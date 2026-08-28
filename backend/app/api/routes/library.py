@@ -797,7 +797,7 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", "
 # render to POST /files/{id}/preview-thumbnail instead. Kept to exactly
 # these types so the endpoint can never overwrite a server-generated
 # STL/3MF/G-code/image thumbnail.
-CLIENT_THUMBNAIL_TYPES = {"step", "stp", "pdf", "csv", "xlsx", "ods"}
+CLIENT_THUMBNAIL_TYPES = {"step", "stp", "pdf", "csv", "xlsx", "ods", "msg"}
 
 # Upper bound for an uploaded client-rendered thumbnail. The FE sends a
 # 256px PNG (a few tens of KB); anything near this limit is not a thumbnail.
@@ -1589,6 +1589,9 @@ _SCANNABLE_EXTENSIONS = {
     ".csv",
     ".xlsx",
     ".ods",
+    # Outlook messages — order confirmations and customer mail filed with a
+    # job; previewed client-side like the other document types.
+    ".msg",
 }
 
 
