@@ -42,6 +42,7 @@ import { LdapUserPicker } from '../components/LdapUserPicker';
 import { SpoolmanSettings } from '../components/SpoolmanSettings';
 import { SpoolCatalogSettings } from '../components/SpoolCatalogSettings';
 import { ColorCatalogSettings } from '../components/ColorCatalogSettings';
+import { SupplierSettings } from '../components/SupplierSettings';
 import { ExternalLinksSettings } from '../components/ExternalLinksSettings';
 import { VirtualPrinterList } from '../components/VirtualPrinterList';
 import { SpoolBuddySettings } from '../components/SpoolBuddySettings';
@@ -6196,10 +6197,11 @@ export function SettingsPage() {
             </Card>
           </div>
 
-          {/* Right Column (2/3) - Spool Catalog + Color Catalog */}
+          {/* Right Column (2/3) - Spool Catalog + Color Catalog + Suppliers */}
           <div className="lg:w-2/3 space-y-3">
             <SpoolCatalogSettings />
             <ColorCatalogSettings />
+            <SupplierSettings />
           </div>
         </div>
         </>

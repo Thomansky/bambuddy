@@ -56,6 +56,10 @@ CSV_COLUMNS = [
     "category",
     "low_stock_threshold_pct",
     "material_number",
+    # Export-only (#2988): "; "-joined supplier names, the purchase source
+    # marked with a trailing *. Ignored on import — supplier assignments are
+    # relational and managed through the API/UI, not re-created from names.
+    "suppliers",
 ]
 
 # Upload ceiling for the import endpoint. A spool inventory CSV is a few KB
@@ -547,6 +551,11 @@ def _cell_value(spool: Spool, col: str) -> str:
     if col == "remaining":
         # Derived for display: label_weight - weight_used, clamped at 0.
         return str(max(0, round((spool.label_weight or 0) - (spool.weight_used or 0))))
+    if col == "suppliers":
+        # Derived (#2988): supplier names, purchase source marked with *.
+        # supplier_links is selectin-loaded with the export query.
+        parts = [f"{link.supplier_name}{'*' if link.is_purchase_source else ''}" for link in spool.supplier_links]
+        return "; ".join(parts)
     value = getattr(spool, col, None)
     if value is None:
         return ""
