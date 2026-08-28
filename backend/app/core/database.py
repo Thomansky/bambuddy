@@ -4865,6 +4865,10 @@ async def run_migrations(conn):
     # on fresh installs only — this covers databases whose table predates it.
     await _migrate_location_ha_sensor_unique_binding(conn)
 
+    # Migration: supplier master list + spool assignments (#2988).
+    # create_all() covers fresh installs; this covers upgrades.
+    await _migrate_create_supplier_tables(conn)
+
     # Migration: repair the tare of spools the RFID auto-add gave the wrong
     # Bambu spool row (#2909). Runs last so the spool catalogue it reads is
     # whatever this database actually holds.
@@ -4873,6 +4877,78 @@ async def run_migrations(conn):
     # Migration: drop the AMS slot markers an older Bambuddy wrote into
     # Spoolman and the location sync then imported as storage locations.
     await _migrate_drop_ams_slot_locations(conn)
+
+
+async def _migrate_create_supplier_tables(conn) -> None:
+    """Create the supplier tables on databases that predate #2988.
+
+    ``Base.metadata.create_all()`` covers fresh installs; upgrades get the
+    tables here, following the ``_migrate_create_finance_tables`` shape.
+    ``spool_suppliers`` deliberately has NO ON DELETE CASCADE on the supplier
+    side — the API refuses to delete a referenced supplier (409) so
+    assignments can never silently orphan.
+    """
+    if is_sqlite():
+        statements = [
+            """
+            CREATE TABLE IF NOT EXISTS suppliers (
+                id INTEGER PRIMARY KEY,
+                name VARCHAR(200) NOT NULL,
+                website VARCHAR(500),
+                customer_number VARCHAR(100),
+                note VARCHAR(500),
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS spool_suppliers (
+                id INTEGER PRIMARY KEY,
+                spool_id INTEGER NOT NULL REFERENCES spool(id) ON DELETE CASCADE,
+                supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
+                supplier_article_number VARCHAR(100),
+                cost_per_kg FLOAT,
+                is_purchase_source BOOLEAN NOT NULL DEFAULT 0,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT uq_spool_suppliers_spool_supplier UNIQUE (spool_id, supplier_id)
+            )
+            """,
+        ]
+    else:
+        statements = [
+            """
+            CREATE TABLE IF NOT EXISTS suppliers (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(200) NOT NULL,
+                website VARCHAR(500),
+                customer_number VARCHAR(100),
+                note VARCHAR(500),
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS spool_suppliers (
+                id SERIAL PRIMARY KEY,
+                spool_id INTEGER NOT NULL REFERENCES spool(id) ON DELETE CASCADE,
+                supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
+                supplier_article_number VARCHAR(100),
+                cost_per_kg FLOAT,
+                is_purchase_source BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT uq_spool_suppliers_spool_supplier UNIQUE (spool_id, supplier_id)
+            )
+            """,
+        ]
+    for statement in statements:
+        await _safe_execute(conn, statement)
+    # The model declares index=True on these; fresh installs get them from
+    # create_all(), migrated databases need them spelled out.
+    await _safe_execute(conn, "CREATE INDEX IF NOT EXISTS ix_suppliers_name ON suppliers (name)")
+    await _safe_execute(conn, "CREATE INDEX IF NOT EXISTS ix_spool_suppliers_spool_id ON spool_suppliers (spool_id)")
+    await _safe_execute(
+        conn, "CREATE INDEX IF NOT EXISTS ix_spool_suppliers_supplier_id ON spool_suppliers (supplier_id)"
+    )
 
 
 async def _migrate_rename_ha_sensor_alert_template(conn) -> None:
@@ -5460,6 +5536,32 @@ async def seed_default_groups():
                 perms.append("makerworld:view")
                 changed = True
                 logger.info("Added makerworld:view to group '%s' (has library:read)", group.name)
+            if changed:
+                group.permissions = perms
+        await session.commit()
+
+        # Migrate new permissions for suppliers (#2988): groups that can
+        # already edit the inventory are the audience for managing the
+        # supplier master list; read-only inventory groups get read access.
+        # Matches the intent of DEFAULT_GROUPS without clobbering
+        # user-customised permission lists. Administrators are covered by the
+        # ALL_PERMISSIONS sync below.
+        result = await session.execute(select(Group))
+        for group in result.scalars().all():
+            if not group.permissions:
+                continue
+            perms = list(group.permissions)
+            changed = False
+            if "inventory:update" in perms:
+                for new_perm in ("suppliers:read", "suppliers:create", "suppliers:update", "suppliers:delete"):
+                    if new_perm not in perms:
+                        perms.append(new_perm)
+                        changed = True
+                        logger.info("Added %s to group '%s' (has inventory:update)", new_perm, group.name)
+            elif "inventory:read" in perms and "suppliers:read" not in perms:
+                perms.append("suppliers:read")
+                changed = True
+                logger.info("Added suppliers:read to group '%s' (has inventory:read)", group.name)
             if changed:
                 group.permissions = perms
         await session.commit()

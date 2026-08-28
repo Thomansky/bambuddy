@@ -86,6 +86,13 @@ class Permission(StrEnum):
     INVENTORY_FORECAST_READ = "inventory:forecast_read"  # View forecast/reorder intelligence panel
     INVENTORY_FORECAST_WRITE = "inventory:forecast_write"  # Modify SKU settings, lead times, shopping list
 
+    # Suppliers (#2988) — the managed list of where filament is bought,
+    # maintained next to the spool catalog in the filament settings.
+    SUPPLIERS_READ = "suppliers:read"
+    SUPPLIERS_CREATE = "suppliers:create"
+    SUPPLIERS_UPDATE = "suppliers:update"
+    SUPPLIERS_DELETE = "suppliers:delete"
+
     # Smart Plugs
     SMART_PLUGS_READ = "smart_plugs:read"
     SMART_PLUGS_CREATE = "smart_plugs:create"
@@ -265,6 +272,10 @@ PERMISSION_CATEGORIES = {
         Permission.INVENTORY_VIEW_ASSIGNMENTS,
         Permission.INVENTORY_FORECAST_READ,
         Permission.INVENTORY_FORECAST_WRITE,
+        Permission.SUPPLIERS_READ,
+        Permission.SUPPLIERS_CREATE,
+        Permission.SUPPLIERS_UPDATE,
+        Permission.SUPPLIERS_DELETE,
     ],
     "Smart Plugs": [
         Permission.SMART_PLUGS_READ,
@@ -438,6 +449,11 @@ DEFAULT_GROUPS = {
             Permission.INVENTORY_VIEW_ASSIGNMENTS.value,
             Permission.INVENTORY_FORECAST_READ.value,
             Permission.INVENTORY_FORECAST_WRITE.value,
+            # Suppliers (#2988) - operators manage the master list
+            Permission.SUPPLIERS_READ.value,
+            Permission.SUPPLIERS_CREATE.value,
+            Permission.SUPPLIERS_UPDATE.value,
+            Permission.SUPPLIERS_DELETE.value,
             # Smart Plugs - full access
             Permission.SMART_PLUGS_READ.value,
             Permission.SMART_PLUGS_CREATE.value,
@@ -504,6 +520,7 @@ DEFAULT_GROUPS = {
             Permission.INVENTORY_READ.value,
             Permission.INVENTORY_VIEW_ASSIGNMENTS.value,
             Permission.INVENTORY_FORECAST_READ.value,
+            Permission.SUPPLIERS_READ.value,
             Permission.SMART_PLUGS_READ.value,
             Permission.CAMERA_VIEW.value,
             Permission.MAINTENANCE_READ.value,

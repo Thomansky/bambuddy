@@ -28,6 +28,7 @@ from backend.app.models.spool_assignment import SpoolAssignment
 from backend.app.models.spool_catalog import SpoolCatalogEntry
 from backend.app.models.spool_filament_preset import SpoolFilamentPreset
 from backend.app.models.spool_k_profile import SpoolKProfile
+from backend.app.models.supplier import SpoolSupplier, Supplier
 from backend.app.models.user import User
 from backend.app.schemas.location import LocationCreate, LocationResponse, LocationUpdate
 from backend.app.schemas.spool import (
@@ -45,6 +46,7 @@ from backend.app.schemas.spool import (
     normalize_extra_colors,
 )
 from backend.app.schemas.spool_usage import SpoolUsageHistoryResponse
+from backend.app.schemas.supplier import SpoolSupplierLinkInput, SpoolSupplierResponse, SupplierStats
 from backend.app.services.location_service import (
     DUPLICATE_LOCATION_NAME,
     assign_location_name,
@@ -66,6 +68,7 @@ from backend.app.services.spool_csv import (
 )
 from backend.app.services.spool_filament_preset import resolve_spool_preset
 from backend.app.services.spoolman import SpoolmanClient, get_spoolman_client, init_spoolman_client
+from backend.app.services.supplier_links import apply_supplier_inheritance
 from backend.app.utils.filament_ids import (
     GENERIC_FILAMENT_IDS,
     filament_id_to_setting_id,
@@ -1342,6 +1345,10 @@ async def create_spool(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     spool = Spool(**payload)
     db.add(spool)
+    await db.flush()
+    # A new spool of a product that already carries supplier assignments
+    # inherits the source list (#2988).
+    await apply_supplier_inheritance(db, spool)
     await db.commit()
     await db.refresh(spool)
     result = await db.execute(select(Spool).options(selectinload(Spool.k_profiles)).where(Spool.id == spool.id))
@@ -1366,6 +1373,11 @@ async def bulk_create_spools(
         spool = Spool(**payload)
         db.add(spool)
         spools.append(spool)
+    await db.flush()
+    # Inherit supplier assignments per copy (#2988); the donor lookup is
+    # identical for all copies but each spool gets its own link rows.
+    for spool in spools:
+        await apply_supplier_inheritance(db, spool)
     await db.commit()
     ids = [s.id for s in spools]
     result = await db.execute(select(Spool).options(selectinload(Spool.k_profiles)).where(Spool.id.in_(ids)))
@@ -1685,6 +1697,52 @@ async def replace_k_profiles(
     for kp in new_profiles:
         await db.refresh(kp)
     return new_profiles
+
+
+@router.put("/spools/{spool_id}/suppliers", response_model=list[SpoolSupplierResponse])
+async def replace_spool_suppliers(
+    spool_id: int,
+    links: list[SpoolSupplierLinkInput],
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_UPDATE),
+):
+    """Replace a spool's supplier assignments (#2988, batch save).
+
+    Same replace-all shape as the k-profiles endpoint. At most one assignment
+    may be the purchase source — the record of where this concrete spool was
+    actually bought; the rest read as alternative sources.
+    """
+    result = await db.execute(select(Spool).where(Spool.id == spool_id))
+    if not result.scalar_one_or_none():
+        raise HTTPException(404, "Spool not found")
+
+    supplier_ids = [link.supplier_id for link in links]
+    if len(set(supplier_ids)) != len(supplier_ids):
+        raise HTTPException(400, "Duplicate supplier in assignment list")
+    if sum(1 for link in links if link.is_purchase_source) > 1:
+        raise HTTPException(400, "Only one assignment can be the purchase source")
+    if supplier_ids:
+        found = await db.execute(select(Supplier.id).where(Supplier.id.in_(supplier_ids)))
+        missing = set(supplier_ids) - {row[0] for row in found.all()}
+        if missing:
+            raise HTTPException(404, f"Supplier(s) not found: {sorted(missing)}")
+
+    existing = await db.execute(select(SpoolSupplier).where(SpoolSupplier.spool_id == spool_id))
+    for old in existing.scalars().all():
+        await db.delete(old)
+    await db.flush()
+
+    new_links = []
+    for link in links:
+        row = SpoolSupplier(spool_id=spool_id, **link.model_dump())
+        db.add(row)
+        new_links.append(row)
+
+    await db.commit()
+    for row in new_links:
+        await db.refresh(row)
+    await ws_manager.broadcast({"type": "inventory_changed"})
+    return new_links
 
 
 @router.get("/spools/{spool_id}/filament-presets", response_model=list[SpoolFilamentPresetResponse])
@@ -2177,6 +2235,77 @@ async def get_spool_usage_history(
         .limit(limit)
     )
     return list(result.scalars().all())
+
+
+@router.get("/stats/suppliers", response_model=list[SupplierStats])
+async def get_supplier_stats(
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_READ),
+):
+    """Aggregate the inventory by purchase-source supplier (#2988).
+
+    Groups by the supplier a spool was actually bought from (the
+    ``is_purchase_source`` assignment), so "how much did we run through
+    supplier X" reads directly. Stock comes from active spools; consumption
+    and cost from the recorded usage history, archived spools included —
+    their consumption happened. Sorted by consumption, heaviest first.
+    """
+    from backend.app.models.spool_usage_history import SpoolUsageHistory
+
+    purchase_link = (SpoolSupplier.spool_id == Spool.id) & SpoolSupplier.is_purchase_source.is_(True)
+
+    inventory_rows = await db.execute(
+        select(
+            SpoolSupplier.supplier_id,
+            func.count(Spool.id),
+            func.sum(Spool.label_weight - Spool.weight_used),
+        )
+        .select_from(Spool)
+        .join(SpoolSupplier, purchase_link)
+        .where(Spool.archived_at.is_(None))
+        .group_by(SpoolSupplier.supplier_id)
+    )
+
+    usage_rows = await db.execute(
+        select(
+            SpoolSupplier.supplier_id,
+            func.sum(SpoolUsageHistory.weight_used),
+            func.sum(SpoolUsageHistory.cost),
+        )
+        .select_from(SpoolUsageHistory)
+        .join(Spool, SpoolUsageHistory.spool_id == Spool.id)
+        .join(SpoolSupplier, purchase_link)
+        .group_by(SpoolSupplier.supplier_id)
+    )
+
+    names = dict((await db.execute(select(Supplier.id, Supplier.name))).all())
+
+    stats: dict[int, SupplierStats] = {}
+    for supplier_id, count, remaining in inventory_rows.all():
+        stats[supplier_id] = SupplierStats(
+            supplier_id=supplier_id,
+            supplier_name=names.get(supplier_id, f"#{supplier_id}"),
+            spool_count=count,
+            remaining_g=max(0.0, float(remaining or 0)),
+            consumed_g=0.0,
+            cost=0.0,
+        )
+    for supplier_id, consumed, cost in usage_rows.all():
+        entry = stats.get(supplier_id)
+        if entry is None:
+            entry = SupplierStats(
+                supplier_id=supplier_id,
+                supplier_name=names.get(supplier_id, f"#{supplier_id}"),
+                spool_count=0,
+                remaining_g=0.0,
+                consumed_g=0.0,
+                cost=0.0,
+            )
+            stats[supplier_id] = entry
+        entry.consumed_g = float(consumed or 0)
+        entry.cost = float(cost or 0)
+
+    return sorted(stats.values(), key=lambda s: s.consumed_g, reverse=True)
 
 
 @router.get("/usage", response_model=list[SpoolUsageHistoryResponse])
