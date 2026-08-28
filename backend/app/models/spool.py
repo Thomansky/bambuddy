@@ -63,6 +63,15 @@ class Spool(Base):
     storage_location: Mapped[str | None] = mapped_column(String(255))  # User-editable storage location
     location_id: Mapped[int | None] = mapped_column(ForeignKey("locations.id"), index=True)
 
+    # Link group for shared filament master data (#2936). NULL = not linked.
+    # Members of one group are records of the same filament product: edits to
+    # master-data fields propagate across the group (services/spool_links.py),
+    # while weights, tag ids, location, history and archive state stay
+    # strictly per spool. Plain Integer, no FK — same shape as
+    # core_weight_catalog_id; the service dissolves groups below two members,
+    # so referential cleanup is its job, not the database's.
+    filament_group_id: Mapped[int | None] = mapped_column(Integer, index=True)
+
     last_used: Mapped[datetime | None] = mapped_column(DateTime)  # Last time this spool was used in a print
     encode_time: Mapped[datetime | None] = mapped_column(DateTime)  # When spool was encoded/written to tag
     tag_uid: Mapped[str | None] = mapped_column(String(32))  # RFID tag UID (up to 32 hex chars)

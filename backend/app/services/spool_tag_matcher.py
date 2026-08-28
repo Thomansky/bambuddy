@@ -258,6 +258,28 @@ async def create_spool_from_tray(db: AsyncSession, tray_data: dict) -> Spool:
     db.add(spool)
     await db.flush()
 
+    # Auto-link (#2936, opt-in setting): attach the scanned spool to an
+    # existing spool of the same product so it arrives with the full master
+    # data — cost per kg included — instead of blank fields, and stays in
+    # sync from then on. Prefers an established link group; otherwise the
+    # newest matching spool founds one.
+    from backend.app.services.spool_links import auto_link_enabled, find_auto_link_donor, link_spools
+
+    if await auto_link_enabled(db):
+        donor = await find_auto_link_donor(
+            db,
+            material=material,
+            subtype=subtype,
+            brand="Bambu Lab",
+            color_name=color_name,
+            exclude_spool_id=spool.id,
+        )
+        if donor is not None:
+            await link_spools(db, [spool.id], source_spool_id=donor.id)
+            logger.info(
+                "Auto-linked scanned spool %d to spool %d (group %s)", spool.id, donor.id, spool.filament_group_id
+            )
+
     logger.info(
         "Auto-created spool %d from AMS tray data: %s %s %s (tag=%s uuid=%s)",
         spool.id,

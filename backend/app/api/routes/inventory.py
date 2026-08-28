@@ -31,6 +31,8 @@ from backend.app.models.spool_k_profile import SpoolKProfile
 from backend.app.models.user import User
 from backend.app.schemas.location import LocationCreate, LocationResponse, LocationUpdate
 from backend.app.schemas.spool import (
+    LinkSpoolsRequest,
+    LinkSpoolsResponse,
     SpoolAssignmentCreate,
     SpoolAssignmentResponse,
     SpoolBulkCreate,
@@ -65,6 +67,14 @@ from backend.app.services.spool_csv import (
     serialize,
 )
 from backend.app.services.spool_filament_preset import resolve_spool_preset
+from backend.app.services.spool_links import (
+    SPOOL_MASTER_DATA_FIELDS,
+    get_group_members,
+    link_spools,
+    propagate_master_data,
+    touches_master_data,
+    unlink_spool,
+)
 from backend.app.services.spoolman import SpoolmanClient, get_spoolman_client, init_spoolman_client
 from backend.app.utils.filament_ids import (
     GENERIC_FILAMENT_IDS,
@@ -1336,13 +1346,26 @@ async def create_spool(
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_UPDATE),
 ):
-    """Create a new spool."""
+    """Create a new spool.
+
+    ``link_to_spool_id`` (#2936) attaches the new spool to an existing
+    spool's link group: it takes over that spool's master data and stays in
+    sync from then on. This is the scan-flow hook — a freshly scanned refill
+    of a known product arrives linked instead of as a drifting copy.
+    """
     try:
         payload = await prepare_internal_spool_payload(db, spool_data.model_dump(), set(spool_data.model_fields_set))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    link_to_spool_id = payload.pop("link_to_spool_id", None)
     spool = Spool(**payload)
     db.add(spool)
+    await db.flush()
+    if link_to_spool_id is not None:
+        try:
+            await link_spools(db, [spool.id], source_spool_id=link_to_spool_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
     await db.commit()
     await db.refresh(spool)
     result = await db.execute(select(Spool).options(selectinload(Spool.k_profiles)).where(Spool.id == spool.id))
@@ -1363,10 +1386,17 @@ async def bulk_create_spools(
         payload = await prepare_internal_spool_payload(db, data.spool.model_dump(), fields_set)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    link_to_spool_id = payload.pop("link_to_spool_id", None)
     for _ in range(data.quantity):
         spool = Spool(**payload)
         db.add(spool)
         spools.append(spool)
+    await db.flush()
+    if link_to_spool_id is not None:
+        try:
+            await link_spools(db, [s.id for s in spools], source_spool_id=link_to_spool_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
     await db.commit()
     ids = [s.id for s in spools]
     result = await db.execute(select(Spool).options(selectinload(Spool.k_profiles)).where(Spool.id.in_(ids)))
@@ -1399,6 +1429,12 @@ async def update_spool(
     for field, value in update_data.items():
         setattr(spool, field, value)
 
+    # Linked spools (#2936): a master-data edit propagates to the whole
+    # group inside the same transaction; per-spool fields never do. The UI
+    # asks before sending, naming the number of affected records.
+    if spool.filament_group_id is not None and touches_master_data(update_data):
+        await propagate_master_data(db, spool)
+
     await db.commit()
     result = await db.execute(select(Spool).options(selectinload(Spool.k_profiles)).where(Spool.id == spool_id))
     await ws_manager.broadcast({"type": "inventory_changed"})
@@ -1417,6 +1453,9 @@ async def delete_spool(
     if not spool:
         raise HTTPException(404, "Spool not found")
 
+    # Leave the link group first so a group shrunk below two members
+    # dissolves instead of lingering as an orphan (#2936).
+    await unlink_spool(db, spool)
     await db.delete(spool)
     await db.commit()
     await ws_manager.broadcast({"type": "inventory_changed"})
@@ -1523,6 +1562,52 @@ async def bulk_reset_spool_consumed_counter(
     return {"reset": len(spools)}
 
 
+@router.post("/spools/link", response_model=LinkSpoolsResponse)
+async def link_spools_endpoint(
+    payload: LinkSpoolsRequest,
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_UPDATE),
+):
+    """Link spools into one master-data group (#2936).
+
+    The source spool's master data wins and is copied to the other members
+    once; from then on edits to any member propagate across the group. The
+    UI confirms beforehand, naming the number of affected spools. Weights,
+    tag ids, location, history and archive state stay strictly per spool.
+    """
+    try:
+        group_id, updated = await link_spools(db, payload.spool_ids, source_spool_id=payload.source_spool_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await db.commit()
+    await ws_manager.broadcast({"type": "inventory_changed"})
+    linked = len(set(payload.spool_ids) | {payload.source_spool_id})
+    return LinkSpoolsResponse(group_id=group_id, linked=linked, updated=updated)
+
+
+@router.post("/spools/{spool_id}/unlink", response_model=SpoolResponse)
+async def unlink_spool_endpoint(
+    spool_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_UPDATE),
+):
+    """Remove one spool from its link group (#2936).
+
+    The spool keeps its current master data; a group left with fewer than
+    two members dissolves, so no orphan groups remain.
+    """
+    result = await db.execute(select(Spool).where(Spool.id == spool_id))
+    spool = result.scalar_one_or_none()
+    if not spool:
+        raise HTTPException(404, "Spool not found")
+
+    await unlink_spool(db, spool)
+    await db.commit()
+    await ws_manager.broadcast({"type": "inventory_changed"})
+    result = await db.execute(select(Spool).options(selectinload(Spool.k_profiles)).where(Spool.id == spool_id))
+    return result.scalar_one()
+
+
 class BulkUpdateRequest(BaseModel):
     ids: list[int] = Field(..., min_length=1, max_length=500)
     update: SpoolUpdate
@@ -1565,10 +1650,32 @@ async def bulk_update_spools(
         for field, value in prepared.items():
             setattr(spool, field, value)
         updated_ids.append(sid)
+    # Linked spools (#2936): the master-data part of the patch reaches every
+    # group member of every selected spool, exactly like the per-spool PATCH.
+    # ONLY the master fields cross the group — a bulk edit that also sets a
+    # per-spool field (weight, location, ...) applies that to the selection
+    # alone. Propagating per distinct group keeps it idempotent when several
+    # members of one group are selected. `propagated` counts records OUTSIDE
+    # the selection.
+    propagated_ids: set[int] = set()
+    master_patch = {k: v for k, v in prepared.items() if k in SPOOL_MASTER_DATA_FIELDS}
+    if master_patch:
+        seen_groups: set[int] = set()
+        for spool in spools.values():
+            group_id = spool.filament_group_id
+            if group_id is None or group_id in seen_groups:
+                continue
+            seen_groups.add(group_id)
+            for member in await get_group_members(db, group_id):
+                if member.id in spools:
+                    continue
+                for field, value in master_patch.items():
+                    setattr(member, field, value)
+                propagated_ids.add(member.id)
     await db.commit()
     if updated_ids:
         await ws_manager.broadcast({"type": "inventory_changed"})
-    return {"updated": len(updated_ids), "not_found": not_found}
+    return {"updated": len(updated_ids), "not_found": not_found, "propagated": len(propagated_ids)}
 
 
 @router.post("/spools/bulk-delete")
@@ -1583,6 +1690,9 @@ async def bulk_delete_spools(
     found_ids = {s.id for s in spools}
     not_found = [sid for sid in payload.ids if sid not in found_ids]
     for spool in spools:
+        # See delete_spool: leave the link group first so no orphan
+        # groups remain (#2936).
+        await unlink_spool(db, spool)
         await db.delete(spool)
     await db.commit()
     if spools:
