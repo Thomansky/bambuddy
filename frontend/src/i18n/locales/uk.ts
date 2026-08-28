@@ -4897,6 +4897,10 @@ export default {
     filamentPresetSaveFailed: 'Не вдалося зберегти пресети за моделями',
     // Stats & enhanced table
     totalInventory: "Загальний запас",
+    stockValue: "Вартість запасу",
+    stockValuePurchase: "Закупівельна вартість: {{value}}",
+    stockValueUnpriced: "{{count}} без ціни",
+    stockValueUnpricedTooltip: "Котушки без зазначеної вартості за кг не враховуються у вартості запасу.",
     totalConsumed: "Всього спожито",
     byMaterial: "За матеріалом",
     inPrinter: "У принтері",

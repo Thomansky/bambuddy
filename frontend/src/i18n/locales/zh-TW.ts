@@ -4849,6 +4849,10 @@ export default {
     filamentPresetSaveFailed: '無法儲存各機型預設',
     // Stats & enhanced table
     totalInventory: '總庫存',
+    stockValue: '庫存價值',
+    stockValuePurchase: '購入價值：{{value}}',
+    stockValueUnpriced: '{{count}} 個未設定價格',
+    stockValueUnpricedTooltip: '未設定每公斤成本的料盤不會計入此價值。',
     totalConsumed: '總消耗',
     byMaterial: '按材料',
     inPrinter: '在印表機中',

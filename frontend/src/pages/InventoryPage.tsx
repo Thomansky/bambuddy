@@ -7,7 +7,7 @@ import {
   Search, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
   TrendingDown, Layers, Printer, AlertTriangle, X, Clock, LayoutGrid, TableProperties, Columns,
   ArrowUp, ArrowDown, ArrowUpDown, Group, ChevronDown, Check, RefreshCw, TrendingUp, Lock, Copy, Eraser, MapPin,
-  Upload, Download,
+  Upload, Download, Banknote,
 } from 'lucide-react';
 import { ForecastPanel } from '../components/ForecastPanel';
 import { api, spoolbuddyApi, ApiError } from '../api/client';
@@ -1078,6 +1078,9 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
     let totalConsumed = 0;
     let lowStock = 0;
     let activeCount = 0;
+    let totalValue = 0;
+    let totalPurchase = 0;
+    let unpricedCount = 0;
     const byMaterial: Record<string, { count: number; weight: number }> = {};
     for (const s of spools) {
       // "Total Consumed" is the resettable counter (weight_used - baseline)
@@ -1097,8 +1100,18 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
       if (!byMaterial[mat]) byMaterial[mat] = { count: 0, weight: 0 };
       byMaterial[mat].count++;
       byMaterial[mat].weight += remaining;
+      // Stock value prices the filament still on the spool, not what was
+      // paid for it once — the purchase total is the tile's sub-line.
+      // Spools without a price can't be valued and are surfaced as a count
+      // instead of silently pricing them at zero.
+      if (s.cost_per_kg != null) {
+        totalValue += (s.cost_per_kg * remaining) / 1000;
+        totalPurchase += (s.cost_per_kg * s.label_weight) / 1000;
+      } else {
+        unpricedCount++;
+      }
     }
-    return { totalWeight, totalConsumed, lowStock, byMaterial, totalSpools: activeCount };
+    return { totalWeight, totalConsumed, lowStock, byMaterial, totalSpools: activeCount, totalValue, totalPurchase, unpricedCount };
   }, [spools, lowStockThreshold]);
 
   const inPrinterCount =
@@ -1525,7 +1538,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
 
       {/* Stats Bar */}
       {stats && !isLoading && (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
           {/* Total Inventory */}
           <div className="bg-bambu-dark-secondary rounded-lg p-4">
             <div className="flex items-center gap-2 mb-1">
@@ -1534,6 +1547,23 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
             </div>
             <div className="text-xl font-bold text-white">{formatWeight(stats.totalWeight, true)}</div>
             <div className="text-xs text-bambu-gray mt-1">{stats.totalSpools} {stats.totalSpools !== 1 ? t('inventory.spools') : t('inventory.spool')}</div>
+          </div>
+
+          {/* Stock Value */}
+          <div className="bg-bambu-dark-secondary rounded-lg p-4">
+            <div className="flex items-center gap-2 mb-1">
+              <Banknote className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+              <span className="text-xs text-bambu-gray font-medium uppercase tracking-wide">{t('inventory.stockValue')}</span>
+            </div>
+            <div className="text-xl font-bold text-white">{currencySymbol}{stats.totalValue.toFixed(2)}</div>
+            <div className="text-xs text-bambu-gray mt-1">
+              {t('inventory.stockValuePurchase', { value: `${currencySymbol}${stats.totalPurchase.toFixed(2)}` })}
+              {stats.unpricedCount > 0 && (
+                <span className="ml-1" title={t('inventory.stockValueUnpricedTooltip')}>
+                  · {t('inventory.stockValueUnpriced', { count: stats.unpricedCount })}
+                </span>
+              )}
+            </div>
           </div>
 
           {/* Total Consumed */}

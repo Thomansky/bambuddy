@@ -4843,6 +4843,10 @@ export default {
     filamentPresetSaveFailed: 'Não foi possível salvar as predefinições por modelo',
     // Stats & enhanced table
     totalInventory: 'Inventário Total',
+    stockValue: 'Valor do Estoque',
+    stockValuePurchase: 'Valor de compra: {{value}}',
+    stockValueUnpriced: '{{count}} sem preço',
+    stockValueUnpricedTooltip: 'Carretéis sem preço por kg não são incluídos no valor.',
     totalConsumed: 'Total Consumido',
     byMaterial: 'Por Material',
     inPrinter: 'Na Impressora',

@@ -4843,6 +4843,10 @@ export default {
     filamentPresetSaveFailed: 'Impossibile salvare i preset per modello',
     // Stats & enhanced table
     totalInventory: 'Inventario totale',
+    stockValue: 'Valore scorte',
+    stockValuePurchase: 'Valore d\'acquisto: {{value}}',
+    stockValueUnpriced: '{{count}} senza prezzo',
+    stockValueUnpricedTooltip: 'Le bobine senza un costo per kg non sono incluse nel valore.',
     totalConsumed: 'Totale consumato',
     byMaterial: 'Per materiale',
     inPrinter: 'In stampante',
