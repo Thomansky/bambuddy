@@ -169,6 +169,7 @@ async def _build_settings_response(db: AsyncSession, is_api_key: bool = False) -
             "spoolman_disable_weight_sync",
             "spoolman_report_partial_usage",
             "auto_add_unknown_rfid",
+            "auto_link_scanned_spools",
             "disable_filament_warnings",
             "prefer_lowest_filament",
             "check_updates",

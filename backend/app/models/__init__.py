@@ -36,6 +36,7 @@ from backend.app.models.spool_assignment import SpoolAssignment
 from backend.app.models.spool_catalog import SpoolCatalogEntry
 from backend.app.models.spool_filament_preset import SpoolFilamentPreset, SpoolmanFilamentPreset
 from backend.app.models.spool_k_profile import SpoolKProfile
+from backend.app.models.spool_link_group import SpoolLinkGroup
 from backend.app.models.spool_usage_history import SpoolUsageHistory
 from backend.app.models.spoolbuddy_device import SpoolBuddyDevice
 from backend.app.models.supplier import SpoolSupplier, Supplier
@@ -89,6 +90,7 @@ __all__ = [
     "SpoolmanFilamentPreset",
     "SpoolAssignment",
     "SpoolCatalogEntry",
+    "SpoolLinkGroup",
     "SpoolUsageHistory",
     "Supplier",
     "SpoolSupplier",

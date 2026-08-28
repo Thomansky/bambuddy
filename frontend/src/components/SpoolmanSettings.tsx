@@ -79,6 +79,23 @@ export function SpoolmanSettings() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [localEnabled, localUrl, localSyncMode, localDisableWeightSync, localReportPartialUsage, localAutoAddUnknownRfid, isInitialized]);
 
+  // Auto-link scanned spools (#2936) — lives in the general app settings,
+  // unlike the string-typed /settings/spoolman fields above.
+  const { data: appSettings } = useQuery({
+    queryKey: ['settings'],
+    queryFn: api.getSettings,
+  });
+  const autoLinkMutation = useMutation({
+    mutationFn: (enabled: boolean) => api.updateSettings({ auto_link_scanned_spools: enabled }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['settings'] });
+      showToast(t('settings.toast.settingsSaved'));
+    },
+    onError: () => {
+      showToast(t('settings.toast.saveFailed'), 'error');
+    },
+  });
+
   // Save mutation
   const saveMutation = useMutation({
     mutationFn: () =>
@@ -296,6 +313,30 @@ export function SpoolmanSettings() {
             <div className="w-11 h-6 bg-bambu-dark-tertiary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-bambu-green"></div>
           </label>
         </div>
+
+        {/* Auto-link scanned spools (#2936) — built-in inventory only:
+            Spoolman mode shares master data through Spoolman filaments. A
+            scanned refill of a known product joins that spool's link group
+            and arrives with the full master data, cost per kg included. */}
+        {!localEnabled && (
+          <div className="flex items-center justify-between pt-2 border-t border-bambu-dark-tertiary">
+            <div className="pr-4">
+              <p className="text-white">{t('settings.autoLinkScannedSpools')}</p>
+              <p className="text-sm text-bambu-gray">
+                {t('settings.autoLinkScannedSpoolsDesc')}
+              </p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={appSettings?.auto_link_scanned_spools ?? false}
+                onChange={(e) => autoLinkMutation.mutate(e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-bambu-dark-tertiary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-bambu-green"></div>
+            </label>
+          </div>
+        )}
 
         {/* Built-in Inventory details */}
         {!localEnabled && (
