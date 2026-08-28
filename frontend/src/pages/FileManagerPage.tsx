@@ -45,6 +45,7 @@ import {
   Lock,
   FolderSymlink,
   Tag as TagIcon,
+  FileText,
   FileSpreadsheet,
 } from 'lucide-react';
 import { api } from '../api/client';
@@ -82,8 +83,11 @@ type SortField = 'name' | 'date' | 'size' | 'type' | 'prints';
 type SortDirection = 'asc' | 'desc';
 type TFunction = (key: string, options?: Record<string, unknown>) => string;
 
-// Document previews (#2976) are code-split: the spreadsheet parsers only
-// load when a preview is actually opened.
+// Document previews (#2976) are code-split: pdf.js and the spreadsheet
+// parsers only load when a preview is actually opened.
+const PdfPreviewModal = lazy(() =>
+  import('../components/PdfPreviewModal').then((m) => ({ default: m.PdfPreviewModal }))
+);
 const SpreadsheetPreviewModal = lazy(() =>
   import('../components/SpreadsheetPreviewModal').then((m) => ({ default: m.SpreadsheetPreviewModal }))
 );
@@ -837,10 +841,10 @@ function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, o
       title: !canPreview3d ? t('fileManager.noPermissionPreview') : undefined,
     });
   }
-  if (onPreviewDocument && isSpreadsheetType(file.file_type)) {
+  if (onPreviewDocument && (file.file_type === 'pdf' || isSpreadsheetType(file.file_type))) {
     menuItems.push({
       label: t('fileManager.preview.open'),
-      icon: <FileSpreadsheet className="w-4 h-4" />,
+      icon: file.file_type === 'pdf' ? <FileText className="w-4 h-4" /> : <FileSpreadsheet className="w-4 h-4" />,
       onClick: () => onPreviewDocument(file),
       disabled: !canPreview3d,
       title: !canPreview3d ? t('fileManager.noPermissionPreview') : undefined,
@@ -897,6 +901,8 @@ function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, o
             alt={file.filename}
             className="w-full h-full object-cover"
           />
+        ) : file.file_type === 'pdf' ? (
+          <FileText className="w-12 h-12 text-bambu-gray/30" />
         ) : isSpreadsheetType(file.file_type) ? (
           <FileSpreadsheet className="w-12 h-12 text-bambu-gray/30" />
         ) : (
@@ -909,6 +915,7 @@ function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, o
           // that the file is already sliced and ready to print (#1543).
           : file.file_type === 'gcode' || file.file_type === 'gcode.3mf' ? 'bg-blue-500/90 text-white'
           : file.file_type === 'stl' ? 'bg-purple-500/90 text-white'
+          : file.file_type === 'pdf' ? 'bg-red-500/90 text-white'
           : isSpreadsheetType(file.file_type) ? 'bg-teal-500/90 text-white'
           : 'bg-bambu-gray/90 text-white'
         }`}>
@@ -1052,6 +1059,7 @@ export function FileManagerPage() {
   const [renameItem, setRenameItem] = useState<{ type: 'file' | 'folder'; id: number; name: string } | null>(null);
   const [thumbnailVersions, setThumbnailVersions] = useState<Record<number, number>>({});
   const [viewerFile, setViewerFile] = useState<LibraryFileListItem | null>(null);
+  const [pdfPreviewFile, setPdfPreviewFile] = useState<LibraryFileListItem | null>(null);
   const [sheetPreviewFile, setSheetPreviewFile] = useState<LibraryFileListItem | null>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>(() => {
     return (localStorage.getItem('library-view-mode') as 'grid' | 'list') || 'grid';
@@ -2503,7 +2511,10 @@ export function FileManagerPage() {
                         setViewerFile(f);
                       }
                     }}
-                    onPreviewDocument={(f) => setSheetPreviewFile(f)}
+                    onPreviewDocument={(f) => {
+                      if (f.file_type === 'pdf') setPdfPreviewFile(f);
+                      else setSheetPreviewFile(f);
+                    }}
                     onRename={(f) => setRenameItem({ type: 'file', id: f.id, name: f.filename })}
                     onGenerateThumbnail={(f) => singleThumbnailMutation.mutate(f.id)}
                     onTagClick={toggleTagFilter}
@@ -2569,7 +2580,9 @@ export function FileManagerPage() {
                             />
                           ) : (
                             <div className="w-full h-full flex items-center justify-center">
-                              {isSpreadsheetType(file.file_type) ? (
+                              {file.file_type === 'pdf' ? (
+                                <FileText className="w-5 h-5 text-bambu-gray/50" />
+                              ) : isSpreadsheetType(file.file_type) ? (
                                 <FileSpreadsheet className="w-5 h-5 text-bambu-gray/50" />
                               ) : (
                                 <FileBox className="w-5 h-5 text-bambu-gray/50" />
@@ -2621,6 +2634,7 @@ export function FileManagerPage() {
                         file.file_type === '3mf' ? 'bg-bambu-green/20 text-bambu-green'
                         : (file.file_type === 'gcode' || file.file_type === 'gcode.3mf') ? 'bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-400'
                         : file.file_type === 'stl' ? 'bg-purple-100 dark:bg-purple-500/20 text-purple-700 dark:text-purple-400'
+                        : file.file_type === 'pdf' ? 'bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-400'
                         : isSpreadsheetType(file.file_type) ? 'bg-teal-100 dark:bg-teal-500/20 text-teal-700 dark:text-teal-400'
                         : 'bg-bambu-gray/20 text-bambu-gray'
                       }`}>
@@ -2725,11 +2739,12 @@ export function FileManagerPage() {
                           <Box className="w-4 h-4" />
                         </button>
                       )}
-                      {isSpreadsheetType(file.file_type) && (
+                      {(file.file_type === 'pdf' || isSpreadsheetType(file.file_type)) && (
                         <button
                           onClick={() => {
                             if (!hasPermission('library:read')) return;
-                            setSheetPreviewFile(file);
+                            if (file.file_type === 'pdf') setPdfPreviewFile(file);
+                            else setSheetPreviewFile(file);
                           }}
                           className={`p-1.5 rounded transition-colors ${
                             hasPermission('library:read')
@@ -2739,7 +2754,7 @@ export function FileManagerPage() {
                           title={hasPermission('library:read') ? t('fileManager.preview.open') : t('fileManager.noPermissionPreview')}
                           disabled={!hasPermission('library:read')}
                         >
-                          <FileSpreadsheet className="w-4 h-4" />
+                          {file.file_type === 'pdf' ? <FileText className="w-4 h-4" /> : <FileSpreadsheet className="w-4 h-4" />}
                         </button>
                       )}
                       <button
@@ -2964,8 +2979,17 @@ export function FileManagerPage() {
         />
       )}
 
-      {sheetPreviewFile && (
+      {(pdfPreviewFile || sheetPreviewFile) && (
         <Suspense fallback={null}>
+          {pdfPreviewFile && (
+            <PdfPreviewModal
+              libraryFileId={pdfPreviewFile.id}
+              filename={pdfPreviewFile.print_name || pdfPreviewFile.filename}
+              fileSize={pdfPreviewFile.file_size}
+              onClose={() => setPdfPreviewFile(null)}
+              onSnapshot={previewSnapshotHandler(pdfPreviewFile)}
+            />
+          )}
           {sheetPreviewFile && (
             <SpreadsheetPreviewModal
               libraryFileId={sheetPreviewFile.id}
