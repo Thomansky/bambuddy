@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { X, Loader2, Save, Beaker, Palette, Zap, Tag, Unlink } from 'lucide-react';
+import { X, Loader2, Save, Beaker, Palette, Zap, Tag, Unlink, Link2 } from 'lucide-react';
 import { api, ApiError } from '../api/client';
 import type { InventorySpool, SlicerSetting, SpoolCatalogEntry, LocalPreset, BuiltinFilament, SpoolmanBulkCreateResult, SpoolFilamentPresetInput, SpoolKProfileInput, SpoolmanFilamentEntry } from '../api/client';
 import { Button } from './Button';
@@ -24,6 +24,8 @@ import { SpoolmanFilamentPicker } from './spool-form/SpoolmanFilamentPicker';
 import { PrinterProfilesSection } from './spool-form/PrinterProfilesSection';
 import { normaliseFlow } from '../utils/nozzleFlow';
 import { SpoolUsageHistory } from './SpoolUsageHistory';
+import { ConfirmModal } from './ConfirmModal';
+import { SpoolGroupLinkModal } from './SpoolGroupLinkModal';
 import {
   invalidateInventoryLocations,
   invalidateSpoolAndLocationQueries,
@@ -76,6 +78,10 @@ export function SpoolFormModal({
   const [activeTab, setActiveTab] = useState<TabId>('filament');
   const [weightTouched, setWeightTouched] = useState(false);
   const [locationIdTouched, setLocationIdTouched] = useState(false);
+  // Linked spools (#2936): a pending master-data update awaiting the
+  // propagate-to-group confirmation, and the link-with-existing picker.
+  const [pendingLinkedUpdate, setPendingLinkedUpdate] = useState<Record<string, unknown> | null>(null);
+  const [linkPickerOpen, setLinkPickerOpen] = useState(false);
   const [quickAdd, setQuickAdd] = useState(false);
   const [quantity, setQuantity] = useState(1);
 
@@ -663,6 +669,20 @@ export function SpoolFormModal({
     },
   });
 
+  // Linked spools (#2936): leave the master-data group.
+  const unlinkMutation = useMutation({
+    mutationFn: () => api.unlinkSpoolGroup(spool!.id),
+    onSuccess: async () => {
+      await refreshSpoolQueries();
+      showToast(t('inventory.linked.unlinkedToast'), 'success');
+      onClose();
+    },
+    onError: (error: Error) => {
+      console.error('SpoolFormModal.unlinkMutation failed:', error);
+      showToast(t('inventory.linked.unlinkFailed'), 'error');
+    },
+  });
+
   const deleteTagMutation = useMutation({
     mutationFn: () => {
       if (spoolmanMode) {
@@ -842,6 +862,28 @@ export function SpoolFormModal({
 
   if (!isOpen) return null;
 
+  // Linked spools (#2936): other members of this spool's group, from the
+  // inventory cache the modal already reads for the category autocomplete.
+  const linkedOthersCount = (isEditing && !spoolmanMode && spool?.filament_group_id != null)
+    ? (allSpools ?? []).filter((s) => s.filament_group_id === spool.filament_group_id && s.id !== spool.id).length
+    : 0;
+
+  // The fields propagation shares — mirror of the backend's master-data set.
+  const MASTER_DATA_KEYS = [
+    'material', 'subtype', 'brand', 'color_name', 'rgba', 'extra_colors', 'effect_type',
+    'label_weight', 'core_weight', 'core_weight_catalog_id', 'slicer_filament',
+    'slicer_filament_name', 'note', 'cost_per_kg',
+  ] as const;
+
+  const masterDataChanged = (data: Record<string, unknown>): boolean => {
+    if (!spool) return false;
+    const original = spool as unknown as Record<string, unknown>;
+    return MASTER_DATA_KEYS.some((key) => {
+      if (!(key in data)) return false;
+      return (data[key] ?? null) !== (original[key] ?? null);
+    });
+  };
+
   const handleSubmit = () => {
     const validation = validateForm(formData, quickAdd, spoolmanMode, mode);
     if (!validation.isValid) {
@@ -889,6 +931,12 @@ export function SpoolFormModal({
     }
 
     if (isEditing) {
+      // Linked spools (#2936): a master-data change on a grouped spool
+      // propagates to the whole group — ask first, naming the count.
+      if (linkedOthersCount > 0 && masterDataChanged(data)) {
+        setPendingLinkedUpdate(data);
+        return;
+      }
       updateMutation.mutate(data);
     } else if (quantity > 1) {
       bulkCreateMutation.mutate({ data, qty: quantity });
@@ -897,7 +945,7 @@ export function SpoolFormModal({
     }
   };
 
-  const isPending = createMutation.isPending || bulkCreateMutation.isPending || updateMutation.isPending || deleteTagMutation.isPending || unassignMutation.isPending;
+  const isPending = createMutation.isPending || bulkCreateMutation.isPending || updateMutation.isPending || deleteTagMutation.isPending || unassignMutation.isPending || unlinkMutation.isPending;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -927,6 +975,43 @@ export function SpoolFormModal({
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {/* Linked spools (#2936) — internal inventory, edit mode only.
+            Shows the membership with an unlink action, or offers linking
+            with an existing spool. */}
+        {isEditing && spool && !spoolmanMode && (
+          <div className="flex items-center gap-2 px-4 py-2 border-b border-bambu-dark-tertiary flex-shrink-0">
+            <Link2 className={`w-4 h-4 ${spool.filament_group_id != null ? 'text-bambu-green' : 'text-bambu-gray'}`} />
+            {spool.filament_group_id != null ? (
+              <>
+                <span className="text-sm text-bambu-gray">
+                  {t('inventory.linked.banner', { count: linkedOthersCount })}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => unlinkMutation.mutate()}
+                  disabled={unlinkMutation.isPending}
+                  className="ml-auto text-sm text-bambu-gray hover:text-red-400 flex items-center gap-1.5 transition-colors"
+                >
+                  <Unlink className="w-3.5 h-3.5" />
+                  {t('inventory.linked.unlinkAction')}
+                </button>
+              </>
+            ) : (
+              <>
+                <span className="text-sm text-bambu-gray">{t('inventory.linked.notLinked')}</span>
+                <button
+                  type="button"
+                  onClick={() => setLinkPickerOpen(true)}
+                  className="ml-auto text-sm text-bambu-green hover:text-bambu-green/80 flex items-center gap-1.5 transition-colors"
+                >
+                  <Link2 className="w-3.5 h-3.5" />
+                  {t('inventory.linked.linkWithExisting')}
+                </button>
+              </>
+            )}
+          </div>
+        )}
 
         {/* Quick Add toggle — only in create mode (not edit, not copy).
             In copy mode the modal title is the singular "Copy Spool", so the
@@ -1168,6 +1253,36 @@ export function SpoolFormModal({
           </Button>
           </div>
         </div>
+
+        {/* Linked spools (#2936): confirm before a master-data edit is
+            written to the whole group. */}
+        {pendingLinkedUpdate && (
+          <ConfirmModal
+            title={t('inventory.linked.propagateTitle')}
+            message={t('inventory.linked.propagateConfirm', { count: linkedOthersCount })}
+            confirmText={t('common.save')}
+            onConfirm={() => {
+              const data = pendingLinkedUpdate;
+              setPendingLinkedUpdate(null);
+              updateMutation.mutate(data);
+            }}
+            onCancel={() => setPendingLinkedUpdate(null)}
+          />
+        )}
+
+        {/* Linked spools (#2936): link this spool with an existing one; the
+            chosen spool's master data wins. */}
+        {linkPickerOpen && spool && (
+          <SpoolGroupLinkModal
+            targetIds={[spool.id]}
+            candidates={(allSpools ?? []).filter((s) => s.id !== spool.id)}
+            onClose={() => setLinkPickerOpen(false)}
+            onLinked={() => {
+              refreshSpoolQueries();
+              onClose();
+            }}
+          />
+        )}
       </div>
     </div>
   );

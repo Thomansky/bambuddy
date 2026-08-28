@@ -2106,6 +2106,9 @@ export default {
     filamentTrackingDesc: 'Choose how to track your filament spools. You can use the built-in inventory or connect an external Spoolman server.',
     autoAddUnknownRfid: 'Auto-add unknown RFID spools',
     autoAddUnknownRfidDesc: 'Automatically create an inventory entry when a spool with an unknown RFID tag is detected. Turn off if you pre-register new spools manually to avoid duplicates.',
+    // Linked spools (#2936)
+    autoLinkScannedSpools: 'Auto-link scanned spools',
+    autoLinkScannedSpoolsDesc: 'When a scanned or auto-added spool matches an existing product, link it to that spool so it arrives with the full filament data — price per kg included.',
     filamentChecks: 'Filament checks',
     disableFilamentWarnings: 'Disable filament warnings',
     disableFilamentWarningsDesc: 'Don\'t show warnings about insufficient filament when printing or queueing',
@@ -4764,6 +4767,28 @@ export default {
     storageLocationNone: 'No location set',
     lowStockThresholdOverride: 'Low-stock threshold (this spool)',
     lowStockThresholdOverrideHelp: 'Leave blank to use the global threshold ({{global}}%).',
+    // Linked spools sharing filament master data (#2936)
+    linked: {
+      column: 'Linked',
+      indicatorTooltip: 'Linked spool — filament data is shared with its group',
+      linkTitle: 'Link Spools',
+      pickSourceHint: 'Pick the spool whose filament data should win. Its brand, colour, weights, temperatures, price and notes are copied to the others and stay in sync from then on. Remaining weight, tags, locations and history always stay per spool.',
+      searchPlaceholder: 'Search spools…',
+      noCandidates: 'No spools to choose from',
+      alreadyLinked: 'linked',
+      linkConfirm: 'This will overwrite the filament data of {{count}} spool(s).',
+      linkAction: 'Link',
+      linkedToast: 'Linked — {{count}} record(s) updated',
+      linkFailed: 'Failed to link spools',
+      banner: 'Linked with {{count}} other spool(s) — filament-data changes apply to all of them.',
+      notLinked: 'Not linked to other spools.',
+      linkWithExisting: 'Link with existing spool…',
+      unlinkAction: 'Unlink',
+      unlinkedToast: 'Spool unlinked',
+      unlinkFailed: 'Failed to unlink spool',
+      propagateTitle: 'Apply to linked spools?',
+      propagateConfirm: 'This change also updates the filament data of {{count}} linked spool(s). Remaining weight, tags, locations and history stay untouched.',
+    },
     // RFID button rename (was "Delete Tag" — confusing because it sounds like a
     // taxonomy delete; this clears the RFID tag/UUID off the spool record)
     clearRfid: 'Clear RFID Tag',

@@ -1400,6 +1400,10 @@ export interface AppSettings {
   bed_cooled_threshold: number;
   // Inventory low stock threshold
   low_stock_threshold: number;
+  // Linked spools (#2936): auto-attach RFID/SpoolBuddy-added spools to an
+  // existing spool of the same product, so they arrive with full master
+  // data (cost per kg included). Opt-in.
+  auto_link_scanned_spools: boolean;
   // Session policy (#1706) — admin-set ceiling, hours, [1, 720]
   session_max_hours: number;
   // User email notifications toggle
@@ -3561,6 +3565,9 @@ export interface InventorySpool {
   k_profiles?: SpoolKProfile[];
   storage_location?: string | null;
   location_id?: number | null;
+  // Link group for shared filament master data (#2936); null = not linked.
+  // Membership changes go through linkSpools / unlinkSpoolGroup, never PATCH.
+  filament_group_id?: number | null;
 }
 
 export interface SpoolmanBulkCreateResult {
@@ -6423,10 +6430,21 @@ export const api = {
       body: JSON.stringify({ spool_ids: spoolIds }),
     }),
   bulkUpdateSpools: (ids: number[], update: Partial<Omit<InventorySpool, 'id' | 'archived_at' | 'created_at' | 'updated_at' | 'k_profiles'>>) =>
-    request<{ updated: number; not_found: number[] }>(`/inventory/spools/bulk-update`, {
+    request<{ updated: number; not_found: number[]; propagated?: number }>(`/inventory/spools/bulk-update`, {
       method: 'POST',
       body: JSON.stringify({ ids, update }),
     }),
+  // Linked spools (#2936): the source spool's master data wins and is copied
+  // to the others once; afterwards edits to any member propagate.
+  linkSpools: (spoolIds: number[], sourceSpoolId: number) =>
+    request<{ group_id: number; linked: number; updated: number }>(`/inventory/spools/link`, {
+      method: 'POST',
+      body: JSON.stringify({ spool_ids: spoolIds, source_spool_id: sourceSpoolId }),
+    }),
+  // Named unlinkSpoolGroup, not unlinkSpool — that name is taken by the
+  // Spoolman tag-unlink above, which does something entirely different.
+  unlinkSpoolGroup: (id: number) =>
+    request<InventorySpool>(`/inventory/spools/${id}/unlink`, { method: 'POST' }),
   bulkDeleteSpools: (ids: number[]) =>
     request<{ deleted: number; not_found: number[] }>(`/inventory/spools/bulk-delete`, {
       method: 'POST',
