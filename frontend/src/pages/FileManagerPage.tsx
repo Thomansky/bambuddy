@@ -96,6 +96,10 @@ function isSpreadsheetType(fileType: string): boolean {
   return fileType === 'csv' || fileType === 'xlsx' || fileType === 'ods';
 }
 
+function isStepType(fileType: string): boolean {
+  return fileType === 'step' || fileType === 'stp';
+}
+
 // New Folder Modal
 interface NewFolderModalProps {
   parentId: number | null;
@@ -832,7 +836,7 @@ function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, o
       title: !hasPermission('pipelines:run') ? t('library.runWithPipeline.noPermission') : undefined,
     });
   }
-  if (onPreview3d && (file.file_type === '3mf' || file.file_type === 'gcode' || file.file_type === 'stl' || file.file_type === 'gcode.3mf')) {
+  if (onPreview3d && (file.file_type === '3mf' || file.file_type === 'gcode' || file.file_type === 'stl' || file.file_type === 'gcode.3mf' || isStepType(file.file_type))) {
     menuItems.push({
       label: t('fileManager.preview3d'),
       icon: <Box className="w-4 h-4" />,
@@ -915,6 +919,7 @@ function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, o
           // that the file is already sliced and ready to print (#1543).
           : file.file_type === 'gcode' || file.file_type === 'gcode.3mf' ? 'bg-blue-500/90 text-white'
           : file.file_type === 'stl' ? 'bg-purple-500/90 text-white'
+          : isStepType(file.file_type) ? 'bg-amber-500/90 text-white'
           : file.file_type === 'pdf' ? 'bg-red-500/90 text-white'
           : isSpreadsheetType(file.file_type) ? 'bg-teal-500/90 text-white'
           : 'bg-bambu-gray/90 text-white'
@@ -2634,6 +2639,7 @@ export function FileManagerPage() {
                         file.file_type === '3mf' ? 'bg-bambu-green/20 text-bambu-green'
                         : (file.file_type === 'gcode' || file.file_type === 'gcode.3mf') ? 'bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-400'
                         : file.file_type === 'stl' ? 'bg-purple-100 dark:bg-purple-500/20 text-purple-700 dark:text-purple-400'
+                        : isStepType(file.file_type) ? 'bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400'
                         : file.file_type === 'pdf' ? 'bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-400'
                         : isSpreadsheetType(file.file_type) ? 'bg-teal-100 dark:bg-teal-500/20 text-teal-700 dark:text-teal-400'
                         : 'bg-bambu-gray/20 text-bambu-gray'
@@ -2718,7 +2724,7 @@ export function FileManagerPage() {
                           <Play className="w-4 h-4" />
                         </button>
                       )}
-                      {(file.file_type === '3mf' || file.file_type === 'gcode' || file.file_type === 'gcode.3mf' || file.file_type === 'stl') && (
+                      {(file.file_type === '3mf' || file.file_type === 'gcode' || file.file_type === 'gcode.3mf' || file.file_type === 'stl' || isStepType(file.file_type)) && (
                         <button
                           onClick={() => {
                             if (!hasPermission('library:read')) return;
@@ -2965,6 +2971,9 @@ export function FileManagerPage() {
           title={viewerFile.print_name || viewerFile.filename}
           fileType={viewerFile.file_type}
           onClose={() => setViewerFile(null)}
+          // STEP has no server-side renderer; persist the first client render
+          // as the grid thumbnail (#2976).
+          onSnapshot={isStepType(viewerFile.file_type) ? previewSnapshotHandler(viewerFile) : undefined}
           onSliceWithBambuddy={
             // Only offer in-app slicing on files the SliceModal can actually
             // handle (matches the file-row Cog visibility check at :2127).

@@ -57,7 +57,9 @@ async def file_factory(db_session):
 class TestPreviewThumbnailUpload:
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_upload_sets_thumbnail_path(self, async_client: AsyncClient, db_session, file_factory, isolated_storage):
+    async def test_upload_sets_thumbnail_path(
+        self, async_client: AsyncClient, db_session, file_factory, isolated_storage
+    ):
         library_file = await file_factory(file_type="step")
 
         response = await async_client.post(
