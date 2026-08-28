@@ -455,6 +455,10 @@ async def parse_and_validate(raw_bytes: bytes, db: AsyncSession) -> ImportPrevie
             continue
 
         spool_data = spool.model_dump()
+        # link_to_spool_id (#2936) is a create-request directive, not a Spool
+        # column — the import's persist path does Spool(**row.spool), which
+        # would raise on it. CSV rows never link.
+        spool_data.pop("link_to_spool_id", None)
         if last_used is not None:
             # last_used isn't a SpoolCreate field; graft it onto the persisted
             # dict so the ORM object carries it.
