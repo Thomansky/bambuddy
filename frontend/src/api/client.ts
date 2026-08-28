@@ -3561,6 +3561,60 @@ export interface InventorySpool {
   k_profiles?: SpoolKProfile[];
   storage_location?: string | null;
   location_id?: number | null;
+  // Supplier assignments (#2988). Absent in Spoolman mode — Spoolman's
+  // vendor is the manufacturer, not the seller, so there is no mapping.
+  suppliers?: SpoolSupplierLink[];
+}
+
+// ── Suppliers (#2988) ──────────────────────────────────────────────────────
+
+/** Where filament is bought — distinct from brand (who made it). */
+export interface Supplier {
+  id: number;
+  name: string;
+  website: string | null;
+  customer_number: string | null;
+  note: string | null;
+  /** Spools referencing this supplier; a referenced supplier cannot be deleted. */
+  spool_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SupplierInput {
+  name: string;
+  website?: string | null;
+  customer_number?: string | null;
+  note?: string | null;
+}
+
+/** One spool-to-supplier assignment as written by the spool dialog. */
+export interface SpoolSupplierLinkInput {
+  supplier_id: number;
+  /** The supplier's own article number — NOT the internal material number. */
+  supplier_article_number?: string | null;
+  cost_per_kg?: number | null;
+  /** Marks where this concrete spool was actually bought. */
+  is_purchase_source?: boolean;
+}
+
+export interface SpoolSupplierLink {
+  id: number;
+  supplier_id: number;
+  supplier_name: string;
+  supplier_article_number: string | null;
+  cost_per_kg: number | null;
+  is_purchase_source: boolean;
+}
+
+/** Per-supplier inventory aggregate (#2988), purchase-source spools only. */
+export interface SupplierStats {
+  supplier_id: number;
+  supplier_name: string;
+  spool_count: number;
+  remaining_g: number;
+  consumed_g: number;
+  cost: number;
 }
 
 export interface SpoolmanBulkCreateResult {
@@ -6515,6 +6569,22 @@ export const api = {
     request<{ deleted: number }>('/inventory/catalog/bulk-delete', { method: 'POST', body: JSON.stringify({ ids }) }),
   resetSpoolCatalog: () =>
     request<{ status: string }>('/inventory/catalog/reset', { method: 'POST' }),
+  // ── Suppliers (#2988) ────────────────────────────────────────────────────
+  getSuppliers: () =>
+    request<Supplier[]>('/suppliers'),
+  createSupplier: (data: SupplierInput) =>
+    request<Supplier>('/suppliers', { method: 'POST', body: JSON.stringify(data) }),
+  updateSupplier: (id: number, data: Partial<SupplierInput>) =>
+    request<Supplier>(`/suppliers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteSupplier: (id: number) =>
+    request<{ status: string; id: number }>(`/suppliers/${id}`, { method: 'DELETE' }),
+  setSpoolSuppliers: (spoolId: number, links: SpoolSupplierLinkInput[]) =>
+    request<SpoolSupplierLink[]>(`/inventory/spools/${spoolId}/suppliers`, {
+      method: 'PUT',
+      body: JSON.stringify(links),
+    }),
+  getSupplierStats: () =>
+    request<SupplierStats[]>('/inventory/stats/suppliers'),
   getLocations: () =>
     request<StorageLocation[]>('/inventory/locations'),
   createLocation: (data: { name: string; identifier?: string | null }) =>
