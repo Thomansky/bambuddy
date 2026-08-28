@@ -78,6 +78,25 @@ class TestPreviewThumbnailUpload:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    async def test_upload_accepts_msg_files(
+        self, async_client: AsyncClient, db_session, file_factory, isolated_storage
+    ):
+        library_file = await file_factory(
+            file_type="msg", filename="order.msg", file_path="library/files/order.msg"
+        )
+
+        response = await async_client.post(
+            f"/api/v1/library/files/{library_file.id}/preview-thumbnail",
+            files={"thumbnail": ("preview.png", _png_bytes(), "image/png")},
+        )
+        assert response.status_code == 200
+        assert response.json() == {"updated": True}
+
+        await db_session.refresh(library_file)
+        assert library_file.thumbnail_path
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_upload_downscales_oversized_image(
         self, async_client: AsyncClient, db_session, file_factory, isolated_storage
     ):
