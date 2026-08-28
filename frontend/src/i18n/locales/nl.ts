@@ -2106,6 +2106,9 @@ export default {
     filamentTrackingDesc: 'Kies hoe je filamentspoelen wilt bijhouden. Je kunt de ingebouwde voorraad gebruiken of een externe Spoolman-server koppelen.',
     autoAddUnknownRfid: 'Onbekende RFID-spoelen automatisch toevoegen',
     autoAddUnknownRfidDesc: 'Maak automatisch een voorraaditem wanneer een spoel met een onbekende RFID-tag wordt gedetecteerd. Schakel dit uit als je nieuwe spoelen handmatig vooraf registreert om duplicaten te voorkomen.',
+    // Linked spools (#2936)
+    autoLinkScannedSpools: 'Gescande spoelen automatisch koppelen',
+    autoLinkScannedSpoolsDesc: 'Wanneer een gescande of automatisch toegevoegde spoel overeenkomt met een bestaand product, koppel deze dan aan die spoel zodat hij binnenkomt met de volledige filamentgegevens — inclusief prijs per kg.',
     filamentChecks: 'Filamentcontroles',
     disableFilamentWarnings: 'Filamentwaarschuwingen uitschakelen',
     disableFilamentWarningsDesc: 'Geen waarschuwingen tonen over onvoldoende filament bij afdrukken of in wachtrij plaatsen',
@@ -4764,6 +4767,28 @@ export default {
     storageLocationNone: 'Geen locatie ingesteld',
     lowStockThresholdOverride: 'Drempel lage voorraad (deze spoel)',
     lowStockThresholdOverrideHelp: 'Laat leeg om de globale drempel ({{global}}%) te gebruiken.',
+    // Linked spools sharing filament master data (#2936)
+    linked: {
+      column: 'Gekoppeld',
+      indicatorTooltip: 'Gekoppelde spoel — filamentgegevens worden gedeeld met de groep',
+      linkTitle: 'Spoelen koppelen',
+      pickSourceHint: 'Kies de spoel waarvan de filamentgegevens leidend moeten zijn. Het merk, de kleur, gewichten, temperaturen, prijs en notities worden naar de andere gekopieerd en blijven vanaf dan gesynchroniseerd. Resterend gewicht, tags, locaties en geschiedenis blijven altijd per spoel.',
+      searchPlaceholder: 'Spoelen zoeken…',
+      noCandidates: 'Geen spoelen om uit te kiezen',
+      alreadyLinked: 'gekoppeld',
+      linkConfirm: 'Hiermee worden de filamentgegevens van {{count}} spoel(en) overschreven.',
+      linkAction: 'Koppelen',
+      linkedToast: 'Gekoppeld — {{count}} record(s) bijgewerkt',
+      linkFailed: 'Koppelen van spoelen mislukt',
+      banner: 'Gekoppeld met {{count}} andere spoel(en) — wijzigingen in filamentgegevens gelden voor allemaal.',
+      notLinked: 'Niet gekoppeld aan andere spoelen.',
+      linkWithExisting: 'Koppelen met bestaande spoel…',
+      unlinkAction: 'Ontkoppelen',
+      unlinkedToast: 'Spoel ontkoppeld',
+      unlinkFailed: 'Ontkoppelen van spoel mislukt',
+      propagateTitle: 'Toepassen op gekoppelde spoelen?',
+      propagateConfirm: 'Deze wijziging werkt ook de filamentgegevens van {{count}} gekoppelde spoel(en) bij. Resterend gewicht, tags, locaties en geschiedenis blijven onaangeroerd.',
+    },
     // RFID button rename (was "Delete Tag" — confusing because it sounds like a
     // taxonomy delete; this clears the RFID tag/UUID off the spool record)
     clearRfid: 'RFID-tag wissen',
