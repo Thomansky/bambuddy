@@ -7,7 +7,7 @@ import {
   Search, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
   TrendingDown, Layers, Printer, AlertTriangle, X, Clock, LayoutGrid, TableProperties, Columns,
   ArrowUp, ArrowDown, ArrowUpDown, Group, ChevronDown, Check, RefreshCw, TrendingUp, Lock, Copy, Eraser, MapPin,
-  Upload, Download,
+  Upload, Download, Link2,
 } from 'lucide-react';
 import { ForecastPanel } from '../components/ForecastPanel';
 import { api, spoolbuddyApi, ApiError } from '../api/client';
@@ -23,6 +23,7 @@ import { LabelTemplatePickerModal } from '../components/LabelTemplatePickerModal
 import { SpoolCsvImportModal } from '../components/SpoolCsvImportModal';
 import { LocationsModal } from '../components/LocationsModal';
 import { BulkEditSpoolsModal } from '../components/BulkEditSpoolsModal';
+import { SpoolGroupLinkModal } from '../components/SpoolGroupLinkModal';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { colorSortKey, resolveSpoolColorName } from '../utils/colors';
@@ -99,6 +100,7 @@ const DEFAULT_COLUMNS: ColumnConfig[] = [
   { id: 'note', label: 'Note', visible: false },
   { id: 'material_number', label: 'Material No.', visible: false },
   { id: 'suppliers', label: 'Suppliers', visible: false },
+  { id: 'linked', label: 'Linked', visible: true },
   { id: 'pa_k', label: 'PA(K)', visible: true },
   { id: 'tag_id', label: 'Tag ID', visible: false },
   { id: 'data_origin', label: 'Data Origin', visible: false },
@@ -230,6 +232,7 @@ const columnHeaders: Record<string, (t: TFn) => string> = {
   note: (t) => t('inventory.note'),
   material_number: (t) => t('inventory.materialNumber'),
   suppliers: (t) => t('inventory.suppliers.label'),
+  linked: (t) => t('inventory.linked.column'),
   pa_k: () => 'PA(K)',
   tag_id: () => 'Tag ID',
   data_origin: () => 'Data Origin',
@@ -398,6 +401,19 @@ const columnCells: Record<string, (ctx: CellCtx) => ReactNode> = {
       </div>
     );
   },
+  // Linked-spools indicator (#2936): a chain icon marks records that share
+  // their filament master data with others; the edit dialog names the count.
+  linked: ({ spool, t }) => {
+    if (spool.filament_group_id == null) return <span className="text-sm text-bambu-gray">-</span>;
+    return (
+      <span
+        className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-bambu-green/10 text-bambu-green"
+        title={t('inventory.linked.indicatorTooltip')}
+      >
+        <Link2 className="w-3 h-3" />
+      </span>
+    );
+  },
   pa_k: ({ spool }) => {
     const count = spool.k_profiles?.length ?? 0;
     if (count === 0) return <span className="text-sm text-bambu-gray">-</span>;
@@ -552,6 +568,8 @@ const columnSortValues: Record<
     const primary = links.find((l) => l.is_purchase_source) ?? links[0];
     return (primary?.supplier_name || '').toLowerCase();
   },
+  // Sorts linked records together by group id; unlinked spools sort last.
+  linked: (s) => s.filament_group_id ?? Number.MAX_SAFE_INTEGER,
   data_origin: (s) => (s.data_origin || '').toLowerCase(),
   tag_type: (s) => (s.tag_type || '').toLowerCase(),
   stock: (s) => s.slicer_filament ? 1 : 0,
@@ -661,6 +679,8 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
   // produces a confusing toolbar count vs. visible-row count delta.
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [bulkEditOpen, setBulkEditOpen] = useState(false);
+  // Linked spools (#2936): merge the selection into a master-data group.
+  const [linkModalOpen, setLinkModalOpen] = useState(false);
   const [bulkConfirmAction, setBulkConfirmAction] = useState<'delete' | 'archive' | 'restore' | 'reset-consumed-counter' | null>(null);
   const toggleSelected = useCallback((id: number) => {
     setSelectedIds((prev) => {
@@ -2109,6 +2129,15 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
               <Edit2 className="w-3.5 h-3.5 mr-1.5" />
               {t('inventory.bulk.edit')}
             </Button>
+            {/* Linked spools (#2936): merge the selection into one
+                master-data group. Internal inventory only — Spoolman mode
+                already shares master data through Spoolman filaments. */}
+            {!spoolmanMode && selectedIds.size >= 2 && (
+              <Button size="sm" variant="secondary" onClick={() => setLinkModalOpen(true)}>
+                <Link2 className="w-3.5 h-3.5 mr-1.5" />
+                {t('inventory.linked.linkAction')}
+              </Button>
+            )}
             <Button size="sm" variant="secondary" onClick={() => setLabelPickerSpoolIds([...selectedIds])}>
               <Printer className="w-3.5 h-3.5 mr-1.5" />
               {t('inventory.bulk.printLabels')}
@@ -2562,6 +2591,19 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
         initialSelectedIds={labelPickerSpoolIds ?? []}
         spoolmanMode={spoolmanMode}
       />
+
+      {/* Linked spools (#2936): pick which selected spool's master data wins. */}
+      {linkModalOpen && (
+        <SpoolGroupLinkModal
+          targetIds={[...selectedIds]}
+          candidates={(spools ?? []).filter((s) => selectedIds.has(s.id))}
+          onClose={() => setLinkModalOpen(false)}
+          onLinked={() => {
+            setSelectedIds(new Set());
+            refreshSpoolQueries();
+          }}
+        />
+      )}
 
       <BulkEditSpoolsModal
         isOpen={bulkEditOpen}

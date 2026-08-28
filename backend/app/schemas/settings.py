@@ -362,6 +362,16 @@ class AppSettings(BaseModel):
         description="Low stock threshold percentage (%) for inventory filtering and display",
     )
 
+    # Linked spools (#2936): when a scanned/auto-added spool matches an
+    # existing product (material, subtype, brand, colour), automatically
+    # attach it to that spool's link group so it arrives with the full
+    # master data — including cost per kg — instead of blank fields.
+    # Opt-in so existing installs see no behaviour change.
+    auto_link_scanned_spools: bool = Field(
+        default=False,
+        description="Automatically link RFID/SpoolBuddy-added spools to an existing spool of the same product",
+    )
+
     # Session policy (#1706) — admin-set ceiling for user session lifetime.
     # Default 24h preserves the M-2 audit reduction from 7 days. Max 720h
     # (30 days) bounds blast radius if an admin chooses a long session.
@@ -729,6 +739,7 @@ class AppSettingsUpdate(BaseModel):
     prometheus_enabled: bool | None = None
     prometheus_token: str | None = None
     low_stock_threshold: float | None = Field(default=None, ge=0.1, le=99.9)
+    auto_link_scanned_spools: bool | None = None
     session_max_hours: int | None = Field(default=None, ge=1, le=720)
     user_notifications_enabled: bool | None = None
     default_bed_levelling: TriState | None = None
