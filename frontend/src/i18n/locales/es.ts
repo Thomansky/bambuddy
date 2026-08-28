@@ -4862,6 +4862,10 @@ export default {
     filamentPresetSaveFailed: 'No se pudieron guardar los perfiles por modelo',
     // Stats & enhanced table
     totalInventory: 'Inventario total',
+    stockValue: 'Valor del inventario',
+    stockValuePurchase: 'Valor de compra: {{value}}',
+    stockValueUnpriced: '{{count}} sin precio',
+    stockValueUnpricedTooltip: 'Las bobinas sin precio por kg no se incluyen en el valor.',
     totalConsumed: 'Total consumido',
     byMaterial: 'Por material',
     inPrinter: 'En la impresora',

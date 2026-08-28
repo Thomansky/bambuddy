@@ -4855,6 +4855,10 @@ export default {
     filamentPresetSaveFailed: 'Die modellspezifischen Voreinstellungen konnten nicht gespeichert werden',
     // Stats & enhanced table
     totalInventory: 'Gesamtbestand',
+    stockValue: 'Lagerwert',
+    stockValuePurchase: 'Einkaufswert: {{value}}',
+    stockValueUnpriced: '{{count}} ohne Preis',
+    stockValueUnpricedTooltip: 'Spulen ohne Preis pro kg werden im Wert nicht berücksichtigt.',
     totalConsumed: 'Gesamtverbrauch',
     byMaterial: 'Nach Material',
     inPrinter: 'Im Drucker',

@@ -4855,6 +4855,10 @@ export default {
     filamentPresetSaveFailed: 'モデル別プリセットを保存できませんでした',
     // Stats & enhanced table
     totalInventory: '在庫合計',
+    stockValue: '在庫金額',
+    stockValuePurchase: '購入金額: {{value}}',
+    stockValueUnpriced: '{{count}}個が価格未設定',
+    stockValueUnpricedTooltip: 'kg単価が未設定のスプールは金額に含まれません。',
     totalConsumed: '総消費量',
     byMaterial: '素材別',
     inPrinter: 'プリンター内',

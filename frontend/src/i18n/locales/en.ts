@@ -4900,6 +4900,10 @@ export default {
     filamentPresetSaveFailed: 'Could not save the per-model presets',
     // Stats & enhanced table
     totalInventory: 'Total Inventory',
+    stockValue: 'Stock Value',
+    stockValuePurchase: 'Purchase value: {{value}}',
+    stockValueUnpriced: '{{count}} without price',
+    stockValueUnpricedTooltip: 'Spools without a price per kg are not included in the value.',
     totalConsumed: 'Total Consumed',
     byMaterial: 'By Material',
     inPrinter: 'In Printer',

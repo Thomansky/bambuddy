@@ -4900,6 +4900,10 @@ export default {
     filamentPresetSaveFailed: 'De voorinstellingen per model konden niet worden opgeslagen',
     // Stats & enhanced table
     totalInventory: 'Totale voorraad',
+    stockValue: 'Voorraadwaarde',
+    stockValuePurchase: 'Aanschafwaarde: {{value}}',
+    stockValueUnpriced: '{{count}} zonder prijs',
+    stockValueUnpricedTooltip: 'Spoelen zonder prijs per kg tellen niet mee in de waarde.',
     totalConsumed: 'Totaal verbruikt',
     byMaterial: 'Per materiaal',
     inPrinter: 'In printer',

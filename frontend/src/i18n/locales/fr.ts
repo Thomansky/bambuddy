@@ -4844,6 +4844,10 @@ export default {
     filamentPresetSaveFailed: 'Impossible d\'enregistrer les préréglages par modèle',
     // Stats & enhanced table
     totalInventory: 'Total Inventaire',
+    stockValue: 'Valeur du Stock',
+    stockValuePurchase: 'Valeur d\'achat : {{value}}',
+    stockValueUnpriced: '{{count}} sans prix',
+    stockValueUnpricedTooltip: 'Les bobines sans prix par kg ne sont pas incluses dans la valeur.',
     totalConsumed: 'Total Consommé',
     byMaterial: 'Par Matériau',
     inPrinter: 'Dans Imprimante',

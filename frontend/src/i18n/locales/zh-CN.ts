@@ -4849,6 +4849,10 @@ export default {
     filamentPresetSaveFailed: '无法保存按机型预设',
     // Stats & enhanced table
     totalInventory: '总库存',
+    stockValue: '库存价值',
+    stockValuePurchase: '购入价值：{{value}}',
+    stockValueUnpriced: '{{count}} 个未设价格',
+    stockValueUnpricedTooltip: '未设置每公斤价格的料盘不计入该价值。',
     totalConsumed: '总消耗',
     byMaterial: '按材料',
     inPrinter: '在打印机中',
