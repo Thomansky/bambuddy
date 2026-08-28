@@ -129,7 +129,12 @@ class SpoolBase(BaseModel):
 
 
 class SpoolCreate(SpoolBase):
-    pass
+    # Link the new spool into an existing spool's group on creation (#2936):
+    # it joins that spool's link group and takes over its master data. This
+    # is the hook for the SpoolBuddy/ESPoolBuddy scan flow, so a freshly
+    # scanned refill attaches to the known product instead of creating a
+    # drifting standalone record.
+    link_to_spool_id: int | None = Field(default=None, gt=0)
 
 
 class SpoolBulkCreate(BaseModel):
@@ -176,6 +181,25 @@ class SpoolUpdate(BaseModel):
     low_stock_threshold_pct: int | None = Field(default=None, ge=1, le=99)
     storage_location: str | None = Field(default=None, max_length=255)
     location_id: int | None = Field(default=None, gt=0)
+
+
+class LinkSpoolsRequest(BaseModel):
+    """Link a set of spools into one master-data group (#2936).
+
+    The source spool's master data wins and is copied to the others once;
+    afterwards edits to any member propagate to the whole group.
+    """
+
+    spool_ids: list[int] = Field(..., min_length=1, max_length=500)
+    source_spool_id: int = Field(..., gt=0)
+
+
+class LinkSpoolsResponse(BaseModel):
+    group_id: int
+    linked: int
+    # Number of OTHER records whose master data was overwritten by the
+    # source's values — the count the UI's confirmation names.
+    updated: int
 
 
 class SpoolKProfileBase(BaseModel):
@@ -241,6 +265,9 @@ class SpoolResponse(SpoolBase):
     created_at: datetime
     updated_at: datetime
     k_profiles: list[SpoolKProfileResponse] = []
+    # Link group for shared master data (#2936); NULL = not linked. Read-only
+    # here — membership changes go through the link/unlink endpoints.
+    filament_group_id: int | None = None
 
     class Config:
         from_attributes = True

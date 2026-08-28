@@ -4772,6 +4772,35 @@ async def run_migrations(conn):
     # on fresh installs only — this covers databases whose table predates it.
     await _migrate_location_ha_sensor_unique_binding(conn)
 
+    # Migration: linked spools sharing filament master data (#2936). The
+    # group table is payload-free; the spool gains a nullable group FK.
+    # create_all() covers fresh installs, this covers upgrades. Identical
+    # DDL on SQLite and PostgreSQL except the PK spelling.
+    if is_sqlite():
+        await _safe_execute(
+            conn,
+            """
+            CREATE TABLE IF NOT EXISTS spool_link_groups (
+                id INTEGER PRIMARY KEY,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+        )
+    else:
+        await _safe_execute(
+            conn,
+            """
+            CREATE TABLE IF NOT EXISTS spool_link_groups (
+                id SERIAL PRIMARY KEY,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+        )
+    # Plain INTEGER, no FK — mirrors the model (service-managed lifecycle,
+    # same shape as core_weight_catalog_id).
+    await _safe_execute(conn, "ALTER TABLE spool ADD COLUMN filament_group_id INTEGER")
+    await _safe_execute(conn, "CREATE INDEX IF NOT EXISTS ix_spool_filament_group_id ON spool (filament_group_id)")
+
     # Migration: repair the tare of spools the RFID auto-add gave the wrong
     # Bambu spool row (#2909). Runs last so the spool catalogue it reads is
     # whatever this database actually holds.
