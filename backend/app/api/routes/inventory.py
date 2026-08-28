@@ -1,4 +1,4 @@
-import json
+﻿import json
 import logging
 
 import httpx
@@ -28,6 +28,7 @@ from backend.app.models.spool_assignment import SpoolAssignment
 from backend.app.models.spool_catalog import SpoolCatalogEntry
 from backend.app.models.spool_filament_preset import SpoolFilamentPreset
 from backend.app.models.spool_k_profile import SpoolKProfile
+from backend.app.models.supplier import SpoolSupplier, Supplier
 from backend.app.models.user import User
 from backend.app.schemas.location import LocationCreate, LocationResponse, LocationUpdate
 from backend.app.schemas.spool import (
@@ -46,6 +47,7 @@ from backend.app.schemas.spool import (
     normalize_extra_colors,
 )
 from backend.app.schemas.spool_usage import SpoolUsageHistoryResponse
+from backend.app.schemas.supplier import SpoolSupplierLinkInput, SpoolSupplierResponse, SupplierStats
 from backend.app.services.location_service import (
     DUPLICATE_LOCATION_NAME,
     assign_location_name,
@@ -68,6 +70,7 @@ from backend.app.services.spool_csv import (
 )
 from backend.app.services.spool_filament_preset import resolve_spool_preset
 from backend.app.services.spoolman import SpoolmanClient, get_spoolman_client, init_spoolman_client
+from backend.app.services.supplier_links import apply_supplier_inheritance
 from backend.app.utils.filament_ids import (
     GENERIC_FILAMENT_IDS,
     filament_id_to_setting_id,
@@ -106,7 +109,7 @@ async def apply_spool_to_slot_via_mqtt(
 
     Shared by `assign_spool` (initial assign for a loaded slot) and
     `on_ams_change` (re-fire when a SpoolBuddy-pre-assigned slot transitions
-    empty → loaded). Returns True when MQTT commands were published, False if
+    empty â†’ loaded). Returns True when MQTT commands were published, False if
     no client was available or setup failed mid-way.
 
     `current_tray_info_idx` / `current_tray_type` describe the live tray state
@@ -158,7 +161,7 @@ async def apply_spool_to_slot_via_mqtt(
         fallback_name=spool.slicer_filament_name,
     )
 
-    # slicer_filament → (tray_info_idx, setting_id) resolution is shared with
+    # slicer_filament â†’ (tray_info_idx, setting_id) resolution is shared with
     # the Spoolman-mode route via this helper (#1713). The helper handles
     # GFS/PFUS/PFCN cloud lookup, GF normalize, integer LocalPreset id,
     # the builtin-name realignment, AND the defensive PFUS/PFCN/material-name
@@ -211,7 +214,7 @@ async def apply_spool_to_slot_via_mqtt(
 
     # Ensure setting_id is always derivable from tray_info_idx. The local-preset
     # path above sets tray_info_idx to a generic ID (e.g. "GFL99") but leaves
-    # setting_id empty — without this fallback the slicer gets a half-configured
+    # setting_id empty â€” without this fallback the slicer gets a half-configured
     # slot (filament id without setting id) and shows empty fields in the slot
     # detail modal.
     if tray_info_idx and not setting_id:
@@ -251,7 +254,7 @@ async def apply_spool_to_slot_via_mqtt(
 
     # Resolve the printer-side calibration entry by looking up the cali_idx
     # in state.kprofiles. The printer keys its calibration table by
-    # (filament_id, cali_idx) — for the cali_idx to stick, the slot's
+    # (filament_id, cali_idx) â€” for the cali_idx to stick, the slot's
     # filament_id must match the kp's. PFUS-prefix cloud user presets are
     # rejected by the slicer in tray_info_idx; the printer-reported
     # filament_id is typically a P-prefix local preset which is valid.
@@ -273,7 +276,7 @@ async def apply_spool_to_slot_via_mqtt(
         effective_setting_id = target_setting_id
     if effective_tray_info_idx != tray_info_idx or effective_setting_id != setting_id:
         logger.info(
-            "Spool assign: realigning tray_info_idx %r → %r, setting_id %r → %r (source=%s)",
+            "Spool assign: realigning tray_info_idx %r â†’ %r, setting_id %r â†’ %r (source=%s)",
             tray_info_idx,
             effective_tray_info_idx,
             setting_id,
@@ -311,7 +314,7 @@ async def apply_spool_to_slot_via_mqtt(
             nozzle_diameter=nozzle_diameter,
         )
     else:
-        # No stored K-profile for this spool — always reset the slot to Default
+        # No stored K-profile for this spool â€” always reset the slot to Default
         # K (cali_idx=-1). The live cali_idx on the slot belongs to whatever
         # filament was there before, so preserving it would apply the wrong
         # filament's calibration to the new spool. Default K is the firmware's
@@ -326,7 +329,7 @@ async def apply_spool_to_slot_via_mqtt(
             nozzle_diameter=nozzle_diameter,
         )
         logger.info(
-            "No stored K-profile for spool %d — reset slot to Default K (cali_idx=-1)",
+            "No stored K-profile for spool %d â€” reset slot to Default K (cali_idx=-1)",
             spool.id,
         )
 
@@ -334,7 +337,7 @@ async def apply_spool_to_slot_via_mqtt(
     # tray actually accepted this assignment (#2582). We record the same
     # effective filament id we pushed plus the cali_idx we selected (or -1 for
     # the Default-K reset above), and the client fires on_assignment_verified
-    # on match/timeout. Colour is informational only — the match keys on the
+    # on match/timeout. Colour is informational only â€” the match keys on the
     # filament id the slicer echoes back.
     verify_cali_idx = matching_kp.cali_idx if (matching_kp and matching_kp.cali_idx is not None) else -1
     client.register_assignment_verification(
@@ -346,7 +349,7 @@ async def apply_spool_to_slot_via_mqtt(
     )
 
     # Persist slot preset mapping for UI display (preset_name on hover card).
-    # Shared with the RFID auto-assign path — both must keep this row in sync
+    # Shared with the RFID auto-assign path â€” both must keep this row in sync
     # with the currently-assigned spool, otherwise the slot card surfaces the
     # previous spool's preset name (the PrintersPage display chain consults
     # slot_preset_mappings.preset_name first).
@@ -374,7 +377,7 @@ async def apply_spool_to_slot_via_mqtt(
     return True
 
 
-# ── Spool Catalog Schemas ──────────────────────────────────────────────────
+# â”€â”€ Spool Catalog Schemas â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 class CatalogEntryResponse(BaseModel):
@@ -401,7 +404,7 @@ class BulkDeleteIdsRequest(BaseModel):
     ids: list[int]
 
 
-# ── Color Catalog Schemas ──────────────────────────────────────────────────
+# â”€â”€ Color Catalog Schemas â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 class ColorEntryResponse(BaseModel):
@@ -469,7 +472,7 @@ class ColorByMaterialResult(BaseModel):
     color_name: str | None = None
 
 
-# ── Spool Catalog CRUD ─────────────────────────────────────────────────────
+# â”€â”€ Spool Catalog CRUD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 @router.get("/catalog", response_model=list[CatalogEntryResponse])
@@ -566,7 +569,7 @@ async def reset_spool_catalog(
     return {"status": "reset"}
 
 
-# ── Storage Locations (#1004) ───────────────────────────────────────────────
+# â”€â”€ Storage Locations (#1004) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 async def _load_settings_map(db: AsyncSession) -> dict[str, str]:
@@ -612,7 +615,7 @@ async def _spool_counts_for_locations(
                 # Use the canonical key helper so this matches what the
                 # migration backfill, Location.name_key, and every other
                 # codepath store as the case-insensitive lookup key. Plain
-                # str.lower() drifts for non-ASCII (Turkish ı/İ, German ß)
+                # str.lower() drifts for non-ASCII (Turkish Ä±/Ä°, German ÃŸ)
                 # and caused mismatched delete-block counts in Spoolman mode.
                 by_key: dict[str, int] = {}
                 for spool in spools:
@@ -760,7 +763,7 @@ async def delete_location(
     return {"status": "deleted"}
 
 
-# ── Color Catalog CRUD ─────────────────────────────────────────────────────
+# â”€â”€ Color Catalog CRUD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 @router.get("/colors", response_model=list[ColorEntryResponse])
@@ -784,7 +787,7 @@ async def get_color_name_map(
 ):
     """Compact {hex: name} map for frontend color-name resolution.
 
-    Not gated on INVENTORY_READ — every page that renders a spool color needs
+    Not gated on INVENTORY_READ â€” every page that renders a spool color needs
     this, including read-only views available to users without inventory access.
     Normalized to lowercase 6-char hex without '#'. When multiple catalog entries
     share the same hex (different materials or manufacturers), Bambu Lab wins,
@@ -793,14 +796,14 @@ async def get_color_name_map(
     ``by_material`` carries the names that collapsing loses. A hex is not one
     colour in Bambu's range: #FFFFFF is Jade White in PLA Basic, Ivory White in
     PLA Matte and plain White in six more, and #000000 is Black except in PLA
-    Matte where it is Charcoal. A caller that knows the material — an AMS slot
-    knows it as ``tray_sub_brands`` — looks up ``"<material>|<hex>"`` there
+    Matte where it is Charcoal. A caller that knows the material â€” an AMS slot
+    knows it as ``tray_sub_brands`` â€” looks up ``"<material>|<hex>"`` there
     first and falls back to ``colors`` (#2875).
 
     An entry is included only when it recovers a name the *same manufacturer's*
     own range lost. Two conditions, both load-bearing: a name equal to the
     collapsed one is pure weight, and a name from a different manufacturer is
-    not a recovery at all — it would put Prusament's "Pristine White" on every
+    not a recovery at all â€” it would put Prusament's "Pristine White" on every
     generic white PLA slot in place of Bambu's "Jade White", trading one
     arbitrary answer for another. What survives is the handful of cases this
     exists for.
@@ -814,9 +817,9 @@ async def get_color_name_map(
             ColorCatalogEntry.material,
         )
     )
-    # hex → (name, priority, manufacturer); higher priority wins, first on a tie
+    # hex â†’ (name, priority, manufacturer); higher priority wins, first on a tie
     mapping: dict[str, tuple[str, int, str]] = {}
-    by_material: dict[str, tuple[str, int, str]] = {}  # "material|hex" → same
+    by_material: dict[str, tuple[str, int, str]] = {}  # "material|hex" â†’ same
     for hex_color, color_name, manufacturer, is_default, material in result.all():
         if not hex_color or not color_name:
             continue
@@ -981,10 +984,10 @@ async def get_color_by_material(
     db: AsyncSession = Depends(get_db),
     _: User | None = Depends(require_auth_if_enabled),
 ):
-    """Disambiguated hex→name lookup that respects material context.
+    """Disambiguated hexâ†’name lookup that respects material context.
 
     ``/colors/map`` collapses every catalog entry sharing a hex to a single
-    name with "Bambu Lab > is_default > first" priority — that loses, e.g.,
+    name with "Bambu Lab > is_default > first" priority â€” that loses, e.g.,
     "PLA Matte Charcoal" (#000000) behind "PLA Basic Black" (also #000000).
     This endpoint preserves the material context so the queue scheduler's
     Filament Override label can show the actually-sliced sub-brand colour
@@ -995,7 +998,7 @@ async def get_color_by_material(
     material (or none was supplied), falls back to the same priority order
     as ``/colors/map`` so callers without a material hint don't regress.
 
-    Not gated on INVENTORY_READ for the same reason ``/colors/map`` isn't —
+    Not gated on INVENTORY_READ for the same reason ``/colors/map`` isn't â€”
     every queue / archive view that renders a sliced filament colour needs
     this, including read-only roles.
     """
@@ -1075,7 +1078,7 @@ async def sync_from_filamentcolors(
 
         try:
             # Identify honestly as Bambuddy rather than leaking httpx's
-            # default "python-httpx/x.y" UA — consistent with every other
+            # default "python-httpx/x.y" UA â€” consistent with every other
             # outbound client (bambu_cloud, makerworld, firmware_check).
             async with httpx.AsyncClient(
                 timeout=120.0,
@@ -1171,7 +1174,7 @@ async def sync_from_filamentcolors(
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
-# ── Spool CRUD ───────────────────────────────────────────────────────────────
+# â”€â”€ Spool CRUD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 @router.get("/spools", response_model=list[SpoolResponse])
@@ -1189,7 +1192,7 @@ async def list_spools(
     return list(result.scalars().all())
 
 
-# ── CSV import / export (#1576) ──────────────────────────────────────────────
+# â”€â”€ CSV import / export (#1576) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Declared before the dynamic `/spools/{spool_id}` route below so the literal
 # `export` / `import` segments match here instead of being parsed as an int id.
 
@@ -1226,7 +1229,7 @@ async def import_spools_csv(
     """Import spools from a CSV file.
 
     With ``dry_run=true`` returns an ImportPreview (per-row valid/error/skipped,
-    colours resolved) and writes nothing — the UI shows this before the user
+    colours resolved) and writes nothing â€” the UI shows this before the user
     confirms. With ``dry_run=false`` it validates the same way and then persists
     only the valid rows in a single transaction (invalid rows are skipped, the
     user fixes the CSV and re-uploads), returning an ImportResult summary.
@@ -1243,7 +1246,7 @@ async def import_spools_csv(
 
     # Reject by declared size first (fast path when Content-Length is set), then
     # read in bounded chunks and bail the moment the accumulated body crosses the
-    # cap — file.size is None for chunked uploads, so the loop is what actually
+    # cap â€” file.size is None for chunked uploads, so the loop is what actually
     # keeps an oversized stream from filling memory.
     if file.size is not None and file.size > MAX_CSV_IMPORT_BYTES:
         raise _too_large()
@@ -1347,6 +1350,10 @@ async def create_spool(
     payload = await apply_material_number_inheritance(db, payload)
     spool = Spool(**payload)
     db.add(spool)
+    await db.flush()
+    # A new spool of a product that already carries supplier assignments
+    # inherits the source list (#2988).
+    await apply_supplier_inheritance(db, spool)
     await db.commit()
     await db.refresh(spool)
     result = await db.execute(select(Spool).options(selectinload(Spool.k_profiles)).where(Spool.id == spool.id))
@@ -1373,6 +1380,11 @@ async def bulk_create_spools(
         spool = Spool(**payload)
         db.add(spool)
         spools.append(spool)
+    await db.flush()
+    # Inherit supplier assignments per copy (#2988); the donor lookup is
+    # identical for all copies but each spool gets its own link rows.
+    for spool in spools:
+        await apply_supplier_inheritance(db, spool)
     await db.commit()
     ids = [s.id for s in spools]
     result = await db.execute(select(Spool).options(selectinload(Spool.k_profiles)).where(Spool.id.in_(ids)))
@@ -1480,13 +1492,13 @@ async def reset_spool_consumed_counter(
     Stamps `weight_used_baseline = weight_used` so the Inventory page's
     `weight_used - baseline` display reads 0, while `label_weight -
     weight_used` (remaining) is unchanged. weight_locked is also left
-    alone — the spool keeps receiving AMS auto-sync updates. Matches
+    alone â€” the spool keeps receiving AMS auto-sync updates. Matches
     Spoolman's split between used_weight and remaining_weight (#1390).
 
     The earlier name `/reset-usage` was misleading: callers reasonably
     expected `weight_used` itself to drop to 0 and were surprised when
     the response showed it unchanged. The current name describes what
-    the endpoint actually does — reset the "Total Consumed" counter
+    the endpoint actually does â€” reset the "Total Consumed" counter
     widget, not the lifetime weight_used field.
     """
     result = await db.execute(select(Spool).where(Spool.id == spool_id))
@@ -1509,7 +1521,7 @@ async def bulk_reset_spool_consumed_counter(
 ):
     """Bulk-stamp baseline = weight_used across the given spool IDs.
 
-    Caller passes an explicit list of IDs — no "reset all" shortcut, since
+    Caller passes an explicit list of IDs â€” no "reset all" shortcut, since
     a typo on a wildcard would wipe the entire inventory's tracking.
     Same semantics as the per-spool endpoint: remaining is preserved,
     weight_locked is left alone.
@@ -1558,7 +1570,7 @@ async def bulk_update_spools(
         prepared = await prepare_internal_spool_payload(db, update_data, fields_set)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    # Auto-lock weight when the user explicitly sets weight_used — mirrors the
+    # Auto-lock weight when the user explicitly sets weight_used â€” mirrors the
     # per-spool PATCH behaviour so bulk edits don't desync the lock state.
     if "weight_used" in prepared and "weight_locked" not in prepared:
         prepared["weight_locked"] = True
@@ -1649,7 +1661,7 @@ async def bulk_restore_spools(
     return {"restored": len(restored), "already_active": already, "not_found": not_found}
 
 
-# ── K-Profiles ───────────────────────────────────────────────────────────────
+# â”€â”€ K-Profiles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 @router.get("/spools/{spool_id}/k-profiles", response_model=list[SpoolKProfileResponse])
@@ -1692,6 +1704,52 @@ async def replace_k_profiles(
     for kp in new_profiles:
         await db.refresh(kp)
     return new_profiles
+
+
+@router.put("/spools/{spool_id}/suppliers", response_model=list[SpoolSupplierResponse])
+async def replace_spool_suppliers(
+    spool_id: int,
+    links: list[SpoolSupplierLinkInput],
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_UPDATE),
+):
+    """Replace a spool's supplier assignments (#2988, batch save).
+
+    Same replace-all shape as the k-profiles endpoint. At most one assignment
+    may be the purchase source â€” the record of where this concrete spool was
+    actually bought; the rest read as alternative sources.
+    """
+    result = await db.execute(select(Spool).where(Spool.id == spool_id))
+    if not result.scalar_one_or_none():
+        raise HTTPException(404, "Spool not found")
+
+    supplier_ids = [link.supplier_id for link in links]
+    if len(set(supplier_ids)) != len(supplier_ids):
+        raise HTTPException(400, "Duplicate supplier in assignment list")
+    if sum(1 for link in links if link.is_purchase_source) > 1:
+        raise HTTPException(400, "Only one assignment can be the purchase source")
+    if supplier_ids:
+        found = await db.execute(select(Supplier.id).where(Supplier.id.in_(supplier_ids)))
+        missing = set(supplier_ids) - {row[0] for row in found.all()}
+        if missing:
+            raise HTTPException(404, f"Supplier(s) not found: {sorted(missing)}")
+
+    existing = await db.execute(select(SpoolSupplier).where(SpoolSupplier.spool_id == spool_id))
+    for old in existing.scalars().all():
+        await db.delete(old)
+    await db.flush()
+
+    new_links = []
+    for link in links:
+        row = SpoolSupplier(spool_id=spool_id, **link.model_dump())
+        db.add(row)
+        new_links.append(row)
+
+    await db.commit()
+    for row in new_links:
+        await db.refresh(row)
+    await ws_manager.broadcast({"type": "inventory_changed"})
+    return new_links
 
 
 @router.get("/spools/{spool_id}/filament-presets", response_model=list[SpoolFilamentPresetResponse])
@@ -1761,7 +1819,7 @@ async def replace_filament_presets(
     return new_presets
 
 
-# ── Spool Assignments ────────────────────────────────────────────────────────
+# â”€â”€ Spool Assignments â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 @router.get("/assignments", response_model=list[SpoolAssignmentResponse])
@@ -1849,7 +1907,7 @@ async def assign_spool(
     # 2. Get current AMS tray state for fingerprint + existing filament ID.
     # tray_state: Bambu firmware reports 11=loaded, 9=empty, 10=spool present
     # but filament not in feeder. Captured here so the empty-slot heuristic
-    # below can prefer it over tray_type — a manual "Reset slot" clears
+    # below can prefer it over tray_type â€” a manual "Reset slot" clears
     # tray_type to "" while leaving state at 11 (filament still physically
     # present), which would otherwise mislead the heuristic into the
     # pending-config branch and skip MQTT forever (#1228 follow-up).
@@ -1862,7 +1920,7 @@ async def assign_spool(
         if data.ams_id == 255:
             # External slot: look up tray from vt_tray by global ID
             vt_tray = state.raw_data.get("vt_tray") or []
-            ext_id = data.tray_id + 254  # 0→254, 1→255
+            ext_id = data.tray_id + 254  # 0â†’254, 1â†’255
             for vt in vt_tray:
                 if isinstance(vt, dict) and int(vt.get("id", 254)) == ext_id:
                     fingerprint_color = vt.get("tray_color", "")
@@ -1922,7 +1980,7 @@ async def assign_spool(
     # 4. Auto-configure AMS slot via MQTT.
     #
     # Only suppress the publish when the firmware's *explicit* empty signal
-    # (state ∈ {9, 10}) is set — "no spool" / "spool present but no feed".
+    # (state âˆˆ {9, 10}) is set â€” "no spool" / "spool present but no feed".
     # Every other state, including state=3 (the default idle on A1 Mini BMCU /
     # P1S Standard AMS for both loaded and unconfigured slots) and missing
     # state (older firmwares), is treated as the user's assertion that a
@@ -1931,7 +1989,7 @@ async def assign_spool(
     # The pre-existing "skip when slot looks empty" guard read state=3 +
     # tray_type="" as "empty" and skipped MQTT. On these firmwares that
     # combination is the post-"Reset Slot" state with the spool still
-    # physically inserted — there is NO AMS signal that distinguishes it
+    # physically inserted â€” there is NO AMS signal that distinguishes it
     # from a truly-empty slot, so the guard created a deadlock: MQTT never
     # fired, the AMS never reported any change (because nothing changed
     # physically), and on_ams_change replay therefore never re-fired the
@@ -1946,11 +2004,11 @@ async def assign_spool(
     # updates that column, and on_ams_change at main.py:1031-1054 still
     # fires the deferred config when a spool eventually appears. So the
     # SpoolBuddy weigh-then-assign-before-insert workflow continues to
-    # work — just without the optimization of skipping a no-op MQTT call.
+    # work â€” just without the optimization of skipping a no-op MQTT call.
     #
-    # state ∈ {9, 10} stays as an explicit short-circuit so we don't churn
+    # state âˆˆ {9, 10} stays as an explicit short-circuit so we don't churn
     # a doomed MQTT push when the firmware has positively confirmed "no
-    # spool" — and to keep the on_ams_change replay path as the single
+    # spool" â€” and to keep the on_ams_change replay path as the single
     # source of truth for those slots.
     slot_is_definitely_empty = tray_state == 9 or tray_state == 10
     configured = False
@@ -1972,7 +2030,7 @@ async def assign_spool(
             # Nudge a fresh pushall so the read-back verification registered in
             # apply_spool_to_slot_via_mqtt (#2582) has current tray telemetry to
             # compare against within its window, instead of waiting for the next
-            # idle push. Best-effort — the periodic push is the fallback.
+            # idle push. Best-effort â€” the periodic push is the fallback.
             if configured:
                 try:
                     client = printer_manager.get_client(data.printer_id)
@@ -2002,7 +2060,7 @@ async def assign_spool(
 
     if pending_config:
         logger.info(
-            "Pre-configured assignment: spool %d → printer %d AMS%d-T%d (slot empty, will configure on insert)",
+            "Pre-configured assignment: spool %d â†’ printer %d AMS%d-T%d (slot empty, will configure on insert)",
             spool.id,
             data.printer_id,
             data.ams_id,
@@ -2056,7 +2114,7 @@ async def unassign_spool(
     return {"status": "deleted"}
 
 
-# ── Tag Linking ───────────────────────────────────────────────────────────────
+# â”€â”€ Tag Linking â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 class LinkTagRequest(BaseModel):
@@ -2159,7 +2217,7 @@ async def link_tag_to_spool(
     return result.scalar_one()
 
 
-# ── Usage History ─────────────────────────────────────────────────────────────
+# â”€â”€ Usage History â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 @router.get("/spools/{spool_id}/usage", response_model=list[SpoolUsageHistoryResponse])
@@ -2247,6 +2305,77 @@ async def get_material_number_stats(
     return sorted(stats.values(), key=lambda s: s.consumed_g, reverse=True)
 
 
+@router.get("/stats/suppliers", response_model=list[SupplierStats])
+async def get_supplier_stats(
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_READ),
+):
+    """Aggregate the inventory by purchase-source supplier (#2988).
+
+    Groups by the supplier a spool was actually bought from (the
+    ``is_purchase_source`` assignment), so "how much did we run through
+    supplier X" reads directly. Stock comes from active spools; consumption
+    and cost from the recorded usage history, archived spools included —
+    their consumption happened. Sorted by consumption, heaviest first.
+    """
+    from backend.app.models.spool_usage_history import SpoolUsageHistory
+
+    purchase_link = (SpoolSupplier.spool_id == Spool.id) & SpoolSupplier.is_purchase_source.is_(True)
+
+    inventory_rows = await db.execute(
+        select(
+            SpoolSupplier.supplier_id,
+            func.count(Spool.id),
+            func.sum(Spool.label_weight - Spool.weight_used),
+        )
+        .select_from(Spool)
+        .join(SpoolSupplier, purchase_link)
+        .where(Spool.archived_at.is_(None))
+        .group_by(SpoolSupplier.supplier_id)
+    )
+
+    usage_rows = await db.execute(
+        select(
+            SpoolSupplier.supplier_id,
+            func.sum(SpoolUsageHistory.weight_used),
+            func.sum(SpoolUsageHistory.cost),
+        )
+        .select_from(SpoolUsageHistory)
+        .join(Spool, SpoolUsageHistory.spool_id == Spool.id)
+        .join(SpoolSupplier, purchase_link)
+        .group_by(SpoolSupplier.supplier_id)
+    )
+
+    names = dict((await db.execute(select(Supplier.id, Supplier.name))).all())
+
+    stats: dict[int, SupplierStats] = {}
+    for supplier_id, count, remaining in inventory_rows.all():
+        stats[supplier_id] = SupplierStats(
+            supplier_id=supplier_id,
+            supplier_name=names.get(supplier_id, f"#{supplier_id}"),
+            spool_count=count,
+            remaining_g=max(0.0, float(remaining or 0)),
+            consumed_g=0.0,
+            cost=0.0,
+        )
+    for supplier_id, consumed, cost in usage_rows.all():
+        entry = stats.get(supplier_id)
+        if entry is None:
+            entry = SupplierStats(
+                supplier_id=supplier_id,
+                supplier_name=names.get(supplier_id, f"#{supplier_id}"),
+                spool_count=0,
+                remaining_g=0.0,
+                consumed_g=0.0,
+                cost=0.0,
+            )
+            stats[supplier_id] = entry
+        entry.consumed_g = float(consumed or 0)
+        entry.cost = float(cost or 0)
+
+    return sorted(stats.values(), key=lambda s: s.consumed_g, reverse=True)
+
+
 @router.get("/usage", response_model=list[SpoolUsageHistoryResponse])
 async def get_all_usage_history(
     limit: int = 100,
@@ -2280,7 +2409,7 @@ async def clear_spool_usage_history(
     return {"status": "cleared"}
 
 
-# ── AMS Weight Sync ──────────────────────────────────────────────────────────
+# â”€â”€ AMS Weight Sync â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 @router.post("/sync-ams-weights")
@@ -2292,7 +2421,7 @@ async def sync_weights_from_ams(
 
     Overwrites the database weight_used for every assigned spool using the
     current AMS remain% from connected printers.  This is a manual recovery
-    tool — it bypasses the normal "only increase" guard.
+    tool â€” it bypasses the normal "only increase" guard.
     """
     from backend.app.services.printer_manager import printer_manager
 
@@ -2378,7 +2507,7 @@ async def sync_weights_from_ams(
     return {"synced": synced, "skipped": skipped}
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def _find_tray_in_ams_data(ams_data: list, ams_id: int, tray_id: int) -> dict | None:
@@ -2394,7 +2523,7 @@ def _find_tray_in_ams_data(ams_data: list, ams_id: int, tray_id: int) -> dict | 
     return None
 
 
-# ── Filament SKU Settings (reorder forecasting) ───────────────────────────────
+# â”€â”€ Filament SKU Settings (reorder forecasting) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 class FilamentSkuSettingsResponse(BaseModel):
@@ -2479,7 +2608,7 @@ async def upsert_sku_settings(
     return row
 
 
-# ── Shopping List ─────────────────────────────────────────────────────────────
+# â”€â”€ Shopping List â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 class ShoppingListItemResponse(BaseModel):
@@ -2668,7 +2797,7 @@ async def create_spool_from_slot(
 ):
     """Explicit user action: create an inventory spool from an AMS slot's current tray data.
 
-    Used by the "+ Add to inventory" affordance when auto_add_unknown_rfid is disabled —
+    Used by the "+ Add to inventory" affordance when auto_add_unknown_rfid is disabled â€”
     the user looked at the slot and chose to register it. Also assigns the new spool
     to the slot in the same call.
     """

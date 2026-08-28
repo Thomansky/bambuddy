@@ -39,6 +39,7 @@ import { api, type ArchiveSlim } from '../api/client';
 import { PrintCalendar } from '../components/PrintCalendar';
 import { FilamentTrends } from '../components/FilamentTrends';
 import { MaterialNumberStats } from '../components/MaterialNumberStats';
+import { SupplierStats } from '../components/SupplierStats';
 import { Dashboard, type DashboardWidget } from '../components/Dashboard';
 import { getCurrencySymbol } from '../utils/currency';
 import { formatWeight } from '../utils/weight';
@@ -1182,6 +1183,12 @@ export function StatsPage() {
       id: 'material-numbers',
       title: t('stats.materialNumbers.title'),
       component: <MaterialNumberStats currency={currency} />,
+      defaultSize: 2,
+    },
+    {
+      id: 'suppliers',
+      title: t('stats.suppliers.title'),
+      component: <SupplierStats currency={currency} />,
       defaultSize: 2,
     },
   ];

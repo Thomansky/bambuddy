@@ -98,6 +98,7 @@ const DEFAULT_COLUMNS: ColumnConfig[] = [
   { id: 'printed_since_weight', label: 'Printed Since Weight', visible: false },
   { id: 'note', label: 'Note', visible: false },
   { id: 'material_number', label: 'Material No.', visible: false },
+  { id: 'suppliers', label: 'Suppliers', visible: false },
   { id: 'pa_k', label: 'PA(K)', visible: true },
   { id: 'tag_id', label: 'Tag ID', visible: false },
   { id: 'data_origin', label: 'Data Origin', visible: false },
@@ -228,6 +229,7 @@ const columnHeaders: Record<string, (t: TFn) => string> = {
   printed_since_weight: () => 'Printed Since Weight',
   note: (t) => t('inventory.note'),
   material_number: (t) => t('inventory.materialNumber'),
+  suppliers: (t) => t('inventory.suppliers.label'),
   pa_k: () => 'PA(K)',
   tag_id: () => 'Tag ID',
   data_origin: () => 'Data Origin',
@@ -371,6 +373,31 @@ const columnCells: Record<string, (ctx: CellCtx) => ReactNode> = {
   material_number: ({ spool }) => (
     <span className="text-sm text-bambu-gray">{spool.material_number || '-'}</span>
   ),
+  // Supplier chips (#2988): purchase source first and highlighted; the
+  // others read as alternative sources. Tooltip carries the supplier's
+  // article number when set.
+  suppliers: ({ spool }) => {
+    const links = spool.suppliers ?? [];
+    if (links.length === 0) return <span className="text-sm text-bambu-gray">-</span>;
+    const sorted = [...links].sort((a, b) => Number(b.is_purchase_source) - Number(a.is_purchase_source));
+    return (
+      <div className="flex flex-wrap gap-1 max-w-[220px]">
+        {sorted.map((link) => (
+          <span
+            key={link.id}
+            title={link.supplier_article_number || undefined}
+            className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+              link.is_purchase_source
+                ? 'bg-bambu-green/20 text-bambu-green'
+                : 'bg-bambu-gray/10 text-bambu-gray'
+            }`}
+          >
+            {link.supplier_name}
+          </span>
+        ))}
+      </div>
+    );
+  },
   pa_k: ({ spool }) => {
     const count = spool.k_profiles?.length ?? 0;
     if (count === 0) return <span className="text-sm text-bambu-gray">-</span>;
@@ -518,6 +545,13 @@ const columnSortValues: Record<
   remaining: (s) => s.label_weight > 0 ? Math.max(0, s.label_weight - s.weight_used) / s.label_weight : 0,
   note: (s) => (s.note || '').toLowerCase(),
   material_number: (s) => (s.material_number || '').toLowerCase(),
+  // Sorts on the purchase-source supplier, falling back to the first
+  // assignment — a spool has to sit in exactly one place in the list.
+  suppliers: (s) => {
+    const links = s.suppliers ?? [];
+    const primary = links.find((l) => l.is_purchase_source) ?? links[0];
+    return (primary?.supplier_name || '').toLowerCase();
+  },
   data_origin: (s) => (s.data_origin || '').toLowerCase(),
   tag_type: (s) => (s.tag_type || '').toLowerCase(),
   stock: (s) => s.slicer_filament ? 1 : 0,
@@ -606,6 +640,8 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
   const [categoryFilter, setCategoryFilter] = useState('');
   // Filter on the internal material number (#2870), same shape as category.
   const [materialNumberFilter, setMaterialNumberFilter] = useState('');
+  // Filter on an assigned supplier (#2988), same shape as category.
+  const [supplierFilter, setSupplierFilter] = useState('');
   const [spoolFilter, setSpoolFilter] = useState('');
   const [stockFilter, setStockFilter] = useState<'all' | 'stock' | 'configured'>('all');
   const [search, setSearch] = useState('');
@@ -640,7 +676,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
   // honest vs. what the user is actually looking at.
   useEffect(() => {
     setSelectedIds(new Set());
-  }, [archiveFilter, usageFilter, materialFilter, brandFilter, categoryFilter, materialNumberFilter, spoolFilter, stockFilter, search]);
+  }, [archiveFilter, usageFilter, materialFilter, brandFilter, categoryFilter, materialNumberFilter, supplierFilter, spoolFilter, stockFilter, search]);
 
   // Pagination state (pageSize persisted to localStorage)
   const [pageIndex, setPageIndex] = useState(0);
@@ -1277,6 +1313,18 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
       }
     }
 
+    // Supplier dropdown (#2988): "everything from supplier X" matches ANY
+    // assignment, purchase source or alternative; `__none__` finds spools
+    // without supplier assignments.
+    if (supplierFilter) {
+      if (supplierFilter === '__none__') {
+        filtered = filtered.filter((s) => (s.suppliers ?? []).length === 0);
+      } else {
+        const supplierId = Number(supplierFilter);
+        filtered = filtered.filter((s) => (s.suppliers ?? []).some((l) => l.supplier_id === supplierId));
+      }
+    }
+
     // Spool name dropdown
     if (spoolFilter) {
       const catalogId = Number(spoolFilter);
@@ -1312,7 +1360,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
     }
 
     return filtered;
-  }, [spools, archiveFilter, usageFilter, materialFilter, brandFilter, categoryFilter, materialNumberFilter, spoolFilter, stockFilter, storageLocationFilter, search, lowStockThreshold, storageLocations]);
+  }, [spools, archiveFilter, usageFilter, materialFilter, brandFilter, categoryFilter, materialNumberFilter, supplierFilter, spoolFilter, stockFilter, storageLocationFilter, search, lowStockThreshold, storageLocations]);
 
   // Reset page on filter changes
   const resetPage = () => setPageIndex(0);
@@ -1337,6 +1385,17 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
   const uniqueMaterialNumbers = [...new Set(spools?.map((s) => s.material_number?.trim()).filter(Boolean) as string[] || [])]
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   const hasUnnumbered = (spools ?? []).some((s) => !s.material_number?.trim());
+  // #2988: suppliers seen across the inventory, for the filter dropdown.
+  const uniqueSuppliers = useMemo(() => {
+    const byId = new Map<number, string>();
+    for (const s of spools ?? []) {
+      for (const link of s.suppliers ?? []) {
+        byId.set(link.supplier_id, link.supplier_name);
+      }
+    }
+    return [...byId.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [spools]);
+  const hasUnsupplied = (spools ?? []).some((s) => (s.suppliers ?? []).length === 0);
   const uniqueSpoolCatalogIds = [...new Set(spools?.map((s) => s.core_weight_catalog_id).filter((id): id is number => id != null) || [])].sort((a, b) => {
     const nameA = (catalogMap[a]?.name || '').toLowerCase();
     const nameB = (catalogMap[b]?.name || '').toLowerCase();
@@ -1347,7 +1406,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
   const hasUnsetStorageLocation = (spools ?? []).some((s) => !s.location_id && !s.storage_location?.trim());
 
   // Check if any filters are non-default
-  const hasActiveFilters = archiveFilter !== 'active' || usageFilter !== 'all' || !!materialFilter || !!brandFilter || !!categoryFilter || !!materialNumberFilter || !!spoolFilter || !!storageLocationFilter || stockFilter !== 'all' || !!search;
+  const hasActiveFilters = archiveFilter !== 'active' || usageFilter !== 'all' || !!materialFilter || !!brandFilter || !!categoryFilter || !!materialNumberFilter || !!supplierFilter || !!spoolFilter || !!storageLocationFilter || stockFilter !== 'all' || !!search;
 
   const handleColumnConfigSave = (config: ColumnConfig[]) => {
     setColumnConfig(config);
@@ -1470,6 +1529,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
     setBrandFilter('');
     setCategoryFilter('');
     setMaterialNumberFilter('');
+    setSupplierFilter('');
     setSpoolFilter('');
     setStockFilter('all');
     setSearch('');
@@ -1946,6 +2006,28 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
             ))}
             {hasUnnumbered && (
               <option value="__none__">{t('inventory.materialNumberNone')}</option>
+            )}
+          </select>
+        )}
+
+        {/* Supplier dropdown chip (#2988) — same render rule as the category
+            chip: hidden until at least one spool carries an assignment. */}
+        {(uniqueSuppliers.length > 0 || supplierFilter) && (
+          <select
+            value={supplierFilter}
+            onChange={(e) => { setSupplierFilter(e.target.value); resetPage(); }}
+            className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors cursor-pointer focus:outline-none ${
+              supplierFilter
+                ? 'bg-bambu-green/20 text-bambu-green border-bambu-green/30'
+                : 'bg-transparent text-bambu-gray border-bambu-dark-tertiary hover:bg-bambu-dark-tertiary'
+            }`}
+          >
+            <option value="">{t('inventory.suppliers.label')}</option>
+            {uniqueSuppliers.map((supplier) => (
+              <option key={supplier.id} value={String(supplier.id)}>{supplier.name}</option>
+            ))}
+            {hasUnsupplied && (
+              <option value="__none__">{t('inventory.suppliers.none')}</option>
             )}
           </select>
         )}
