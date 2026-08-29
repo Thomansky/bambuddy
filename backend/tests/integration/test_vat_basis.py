@@ -85,14 +85,18 @@ class TestVatRateSetting:
     @pytest.mark.integration
     async def test_default_and_update(self, async_client: AsyncClient):
         settings = (await async_client.get("/api/v1/settings/")).json()
+        # Off by default: private users never see the VAT distinction.
+        assert settings["vat_enabled"] is False
         assert settings["vat_rate_percent"] == 19.0
         assert settings["price_vat_basis"] == "gross"
 
         resp = await async_client.put(
-            "/api/v1/settings/", json={"vat_rate_percent": 7.7, "price_vat_basis": "net"}
+            "/api/v1/settings/",
+            json={"vat_enabled": True, "vat_rate_percent": 7.7, "price_vat_basis": "net"},
         )
         assert resp.status_code == 200
         settings = (await async_client.get("/api/v1/settings/")).json()
+        assert settings["vat_enabled"] is True
         assert settings["vat_rate_percent"] == 7.7
         assert settings["price_vat_basis"] == "net"
 

@@ -1271,6 +1271,7 @@ export function SpoolFormModal({
                   }}
                   globalLowStockThreshold={globalLowStockThreshold}
                   spoolmanMode={spoolmanMode}
+                  vatEnabled={settingsForForm?.vat_enabled ?? false}
                 />
               </div>
 
