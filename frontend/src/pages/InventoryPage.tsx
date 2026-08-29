@@ -1205,7 +1205,9 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
     (assignments?.length ?? 0) + (spoolmanMode ? spoolmanSlotAssignments.length : 0);
 
   const currencySymbol = getCurrencySymbol(settings?.currency || 'USD');
-  const vatRatePercent = settings?.vat_rate_percent ?? 19;
+  // Rate 0 disables every VAT hint downstream (suffixes, tooltips), which is
+  // exactly the off-state of the opt-in vat_enabled switch.
+  const vatRatePercent = settings?.vat_enabled ? (settings?.vat_rate_percent ?? 19) : 0;
   // The configured working basis decides which basis the stock-value tile
   // leads with; the other basis stays one hover away in the tooltip.
   const priceBasisNet = (settings?.price_vat_basis ?? 'gross') === 'net';
