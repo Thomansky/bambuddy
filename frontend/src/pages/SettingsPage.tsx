@@ -2408,31 +2408,53 @@ export function SettingsPage() {
                   />
                 </div>
               </div>
-              <div>
-                <label className="block text-sm text-bambu-gray mb-1">{t('settings.vatRate')}</label>
-                <input
-                  type="number"
-                  step="0.1"
-                  min="0"
-                  max="100"
-                  value={localSettings.vat_rate_percent ?? 19}
-                  onChange={(e) => updateSetting('vat_rate_percent', parseFloat(e.target.value) || 0)}
-                  className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
-                />
-                <p className="text-xs text-bambu-gray mt-1">{t('settings.vatRateHelp')}</p>
+              {/* VAT distinction is opt-in (business workflows): off means no
+                  selector, suffix or conversion anywhere — the app behaves
+                  exactly as before for private users. */}
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <label className="text-sm text-bambu-gray">{t('settings.vatEnabled')}</label>
+                  <p className="text-xs text-bambu-gray mt-1">{t('settings.vatEnabledHelp')}</p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer flex-shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={localSettings.vat_enabled ?? false}
+                    onChange={(e) => updateSetting('vat_enabled', e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-bambu-dark-tertiary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-bambu-green"></div>
+                </label>
               </div>
-              <div>
-                <label className="block text-sm text-bambu-gray mb-1">{t('settings.priceBasis')}</label>
-                <select
-                  value={localSettings.price_vat_basis ?? 'gross'}
-                  onChange={(e) => updateSetting('price_vat_basis', e.target.value === 'net' ? 'net' : 'gross')}
-                  className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
-                >
-                  <option value="gross">{t('settings.priceBasisGross')}</option>
-                  <option value="net">{t('settings.priceBasisNet')}</option>
-                </select>
-                <p className="text-xs text-bambu-gray mt-1">{t('settings.priceBasisHelp')}</p>
-              </div>
+              {localSettings.vat_enabled && (
+                <>
+                  <div>
+                    <label className="block text-sm text-bambu-gray mb-1">{t('settings.vatRate')}</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      min="0"
+                      max="100"
+                      value={localSettings.vat_rate_percent ?? 19}
+                      onChange={(e) => updateSetting('vat_rate_percent', parseFloat(e.target.value) || 0)}
+                      className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                    />
+                    <p className="text-xs text-bambu-gray mt-1">{t('settings.vatRateHelp')}</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm text-bambu-gray mb-1">{t('settings.priceBasis')}</label>
+                    <select
+                      value={localSettings.price_vat_basis ?? 'gross'}
+                      onChange={(e) => updateSetting('price_vat_basis', e.target.value === 'net' ? 'net' : 'gross')}
+                      className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                    >
+                      <option value="gross">{t('settings.priceBasisGross')}</option>
+                      <option value="net">{t('settings.priceBasisNet')}</option>
+                    </select>
+                    <p className="text-xs text-bambu-gray mt-1">{t('settings.priceBasisHelp')}</p>
+                  </div>
+                </>
+              )}
               <div>
                 <label className="block text-sm text-bambu-gray mb-1">
                   {t('settings.electricityCost')}

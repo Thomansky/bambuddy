@@ -1291,6 +1291,8 @@ export interface AppSettings {
   finish_photo_restore_plate: boolean;
   default_filament_cost: number;
   currency: string;
+  /** Master switch for the incl./excl. VAT distinction (business workflows). */
+  vat_enabled: boolean;
   /** VAT rate (%) used to convert spool costs between incl. and excl. VAT. */
   vat_rate_percent: number;
   /** Working price basis: pre-fills new spools and drives aggregate display. */

@@ -59,6 +59,13 @@ class AppSettings(BaseModel):
     )
     default_filament_cost: float = Field(default=25.0, description="Default filament cost per kg")
     currency: str = Field(default="USD", description="Currency for cost tracking")
+    # Master switch for the VAT distinction (off by default): private users
+    # never see a VAT selector, suffix or conversion — everything below only
+    # takes effect when a business-style workflow turns this on.
+    vat_enabled: bool = Field(
+        default=False,
+        description="Enable the incl./excl. VAT distinction on spool costs (business workflows)",
+    )
     # Used to convert spool costs between net and gross for display — the
     # stored per-spool value keeps the basis it was entered in.
     vat_rate_percent: float = Field(
@@ -746,6 +753,7 @@ class AppSettingsUpdate(BaseModel):
     prometheus_enabled: bool | None = None
     prometheus_token: str | None = None
     low_stock_threshold: float | None = Field(default=None, ge=0.1, le=99.9)
+    vat_enabled: bool | None = None
     vat_rate_percent: float | None = Field(default=None, ge=0, le=100)
     price_vat_basis: str | None = Field(default=None, pattern="^(gross|net)$")
     session_max_hours: int | None = Field(default=None, ge=1, le=720)

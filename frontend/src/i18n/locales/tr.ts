@@ -2704,6 +2704,8 @@ export default {
     // Maliyet takibi
     currency: 'Para Birimi',
     defaultFilamentCost: 'Varsayılan filament maliyeti (kg başına)',
+    vatEnabled: 'KDV ayrımı (dahil/hariç)',
+    vatEnabledHelp: 'Ticari iş akışları için: makara maliyetlerine bir KDV esası ekler, böylece fatura tutarları olduğu gibi girilebilir. Kapalıyken (varsayılan) tüm KDV ipuçları gizlenir — özel kullanımda hiçbir şey değişmez.',
     vatRate: 'KDV oranı (%)',
     vatRateHelp: 'Makara maliyetlerini görüntüleme ve stok değeri için KDV dahil ile KDV hariç arasında dönüştürmek için kullanılır. KDV ipuçlarını gizlemek için 0 olarak ayarlayın.',
     priceBasis: 'Fiyat esası',

@@ -2703,6 +2703,8 @@ export default {
     // Cost tracking
     currency: 'Moneda',
     defaultFilamentCost: 'Coste predeterminado del filamento (por kg)',
+    vatEnabled: 'Distinguir IVA incl./excl.',
+    vatEnabledHelp: 'Para flujos de trabajo empresariales: añade una base de IVA a los costes de las bobinas para poder introducir los importes de las facturas tal cual. Desactivado (el valor predeterminado) oculta todas las indicaciones de IVA — no cambia nada para el uso privado.',
     vatRate: 'Tipo de IVA (%)',
     vatRateHelp: 'Se usa para convertir los costes de las bobinas entre precios con y sin IVA para la visualización y el valor del inventario. Establécelo en 0 para ocultar las indicaciones de IVA.',
     priceBasis: 'Base de precios',

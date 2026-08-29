@@ -2652,6 +2652,8 @@ export default {
     disconnected: 'Disconnesso',
     currency: 'Valuta',
     defaultFilamentCost: 'Costo filamento predefinito (per kg)',
+    vatEnabled: 'Distinzione IVA (incl./escl.)',
+    vatEnabledHelp: 'Per flussi di lavoro aziendali: aggiunge una base IVA ai costi delle bobine, così gli importi delle fatture possono essere inseriti così come sono. Se disattivata (impostazione predefinita), tutte le indicazioni IVA vengono nascoste — per l\'uso privato non cambia nulla.',
     vatRate: 'Aliquota IVA (%)',
     vatRateHelp: 'Usata per convertire i costi delle bobine tra IVA inclusa ed esclusa per la visualizzazione e il valore di magazzino. Imposta a 0 per nascondere le indicazioni IVA.',
     priceBasis: 'Base di prezzo',

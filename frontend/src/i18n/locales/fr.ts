@@ -2653,6 +2653,8 @@ export default {
     disconnected: 'Déconnecté',
     currency: 'Devise',
     defaultFilamentCost: 'Coût filament par défaut (par kg)',
+    vatEnabled: 'Distinction TTC/HT (TVA)',
+    vatEnabledHelp: 'Pour les flux de travail professionnels : ajoute une base de TVA aux coûts des bobines afin que les montants des factures puissent être saisis tels quels. Désactivé (par défaut), toutes les indications de TVA sont masquées — rien ne change pour l\'usage privé.',
     vatRate: 'Taux de TVA (%)',
     vatRateHelp: 'Utilisé pour convertir les coûts des bobines entre TTC et HT pour l\'affichage et la valeur du stock. Réglez sur 0 pour masquer les indications de TVA.',
     priceBasis: 'Base de prix',

@@ -2721,6 +2721,8 @@ export default {
     // Cost tracking
     currency: 'Currency',
     defaultFilamentCost: 'Default filament cost (per kg)',
+    vatEnabled: 'Distinguish incl./excl. VAT',
+    vatEnabledHelp: 'For business workflows: adds a VAT basis to spool costs so invoice amounts can be entered as-is. Off (the default) hides all VAT hints — nothing changes for private use.',
     vatRate: 'VAT rate (%)',
     vatRateHelp: 'Used to convert spool costs between incl. and excl. VAT for display and stock value. Set to 0 to hide the VAT hints.',
     priceBasis: 'Price basis',

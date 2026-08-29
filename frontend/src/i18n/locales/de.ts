@@ -2701,6 +2701,8 @@ export default {
     // Cost tracking
     currency: 'Währung',
     defaultFilamentCost: 'Standard-Filamentkosten (pro kg)',
+    vatEnabled: 'MwSt.-Unterscheidung (inkl./exkl.)',
+    vatEnabledHelp: 'Für geschäftliche Workflows: ergänzt Spulenkosten um eine MwSt.-Basis, sodass Rechnungsbeträge direkt übernommen werden können. Deaktiviert (Standard) werden alle MwSt.-Hinweise ausgeblendet — für die private Nutzung ändert sich nichts.',
     vatRate: 'MwSt.-Satz (%)',
     vatRateHelp: 'Wird verwendet, um Spulenkosten für Anzeige und Lagerwert zwischen inkl. und exkl. MwSt. umzurechnen. Auf 0 setzen, um die MwSt.-Hinweise auszublenden.',
     priceBasis: 'Preisbasis',
