@@ -5609,32 +5609,6 @@ async def seed_default_groups():
                 group.permissions = perms
         await session.commit()
 
-        # Migrate new permissions for suppliers (#2988): groups that can
-        # already edit the inventory are the audience for managing the
-        # supplier master list; read-only inventory groups get read access.
-        # Matches the intent of DEFAULT_GROUPS without clobbering
-        # user-customised permission lists. Administrators are covered by the
-        # ALL_PERMISSIONS sync below.
-        result = await session.execute(select(Group))
-        for group in result.scalars().all():
-            if not group.permissions:
-                continue
-            perms = list(group.permissions)
-            changed = False
-            if "inventory:update" in perms:
-                for new_perm in ("suppliers:read", "suppliers:create", "suppliers:update", "suppliers:delete"):
-                    if new_perm not in perms:
-                        perms.append(new_perm)
-                        changed = True
-                        logger.info("Added %s to group '%s' (has inventory:update)", new_perm, group.name)
-            elif "inventory:read" in perms and "suppliers:read" not in perms:
-                perms.append("suppliers:read")
-                changed = True
-                logger.info("Added suppliers:read to group '%s' (has inventory:read)", group.name)
-            if changed:
-                group.permissions = perms
-        await session.commit()
-
         # Backfill: sync the Administrators system group to ALL_PERMISSIONS.
         # Administrators' contract is full access to every feature — fresh
         # installs get that via DEFAULT_GROUPS["Administrators"]["permissions"]
