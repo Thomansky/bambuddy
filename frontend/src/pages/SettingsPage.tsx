@@ -2409,6 +2409,19 @@ export function SettingsPage() {
                 </div>
               </div>
               <div>
+                <label className="block text-sm text-bambu-gray mb-1">{t('settings.vatRate')}</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  max="100"
+                  value={localSettings.vat_rate_percent ?? 19}
+                  onChange={(e) => updateSetting('vat_rate_percent', parseFloat(e.target.value) || 0)}
+                  className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                />
+                <p className="text-xs text-bambu-gray mt-1">{t('settings.vatRateHelp')}</p>
+              </div>
+              <div>
                 <label className="block text-sm text-bambu-gray mb-1">
                   {t('settings.electricityCost')}
                 </label>

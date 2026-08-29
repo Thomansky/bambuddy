@@ -59,6 +59,14 @@ class AppSettings(BaseModel):
     )
     default_filament_cost: float = Field(default=25.0, description="Default filament cost per kg")
     currency: str = Field(default="USD", description="Currency for cost tracking")
+    # Used to convert spool costs between net and gross for display — the
+    # stored per-spool value keeps the basis it was entered in.
+    vat_rate_percent: float = Field(
+        default=19.0,
+        ge=0,
+        le=100,
+        description="VAT rate (%) used to convert spool costs between incl. and excl. VAT",
+    )
     energy_cost_per_kwh: float = Field(default=0.15, description="Electricity cost per kWh for energy tracking")
     energy_tracking_mode: str = Field(
         default="total",
@@ -729,6 +737,7 @@ class AppSettingsUpdate(BaseModel):
     prometheus_enabled: bool | None = None
     prometheus_token: str | None = None
     low_stock_threshold: float | None = Field(default=None, ge=0.1, le=99.9)
+    vat_rate_percent: float | None = Field(default=None, ge=0, le=100)
     session_max_hours: int | None = Field(default=None, ge=1, le=720)
     user_notifications_enabled: bool | None = None
     default_bed_levelling: TriState | None = None
