@@ -197,6 +197,7 @@ type CellCtx = {
   catalogMap: Record<number, SpoolCatalogEntry>;
   locationReadingsMap: Record<number, LocationHASensorReading[]>;
   currencySymbol: string;
+  vatRatePercent: number;
   dateFormat: DateFormat;
   t: TFn;
   onSyncWeight?: (spool: InventorySpool) => void;
@@ -464,11 +465,27 @@ const columnCells: Record<string, (ctx: CellCtx) => ReactNode> = {
     const entry = spool.core_weight_catalog_id != null ? catalogMap[spool.core_weight_catalog_id] : undefined;
     return <span className="text-sm text-bambu-gray">{entry?.name || '-'}</span>;
   },
-  cost_per_kg: ({ spool, currencySymbol }) => (
-    <span className="text-sm text-bambu-gray">
-      {spool.cost_per_kg != null ? `${currencySymbol}${spool.cost_per_kg.toFixed(2)}` : '-'}
-    </span>
-  ),
+  // Shows the cost as entered, marks its VAT basis, and carries the
+  // converted other basis in the tooltip (skipped when the rate is 0).
+  cost_per_kg: ({ spool, currencySymbol, vatRatePercent, t }) => {
+    if (spool.cost_per_kg == null) return <span className="text-sm text-bambu-gray">-</span>;
+    const incl = spool.cost_vat_included ?? true;
+    const rate = vatRatePercent / 100;
+    const converted = incl ? spool.cost_per_kg / (1 + rate) : spool.cost_per_kg * (1 + rate);
+    const title = rate > 0
+      ? t(incl ? 'inventory.vatConvertedExcl' : 'inventory.vatConvertedIncl', {
+          value: `${currencySymbol}${converted.toFixed(2)}`,
+        })
+      : undefined;
+    return (
+      <span className="text-sm text-bambu-gray" title={title}>
+        {currencySymbol}{spool.cost_per_kg.toFixed(2)}
+        {rate > 0 && (
+          <span className="text-bambu-gray/60"> {t(incl ? 'inventory.vatInclShort' : 'inventory.vatExclShort')}</span>
+        )}
+      </span>
+    );
+  },
   weight_check: ({ spool, onSyncWeight }) => {
     const scaleWeight = spool.last_scale_weight;
     if (scaleWeight == null) return <span className="text-sm text-bambu-gray/50" title="No scale measurement">-</span>;
@@ -1184,6 +1201,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
     (assignments?.length ?? 0) + (spoolmanMode ? spoolmanSlotAssignments.length : 0);
 
   const currencySymbol = getCurrencySymbol(settings?.currency || 'USD');
+  const vatRatePercent = settings?.vat_rate_percent ?? 19;
 
   // Map spool_id -> location display data for the LOCATION column.
   // Local SpoolAssignment entries first, then Spoolman SlotAssignment fills in
@@ -2443,6 +2461,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
                           catalogMap={catalogMap}
                           locationReadingsMap={locationReadingsMap}
                           currencySymbol={currencySymbol}
+                          vatRatePercent={vatRatePercent}
                           dateFormat={dateFormat}
                           t={t}
                           onSyncWeight={handleSyncWeight}
@@ -2476,6 +2495,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
                         catalogMap={catalogMap}
                         locationReadingsMap={locationReadingsMap}
                         currencySymbol={currencySymbol}
+                        vatRatePercent={vatRatePercent}
                         dateFormat={dateFormat}
                         t={t}
                         onSyncWeight={handleSyncWeight}
@@ -3041,7 +3061,7 @@ function SpoolLocationFooter({
 function SpoolTableRow({
   spool, remaining, pct, isSelected, onToggleSelected,
   onEdit, onCopy, onRestore, onArchive, onDelete, onPrintLabel, onResetConsumedCounter,
-  visibleColumns, assignmentMap, catalogMap, locationReadingsMap, currencySymbol, dateFormat, t, onSyncWeight,
+  visibleColumns, assignmentMap, catalogMap, locationReadingsMap, currencySymbol, vatRatePercent, dateFormat, t, onSyncWeight,
   colorizeLocationSensors, locationSensorAboveColor, locationSensorBelowColor, locationSensorOptimalColor,
 }: {
   spool: InventorySpool;
@@ -3061,6 +3081,7 @@ function SpoolTableRow({
   catalogMap: Record<number, SpoolCatalogEntry>;
   locationReadingsMap: Record<number, LocationHASensorReading[]>;
   currencySymbol: string;
+  vatRatePercent: number;
   dateFormat: DateFormat;
   t: TFn;
   onSyncWeight?: (spool: InventorySpool) => void;
@@ -3089,7 +3110,7 @@ function SpoolTableRow({
       </td>
       {visibleColumns.map((colId) => (
         <td key={colId} className="py-3 px-4">
-          {columnCells[colId]?.({ spool, remaining, pct, assignmentMap, catalogMap, locationReadingsMap, currencySymbol, dateFormat, t, onSyncWeight, colorizeLocationSensors, locationSensorAboveColor, locationSensorBelowColor, locationSensorOptimalColor })}
+          {columnCells[colId]?.({ spool, remaining, pct, assignmentMap, catalogMap, locationReadingsMap, currencySymbol, vatRatePercent, dateFormat, t, onSyncWeight, colorizeLocationSensors, locationSensorAboveColor, locationSensorBelowColor, locationSensorOptimalColor })}
         </td>
       ))}
       <td className="py-3 px-4">
@@ -3138,7 +3159,7 @@ function SpoolTableRow({
 function SpoolTableGroup({
   spools, headerSpool, remaining, pct, isExpanded, onToggle,
   onEdit, onCopy, onArchive, onDelete, onPrintLabel, onResetConsumedCounter,
-  visibleColumns, assignmentMap, catalogMap, locationReadingsMap, currencySymbol, dateFormat, t, onSyncWeight,
+  visibleColumns, assignmentMap, catalogMap, locationReadingsMap, currencySymbol, vatRatePercent, dateFormat, t, onSyncWeight,
   colorizeLocationSensors, locationSensorAboveColor, locationSensorBelowColor, locationSensorOptimalColor,
   selectedIds, onToggleSelected, onToggleGroupSelected,
 }: {
@@ -3161,6 +3182,7 @@ function SpoolTableGroup({
   catalogMap: Record<number, SpoolCatalogEntry>;
   locationReadingsMap: Record<number, LocationHASensorReading[]>;
   currencySymbol: string;
+  vatRatePercent: number;
   dateFormat: DateFormat;
   t: TFn;
   onSyncWeight?: (spool: InventorySpool) => void;
@@ -3196,14 +3218,14 @@ function SpoolTableGroup({
             {idx === 0 ? (
               <div className="flex items-center gap-2">
                 <ChevronDown className={`w-4 h-4 text-bambu-gray transition-transform ${isExpanded ? '' : '-rotate-90'}`} />
-                {columnCells[colId]?.({ spool: headerSpool, remaining, pct, assignmentMap, catalogMap, locationReadingsMap, currencySymbol, dateFormat, t, onSyncWeight, colorizeLocationSensors, locationSensorAboveColor, locationSensorBelowColor, locationSensorOptimalColor })}
+                {columnCells[colId]?.({ spool: headerSpool, remaining, pct, assignmentMap, catalogMap, locationReadingsMap, currencySymbol, vatRatePercent, dateFormat, t, onSyncWeight, colorizeLocationSensors, locationSensorAboveColor, locationSensorBelowColor, locationSensorOptimalColor })}
               </div>
             ) : colId === 'id' ? (
               <span className="text-xs font-medium bg-bambu-green/20 text-bambu-green px-2 py-0.5 rounded-full">
                 {t('inventory.groupedSpools', { count: spools.length })}
               </span>
             ) : (
-              columnCells[colId]?.({ spool: headerSpool, remaining, pct, assignmentMap, catalogMap, locationReadingsMap, currencySymbol, dateFormat, t, onSyncWeight, colorizeLocationSensors, locationSensorAboveColor, locationSensorBelowColor, locationSensorOptimalColor })
+              columnCells[colId]?.({ spool: headerSpool, remaining, pct, assignmentMap, catalogMap, locationReadingsMap, currencySymbol, vatRatePercent, dateFormat, t, onSyncWeight, colorizeLocationSensors, locationSensorAboveColor, locationSensorBelowColor, locationSensorOptimalColor })
             )}
           </td>
         ))}
@@ -3237,6 +3259,7 @@ function SpoolTableGroup({
             catalogMap={catalogMap}
             locationReadingsMap={locationReadingsMap}
             currencySymbol={currencySymbol}
+            vatRatePercent={vatRatePercent}
             dateFormat={dateFormat}
             t={t}
             onSyncWeight={onSyncWeight}
