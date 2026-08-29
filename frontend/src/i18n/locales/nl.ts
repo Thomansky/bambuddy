@@ -2721,6 +2721,8 @@ export default {
     // Cost tracking
     currency: 'Valuta',
     defaultFilamentCost: 'Standaard filamentkosten (per kg)',
+    vatEnabled: 'Btw-onderscheid (incl./excl.)',
+    vatEnabledHelp: 'Voor zakelijke workflows: voegt een btw-basis toe aan spoelkosten, zodat factuurbedragen direct kunnen worden overgenomen. Uit (de standaard) verbergt alle btw-vermeldingen — voor privégebruik verandert er niets.',
     vatRate: 'Btw-tarief (%)',
     vatRateHelp: 'Wordt gebruikt om spoelkosten om te rekenen tussen incl. en excl. btw voor weergave en voorraadwaarde. Stel in op 0 om de btw-vermeldingen te verbergen.',
     priceBasis: 'Prijsbasis',

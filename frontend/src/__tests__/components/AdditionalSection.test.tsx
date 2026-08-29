@@ -45,7 +45,7 @@ describe('AdditionalSection', () => {
 
   it('offers the VAT basis next to the cost and reports a change', async () => {
     const updateField = vi.fn();
-    render(<AdditionalSection {...baseProps} updateField={updateField} spoolmanMode={false} />);
+    render(<AdditionalSection {...baseProps} updateField={updateField} spoolmanMode={false} vatEnabled={true} />);
 
     const select = screen.getByLabelText('inventory.vatBasis') as HTMLSelectElement;
     // defaultFormData enters prices including VAT (gross).
@@ -56,8 +56,13 @@ describe('AdditionalSection', () => {
     expect(updateField).toHaveBeenCalledWith('cost_vat_included', false);
   });
 
+  it('hides the VAT basis while the vat_enabled setting is off (the default)', () => {
+    render(<AdditionalSection {...baseProps} spoolmanMode={false} />);
+    expect(screen.queryByLabelText('inventory.vatBasis')).toBeNull();
+  });
+
   it('hides the VAT basis in Spoolman mode (Spoolman owns the price)', () => {
-    render(<AdditionalSection {...baseProps} spoolmanMode={true} />);
+    render(<AdditionalSection {...baseProps} spoolmanMode={true} vatEnabled={true} />);
     expect(screen.queryByLabelText('inventory.vatBasis')).toBeNull();
   });
 });

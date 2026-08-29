@@ -2697,6 +2697,8 @@ export default {
     disconnected: '未連線',
     currency: '貨幣',
     defaultFilamentCost: '預設耗材成本（每公斤）',
+    vatEnabled: '區分含稅與未稅（增值稅）',
+    vatEnabledHelp: '適用於商業工作流程：為料盤成本加入增值稅基準，發票上的金額即可直接輸入。關閉時（預設）會隱藏所有增值稅提示——私人使用不會有任何變化。',
     vatRate: '增值稅率（%）',
     vatRateHelp: '用於在顯示與庫存價值中換算料盤成本的含稅與未稅金額。設為 0 可隱藏增值稅提示。',
     priceBasis: '價格基準',

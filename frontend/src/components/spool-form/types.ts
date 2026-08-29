@@ -218,6 +218,9 @@ export interface AdditionalSectionProps extends SectionProps {
   // When true the empty-spool weight is managed by Spoolman on the filament
   // object, so SpoolWeightPicker is hidden and an info notice is shown instead.
   spoolmanMode?: boolean;
+  // The VAT distinction is opt-in (vat_enabled setting); the incl./excl.
+  // selector behind the cost field only renders when it is on.
+  vatEnabled?: boolean;
 }
 
 // PA Profile section props

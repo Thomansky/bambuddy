@@ -2697,6 +2697,8 @@ export default {
     disconnected: '未连接',
     currency: '货币',
     defaultFilamentCost: '默认耗材成本（每公斤）',
+    vatEnabled: '区分含税/不含税价格',
+    vatEnabledHelp: '面向企业工作流程：为线轴成本添加增值税基准，发票金额可直接按原样输入。关闭时（默认）将隐藏所有增值税提示——个人使用不受任何影响。',
     vatRate: '增值税税率（%）',
     vatRateHelp: '用于在显示和库存价值中换算线轴成本的含税与不含税价格。设为 0 可隐藏增值税提示。',
     priceBasis: '价格基准',

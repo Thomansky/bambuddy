@@ -2652,6 +2652,8 @@ export default {
     disconnected: 'Desconectado',
     currency: 'Moeda',
     defaultFilamentCost: 'Custo padrão do filamento (por kg)',
+    vatEnabled: 'Distinguir com/sem IVA',
+    vatEnabledHelp: 'Para fluxos de trabalho empresariais: adiciona uma base de IVA aos custos das bobinas para que os valores das faturas possam ser inseridos como estão. Desativado (o padrão) oculta todas as indicações de IVA — nada muda para uso pessoal.',
     vatRate: 'Alíquota de IVA (%)',
     vatRateHelp: 'Usado para converter os custos das bobinas entre valores com e sem IVA na exibição e no valor do estoque. Defina como 0 para ocultar as indicações de IVA.',
     priceBasis: 'Base de preço',

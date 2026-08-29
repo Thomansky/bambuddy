@@ -178,6 +178,7 @@ export function AdditionalSection({
   onCreateLocation,
   globalLowStockThreshold,
   spoolmanMode = false,
+  vatEnabled = false,
 }: AdditionalSectionProps) {
   const { t } = useTranslation();
   const { showToast } = useToast();
@@ -319,9 +320,10 @@ export function AdditionalSection({
             />
           </div>
           {/* VAT basis: says which basis the number above was entered in;
-              display converts via the configured VAT rate. Bambuddy-only
-              metadata, so hidden in Spoolman mode (Spoolman owns the price). */}
-          {!spoolmanMode && (
+              display converts via the configured VAT rate. Opt-in via the
+              vat_enabled setting, and Bambuddy-only metadata, so hidden in
+              Spoolman mode (Spoolman owns the price). */}
+          {!spoolmanMode && vatEnabled && (
             <select
               aria-label={t('inventory.vatBasis')}
               value={formData.cost_vat_included ? 'incl' : 'excl'}

@@ -2566,6 +2566,8 @@ export default {
     disconnected: '연결 끊김',
     currency: '통화',
     defaultFilamentCost: '기본 필라멘트 비용 (kg당)',
+    vatEnabled: '부가세 포함/제외 구분',
+    vatEnabledHelp: '비즈니스 워크플로우용: 스풀 비용에 부가세 기준을 추가하여 청구서 금액을 그대로 입력할 수 있습니다. 꺼짐(기본값)으로 두면 모든 부가세 안내가 숨겨지며, 개인 용도로 사용할 때는 아무것도 달라지지 않습니다.',
     vatRate: '부가세율 (%)',
     vatRateHelp: '스풀 비용을 부가세 포함/제외 금액으로 변환하여 표시하거나 재고 가치를 계산할 때 사용됩니다. 0으로 설정하면 부가세 안내가 숨겨집니다.',
     priceBasis: '가격 기준',
