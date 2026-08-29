@@ -4903,6 +4903,14 @@ async def run_migrations(conn):
     # same shape as core_weight_catalog_id).
     await _safe_execute(conn, "ALTER TABLE spool ADD COLUMN filament_group_id INTEGER")
     await _safe_execute(conn, "CREATE INDEX IF NOT EXISTS ix_spool_filament_group_id ON spool (filament_group_id)")
+    # Migration: VAT basis of the spool cost. Existing prices are assumed
+    # gross (entered including VAT) — the common case for consumer invoices —
+    # and the flag can be flipped per spool. Dialect branch because the two
+    # engines spell a boolean default differently.
+    if is_sqlite():
+        await _safe_execute(conn, "ALTER TABLE spool ADD COLUMN cost_vat_included BOOLEAN NOT NULL DEFAULT 1")
+    else:
+        await _safe_execute(conn, "ALTER TABLE spool ADD COLUMN cost_vat_included BOOLEAN NOT NULL DEFAULT TRUE")
 
     # Migration: repair the tare of spools the RFID auto-add gave the wrong
     # Bambu spool row (#2909). Runs last so the spool catalogue it reads is
