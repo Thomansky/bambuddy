@@ -1209,8 +1209,22 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
   // exactly the off-state of the opt-in vat_enabled switch.
   const vatRatePercent = settings?.vat_enabled ? (settings?.vat_rate_percent ?? 19) : 0;
   // The configured working basis decides which basis the stock-value tile
-  // leads with; the other basis stays one hover away in the tooltip.
-  const priceBasisNet = (settings?.price_vat_basis ?? 'gross') === 'net';
+  // leads with; the tile's own toggle overrides that on the spot and the
+  // choice sticks per browser, like the other inventory view preferences.
+  const configuredBasisNet = (settings?.price_vat_basis ?? 'gross') === 'net';
+  const [stockValueBasisOverride, setStockValueBasisOverride] = useState<'gross' | 'net' | null>(() => {
+    try {
+      const stored = localStorage.getItem('bambuddy-inventory-stock-value-basis');
+      return stored === 'gross' || stored === 'net' ? stored : null;
+    } catch { return null; }
+  });
+  const priceBasisNet = stockValueBasisOverride != null
+    ? stockValueBasisOverride === 'net'
+    : configuredBasisNet;
+  const setStockValueBasis = (basis: 'gross' | 'net') => {
+    setStockValueBasisOverride(basis);
+    try { localStorage.setItem('bambuddy-inventory-stock-value-basis', basis); } catch { /* ignore */ }
+  };
 
   // Map spool_id -> location display data for the LOCATION column.
   // Local SpoolAssignment entries first, then Spoolman SlotAssignment fills in
@@ -1692,6 +1706,24 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
             <div className="flex items-center gap-2 mb-1">
               <Banknote className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
               <span className="text-xs text-bambu-gray font-medium uppercase tracking-wide">{t('inventory.stockValue')}</span>
+              {/* Basis toggle: flips the tile between incl./excl. VAT on the
+                  spot. Only rendered while the VAT distinction is enabled. */}
+              {vatRatePercent > 0 && (
+                <div className="ml-auto flex rounded overflow-hidden border border-bambu-dark-tertiary text-[10px]">
+                  <button
+                    onClick={() => setStockValueBasis('gross')}
+                    className={`px-1.5 py-0.5 transition-colors ${!priceBasisNet ? 'bg-bambu-green/20 text-bambu-green' : 'text-bambu-gray hover:text-white'}`}
+                  >
+                    {t('inventory.vatInclShort')}
+                  </button>
+                  <button
+                    onClick={() => setStockValueBasis('net')}
+                    className={`px-1.5 py-0.5 transition-colors ${priceBasisNet ? 'bg-bambu-green/20 text-bambu-green' : 'text-bambu-gray hover:text-white'}`}
+                  >
+                    {t('inventory.vatExclShort')}
+                  </button>
+                </div>
+              )}
             </div>
             {/* stats sums are gross-normalised; the tile leads with the
                 configured working basis and keeps the other in the tooltip. */}
