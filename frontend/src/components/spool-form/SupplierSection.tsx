@@ -11,7 +11,8 @@ export interface SupplierLinkDraft {
   supplier_id: number;
   supplier_name: string;
   supplier_article_number: string;
-  cost_per_kg: number | null;
+  /** Quoted price for comparison — never the cost basis (spool.cost_per_kg). */
+  quoted_price_per_kg: number | null;
   is_purchase_source: boolean;
 }
 
@@ -80,7 +81,7 @@ export function SupplierSection({ links, onChange, currencySymbol }: SupplierSec
         supplier_id: supplier.id,
         supplier_name: supplier.name,
         supplier_article_number: '',
-        cost_per_kg: null,
+        quoted_price_per_kg: null,
         is_purchase_source: false,
       },
     ]);
@@ -171,12 +172,13 @@ export function SupplierSection({ links, onChange, currencySymbol }: SupplierSec
                     type="number"
                     className="w-full pl-6 pr-2 py-1.5 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded text-white text-xs text-right placeholder:text-bambu-gray/50 focus:outline-none focus:border-bambu-green"
                     placeholder={t('inventory.suppliers.pricePlaceholder')}
+                    title={t('inventory.suppliers.priceHelp')}
                     min={0}
                     step={0.01}
-                    value={link.cost_per_kg ?? ''}
+                    value={link.quoted_price_per_kg ?? ''}
                     onChange={(e) =>
                       updateLink(link.supplier_id, {
-                        cost_per_kg: e.target.value === '' ? null : parseFloat(e.target.value),
+                        quoted_price_per_kg: e.target.value === '' ? null : parseFloat(e.target.value),
                       })
                     }
                   />
