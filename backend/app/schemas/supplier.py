@@ -43,8 +43,10 @@ class SpoolSupplierLinkInput(BaseModel):
     # The supplier's own article number for the product — NOT the internal
     # material number (#2870).
     supplier_article_number: str | None = Field(default=None, max_length=100)
-    # Price per kg at this supplier, for comparing sources.
-    cost_per_kg: float | None = Field(default=None, ge=0)
+    # Quoted price per kg at this supplier, for comparing sources. Never a
+    # cost basis — ``spool.cost_per_kg`` stays authoritative and is not
+    # written from assignments.
+    quoted_price_per_kg: float | None = Field(default=None, ge=0)
     # Marks where this concrete spool was actually bought; the other
     # assignments are alternative sources.
     is_purchase_source: bool = False
@@ -55,7 +57,7 @@ class SpoolSupplierResponse(BaseModel):
     supplier_id: int
     supplier_name: str
     supplier_article_number: str | None = None
-    cost_per_kg: float | None = None
+    quoted_price_per_kg: float | None = None
     is_purchase_source: bool = False
 
     class Config:

@@ -7,7 +7,7 @@ import {
   Search, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
   TrendingDown, Layers, Printer, AlertTriangle, X, Clock, LayoutGrid, TableProperties, Columns,
   ArrowUp, ArrowDown, ArrowUpDown, Group, ChevronDown, Check, RefreshCw, TrendingUp, Lock, Copy, Eraser, MapPin,
-  Upload, Download, Link2, Banknote,
+  Upload, Download, Link2, Banknote, Store,
 } from 'lucide-react';
 import { ForecastPanel } from '../components/ForecastPanel';
 import { api, spoolbuddyApi, ApiError } from '../api/client';
@@ -22,6 +22,7 @@ import { ColumnConfigModal, type ColumnConfig } from '../components/ColumnConfig
 import { LabelTemplatePickerModal } from '../components/LabelTemplatePickerModal';
 import { SpoolCsvImportModal } from '../components/SpoolCsvImportModal';
 import { LocationsModal } from '../components/LocationsModal';
+import { SuppliersModal } from '../components/SuppliersModal';
 import { BulkEditSpoolsModal } from '../components/BulkEditSpoolsModal';
 import { SpoolGroupLinkModal } from '../components/SpoolGroupLinkModal';
 import { useToast } from '../contexts/ToastContext';
@@ -649,6 +650,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
   const [csvImportOpen, setCsvImportOpen] = useState(false);
   const [exportingCsv, setExportingCsv] = useState(false);
   const [locationsModalOpen, setLocationsModalOpen] = useState(false);
+  const [suppliersModalOpen, setSuppliersModalOpen] = useState(false);
 
   // Filter state
   const [archiveFilter, setArchiveFilter] = useState<ArchiveFilter>('active');
@@ -1615,6 +1617,12 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
           <Button variant="secondary" onClick={() => setLocationsModalOpen(true)}>
             <MapPin className="w-4 h-4" />
             {t('locations.manage')}
+          </Button>
+          {/* Suppliers (#2988): inventory master data like Locations, so the
+              modal opens from the same toolbar — in both inventory modes. */}
+          <Button variant="secondary" onClick={() => setSuppliersModalOpen(true)}>
+            <Store className="w-4 h-4" />
+            {t('settings.suppliers.title')}
           </Button>
           <Button
             variant="secondary"
@@ -2705,6 +2713,8 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
         onClose={() => setLocationsModalOpen(false)}
         onPickLocation={(id) => setStorageLocationFilter(String(id))}
       />
+
+      <SuppliersModal open={suppliersModalOpen} onClose={() => setSuppliersModalOpen(false)} />
     </div>
   );
 }
