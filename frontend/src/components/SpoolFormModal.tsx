@@ -456,7 +456,7 @@ export function SpoolFormModal({
             supplier_id: link.supplier_id,
             supplier_name: link.supplier_name,
             supplier_article_number: link.supplier_article_number ?? '',
-            cost_per_kg: link.cost_per_kg,
+            quoted_price_per_kg: link.quoted_price_per_kg,
             // Where a COPY was bought is unknown — only a real edit keeps it.
             is_purchase_source: isCopying ? false : link.is_purchase_source,
           }))
@@ -803,14 +803,17 @@ export function SpoolFormModal({
   // actually touched the control — an untouched create keeps the backend's
   // inherited assignments instead of wiping them with an empty list.
   const saveSupplierLinks = async (spoolId: number): Promise<boolean> => {
-    if (spoolmanMode || !supplierLinksTouched) return true;
+    if (!supplierLinksTouched) return true;
+    // Spoolman parity (#2988): the assignment rows live Bambuddy-side either
+    // way; only the endpoint differs (twin table keyed by the remote id).
+    const save = spoolmanMode ? api.setSpoolmanSpoolSuppliers : api.setSpoolSuppliers;
     try {
-      await api.setSpoolSuppliers(
+      await save(
         spoolId,
         supplierLinks.map((link) => ({
           supplier_id: link.supplier_id,
           supplier_article_number: link.supplier_article_number.trim() || null,
-          cost_per_kg: link.cost_per_kg,
+          quoted_price_per_kg: link.quoted_price_per_kg,
           is_purchase_source: link.is_purchase_source,
         })),
       );
@@ -1154,21 +1157,20 @@ export function SpoolFormModal({
                 />
               </div>
 
-              {/* Suppliers (#2988) — internal inventory only: Spoolman's
-                  vendor is the manufacturer, there is no seller concept to
-                  map these onto. */}
-              {!spoolmanMode && (
-                <div>
-                  <SupplierSection
-                    links={supplierLinks}
-                    onChange={(next) => {
-                      setSupplierLinks(next);
-                      setSupplierLinksTouched(true);
-                    }}
-                    currencySymbol={currencySymbol}
-                  />
-                </div>
-              )}
+              {/* Suppliers (#2988) — both inventories: the assignments live
+                  Bambuddy-side either way (Spoolman's vendor is the
+                  manufacturer, not the seller), so the same section renders
+                  in Spoolman mode and saves to the twin endpoint. */}
+              <div>
+                <SupplierSection
+                  links={supplierLinks}
+                  onChange={(next) => {
+                    setSupplierLinks(next);
+                    setSupplierLinksTouched(true);
+                  }}
+                  currencySymbol={currencySymbol}
+                />
+              </div>
 
               {/* Usage History (only when editing internal inventory; Spoolman tracks its own) */}
               {isEditing && spool && !spoolmanMode && (
