@@ -1186,16 +1186,20 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
       // Stock value prices the filament still on the spool, not what was
       // paid for it once — the purchase total is the tile's sub-line.
       // Spools without a price can't be valued and are surfaced as a count
-      // instead of silently pricing them at zero.
+      // instead of silently pricing them at zero. Prices carry a per-spool
+      // VAT basis, so everything is normalised to gross here (net in the
+      // tile's tooltip) instead of summing mixed bases.
       if (s.cost_per_kg != null) {
-        totalValue += (s.cost_per_kg * remaining) / 1000;
-        totalPurchase += (s.cost_per_kg * s.label_weight) / 1000;
+        const vatFactor = 1 + (settings?.vat_rate_percent ?? 19) / 100;
+        const gross = (s.cost_vat_included ?? true) ? s.cost_per_kg : s.cost_per_kg * vatFactor;
+        totalValue += (gross * remaining) / 1000;
+        totalPurchase += (gross * s.label_weight) / 1000;
       } else {
         unpricedCount++;
       }
     }
     return { totalWeight, totalConsumed, lowStock, byMaterial, totalSpools: activeCount, totalValue, totalPurchase, unpricedCount };
-  }, [spools, lowStockThreshold]);
+  }, [spools, lowStockThreshold, settings?.vat_rate_percent]);
 
   const inPrinterCount =
     (assignments?.length ?? 0) + (spoolmanMode ? spoolmanSlotAssignments.length : 0);
@@ -1684,9 +1688,21 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
               <Banknote className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
               <span className="text-xs text-bambu-gray font-medium uppercase tracking-wide">{t('inventory.stockValue')}</span>
             </div>
-            <div className="text-xl font-bold text-white">{currencySymbol}{stats.totalValue.toFixed(2)}</div>
+            {/* Values are normalised to gross; the tooltip carries the net
+                equivalents so the commercial reading is one hover away. */}
+            <div
+              className="text-xl font-bold text-white"
+              title={`${currencySymbol}${(stats.totalValue / (1 + vatRatePercent / 100)).toFixed(2)} ${t('inventory.vatExcl')}`}
+            >
+              {currencySymbol}{stats.totalValue.toFixed(2)}
+              {vatRatePercent > 0 && (
+                <span className="text-xs font-normal text-bambu-gray ml-1">{t('inventory.vatInclShort')}</span>
+              )}
+            </div>
             <div className="text-xs text-bambu-gray mt-1">
-              {t('inventory.stockValuePurchase', { value: `${currencySymbol}${stats.totalPurchase.toFixed(2)}` })}
+              <span title={`${currencySymbol}${(stats.totalPurchase / (1 + vatRatePercent / 100)).toFixed(2)} ${t('inventory.vatExcl')}`}>
+                {t('inventory.stockValuePurchase', { value: `${currencySymbol}${stats.totalPurchase.toFixed(2)}` })}
+              </span>
               {stats.unpricedCount > 0 && (
                 <span className="ml-1" title={t('inventory.stockValueUnpricedTooltip')}>
                   · {t('inventory.stockValueUnpriced', { count: stats.unpricedCount })}

@@ -55,6 +55,8 @@ describe('AdditionalSection', () => {
     // whose value would be silently dropped.
     render(<AdditionalSection {...baseProps} spoolmanMode={true} />);
     expect(screen.queryByText('inventory.materialNumber')).toBeNull();
+  });
+
   it('offers the VAT basis next to the cost and reports a change', async () => {
     const updateField = vi.fn();
     render(<AdditionalSection {...baseProps} updateField={updateField} spoolmanMode={false} />);
