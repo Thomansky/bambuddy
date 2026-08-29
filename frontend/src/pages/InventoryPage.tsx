@@ -1206,6 +1206,9 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
 
   const currencySymbol = getCurrencySymbol(settings?.currency || 'USD');
   const vatRatePercent = settings?.vat_rate_percent ?? 19;
+  // The configured working basis decides which basis the stock-value tile
+  // leads with; the other basis stays one hover away in the tooltip.
+  const priceBasisNet = (settings?.price_vat_basis ?? 'gross') === 'net';
 
   // Map spool_id -> location display data for the LOCATION column.
   // Local SpoolAssignment entries first, then Spoolman SlotAssignment fills in
@@ -1688,20 +1691,26 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
               <Banknote className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
               <span className="text-xs text-bambu-gray font-medium uppercase tracking-wide">{t('inventory.stockValue')}</span>
             </div>
-            {/* Values are normalised to gross; the tooltip carries the net
-                equivalents so the commercial reading is one hover away. */}
+            {/* stats sums are gross-normalised; the tile leads with the
+                configured working basis and keeps the other in the tooltip. */}
             <div
               className="text-xl font-bold text-white"
-              title={`${currencySymbol}${(stats.totalValue / (1 + vatRatePercent / 100)).toFixed(2)} ${t('inventory.vatExcl')}`}
+              title={`${currencySymbol}${(priceBasisNet ? stats.totalValue : stats.totalValue / (1 + vatRatePercent / 100)).toFixed(2)} ${t(priceBasisNet ? 'inventory.vatIncl' : 'inventory.vatExcl')}`}
             >
-              {currencySymbol}{stats.totalValue.toFixed(2)}
+              {currencySymbol}{(priceBasisNet ? stats.totalValue / (1 + vatRatePercent / 100) : stats.totalValue).toFixed(2)}
               {vatRatePercent > 0 && (
-                <span className="text-xs font-normal text-bambu-gray ml-1">{t('inventory.vatInclShort')}</span>
+                <span className="text-xs font-normal text-bambu-gray ml-1">
+                  {t(priceBasisNet ? 'inventory.vatExclShort' : 'inventory.vatInclShort')}
+                </span>
               )}
             </div>
             <div className="text-xs text-bambu-gray mt-1">
-              <span title={`${currencySymbol}${(stats.totalPurchase / (1 + vatRatePercent / 100)).toFixed(2)} ${t('inventory.vatExcl')}`}>
-                {t('inventory.stockValuePurchase', { value: `${currencySymbol}${stats.totalPurchase.toFixed(2)}` })}
+              <span
+                title={`${currencySymbol}${(priceBasisNet ? stats.totalPurchase : stats.totalPurchase / (1 + vatRatePercent / 100)).toFixed(2)} ${t(priceBasisNet ? 'inventory.vatIncl' : 'inventory.vatExcl')}`}
+              >
+                {t('inventory.stockValuePurchase', {
+                  value: `${currencySymbol}${(priceBasisNet ? stats.totalPurchase / (1 + vatRatePercent / 100) : stats.totalPurchase).toFixed(2)}`,
+                })}
               </span>
               {stats.unpricedCount > 0 && (
                 <span className="ml-1" title={t('inventory.stockValueUnpricedTooltip')}>
