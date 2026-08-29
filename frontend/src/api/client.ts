@@ -1293,6 +1293,8 @@ export interface AppSettings {
   currency: string;
   /** VAT rate (%) used to convert spool costs between incl. and excl. VAT. */
   vat_rate_percent: number;
+  /** Working price basis: pre-fills new spools and drives aggregate display. */
+  price_vat_basis: 'gross' | 'net';
   energy_cost_per_kwh: number;
   energy_tracking_mode: 'print' | 'total';
   check_updates: boolean;

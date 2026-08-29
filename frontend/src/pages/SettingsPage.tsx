@@ -2422,6 +2422,18 @@ export function SettingsPage() {
                 <p className="text-xs text-bambu-gray mt-1">{t('settings.vatRateHelp')}</p>
               </div>
               <div>
+                <label className="block text-sm text-bambu-gray mb-1">{t('settings.priceBasis')}</label>
+                <select
+                  value={localSettings.price_vat_basis ?? 'gross'}
+                  onChange={(e) => updateSetting('price_vat_basis', e.target.value === 'net' ? 'net' : 'gross')}
+                  className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                >
+                  <option value="gross">{t('settings.priceBasisGross')}</option>
+                  <option value="net">{t('settings.priceBasisNet')}</option>
+                </select>
+                <p className="text-xs text-bambu-gray mt-1">{t('settings.priceBasisHelp')}</p>
+              </div>
+              <div>
                 <label className="block text-sm text-bambu-gray mb-1">
                   {t('settings.electricityCost')}
                 </label>
