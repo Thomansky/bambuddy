@@ -763,11 +763,8 @@ class AppSettingsUpdate(BaseModel):
     prometheus_enabled: bool | None = None
     prometheus_token: str | None = None
     low_stock_threshold: float | None = Field(default=None, ge=0.1, le=99.9)
-<<<<<<< HEAD
     auto_link_scanned_spools: bool | None = None
-=======
     vat_enabled: bool | None = None
->>>>>>> feature/vat-basis
     vat_rate_percent: float | None = Field(default=None, ge=0, le=100)
     price_vat_basis: str | None = Field(default=None, pattern="^(gross|net)$")
     session_max_hours: int | None = Field(default=None, ge=1, le=720)
