@@ -86,8 +86,18 @@ class TestVatRateSetting:
     async def test_default_and_update(self, async_client: AsyncClient):
         settings = (await async_client.get("/api/v1/settings/")).json()
         assert settings["vat_rate_percent"] == 19.0
+        assert settings["price_vat_basis"] == "gross"
 
-        resp = await async_client.put("/api/v1/settings/", json={"vat_rate_percent": 7.7})
+        resp = await async_client.put(
+            "/api/v1/settings/", json={"vat_rate_percent": 7.7, "price_vat_basis": "net"}
+        )
         assert resp.status_code == 200
         settings = (await async_client.get("/api/v1/settings/")).json()
         assert settings["vat_rate_percent"] == 7.7
+        assert settings["price_vat_basis"] == "net"
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_rejects_unknown_basis(self, async_client: AsyncClient):
+        resp = await async_client.put("/api/v1/settings/", json={"price_vat_basis": "maybe"})
+        assert resp.status_code == 422

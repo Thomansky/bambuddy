@@ -67,6 +67,15 @@ class AppSettings(BaseModel):
         le=100,
         description="VAT rate (%) used to convert spool costs between incl. and excl. VAT",
     )
+    # The basis the user works in: 'gross' (incl. VAT, consumer invoices) or
+    # 'net' (excl. VAT, B2B invoices). Pre-fills the VAT selector for new
+    # spools and decides which basis aggregated values are displayed in — so
+    # invoice numbers can be typed in as-is, whichever kind arrives.
+    price_vat_basis: str = Field(
+        default="gross",
+        pattern="^(gross|net)$",
+        description="Working price basis: 'gross' (incl. VAT) or 'net' (excl. VAT)",
+    )
     energy_cost_per_kwh: float = Field(default=0.15, description="Electricity cost per kWh for energy tracking")
     energy_tracking_mode: str = Field(
         default="total",
@@ -738,6 +747,7 @@ class AppSettingsUpdate(BaseModel):
     prometheus_token: str | None = None
     low_stock_threshold: float | None = Field(default=None, ge=0.1, le=99.9)
     vat_rate_percent: float | None = Field(default=None, ge=0, le=100)
+    price_vat_basis: str | None = Field(default=None, pattern="^(gross|net)$")
     session_max_hours: int | None = Field(default=None, ge=1, le=720)
     user_notifications_enabled: bool | None = None
     default_bed_levelling: TriState | None = None

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { X, Loader2, Save, Beaker, Palette, Zap, Tag, Unlink } from 'lucide-react';
@@ -719,6 +719,23 @@ export function SpoolFormModal({
     queryFn: api.getSettings,
     enabled: isOpen,
   });
+
+  // Pre-fill the VAT basis of a NEW spool from the configured working basis:
+  // typing an invoice must not start with flipping the selector. A one-shot
+  // per open (ref) rather than part of the open-reset effect, because the
+  // settings query can resolve after that effect ran on a cold cache — and
+  // re-running the reset then would clobber fields the user already edited.
+  const vatBasisAppliedRef = useRef(false);
+  useEffect(() => {
+    if (isOpen) vatBasisAppliedRef.current = false;
+  }, [isOpen]);
+  useEffect(() => {
+    if (!isOpen || mode !== 'create' || spool || vatBasisAppliedRef.current) return;
+    const basis = settingsForForm?.price_vat_basis;
+    if (!basis) return;
+    vatBasisAppliedRef.current = true;
+    setFormData((prev) => ({ ...prev, cost_vat_included: basis !== 'net' }));
+  }, [isOpen, mode, spool, settingsForForm?.price_vat_basis]);
 
   // Backend Bambu printer-model registry, so the Printers tab can read the
   // model out of a preset name and offer each model only its own presets. The
