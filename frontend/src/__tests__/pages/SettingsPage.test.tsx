@@ -176,6 +176,33 @@ describe('SettingsPage', () => {
     });
   });
 
+  describe('VAT distinction', () => {
+    // Regression: the debounced save works off an explicit field list, so a
+    // toggle whose field is missing from that list changes the UI, saves
+    // nothing, and silently reverts on the next visit.
+    it('persists the master switch through the debounced save', async () => {
+      let saved: Record<string, unknown> | null = null;
+      server.use(
+        http.put('/api/v1/settings/', async ({ request }) => {
+          saved = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json({ ...mockSettings, ...saved });
+        })
+      );
+      render(<SettingsPage />);
+
+      const label = await screen.findByText('Distinguish incl./excl. VAT');
+      // The page suppresses auto-save for 100ms after the settings load.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const row = label.closest('div')!.parentElement!;
+      await userEvent.click(within(row).getByRole('checkbox'));
+
+      await waitFor(() => {
+        expect(saved).not.toBeNull();
+      }, { timeout: 3000 });
+      expect(saved!.vat_enabled).toBe(true);
+    });
+  });
+
   describe('general settings', () => {
     it('shows date format setting', async () => {
       render(<SettingsPage />);
