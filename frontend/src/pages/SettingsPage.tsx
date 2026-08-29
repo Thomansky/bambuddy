@@ -1135,6 +1135,9 @@ export function SettingsPage() {
       (baseline.finish_photo_restore_plate ?? true) !== (localSettings.finish_photo_restore_plate ?? true) ||
       baseline.default_filament_cost !== localSettings.default_filament_cost ||
       baseline.currency !== localSettings.currency ||
+      (baseline.vat_enabled ?? false) !== (localSettings.vat_enabled ?? false) ||
+      (baseline.vat_rate_percent ?? 19) !== (localSettings.vat_rate_percent ?? 19) ||
+      (baseline.price_vat_basis ?? 'gross') !== (localSettings.price_vat_basis ?? 'gross') ||
       baseline.energy_cost_per_kwh !== localSettings.energy_cost_per_kwh ||
       baseline.energy_tracking_mode !== localSettings.energy_tracking_mode ||
       baseline.check_updates !== localSettings.check_updates ||
@@ -1247,6 +1250,9 @@ export function SettingsPage() {
         finish_photo_restore_plate: localSettings.finish_photo_restore_plate ?? true,
         default_filament_cost: localSettings.default_filament_cost,
         currency: localSettings.currency,
+        vat_enabled: localSettings.vat_enabled ?? false,
+        vat_rate_percent: localSettings.vat_rate_percent ?? 19,
+        price_vat_basis: localSettings.price_vat_basis ?? 'gross',
         energy_cost_per_kwh: localSettings.energy_cost_per_kwh,
         energy_tracking_mode: localSettings.energy_tracking_mode,
         check_updates: localSettings.check_updates,
