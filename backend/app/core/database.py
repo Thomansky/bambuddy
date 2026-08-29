@@ -4907,10 +4907,22 @@ async def _migrate_create_supplier_tables(conn) -> None:
                 spool_id INTEGER NOT NULL REFERENCES spool(id) ON DELETE CASCADE,
                 supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
                 supplier_article_number VARCHAR(100),
-                cost_per_kg FLOAT,
+                quoted_price_per_kg FLOAT,
                 is_purchase_source BOOLEAN NOT NULL DEFAULT 0,
                 created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 CONSTRAINT uq_spool_suppliers_spool_supplier UNIQUE (spool_id, supplier_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS spoolman_spool_suppliers (
+                id INTEGER PRIMARY KEY,
+                spoolman_spool_id INTEGER NOT NULL,
+                supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
+                supplier_article_number VARCHAR(100),
+                quoted_price_per_kg FLOAT,
+                is_purchase_source BOOLEAN NOT NULL DEFAULT 0,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT uq_spoolman_spool_suppliers_pair UNIQUE (spoolman_spool_id, supplier_id)
             )
             """,
         ]
@@ -4933,10 +4945,22 @@ async def _migrate_create_supplier_tables(conn) -> None:
                 spool_id INTEGER NOT NULL REFERENCES spool(id) ON DELETE CASCADE,
                 supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
                 supplier_article_number VARCHAR(100),
-                cost_per_kg FLOAT,
+                quoted_price_per_kg FLOAT,
                 is_purchase_source BOOLEAN NOT NULL DEFAULT FALSE,
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 CONSTRAINT uq_spool_suppliers_spool_supplier UNIQUE (spool_id, supplier_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS spoolman_spool_suppliers (
+                id SERIAL PRIMARY KEY,
+                spoolman_spool_id INTEGER NOT NULL,
+                supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
+                supplier_article_number VARCHAR(100),
+                quoted_price_per_kg FLOAT,
+                is_purchase_source BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT uq_spoolman_spool_suppliers_pair UNIQUE (spoolman_spool_id, supplier_id)
             )
             """,
         ]
@@ -4948,6 +4972,16 @@ async def _migrate_create_supplier_tables(conn) -> None:
     await _safe_execute(conn, "CREATE INDEX IF NOT EXISTS ix_spool_suppliers_spool_id ON spool_suppliers (spool_id)")
     await _safe_execute(
         conn, "CREATE INDEX IF NOT EXISTS ix_spool_suppliers_supplier_id ON spool_suppliers (supplier_id)"
+    )
+    await _safe_execute(
+        conn,
+        "CREATE INDEX IF NOT EXISTS ix_spoolman_spool_suppliers_spoolman_spool_id"
+        " ON spoolman_spool_suppliers (spoolman_spool_id)",
+    )
+    await _safe_execute(
+        conn,
+        "CREATE INDEX IF NOT EXISTS ix_spoolman_spool_suppliers_supplier_id"
+        " ON spoolman_spool_suppliers (supplier_id)",
     )
 
 
@@ -5536,32 +5570,6 @@ async def seed_default_groups():
                 perms.append("makerworld:view")
                 changed = True
                 logger.info("Added makerworld:view to group '%s' (has library:read)", group.name)
-            if changed:
-                group.permissions = perms
-        await session.commit()
-
-        # Migrate new permissions for suppliers (#2988): groups that can
-        # already edit the inventory are the audience for managing the
-        # supplier master list; read-only inventory groups get read access.
-        # Matches the intent of DEFAULT_GROUPS without clobbering
-        # user-customised permission lists. Administrators are covered by the
-        # ALL_PERMISSIONS sync below.
-        result = await session.execute(select(Group))
-        for group in result.scalars().all():
-            if not group.permissions:
-                continue
-            perms = list(group.permissions)
-            changed = False
-            if "inventory:update" in perms:
-                for new_perm in ("suppliers:read", "suppliers:create", "suppliers:update", "suppliers:delete"):
-                    if new_perm not in perms:
-                        perms.append(new_perm)
-                        changed = True
-                        logger.info("Added %s to group '%s' (has inventory:update)", new_perm, group.name)
-            elif "inventory:read" in perms and "suppliers:read" not in perms:
-                perms.append("suppliers:read")
-                changed = True
-                logger.info("Added suppliers:read to group '%s' (has inventory:read)", group.name)
             if changed:
                 group.permissions = perms
         await session.commit()

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.core.database import Base
@@ -54,8 +54,10 @@ class SpoolSupplier(Base):
     supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id"), index=True)
     # The supplier's article number for this product.
     supplier_article_number: Mapped[str | None] = mapped_column(String(100))
-    # Price per kg at this supplier, for comparing sources of the same product.
-    cost_per_kg: Mapped[float | None] = mapped_column(Float)
+    # QUOTED price per kg at this supplier, for comparing sources. Named so it
+    # can never be read as actual cost: ``spool.cost_per_kg`` is the cost basis
+    # for every print and is never written from here.
+    quoted_price_per_kg: Mapped[float | None] = mapped_column(Float)
     # True on the assignment this spool was actually purchased from.
     is_purchase_source: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
@@ -67,4 +69,33 @@ class SpoolSupplier(Base):
     def supplier_name(self) -> str:
         """Flattened for SpoolSupplierResponse — the supplier relationship is
         selectin-loaded wherever links are embedded, so this never lazy-loads."""
+        return self.supplier.name if self.supplier else ""
+
+
+class SpoolmanSpoolSupplier(Base):
+    """``SpoolSupplier`` for a Spoolman-managed spool.
+
+    Mirrors ``SpoolmanKProfile``: Spoolman owns the spool, Bambuddy owns the
+    supplier assignment, so the row is local and keyed by the remote spool id
+    with no foreign key to enforce it. Suppliers are Bambuddy-side on purpose —
+    Spoolman's ``vendor`` is the manufacturer, not the seller.
+    """
+
+    __tablename__ = "spoolman_spool_suppliers"
+    __table_args__ = (
+        UniqueConstraint("spoolman_spool_id", "supplier_id", name="uq_spoolman_spool_suppliers_pair"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    spoolman_spool_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id"), index=True)
+    supplier_article_number: Mapped[str | None] = mapped_column(String(100))
+    quoted_price_per_kg: Mapped[float | None] = mapped_column(Float)
+    is_purchase_source: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    supplier: Mapped[Supplier] = relationship(lazy="selectin")
+
+    @property
+    def supplier_name(self) -> str:
         return self.supplier.name if self.supplier else ""

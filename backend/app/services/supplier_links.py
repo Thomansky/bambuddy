@@ -56,7 +56,7 @@ async def find_supplier_link_templates_for_product(
         {
             "supplier_id": link.supplier_id,
             "supplier_article_number": link.supplier_article_number,
-            "cost_per_kg": link.cost_per_kg,
+            "quoted_price_per_kg": link.quoted_price_per_kg,
             "is_purchase_source": False,
         }
         for link in links.scalars().all()

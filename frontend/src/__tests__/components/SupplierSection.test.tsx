@@ -84,8 +84,8 @@ describe('SupplierSection', () => {
     render(
       <Harness
         initial={[
-          { supplier_id: 1, supplier_name: 'Filament24', supplier_article_number: '', cost_per_kg: null, is_purchase_source: true },
-          { supplier_id: 2, supplier_name: 'PrintStore', supplier_article_number: '', cost_per_kg: null, is_purchase_source: false },
+          { supplier_id: 1, supplier_name: 'Filament24', supplier_article_number: '', quoted_price_per_kg: null, is_purchase_source: true },
+          { supplier_id: 2, supplier_name: 'PrintStore', supplier_article_number: '', quoted_price_per_kg: null, is_purchase_source: false },
         ]}
         onChange={onChange}
       />,
@@ -106,7 +106,7 @@ describe('SupplierSection', () => {
     render(
       <Harness
         initial={[
-          { supplier_id: 1, supplier_name: 'Filament24', supplier_article_number: '', cost_per_kg: null, is_purchase_source: false },
+          { supplier_id: 1, supplier_name: 'Filament24', supplier_article_number: '', quoted_price_per_kg: null, is_purchase_source: false },
         ]}
         onChange={onChange}
       />,

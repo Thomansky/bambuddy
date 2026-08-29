@@ -96,9 +96,6 @@ _APIKEY_SCOPE_BY_PERMISSION: dict[Permission, str | tuple[str, ...]] = {
     Permission.INVENTORY_READ: "can_read_status",
     Permission.INVENTORY_VIEW_ASSIGNMENTS: "can_read_status",
     Permission.INVENTORY_FORECAST_READ: "can_read_status",
-    # Suppliers (#2988) follow the inventory split: reading the master list
-    # is status-shaped, managing it is inventory management.
-    Permission.SUPPLIERS_READ: "can_read_status",
     Permission.SMART_PLUGS_READ: "can_read_status",
     Permission.CAMERA_VIEW: "can_read_status",
     Permission.MAINTENANCE_READ: "can_read_status",
@@ -170,10 +167,6 @@ _APIKEY_SCOPE_BY_PERMISSION: dict[Permission, str | tuple[str, ...]] = {
     Permission.INVENTORY_UPDATE: "can_manage_inventory",
     Permission.INVENTORY_DELETE: "can_manage_inventory",
     Permission.INVENTORY_FORECAST_WRITE: "can_manage_inventory",
-    # Suppliers (#2988): the master list is part of the inventory surface.
-    Permission.SUPPLIERS_CREATE: "can_manage_inventory",
-    Permission.SUPPLIERS_UPDATE: "can_manage_inventory",
-    Permission.SUPPLIERS_DELETE: "can_manage_inventory",
     # can_manage_maintenance — carved out of the admin denylist so HA-style
     # automations can log "cleaned nozzle" / reset a maintenance counter via
     # `POST /maintenance/items/{item_id}/perform` without granting broader

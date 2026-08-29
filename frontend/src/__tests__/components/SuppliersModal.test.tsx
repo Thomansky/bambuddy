@@ -1,11 +1,11 @@
 /**
- * Tests for the SupplierSettings card (#2988).
+ * Tests for the SuppliersModal (#2988) — the supplier master list opened from the Inventory toolbar.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { SupplierSettings } from '../../components/SupplierSettings';
+import { SuppliersModal } from '../../components/SuppliersModal';
 import { api, ApiError } from '../../api/client';
 
 const mockShowToast = vi.fn();
@@ -50,14 +50,14 @@ const suppliers = [
   },
 ];
 
-describe('SupplierSettings', () => {
+describe('SuppliersModal', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (api.getSuppliers as ReturnType<typeof vi.fn>).mockResolvedValue(suppliers);
   });
 
   it('lists suppliers with their spool usage counts', async () => {
-    render(<SupplierSettings />);
+    render(<SuppliersModal open onClose={() => {}} />);
     expect(await screen.findByText('Filament24')).toBeInTheDocument();
     expect(screen.getByText('PrintStore')).toBeInTheDocument();
     expect(screen.getByText('3')).toBeInTheDocument();
@@ -76,7 +76,7 @@ describe('SupplierSettings', () => {
       updated_at: '2026-01-01',
     });
     const user = userEvent.setup();
-    render(<SupplierSettings />);
+    render(<SuppliersModal open onClose={() => {}} />);
     await screen.findByText('Filament24');
 
     await user.click(screen.getByRole('button', { name: /Add/i }));
@@ -100,7 +100,7 @@ describe('SupplierSettings', () => {
       new ApiError('Supplier is assigned to 3 spool(s)', 409),
     );
     const user = userEvent.setup();
-    render(<SupplierSettings />);
+    render(<SuppliersModal open onClose={() => {}} />);
     await screen.findByText('Filament24');
 
     // Open the confirm for the referenced supplier (first row).

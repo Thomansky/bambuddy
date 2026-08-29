@@ -50,6 +50,7 @@ async def engine_without_supplier_tables():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(text("DROP TABLE spoolman_spool_suppliers"))
         await conn.execute(text("DROP TABLE spool_suppliers"))
         await conn.execute(text("DROP TABLE suppliers"))
     yield engine
@@ -73,15 +74,28 @@ async def test_migration_creates_supplier_tables(engine_without_supplier_tables)
         await conn.execute(
             text(
                 """
-                INSERT INTO spool_suppliers (spool_id, supplier_id, is_purchase_source)
-                SELECT s.id, sup.id, 1 FROM spool s, suppliers sup
+                INSERT INTO spool_suppliers (spool_id, supplier_id, quoted_price_per_kg, is_purchase_source)
+                SELECT s.id, sup.id, 19.99, 1 FROM spool s, suppliers sup
+                """
+            )
+        )
+        # Spoolman twin (#2988 parity): local row keyed by the remote spool id.
+        await conn.execute(
+            text(
+                """
+                INSERT INTO spoolman_spool_suppliers (spoolman_spool_id, supplier_id, is_purchase_source)
+                SELECT 7, sup.id, 1 FROM suppliers sup
                 """
             )
         )
 
     async with engine_without_supplier_tables.connect() as conn:
         links = (await conn.execute(text("SELECT supplier_id, is_purchase_source FROM spool_suppliers"))).all()
+        twin_links = (
+            await conn.execute(text("SELECT spoolman_spool_id, supplier_id FROM spoolman_spool_suppliers"))
+        ).all()
     assert len(links) == 1
+    assert len(twin_links) == 1
 
 
 async def test_migration_is_idempotent(engine_without_supplier_tables):

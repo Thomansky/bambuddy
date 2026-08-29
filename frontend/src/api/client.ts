@@ -3593,7 +3593,8 @@ export interface SpoolSupplierLinkInput {
   supplier_id: number;
   /** The supplier's own article number — NOT the internal material number. */
   supplier_article_number?: string | null;
-  cost_per_kg?: number | null;
+  /** Quoted price for comparison — never the cost basis (spool.cost_per_kg). */
+  quoted_price_per_kg?: number | null;
   /** Marks where this concrete spool was actually bought. */
   is_purchase_source?: boolean;
 }
@@ -3603,7 +3604,7 @@ export interface SpoolSupplierLink {
   supplier_id: number;
   supplier_name: string;
   supplier_article_number: string | null;
-  cost_per_kg: number | null;
+  quoted_price_per_kg: number | null;
   is_purchase_source: boolean;
 }
 
@@ -6569,17 +6570,24 @@ export const api = {
     request<{ deleted: number }>('/inventory/catalog/bulk-delete', { method: 'POST', body: JSON.stringify({ ids }) }),
   resetSpoolCatalog: () =>
     request<{ status: string }>('/inventory/catalog/reset', { method: 'POST' }),
-  // ── Suppliers (#2988) ────────────────────────────────────────────────────
+  // ── Suppliers (#2988) — inventory master data, Locations pattern ─────────
   getSuppliers: () =>
-    request<Supplier[]>('/suppliers'),
+    request<Supplier[]>('/inventory/suppliers'),
   createSupplier: (data: SupplierInput) =>
-    request<Supplier>('/suppliers', { method: 'POST', body: JSON.stringify(data) }),
+    request<Supplier>('/inventory/suppliers', { method: 'POST', body: JSON.stringify(data) }),
   updateSupplier: (id: number, data: Partial<SupplierInput>) =>
-    request<Supplier>(`/suppliers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    request<Supplier>(`/inventory/suppliers/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteSupplier: (id: number) =>
-    request<{ status: string; id: number }>(`/suppliers/${id}`, { method: 'DELETE' }),
+    request<{ status: string }>(`/inventory/suppliers/${id}`, { method: 'DELETE' }),
   setSpoolSuppliers: (spoolId: number, links: SpoolSupplierLinkInput[]) =>
     request<SpoolSupplierLink[]>(`/inventory/spools/${spoolId}/suppliers`, {
+      method: 'PUT',
+      body: JSON.stringify(links),
+    }),
+  // Spoolman parity: the assignment rows live Bambuddy-side, keyed by the
+  // remote spool id — same request/response shape as the built-in inventory.
+  setSpoolmanSpoolSuppliers: (spoolmanSpoolId: number, links: SpoolSupplierLinkInput[]) =>
+    request<SpoolSupplierLink[]>(`/spoolman/inventory/spools/${spoolmanSpoolId}/suppliers`, {
       method: 'PUT',
       body: JSON.stringify(links),
     }),

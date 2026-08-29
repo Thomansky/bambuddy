@@ -51,6 +51,7 @@ vi.mock('../../api/client', () => ({
     getSuppliers: vi.fn().mockResolvedValue([]),
     createSupplier: vi.fn().mockResolvedValue({ id: 1, name: 'S' }),
     setSpoolSuppliers: vi.fn().mockResolvedValue([]),
+    setSpoolmanSpoolSuppliers: vi.fn().mockResolvedValue([]),
   },
   ApiError: class ApiError extends Error {
     status: number;
