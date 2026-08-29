@@ -39,6 +39,9 @@ SPOOL_MASTER_DATA_FIELDS: frozenset[str] = frozenset(
         "nozzle_temp_min",
         "nozzle_temp_max",
         "cost_per_kg",
+        # The VAT basis travels with the price — a synced price without its
+        # basis would silently change meaning across the group.
+        "cost_vat_included",
         "note",
         "slicer_filament",
         "slicer_filament_name",
