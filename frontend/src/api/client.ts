@@ -1291,6 +1291,8 @@ export interface AppSettings {
   finish_photo_restore_plate: boolean;
   default_filament_cost: number;
   currency: string;
+  /** VAT rate (%) used to convert spool costs between incl. and excl. VAT. */
+  vat_rate_percent: number;
   energy_cost_per_kwh: number;
   energy_tracking_mode: 'print' | 'total';
   check_updates: boolean;
@@ -3553,6 +3555,8 @@ export interface InventorySpool {
   created_at: string;
   updated_at: string;
   cost_per_kg: number | null;
+  /** Basis of cost_per_kg: true = incl. VAT (gross), false = excl. (net). */
+  cost_vat_included?: boolean;
   last_scale_weight: number | null;
   last_weighed_at: string | null;
   // User-defined category + per-spool low-stock threshold override (#729).

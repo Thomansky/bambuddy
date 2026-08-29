@@ -2721,6 +2721,8 @@ export default {
     // Cost tracking
     currency: 'Currency',
     defaultFilamentCost: 'Default filament cost (per kg)',
+    vatRate: 'VAT rate (%)',
+    vatRateHelp: 'Used to convert spool costs between incl. and excl. VAT for display and stock value. Set to 0 to hide the VAT hints.',
     electricityCost: 'Electricity cost per kWh',
     energyDisplayMode: 'Energy display mode',
     energyModePrintDescription: 'Dashboard shows sum of energy used during prints',
@@ -4737,6 +4739,15 @@ export default {
     measuredWeight: 'Measured Weight',
     spoolName: 'Spool',
     costPerKg: 'Cost per kg',
+    // VAT basis of the spool cost — the number keeps the basis it was
+    // entered in; display converts via the configured VAT rate.
+    vatBasis: 'VAT basis',
+    vatIncl: 'incl. VAT',
+    vatExcl: 'excl. VAT',
+    vatInclShort: 'incl.',
+    vatExclShort: 'excl.',
+    vatConvertedIncl: '= {{value}} incl. VAT',
+    vatConvertedExcl: '= {{value}} excl. VAT',
     storageLocation: 'Storage Location',
     temperature: 'Temperature',
     humidity: 'Humidity',

@@ -47,6 +47,9 @@ CSV_COLUMNS = [
     "weight_used",
     "remaining",
     "cost_per_kg",
+    # Basis of cost_per_kg: true = entered including VAT (gross), false =
+    # excluding it (net). Empty cell on import keeps the schema default (true).
+    "cost_vat_included",
     "nozzle_temp_min",
     "nozzle_temp_max",
     "last_used",
@@ -374,6 +377,18 @@ async def parse_and_validate(raw_bytes: bytes, db: AsyncSession) -> ImportPrevie
                     except ValueError:
                         row_error = f"{field} must be a number (got '{value}')"
                         break
+
+        # VAT basis of the cost: boolean cell, empty keeps the schema default.
+        if row_error is None:
+            value = cell(raw_row, "cost_vat_included")
+            if value:
+                lowered = value.strip().lower()
+                if lowered in ("true", "1", "yes"):
+                    data["cost_vat_included"] = True
+                elif lowered in ("false", "0", "no"):
+                    data["cost_vat_included"] = False
+                else:
+                    row_error = f"cost_vat_included must be true or false (got '{value}')"
 
         # Bounds check: weight_used must be within [0, label_weight]. The schema
         # accepts any float, so a negative or over-full value would otherwise be

@@ -210,6 +210,7 @@ async def _build_settings_response(db: AsyncSession, is_api_key: bool = False) -
             "ams_temp_fair",
             "library_disk_warning_gb",
             "low_stock_threshold",
+            "vat_rate_percent",
         ]:
             settings_dict[setting.key] = float(setting.value)
         elif setting.key in [

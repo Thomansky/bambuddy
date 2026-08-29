@@ -38,6 +38,8 @@ export interface SpoolFormData {
   slicer_filament: string;
   note: string;
   cost_per_kg: number | null;
+  // Basis of cost_per_kg: true = incl. VAT (gross), false = excl. (net).
+  cost_vat_included: boolean;
   // User-defined category + per-spool low-stock threshold override (#729).
   category: string;
   low_stock_threshold_pct: number | null;
@@ -62,6 +64,7 @@ export const defaultFormData: SpoolFormData = {
   slicer_filament: '',
   note: '',
   cost_per_kg: null,
+  cost_vat_included: true,
   category: '',
   low_stock_threshold_pct: null,
   location_id: null,

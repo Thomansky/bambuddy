@@ -115,6 +115,9 @@ class SpoolBase(BaseModel):
     data_origin: str | None = None
     tag_type: str | None = None
     cost_per_kg: float | None = Field(default=None, ge=0)
+    # Basis of cost_per_kg: entered including VAT (gross, the default) or
+    # excluding it (net). Conversion is display-time only.
+    cost_vat_included: bool = True
     weight_locked: bool = False
     last_scale_weight: int | None = None
     last_weighed_at: datetime | None = None
@@ -170,6 +173,7 @@ class SpoolUpdate(BaseModel):
     data_origin: str | None = None
     tag_type: str | None = None
     cost_per_kg: float | None = Field(default=None, ge=0)
+    cost_vat_included: bool | None = None
     weight_locked: bool | None = None
     # User-defined category + per-spool low-stock threshold override (#729).
     category: str | None = Field(default=None, max_length=50)

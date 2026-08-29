@@ -318,6 +318,20 @@ export function AdditionalSection({
               className="w-full py-2 pr-3 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:outline-none focus:border-bambu-green"
             />
           </div>
+          {/* VAT basis: says which basis the number above was entered in;
+              display converts via the configured VAT rate. Bambuddy-only
+              metadata, so hidden in Spoolman mode (Spoolman owns the price). */}
+          {!spoolmanMode && (
+            <select
+              aria-label={t('inventory.vatBasis')}
+              value={formData.cost_vat_included ? 'incl' : 'excl'}
+              onChange={(e) => updateField('cost_vat_included', e.target.value === 'incl')}
+              className="shrink-0 px-2 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-bambu-gray text-sm focus:outline-none focus:border-bambu-green"
+            >
+              <option value="incl">{t('inventory.vatIncl')}</option>
+              <option value="excl">{t('inventory.vatExcl')}</option>
+            </select>
+          )}
         </div>
       </div>
 

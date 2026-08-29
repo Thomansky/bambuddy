@@ -42,4 +42,22 @@ describe('AdditionalSection', () => {
     // SpoolWeightPicker present by default
     expect(screen.getByText('inventory.coreWeight')).toBeTruthy();
   });
+
+  it('offers the VAT basis next to the cost and reports a change', async () => {
+    const updateField = vi.fn();
+    render(<AdditionalSection {...baseProps} updateField={updateField} spoolmanMode={false} />);
+
+    const select = screen.getByLabelText('inventory.vatBasis') as HTMLSelectElement;
+    // defaultFormData enters prices including VAT (gross).
+    expect(select.value).toBe('incl');
+
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.change(select, { target: { value: 'excl' } });
+    expect(updateField).toHaveBeenCalledWith('cost_vat_included', false);
+  });
+
+  it('hides the VAT basis in Spoolman mode (Spoolman owns the price)', () => {
+    render(<AdditionalSection {...baseProps} spoolmanMode={true} />);
+    expect(screen.queryByLabelText('inventory.vatBasis')).toBeNull();
+  });
 });

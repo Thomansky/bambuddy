@@ -4865,6 +4865,15 @@ async def run_migrations(conn):
     # on fresh installs only — this covers databases whose table predates it.
     await _migrate_location_ha_sensor_unique_binding(conn)
 
+    # Migration: VAT basis of the spool cost. Existing prices are assumed
+    # gross (entered including VAT) — the common case for consumer invoices —
+    # and the flag can be flipped per spool. Dialect branch because the two
+    # engines spell a boolean default differently.
+    if is_sqlite():
+        await _safe_execute(conn, "ALTER TABLE spool ADD COLUMN cost_vat_included BOOLEAN NOT NULL DEFAULT 1")
+    else:
+        await _safe_execute(conn, "ALTER TABLE spool ADD COLUMN cost_vat_included BOOLEAN NOT NULL DEFAULT TRUE")
+
     # Migration: repair the tare of spools the RFID auto-add gave the wrong
     # Bambu spool row (#2909). Runs last so the spool catalogue it reads is
     # whatever this database actually holds.
