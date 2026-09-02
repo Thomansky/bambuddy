@@ -1682,6 +1682,30 @@ export function FileManagerPage() {
     return findFolder(folders);
   }, [selectedFolderId, folders]);
 
+  // Direct subfolders of the selected folder, rendered as tiles in the
+  // content pane (#3019). Before this, a folder holding only subfolders
+  // showed the "folder is empty" state and descending was possible only in
+  // the tree. Root deliberately shows no tiles — the tree sits right beside
+  // the pane and already lists the top level. Resolved from sortedFolders so
+  // the tiles follow the tree's sort order.
+  const visibleSubfolders = useMemo(() => {
+    if (!sortedFolders || selectedFolderId === null) return [];
+    const findFolder = (items: LibraryFolderTree[]): LibraryFolderTree | null => {
+      for (const item of items) {
+        if (item.id === selectedFolderId) return item;
+        const found = findFolder(item.children);
+        if (found) return found;
+      }
+      return null;
+    };
+    return findFolder(sortedFolders)?.children ?? [];
+  }, [sortedFolders, selectedFolderId]);
+
+  // The tiles disappear while a search or tag filter is active: those views
+  // list matches from every descendant folder, so per-folder navigation
+  // would sit beside results it doesn't scope.
+  const showFolderTiles = visibleSubfolders.length > 0 && !searchQuery.trim() && selectedTagIds.length === 0;
+
   return (
     <div
       className="p-4 md:p-8 min-h-[calc(100vh-64px)] lg:h-[calc(100vh-64px)] flex flex-col relative"
@@ -2364,6 +2388,31 @@ export function FileManagerPage() {
             </div>
           )}
 
+          {/* Subfolder tiles (#3019): the pane mirrors the tree's children so
+              descending works like any file explorer; clicking a tile selects
+              the folder exactly as clicking it in the tree would. */}
+          {!isLoading && showFolderTiles && (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6 gap-3 mb-4 flex-shrink-0">
+              {visibleSubfolders.map((folder) => (
+                <button
+                  key={folder.id}
+                  onClick={() => setSelectedFolderId(folder.id)}
+                  className="group flex items-center gap-2 p-3 bg-bambu-dark-secondary rounded-lg border border-bambu-dark-tertiary hover:border-bambu-green/50 transition-all text-left"
+                >
+                  {folder.is_external ? (
+                    <FolderSymlink className="w-5 h-5 text-purple-600 dark:text-purple-400 flex-shrink-0" />
+                  ) : (
+                    <FolderOpen className="w-5 h-5 text-bambu-green flex-shrink-0" />
+                  )}
+                  <span className="text-sm text-white truncate flex-1" title={folder.name}>{folder.name}</span>
+                  {folder.file_count > 0 && (
+                    <span className="text-xs text-bambu-gray flex-shrink-0">{folder.file_count}</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* File grid/list */}
           {isLoading ? (
             <div className="flex-1 flex items-center justify-center">
@@ -2372,7 +2421,7 @@ export function FileManagerPage() {
                 <p className="text-sm text-bambu-gray">{t('fileManager.loadingFiles')}</p>
               </div>
             </div>
-          ) : files?.length === 0 ? (
+          ) : files?.length === 0 && !showFolderTiles ? (
             <div className="flex-1 flex flex-col items-center justify-center">
               <div className="p-4 bg-bambu-dark rounded-2xl mb-4">
                 <FileBox className="w-12 h-12 text-bambu-gray/50" />
@@ -2400,6 +2449,10 @@ export function FileManagerPage() {
                 {t('fileManager.uploadFiles')}
               </Button>
             </div>
+          ) : files?.length === 0 ? (
+            // Only subfolder tiles at this level — nothing below them, and no
+            // "no matching files" state, which is about filters, not absence.
+            <div className="flex-1" />
           ) : filteredAndSortedFiles.length === 0 ? (
             <div className="flex-1 flex flex-col items-center justify-center">
               <div className="p-4 bg-bambu-dark rounded-2xl mb-4">

@@ -175,6 +175,49 @@ describe('FileManagerPage', () => {
     );
   });
 
+  describe('subfolder tiles (#3019)', () => {
+    it('shows a selected folder\'s subfolders as tiles instead of the empty state', async () => {
+      server.use(
+        http.get('/api/v1/library/files', () => {
+          return HttpResponse.json([]);
+        })
+      );
+      render(<FileManagerPage />);
+
+      // Select "Functional Parts" (only files are empty; it has a subfolder).
+      await userEvent.click(await screen.findByText('Functional Parts'));
+
+      // Its child renders twice: in the expanded tree AND as a content tile.
+      await waitFor(() => {
+        expect(screen.getAllByText('Brackets').length).toBeGreaterThanOrEqual(2);
+      });
+      // The misleading empty state stays away — the folder is not empty, it
+      // just holds no files.
+      expect(screen.queryByText('Folder is empty')).not.toBeInTheDocument();
+    });
+
+    it('descends into a subfolder when its tile is clicked', async () => {
+      server.use(
+        http.get('/api/v1/library/files', () => {
+          return HttpResponse.json([]);
+        })
+      );
+      render(<FileManagerPage />);
+
+      await userEvent.click(await screen.findByText('Functional Parts'));
+      await waitFor(() => {
+        expect(screen.getAllByText('Brackets').length).toBeGreaterThanOrEqual(2);
+      });
+      // The tile is the last occurrence (tree renders first in the DOM).
+      const tiles = screen.getAllByText('Brackets');
+      await userEvent.click(tiles[tiles.length - 1]);
+
+      // "Brackets" has no subfolders and no files — NOW the empty state is
+      // the truthful answer.
+      expect(await screen.findByText('Folder is empty')).toBeInTheDocument();
+    });
+  });
+
   describe('rendering', () => {
     it('renders the page title', async () => {
       render(<FileManagerPage />);
