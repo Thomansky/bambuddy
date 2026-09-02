@@ -2149,9 +2149,7 @@ async def get_spoolman_spool_suppliers(
 ) -> list[dict]:
     """Supplier assignments for a Spoolman spool (#2988, Bambuddy-side rows)."""
     await _get_client(db)
-    result = await db.execute(
-        select(SpoolmanSpoolSupplier).where(SpoolmanSpoolSupplier.spoolman_spool_id == spool_id)
-    )
+    result = await db.execute(select(SpoolmanSpoolSupplier).where(SpoolmanSpoolSupplier.spoolman_spool_id == spool_id))
     return [_supplier_link_to_dict(link) for link in result.scalars().all()]
 
 

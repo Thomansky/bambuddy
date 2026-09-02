@@ -1,4 +1,4 @@
-﻿from backend.app.models.ams_history import AMSSensorHistory
+from backend.app.models.ams_history import AMSSensorHistory
 from backend.app.models.ams_label import AmsLabel
 from backend.app.models.api_key import APIKey
 from backend.app.models.archive import PrintArchive

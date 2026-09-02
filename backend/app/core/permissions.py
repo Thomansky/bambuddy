@@ -86,7 +86,6 @@ class Permission(StrEnum):
     INVENTORY_FORECAST_READ = "inventory:forecast_read"  # View forecast/reorder intelligence panel
     INVENTORY_FORECAST_WRITE = "inventory:forecast_write"  # Modify SKU settings, lead times, shopping list
 
-
     # Smart Plugs
     SMART_PLUGS_READ = "smart_plugs:read"
     SMART_PLUGS_CREATE = "smart_plugs:create"
