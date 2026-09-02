@@ -4980,8 +4980,7 @@ async def _migrate_create_supplier_tables(conn) -> None:
     )
     await _safe_execute(
         conn,
-        "CREATE INDEX IF NOT EXISTS ix_spoolman_spool_suppliers_supplier_id"
-        " ON spoolman_spool_suppliers (supplier_id)",
+        "CREATE INDEX IF NOT EXISTS ix_spoolman_spool_suppliers_supplier_id ON spoolman_spool_suppliers (supplier_id)",
     )
 
 

@@ -413,7 +413,7 @@ class TestSupplierCsv:
         assert "suppliers" in columns
         assert "purchase_supplier" in columns
         assert "Supplier A; Supplier B" in row
-        assert "Supplier A" == row.split(",")[columns.index("purchase_supplier")].strip('"')
+        assert row.split(",")[columns.index("purchase_supplier")].strip('"') == "Supplier A"
 
     @pytest.mark.asyncio
     @pytest.mark.integration

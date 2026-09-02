@@ -784,9 +784,7 @@ async def _supplier_reference_counts(db: AsyncSession) -> dict[int, int]:
     """
     counts: dict[int, int] = {}
     for model in (SpoolSupplier, SpoolmanSpoolSupplier):
-        result = await db.execute(
-            select(model.supplier_id, func.count(model.id)).group_by(model.supplier_id)
-        )
+        result = await db.execute(select(model.supplier_id, func.count(model.id)).group_by(model.supplier_id))
         for supplier_id, count in result.all():
             counts[supplier_id] = counts.get(supplier_id, 0) + count
     return counts
