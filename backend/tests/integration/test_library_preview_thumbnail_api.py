@@ -81,9 +81,7 @@ class TestPreviewThumbnailUpload:
     async def test_upload_accepts_msg_files(
         self, async_client: AsyncClient, db_session, file_factory, isolated_storage
     ):
-        library_file = await file_factory(
-            file_type="msg", filename="order.msg", file_path="library/files/order.msg"
-        )
+        library_file = await file_factory(file_type="msg", filename="order.msg", file_path="library/files/order.msg")
 
         response = await async_client.post(
             f"/api/v1/library/files/{library_file.id}/preview-thumbnail",
