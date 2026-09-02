@@ -82,9 +82,7 @@ class SpoolmanSpoolSupplier(Base):
     """
 
     __tablename__ = "spoolman_spool_suppliers"
-    __table_args__ = (
-        UniqueConstraint("spoolman_spool_id", "supplier_id", name="uq_spoolman_spool_suppliers_pair"),
-    )
+    __table_args__ = (UniqueConstraint("spoolman_spool_id", "supplier_id", name="uq_spoolman_spool_suppliers_pair"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     spoolman_spool_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
