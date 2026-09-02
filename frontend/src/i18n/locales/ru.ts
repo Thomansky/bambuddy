@@ -3915,6 +3915,8 @@ export default {
     partOf: "Часть проекта {{name}}",
     subProjectCount: "Подпроектов: {{count}}",
     subProjectsOf: "Подпроекты проекта {{name}}",
+    collapseSubProjects: "Свернуть подпроекты",
+    expandSubProjects: "Развернуть подпроекты",
     title: "Проекты",
     subtitle: "Организация и отслеживание проектов 3D-печати",
     newProject: "Новый проект",
