@@ -3880,6 +3880,7 @@ export default {
     generateThumbnailsForMissing: 'Vorschaubilder für STL-Dateien ohne Vorschau generieren',
     gridView: 'Rasteransicht',
     listView: 'Listenansicht',
+    columnsView: 'Spaltenansicht',
     lowDiskSpaceWarning: 'Warnung: Wenig Speicherplatz',
     lowDiskSpaceDetails: 'Nur {{free}} frei von {{total}} gesamt. Schwellenwert ist auf {{threshold}} GB eingestellt.',
     files: 'Dateien',

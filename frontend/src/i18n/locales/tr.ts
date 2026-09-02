@@ -3875,6 +3875,7 @@ export default {
     generateThumbnailsForMissing: 'Eksik olan STL dosyaları için küçük resimler oluştur',
     gridView: 'Izgara görünümü',
     listView: 'Liste görünümü',
+    columnsView: 'Sütun görünümü',
     lowDiskSpaceWarning: 'Düşük disk alanı uyarısı',
     lowDiskSpaceDetails: 'Toplam {{total}} alandan yalnızca {{free}} boş. Eşik ayarlarda {{threshold}} GB olarak ayarlanmış.',
     files: 'Dosyalar',

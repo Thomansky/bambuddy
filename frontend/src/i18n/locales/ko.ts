@@ -3690,6 +3690,7 @@ export default {
     generateThumbnailsForMissing: '썸네일이 없는 STL 파일의 썸네일 생성',
     gridView: '격자 보기',
     listView: '목록 보기',
+    columnsView: '열 보기',
     lowDiskSpaceWarning: '디스크 공간 부족 경고',
     lowDiskSpaceDetails: '전체 {{total}} 중 {{free}}만 남음. 임계값은 설정에서 {{threshold}}GB로 설정됩니다.',
     files: '파일',
