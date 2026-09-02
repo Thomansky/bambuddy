@@ -1682,6 +1682,33 @@ export function FileManagerPage() {
     return findFolder(folders);
   }, [selectedFolderId, folders]);
 
+  // Direct subfolders of the current level, rendered as regular items in the
+  // content pane (#3019) — folders first, then files, the way every file
+  // explorer works. Before this, a folder holding only subfolders showed the
+  // "folder is empty" state and descending was possible only in the tree.
+  // Resolved from sortedFolders so the pane follows the tree's sort order;
+  // the root level shows the current top-level bucket (internal/external).
+  const visibleSubfolders = useMemo(() => {
+    if (!sortedFolders) return [];
+    if (selectedFolderId === null) {
+      return sortedFolders.filter((f) => Boolean(f.is_external) === (topLevelView === 'external'));
+    }
+    const findFolder = (items: LibraryFolderTree[]): LibraryFolderTree | null => {
+      for (const item of items) {
+        if (item.id === selectedFolderId) return item;
+        const found = findFolder(item.children);
+        if (found) return found;
+      }
+      return null;
+    };
+    return findFolder(sortedFolders)?.children ?? [];
+  }, [sortedFolders, selectedFolderId, topLevelView]);
+
+  // The tiles disappear while a search or tag filter is active: those views
+  // list matches from every descendant folder, so per-folder navigation
+  // would sit beside results it doesn't scope.
+  const showFolderTiles = visibleSubfolders.length > 0 && !searchQuery.trim() && selectedTagIds.length === 0;
+
   return (
     <div
       className="p-4 md:p-8 min-h-[calc(100vh-64px)] lg:h-[calc(100vh-64px)] flex flex-col relative"
@@ -1891,6 +1918,7 @@ export function FileManagerPage() {
         {/* Folder sidebar - resizable, hidden on mobile */}
         <div
           ref={sidebarRef}
+          data-testid="folder-sidebar"
           className="hidden lg:flex flex-shrink-0 bg-bambu-dark-secondary rounded-lg border border-bambu-dark-tertiary overflow-hidden flex-col relative"
           style={{ width: `${sidebarWidth}px` }}
         >
@@ -2372,7 +2400,7 @@ export function FileManagerPage() {
                 <p className="text-sm text-bambu-gray">{t('fileManager.loadingFiles')}</p>
               </div>
             </div>
-          ) : files?.length === 0 ? (
+          ) : files?.length === 0 && !showFolderTiles ? (
             <div className="flex-1 flex flex-col items-center justify-center">
               <div className="p-4 bg-bambu-dark rounded-2xl mb-4">
                 <FileBox className="w-12 h-12 text-bambu-gray/50" />
@@ -2400,7 +2428,7 @@ export function FileManagerPage() {
                 {t('fileManager.uploadFiles')}
               </Button>
             </div>
-          ) : filteredAndSortedFiles.length === 0 ? (
+          ) : (files?.length ?? 0) > 0 && filteredAndSortedFiles.length === 0 ? (
             <div className="flex-1 flex flex-col items-center justify-center">
               <div className="p-4 bg-bambu-dark rounded-2xl mb-4">
                 <Search className="w-12 h-12 text-bambu-gray/50" />
@@ -2416,6 +2444,29 @@ export function FileManagerPage() {
           ) : viewMode === 'grid' ? (
             <div className="flex-1 lg:overflow-y-auto">
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4">
+                {/* Folders first, as regular grid items (#3019) — clicking one
+                    selects it exactly like clicking it in the tree. */}
+                {showFolderTiles && visibleSubfolders.map((folder) => (
+                  <button
+                    key={`folder-${folder.id}`}
+                    onClick={() => setSelectedFolderId(folder.id)}
+                    className="group relative bg-bambu-dark-secondary rounded-lg border border-bambu-dark-tertiary hover:border-bambu-green/50 transition-all cursor-pointer text-left"
+                  >
+                    <div className="aspect-square bg-bambu-dark flex items-center justify-center rounded-t-lg">
+                      {folder.is_external ? (
+                        <FolderSymlink className="w-16 h-16 text-purple-600/60 dark:text-purple-400/60" />
+                      ) : (
+                        <FolderOpen className="w-16 h-16 text-bambu-green/60" />
+                      )}
+                    </div>
+                    <div className="p-3">
+                      <h3 className="text-sm font-medium text-white truncate" title={folder.name}>{folder.name}</h3>
+                      <div className="mt-1 text-xs text-bambu-gray">
+                        {folder.file_count > 0 ? folder.file_count : ' '}
+                      </div>
+                    </div>
+                  </button>
+                ))}
                 {filteredAndSortedFiles.map((file) => (
                   <FileCard
                     key={file.id}
@@ -2478,6 +2529,30 @@ export function FileManagerPage() {
                   <div>{t('fileManager.tags.title')}</div>
                   <div />
                 </div>
+                {/* Folder rows first, as regular list items (#3019). */}
+                {showFolderTiles && visibleSubfolders.map((folder) => (
+                  <div
+                    key={`folder-${folder.id}`}
+                    className={`grid ${authEnabled ? 'grid-cols-[auto_1fr_120px_100px_100px_100px_minmax(0,200px)_220px]' : 'grid-cols-[auto_1fr_100px_100px_100px_minmax(0,200px)_220px]'} gap-4 px-4 py-3 items-center border-b border-bambu-dark-tertiary cursor-pointer hover:bg-bambu-dark/50 transition-colors`}
+                    onClick={() => setSelectedFolderId(folder.id)}
+                  >
+                    <div className="w-6" />
+                    <div className="flex items-center gap-2 min-w-0">
+                      {folder.is_external ? (
+                        <FolderSymlink className="w-4 h-4 text-purple-600 dark:text-purple-400 flex-shrink-0" />
+                      ) : (
+                        <FolderOpen className="w-4 h-4 text-bambu-green flex-shrink-0" />
+                      )}
+                      <span className="text-sm text-white truncate" title={folder.name}>{folder.name}</span>
+                    </div>
+                    {authEnabled && <div />}
+                    <div />
+                    <div className="text-sm text-bambu-gray">{folder.file_count > 0 ? folder.file_count : ''}</div>
+                    <div />
+                    <div />
+                    <div />
+                  </div>
+                ))}
                 {/* List rows */}
                 {filteredAndSortedFiles.map((file) => (
                   <div
