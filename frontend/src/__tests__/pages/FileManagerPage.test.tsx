@@ -365,6 +365,59 @@ describe('FileManagerPage', () => {
       // Verify files are still displayed after toggling
       expect(screen.getByText('Benchy')).toBeInTheDocument();
     });
+
+    it('can switch to columns view and descend through folder columns', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Benchy')).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByTitle('Column view'));
+
+      // Scoped to the columns pane — the folder names also live in the tree
+      // sidebar, so unscoped queries would double-match.
+      const columns = within(screen.getByTestId('columns-view'));
+      expect(columns.getByText('Functional Parts')).toBeInTheDocument();
+      expect(columns.getByText('Art Projects')).toBeInTheDocument();
+      // Root files render in the files pane.
+      expect(columns.getByText('Benchy')).toBeInTheDocument();
+
+      // Descend: clicking a folder opens its child column.
+      await user.click(columns.getByText('Functional Parts'));
+      await waitFor(() => {
+        expect(columns.getByText('Brackets')).toBeInTheDocument();
+      });
+
+      // Leaf folder: selecting it adds no further column and keeps the pane.
+      await user.click(columns.getByText('Brackets'));
+      await waitFor(() => {
+        expect(columns.getByText('Benchy')).toBeInTheDocument();
+      });
+    });
+
+    it('hides folder columns while a search filters across folders', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Benchy')).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByTitle('Column view'));
+      const columns = within(screen.getByTestId('columns-view'));
+      expect(columns.getByText('Functional Parts')).toBeInTheDocument();
+
+      await user.type(screen.getByPlaceholderText('Search files...'), 'benchy');
+
+      // Search results span every folder — the per-level columns disappear,
+      // the matching file stays.
+      await waitFor(() => {
+        expect(columns.queryByText('Functional Parts')).not.toBeInTheDocument();
+      });
+      expect(columns.getByText('Benchy')).toBeInTheDocument();
+    });
   });
 
   describe('search and filter', () => {

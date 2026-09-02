@@ -4029,6 +4029,7 @@ export default {
     generateThumbnailsForMissing: "Створити відсутні мініатюри файлів STL і PDF",
     gridView: "Вигляд сітки",
     listView: "Перегляд списку",
+    columnsView: "Вигляд колонок",
     lowDiskSpaceWarning: "Попередження про брак місця на диску",
     lowDiskSpaceDetails: "Вільно лише {{free}} із {{total}}. У налаштуваннях задано поріг {{threshold}} ГБ.",
     files: "Файли",

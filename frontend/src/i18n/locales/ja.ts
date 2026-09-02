@@ -4002,6 +4002,7 @@ export default {
     generateThumbnailsForMissing: 'サムネイルのないSTL・PDFファイルのサムネイルを生成',
     gridView: 'グリッド表示',
     listView: 'リスト表示',
+    columnsView: 'カラム表示',
     lowDiskSpaceWarning: 'ディスク容量不足の警告',
     lowDiskSpaceDetails: '{{total}}中{{free}}の空き容量のみ。しきい値は設定で{{threshold}}GBに設定されています。',
     files: 'ファイル',
