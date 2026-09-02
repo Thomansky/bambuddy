@@ -3868,6 +3868,7 @@ export default {
     generateThumbnailsForMissing: '為缺少縮圖的 STL 檔案產生縮圖',
     gridView: '網格檢視',
     listView: '列表檢視',
+    columnsView: '分欄檢視',
     lowDiskSpaceWarning: '磁碟空間不足警告',
     lowDiskSpaceDetails: '僅剩 {{free}}（總共 {{total}}）。閾值設定為 {{threshold}} GB。',
     files: '檔案',

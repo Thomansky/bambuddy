@@ -3682,6 +3682,7 @@ export default {
     generateThumbnailsForMissing: "Создать отсутствующие миниатюры для STL-файлов",
     gridView: "Плитка",
     listView: "Список",
+    columnsView: "Колонки",
     lowDiskSpaceWarning: "Мало свободного места",
     lowDiskSpaceDetails: "Свободно только {{free}} из {{total}}. Порог предупреждения в настройках: {{threshold}} ГБ.",
     files: "Файлы",

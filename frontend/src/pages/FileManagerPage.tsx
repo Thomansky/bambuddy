@@ -45,6 +45,8 @@ import {
   Lock,
   FolderSymlink,
   Tag as TagIcon,
+  Columns,
+  ChevronRight as ChevronRightIcon,
 } from 'lucide-react';
 import { api } from '../api/client';
 import type {
@@ -1022,8 +1024,8 @@ export function FileManagerPage() {
   const [renameItem, setRenameItem] = useState<{ type: 'file' | 'folder'; id: number; name: string } | null>(null);
   const [thumbnailVersions, setThumbnailVersions] = useState<Record<number, number>>({});
   const [viewerFile, setViewerFile] = useState<LibraryFileListItem | null>(null);
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>(() => {
-    return (localStorage.getItem('library-view-mode') as 'grid' | 'list') || 'grid';
+  const [viewMode, setViewMode] = useState<'grid' | 'list' | 'columns'>(() => {
+    return (localStorage.getItem('library-view-mode') as 'grid' | 'list' | 'columns') || 'grid';
   });
   const [wrapFolderNames, setWrapFolderNames] = useState(() => {
     return localStorage.getItem('library-wrap-folders') === 'true';
@@ -1661,7 +1663,7 @@ export function FileManagerPage() {
 
   const isDeleting = deleteFolderMutation.isPending || deleteFileMutation.isPending || bulkDeleteMutation.isPending;
 
-  const handleViewModeChange = (mode: 'grid' | 'list') => {
+  const handleViewModeChange = (mode: 'grid' | 'list' | 'columns') => {
     setViewMode(mode);
     localStorage.setItem('library-view-mode', mode);
   };
@@ -1681,6 +1683,49 @@ export function FileManagerPage() {
     };
     return findFolder(folders);
   }, [selectedFolderId, folders]);
+
+  // Miller-columns view: the chain of folders from a top-level folder down to
+  // the selected one. Selection is the single source of truth — clicking a
+  // folder in any column just moves selectedFolderId, and the path (and with
+  // it the set of visible columns) is re-derived from the sorted tree.
+  const columnsPath = useMemo(() => {
+    if (!sortedFolders || selectedFolderId === null) return [] as LibraryFolderTree[];
+    const path: LibraryFolderTree[] = [];
+    const walk = (items: LibraryFolderTree[]): boolean => {
+      for (const item of items) {
+        path.push(item);
+        if (item.id === selectedFolderId) return true;
+        if (walk(item.children)) return true;
+        path.pop();
+      }
+      return false;
+    };
+    walk(sortedFolders);
+    return path;
+  }, [sortedFolders, selectedFolderId]);
+
+  // One column per level: the top-level bucket (internal vs. external mirrors
+  // the tree's split, following the selected path's bucket when one is set),
+  // then the children of each folder along the path. Leaf folders contribute
+  // no column — the files pane to the right is their content.
+  const folderColumns = useMemo(() => {
+    const externalBucket = columnsPath.length > 0 ? Boolean(columnsPath[0].is_external) : topLevelView === 'external';
+    const rootItems = (sortedFolders ?? []).filter((f) => Boolean(f.is_external) === externalBucket);
+    const cols: { key: string; items: LibraryFolderTree[]; activeId: number | null }[] = [
+      { key: 'root', items: rootItems, activeId: columnsPath[0]?.id ?? null },
+    ];
+    columnsPath.forEach((node, i) => {
+      if (node.children.length > 0) {
+        cols.push({ key: `folder-${node.id}`, items: node.children, activeId: columnsPath[i + 1]?.id ?? null });
+      }
+    });
+    return cols;
+  }, [sortedFolders, columnsPath, topLevelView]);
+
+  // While a search or tag filter is active the file list spans every matching
+  // descendant folder, so per-level folder columns would lie about scope —
+  // hide them and let the files pane take the full width.
+  const columnsFilterActive = searchQuery.trim().length > 0 || selectedTagIds.length > 0;
 
   return (
     <div
@@ -1729,6 +1774,15 @@ export function FileManagerPage() {
               title={t('fileManager.listView')}
             >
               <List className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => handleViewModeChange('columns')}
+              className={`p-1.5 rounded transition-colors ${
+                viewMode === 'columns' ? 'bg-bambu-dark-secondary text-white' : 'text-bambu-gray hover:text-white'
+              }`}
+              title={t('fileManager.columnsView')}
+            >
+              <Columns className="w-4 h-4" />
             </button>
           </div>
           <Button
@@ -1891,6 +1945,7 @@ export function FileManagerPage() {
         {/* Folder sidebar - resizable, hidden on mobile */}
         <div
           ref={sidebarRef}
+          data-testid="folder-sidebar"
           className="hidden lg:flex flex-shrink-0 bg-bambu-dark-secondary rounded-lg border border-bambu-dark-tertiary overflow-hidden flex-col relative"
           style={{ width: `${sidebarWidth}px` }}
         >
@@ -2370,6 +2425,96 @@ export function FileManagerPage() {
               <div className="flex flex-col items-center gap-3">
                 <Loader2 className="w-8 h-8 animate-spin text-bambu-green" />
                 <p className="text-sm text-bambu-gray">{t('fileManager.loadingFiles')}</p>
+              </div>
+            </div>
+          ) : viewMode === 'columns' ? (
+            /* Miller columns (macOS-Finder style): one column per folder level,
+               the rightmost pane lists the selected folder's files. Unlike the
+               grid/list branches this renders even for an "empty" folder — an
+               empty files pane next to navigable folder columns is the whole
+               point of the view. */
+            <div className="flex-1 min-h-0 bg-bambu-dark-secondary rounded-lg border border-bambu-dark-tertiary overflow-x-auto" data-testid="columns-view">
+              <div className="h-full min-h-[16rem] flex divide-x divide-bambu-dark-tertiary">
+                {!columnsFilterActive && folderColumns.map((col) => (
+                  <div key={col.key} className="w-56 flex-shrink-0 overflow-y-auto py-1">
+                    {col.items.map((folder) => (
+                      <button
+                        key={folder.id}
+                        type="button"
+                        onClick={() => setSelectedFolderId(folder.id)}
+                        className={`w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors ${
+                          col.activeId === folder.id
+                            ? 'bg-bambu-green/20 text-bambu-green'
+                            : selectedFolderId === folder.id
+                              ? 'bg-bambu-green/10 text-white'
+                              : 'text-white hover:bg-bambu-dark'
+                        }`}
+                        title={folder.name}
+                      >
+                        {folder.is_external ? (
+                          <FolderSymlink className="w-4 h-4 flex-shrink-0 text-purple-600 dark:text-purple-400" />
+                        ) : (
+                          <FolderOpen className="w-4 h-4 flex-shrink-0 text-bambu-green" />
+                        )}
+                        <span className="flex-1 truncate">{folder.name}</span>
+                        {folder.file_count > 0 && (
+                          <span className="text-xs text-bambu-gray flex-shrink-0">{folder.file_count}</span>
+                        )}
+                        {folder.children.length > 0 && (
+                          <ChevronRightIcon className="w-3.5 h-3.5 flex-shrink-0 text-bambu-gray" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                ))}
+                {/* Files pane */}
+                <div className="flex-1 min-w-[18rem] overflow-y-auto py-1">
+                  {filteredAndSortedFiles.length === 0 ? (
+                    <div className="h-full flex items-center justify-center px-4 text-sm text-bambu-gray text-center">
+                      {(files?.length ?? 0) > 0
+                        ? t('fileManager.noMatchingFiles')
+                        : selectedFolderId !== null
+                          ? t('fileManager.folderIsEmpty')
+                          : topLevelView === 'external'
+                            ? t('fileManager.externalIsEmpty')
+                            : t('fileManager.noFilesYet')}
+                    </div>
+                  ) : (
+                    filteredAndSortedFiles.map((file) => (
+                      <div
+                        key={file.id}
+                        onClick={() => handleFileSelect(file.id)}
+                        onDoubleClick={() => {
+                          if (isSlicedLibraryFile(file)) {
+                            navigate(`/gcode-viewer?library_file=${file.id}`);
+                          } else if (file.file_type === '3mf' || file.file_type === 'stl') {
+                            setViewerFile(file);
+                          }
+                        }}
+                        className={`flex items-center gap-2 px-3 py-1.5 cursor-pointer text-sm transition-colors ${
+                          selectedFiles.includes(file.id)
+                            ? 'bg-bambu-green/10 text-white'
+                            : 'text-white hover:bg-bambu-dark'
+                        }`}
+                        title={file.print_name || file.filename}
+                      >
+                        <div className="w-6 h-6 rounded bg-bambu-dark flex-shrink-0 overflow-hidden flex items-center justify-center">
+                          {file.thumbnail_path ? (
+                            <img
+                              src={`${api.getLibraryFileThumbnailUrl(file.id)}${thumbnailVersions[file.id] ? ((api.getLibraryFileThumbnailUrl(file.id).includes('?') ? '&' : '?') + `v=${thumbnailVersions[file.id]}`) : ''}`}
+                              alt=""
+                              className="w-full h-full object-cover"
+                            />
+                          ) : (
+                            <FileBox className="w-3.5 h-3.5 text-bambu-gray/50" />
+                          )}
+                        </div>
+                        <span className="flex-1 truncate">{file.print_name || file.filename}</span>
+                        <span className="text-xs text-bambu-gray flex-shrink-0">{formatFileSize(file.file_size)}</span>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
             </div>
           ) : files?.length === 0 ? (

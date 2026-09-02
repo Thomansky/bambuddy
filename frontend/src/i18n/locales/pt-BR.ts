@@ -3868,6 +3868,7 @@ export default {
     generateThumbnailsForMissing: 'Gerar miniaturas para arquivos STL que não possuem',
     gridView: 'Visualização em grade',
     listView: 'Visualização em lista',
+    columnsView: 'Visualização em colunas',
     lowDiskSpaceWarning: 'Aviso de pouco espaço em disco',
     lowDiskSpaceDetails: 'Apenas {{free}} livres de {{total}} no total. O limite está definido para {{threshold}} GB nas configurações.',
     files: 'Arquivos',

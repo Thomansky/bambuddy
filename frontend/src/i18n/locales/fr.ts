@@ -3869,6 +3869,7 @@ export default {
     generateThumbnailsForMissing: 'Vignettes STL manquantes',
     gridView: 'Grille',
     listView: 'Liste',
+    columnsView: 'Colonnes',
     lowDiskSpaceWarning: 'Espace disque faible',
     lowDiskSpaceDetails: '{{free}} libre sur {{total}}. Seuil : {{threshold}} Go.',
     files: 'Fichiers',

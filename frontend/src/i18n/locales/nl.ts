@@ -3910,6 +3910,7 @@ export default {
     generateThumbnailsForMissing: 'Miniaturen genereren voor STL-bestanden die ze missen',
     gridView: 'Rasterweergave',
     listView: 'Lijstweergave',
+    columnsView: 'Kolomweergave',
     lowDiskSpaceWarning: 'Waarschuwing weinig schijfruimte',
     lowDiskSpaceDetails: 'Slechts {{free}} vrij van {{total}} totaal. De drempel is in de instellingen ingesteld op {{threshold}} GB.',
     files: 'Bestanden',
