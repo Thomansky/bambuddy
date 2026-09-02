@@ -3967,6 +3967,7 @@ export default {
     generateThumbnailsForMissing: 'Generate thumbnails for STL files missing them',
     gridView: 'Grid view',
     listView: 'List view',
+    columnsView: 'Column view',
     lowDiskSpaceWarning: 'Low disk space warning',
     lowDiskSpaceDetails: 'Only {{free}} free of {{total}} total. Threshold is set to {{threshold}} GB in settings.',
     files: 'Files',
