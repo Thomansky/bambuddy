@@ -2518,31 +2518,6 @@ export function FileManagerPage() {
             </div>
           )}
 
-          {/* Subfolder tiles (#3019): the pane mirrors the tree's children so
-              descending works like any file explorer; clicking a tile selects
-              the folder exactly as clicking it in the tree would. */}
-          {!isLoading && showFolderTiles && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6 gap-3 mb-4 flex-shrink-0">
-              {visibleSubfolders.map((folder) => (
-                <button
-                  key={folder.id}
-                  onClick={() => setSelectedFolderId(folder.id)}
-                  className="group flex items-center gap-2 p-3 bg-bambu-dark-secondary rounded-lg border border-bambu-dark-tertiary hover:border-bambu-green/50 transition-all text-left"
-                >
-                  {folder.is_external ? (
-                    <FolderSymlink className="w-5 h-5 text-purple-600 dark:text-purple-400 flex-shrink-0" />
-                  ) : (
-                    <FolderOpen className="w-5 h-5 text-bambu-green flex-shrink-0" />
-                  )}
-                  <span className="text-sm text-white truncate flex-1" title={folder.name}>{folder.name}</span>
-                  {folder.file_count > 0 && (
-                    <span className="text-xs text-bambu-gray flex-shrink-0">{folder.file_count}</span>
-                  )}
-                </button>
-              ))}
-            </div>
-          )}
-
           {/* File grid/list */}
           {isLoading ? (
             <div className="flex-1 flex items-center justify-center">
