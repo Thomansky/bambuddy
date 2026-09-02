@@ -1027,6 +1027,12 @@ export function FileManagerPage() {
   const [viewMode, setViewMode] = useState<'grid' | 'list' | 'columns'>(() => {
     return (localStorage.getItem('library-view-mode') as 'grid' | 'list' | 'columns') || 'grid';
   });
+  // Miller-columns keyboard navigation (#3020): the pane itself is focusable
+  // and arrow keys walk the hierarchy. The focused file is tracked separately
+  // from the checkbox selection so Space can toggle a file without the arrow
+  // keys hijacking multi-select.
+  const columnsViewRef = useRef<HTMLDivElement>(null);
+  const [columnsFocusedFileId, setColumnsFocusedFileId] = useState<number | null>(null);
   const [wrapFolderNames, setWrapFolderNames] = useState(() => {
     return localStorage.getItem('library-wrap-folders') === 'true';
   });
@@ -1727,6 +1733,128 @@ export function FileManagerPage() {
   // hide them and let the files pane take the full width.
   const columnsFilterActive = searchQuery.trim().length > 0 || selectedTagIds.length > 0;
 
+  // Focus the columns pane when the view opens so arrow keys work right away,
+  // and drop the file focus whenever the folder (and with it the file list)
+  // changes. A modal or the search box taking focus naturally mutes the
+  // pane's key handling — no explicit guards needed.
+  useEffect(() => {
+    if (viewMode === 'columns') columnsViewRef.current?.focus({ preventScroll: true });
+  }, [viewMode]);
+  useEffect(() => {
+    setColumnsFocusedFileId(null);
+  }, [selectedFolderId, viewMode]);
+  // Keep the keyboard-driven selection scrolled into view. Deliberately an
+  // effect keyed on the ids, NOT per-render ref callbacks: those re-run on
+  // every commit and would snap a manually scrolled column back to the
+  // highlighted row whenever anything re-renders. scrollIntoView is guarded
+  // because jsdom doesn't implement it.
+  useEffect(() => {
+    if (viewMode !== 'columns' || selectedFolderId === null) return;
+    columnsViewRef.current?.querySelector(`[data-folder-id="${selectedFolderId}"]`)?.scrollIntoView?.({ block: 'nearest' });
+  }, [selectedFolderId, viewMode]);
+  useEffect(() => {
+    if (viewMode !== 'columns' || columnsFocusedFileId === null) return;
+    columnsViewRef.current?.querySelector(`[data-file-id="${columnsFocusedFileId}"]`)?.scrollIntoView?.({ block: 'nearest' });
+  }, [columnsFocusedFileId, viewMode]);
+
+  // Finder-style keys: Up/Down move within the current column, Right descends
+  // (into the first child folder, then into the files), Left ascends, Enter
+  // opens the focused file's preview, Space toggles its selection.
+  const handleColumnsKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const target = e.target as HTMLElement;
+    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable) return;
+    const inFiles = columnsFocusedFileId !== null;
+    const selectedNode = columnsPath[columnsPath.length - 1];
+    switch (e.key) {
+      case 'ArrowDown':
+      case 'ArrowUp': {
+        e.preventDefault();
+        const dir = e.key === 'ArrowDown' ? 1 : -1;
+        if (inFiles || columnsFilterActive) {
+          // findIndex yields -1 for a vanished focus id — ArrowDown then
+          // lands on index 0, ArrowUp on -2 → no-op, both intended.
+          const idx = filteredAndSortedFiles.findIndex((f) => f.id === columnsFocusedFileId);
+          const next = filteredAndSortedFiles[idx + dir];
+          if (next) setColumnsFocusedFileId(next.id);
+        } else if (selectedFolderId === null) {
+          if (dir === 1 && folderColumns[0].items.length > 0) {
+            setSelectedFolderId(folderColumns[0].items[0].id);
+          }
+        } else {
+          const col = folderColumns[columnsPath.length - 1];
+          const idx = col ? col.items.findIndex((f) => f.id === selectedFolderId) : -1;
+          const next = idx === -1 ? undefined : col.items[idx + dir];
+          if (next) setSelectedFolderId(next.id);
+        }
+        break;
+      }
+      case 'ArrowRight': {
+        e.preventDefault();
+        if (inFiles) break;
+        if (!columnsFilterActive && selectedNode && selectedNode.children.length > 0) {
+          setSelectedFolderId(selectedNode.children[0].id);
+        } else if (filteredAndSortedFiles.length > 0) {
+          setColumnsFocusedFileId(filteredAndSortedFiles[0].id);
+        }
+        break;
+      }
+      case 'ArrowLeft': {
+        e.preventDefault();
+        if (inFiles) {
+          setColumnsFocusedFileId(null);
+          break;
+        }
+        // With a filter active the folder columns are hidden — don't move a
+        // selection the user can't see.
+        if (columnsFilterActive) break;
+        if (columnsPath.length > 1) {
+          setSelectedFolderId(columnsPath[columnsPath.length - 2].id);
+        } else if (columnsPath.length === 1) {
+          // Ascending past the top level: keep the bucket the user was
+          // navigating — the tree can select a folder from either bucket
+          // without touching topLevelView, and falling back to a stale one
+          // would teleport the root column to the other folder set.
+          setTopLevelView(columnsPath[0].is_external ? 'external' : 'internal');
+          setSelectedFolderId(null);
+        } else if (selectedFolderId !== null) {
+          // Selection not in the tree (e.g. a deep link to a deleted
+          // folder): give the keyboard an escape hatch back to the root.
+          setSelectedFolderId(null);
+        }
+        break;
+      }
+      // Enter and Space preventDefault BEFORE the inFiles check: DOM focus
+      // may still sit on the last-clicked folder button, and the browser's
+      // default activation would re-click it — snapping the selection back
+      // to a folder the arrows have long left (Space would scroll the page).
+      case 'Enter': {
+        e.preventDefault();
+        if (!inFiles) {
+          // Enter means "open the selected thing": on a folder that is
+          // descending, exactly like ArrowRight.
+          if (!columnsFilterActive && selectedNode && selectedNode.children.length > 0) {
+            setSelectedFolderId(selectedNode.children[0].id);
+          } else if (filteredAndSortedFiles.length > 0) {
+            setColumnsFocusedFileId(filteredAndSortedFiles[0].id);
+          }
+          break;
+        }
+        const file = filteredAndSortedFiles.find((f) => f.id === columnsFocusedFileId);
+        if (!file) break;
+        if (isSlicedLibraryFile(file)) navigate(`/gcode-viewer?library_file=${file.id}`);
+        else if (file.file_type === '3mf' || file.file_type === 'stl') setViewerFile(file);
+        break;
+      }
+      case ' ': {
+        e.preventDefault();
+        if (!inFiles) break;
+        if (columnsFocusedFileId !== null) handleFileSelect(columnsFocusedFileId);
+        break;
+      }
+    }
+  };
+
   return (
     <div
       className="p-4 md:p-8 min-h-[calc(100vh-64px)] lg:h-[calc(100vh-64px)] flex flex-col relative"
@@ -2419,8 +2547,13 @@ export function FileManagerPage() {
             </div>
           )}
 
-          {/* File grid/list */}
-          {isLoading ? (
+          {/* File grid/list. The columns view is exempt from the full-pane
+              loading swap: every keyboard descent into an uncached folder
+              flips filesLoading for one round-trip, and replacing the pane
+              would strip its tabindex mid-keystroke — the focus-fixup rule
+              then drops focus to <body> and kills keyboard navigation. The
+              pane stays mounted and only its files pane shows the spinner. */}
+          {isLoading && viewMode !== 'columns' ? (
             <div className="flex-1 flex items-center justify-center">
               <div className="flex flex-col items-center gap-3">
                 <Loader2 className="w-8 h-8 animate-spin text-bambu-green" />
@@ -2433,7 +2566,14 @@ export function FileManagerPage() {
                grid/list branches this renders even for an "empty" folder — an
                empty files pane next to navigable folder columns is the whole
                point of the view. */
-            <div className="flex-1 min-h-0 bg-bambu-dark-secondary rounded-lg border border-bambu-dark-tertiary overflow-x-auto" data-testid="columns-view">
+            <div
+              ref={columnsViewRef}
+              tabIndex={0}
+              aria-label={t('fileManager.columnsView')}
+              onKeyDown={handleColumnsKeyDown}
+              className="flex-1 min-h-0 bg-bambu-dark-secondary rounded-lg border border-bambu-dark-tertiary overflow-x-auto outline-none focus-visible:ring-1 focus-visible:ring-bambu-green/50"
+              data-testid="columns-view"
+            >
               <div className="h-full min-h-[16rem] flex divide-x divide-bambu-dark-tertiary">
                 {!columnsFilterActive && folderColumns.map((col) => (
                   <div key={col.key} className="w-56 flex-shrink-0 overflow-y-auto py-1">
@@ -2441,7 +2581,15 @@ export function FileManagerPage() {
                       <button
                         key={folder.id}
                         type="button"
-                        onClick={() => setSelectedFolderId(folder.id)}
+                        data-folder-id={folder.id}
+                        onClick={() => {
+                          // Clear the file focus here too: re-clicking the
+                          // already-selected folder bails out of the state
+                          // update, so the clearing effect would not run and
+                          // the arrow keys would stay stuck in the files pane.
+                          setColumnsFocusedFileId(null);
+                          setSelectedFolderId(folder.id);
+                        }}
                         className={`w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors ${
                           col.activeId === folder.id
                             ? 'bg-bambu-green/20 text-bambu-green'
@@ -2469,7 +2617,11 @@ export function FileManagerPage() {
                 ))}
                 {/* Files pane */}
                 <div className="flex-1 min-w-[18rem] overflow-y-auto py-1">
-                  {filteredAndSortedFiles.length === 0 ? (
+                  {filesLoading ? (
+                    <div className="h-full flex items-center justify-center">
+                      <Loader2 className="w-5 h-5 animate-spin text-bambu-green" />
+                    </div>
+                  ) : filteredAndSortedFiles.length === 0 ? (
                     <div className="h-full flex items-center justify-center px-4 text-sm text-bambu-gray text-center">
                       {(files?.length ?? 0) > 0
                         ? t('fileManager.noMatchingFiles')
@@ -2483,7 +2635,11 @@ export function FileManagerPage() {
                     filteredAndSortedFiles.map((file) => (
                       <div
                         key={file.id}
-                        onClick={() => handleFileSelect(file.id)}
+                        data-file-id={file.id}
+                        onClick={() => {
+                          setColumnsFocusedFileId(file.id);
+                          handleFileSelect(file.id);
+                        }}
                         onDoubleClick={() => {
                           if (isSlicedLibraryFile(file)) {
                             navigate(`/gcode-viewer?library_file=${file.id}`);
@@ -2495,7 +2651,7 @@ export function FileManagerPage() {
                           selectedFiles.includes(file.id)
                             ? 'bg-bambu-green/10 text-white'
                             : 'text-white hover:bg-bambu-dark'
-                        }`}
+                        } ${columnsFocusedFileId === file.id ? 'ring-1 ring-inset ring-bambu-green/60' : ''}`}
                         title={file.print_name || file.filename}
                       >
                         <div className="w-6 h-6 rounded bg-bambu-dark flex-shrink-0 overflow-hidden flex items-center justify-center">

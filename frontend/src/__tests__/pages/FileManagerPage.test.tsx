@@ -418,6 +418,97 @@ describe('FileManagerPage', () => {
       });
       expect(columns.getByText('Benchy')).toBeInTheDocument();
     });
+
+    it('navigates the columns with the arrow keys', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Benchy')).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByTitle('Column view'));
+      const columns = within(screen.getByTestId('columns-view'));
+      const activeClassOf = (name: string) =>
+        columns.getByText(name).closest('button')?.className ?? '';
+
+      // The pane auto-focuses when the view opens, so keys work immediately.
+      // Down from the root selects the first folder (name-sorted: Art
+      // Projects), Down again moves to its sibling.
+      await user.keyboard('{ArrowDown}');
+      await waitFor(() => {
+        expect(activeClassOf('Art Projects')).toContain('bg-bambu-green/20');
+      });
+      await user.keyboard('{ArrowDown}');
+      await waitFor(() => {
+        expect(activeClassOf('Functional Parts')).toContain('bg-bambu-green/20');
+      });
+
+      // Right descends into the first child folder…
+      await user.keyboard('{ArrowRight}');
+      await waitFor(() => {
+        expect(activeClassOf('Brackets')).toContain('bg-bambu-green/20');
+      });
+      // …and Left climbs back up to the parent.
+      await user.keyboard('{ArrowLeft}');
+      await waitFor(() => {
+        expect(activeClassOf('Functional Parts')).toContain('bg-bambu-green/20');
+      });
+
+      // Right on a folder without child folders moves the focus into the
+      // files pane; Down walks the file rows. Wait for the refetched file
+      // list before the second Right — during the folder switch the pane can
+      // be momentarily empty.
+      await user.keyboard('{ArrowRight}');
+      await waitFor(() => {
+        expect(activeClassOf('Brackets')).toContain('bg-bambu-green/20');
+        expect(columns.getByText('Benchy')).toBeInTheDocument();
+      });
+      await user.keyboard('{ArrowRight}');
+      await waitFor(() => {
+        expect(columns.getByText('Benchy').closest('[title="Benchy"]')?.className).toContain('ring-1');
+      });
+      await user.keyboard('{ArrowDown}');
+      await waitFor(() => {
+        expect(columns.getByText('bracket.stl').closest('[title="bracket.stl"]')?.className).toContain('ring-1');
+      });
+      // Left leaves the files pane again.
+      await user.keyboard('{ArrowLeft}');
+      await waitFor(() => {
+        expect(columns.getByText('bracket.stl').closest('[title="bracket.stl"]')?.className).not.toContain('ring-1');
+      });
+    });
+
+    it('keeps the columns pane mounted while a folder\'s files load', async () => {
+      const user = userEvent.setup();
+      // First files request (initial load) resolves immediately, later ones
+      // (the refetch a keyboard descent triggers) stay pending briefly.
+      let filesCalls = 0;
+      server.use(
+        http.get('/api/v1/library/files', async () => {
+          filesCalls += 1;
+          if (filesCalls > 1) await new Promise((resolve) => setTimeout(resolve, 150));
+          return HttpResponse.json(mockFiles);
+        })
+      );
+      render(<FileManagerPage />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Benchy')).toBeInTheDocument();
+      });
+      await user.click(screen.getByTitle('Column view'));
+      expect(screen.getByTestId('columns-view')).toBeInTheDocument();
+
+      // Descend while the folder's file list is still in flight. Swapping
+      // the pane for the global spinner here would strip its tabindex and,
+      // in real browsers, drop keyboard focus to <body> for good.
+      await user.keyboard('{ArrowDown}');
+      expect(screen.getByTestId('columns-view')).toBeInTheDocument();
+
+      await waitFor(() => {
+        expect(within(screen.getByTestId('columns-view')).getByText('Benchy')).toBeInTheDocument();
+      });
+    });
   });
 
   describe('search and filter', () => {
