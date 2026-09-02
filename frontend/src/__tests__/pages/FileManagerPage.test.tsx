@@ -185,7 +185,8 @@ describe('FileManagerPage', () => {
       render(<FileManagerPage />);
 
       // Select "Functional Parts" (only files are empty; it has a subfolder).
-      await userEvent.click(await screen.findByText('Functional Parts'));
+      await waitFor(() => { expect(screen.getByTestId('folder-sidebar')).toBeInTheDocument(); });
+      await userEvent.click(within(screen.getByTestId('folder-sidebar')).getByText('Functional Parts'));
 
       // Its child renders twice: in the expanded tree AND as a content tile.
       await waitFor(() => {
@@ -204,7 +205,8 @@ describe('FileManagerPage', () => {
       );
       render(<FileManagerPage />);
 
-      await userEvent.click(await screen.findByText('Functional Parts'));
+      await waitFor(() => { expect(screen.getByTestId('folder-sidebar')).toBeInTheDocument(); });
+      await userEvent.click(within(screen.getByTestId('folder-sidebar')).getByText('Functional Parts'));
       await waitFor(() => {
         expect(screen.getAllByText('Brackets').length).toBeGreaterThanOrEqual(2);
       });
@@ -304,8 +306,8 @@ describe('FileManagerPage', () => {
       render(<FileManagerPage />);
 
       await waitFor(() => {
-        expect(screen.getByText('Functional Parts')).toBeInTheDocument();
-        expect(screen.getByText('Art Projects')).toBeInTheDocument();
+        expect(within(screen.getByTestId('folder-sidebar')).getByText('Functional Parts')).toBeInTheDocument();
+        expect(within(screen.getByTestId('folder-sidebar')).getByText('Art Projects')).toBeInTheDocument();
       });
     });
 
@@ -313,7 +315,7 @@ describe('FileManagerPage', () => {
       render(<FileManagerPage />);
 
       await waitFor(() => {
-        expect(screen.getByText('Brackets')).toBeInTheDocument();
+        expect(within(screen.getByTestId('folder-sidebar')).getByText('Brackets')).toBeInTheDocument();
       });
     });
 
@@ -322,7 +324,7 @@ describe('FileManagerPage', () => {
 
       await waitFor(() => {
         // Art Projects has a project_id
-        expect(screen.getByText('Art Projects')).toBeInTheDocument();
+        expect(within(screen.getByTestId('folder-sidebar')).getByText('Art Projects')).toBeInTheDocument();
       });
     });
   });
@@ -528,8 +530,13 @@ describe('FileManagerPage', () => {
 
   describe('empty state', () => {
     it('shows empty state when no files', async () => {
+      // Folders empty too (#3019): with folders present the pane now shows
+      // them as items instead of the empty state.
       server.use(
         http.get('/api/v1/library/files', () => {
+          return HttpResponse.json([]);
+        }),
+        http.get('/api/v1/library/folders', () => {
           return HttpResponse.json([]);
         })
       );
@@ -959,9 +966,9 @@ describe('FileManagerPage', () => {
       render(<FileManagerPage />);
 
       await waitFor(() => {
-        expect(screen.getByText('Functional Parts')).toBeInTheDocument();
+        expect(within(screen.getByTestId('folder-sidebar')).getByText('Functional Parts')).toBeInTheDocument();
       });
-      expect(screen.getByText('Brackets')).toBeInTheDocument();
+      expect(within(screen.getByTestId('folder-sidebar')).getByText('Brackets')).toBeInTheDocument();
     });
 
     it('honors library-collapse-folders=true on load (nested folders hidden)', async () => {
@@ -971,9 +978,9 @@ describe('FileManagerPage', () => {
       render(<FileManagerPage />);
 
       await waitFor(() => {
-        expect(screen.getByText('Functional Parts')).toBeInTheDocument();
+        expect(within(screen.getByTestId('folder-sidebar')).getByText('Functional Parts')).toBeInTheDocument();
       });
-      expect(screen.queryByText('Brackets')).not.toBeInTheDocument();
+      expect(within(screen.getByTestId('folder-sidebar')).queryByText('Brackets')).not.toBeInTheDocument();
     });
 
     it('collapses nested folders and persists preference when Collapse is clicked', async () => {
@@ -982,7 +989,7 @@ describe('FileManagerPage', () => {
       render(<FileManagerPage />);
 
       await waitFor(() => {
-        expect(screen.getByText('Brackets')).toBeInTheDocument();
+        expect(within(screen.getByTestId('folder-sidebar')).getByText('Brackets')).toBeInTheDocument();
       });
 
       // The Collapse button sits next to Wrap in the sidebar header.
@@ -990,7 +997,7 @@ describe('FileManagerPage', () => {
       await user.click(screen.getByRole('button', { name: 'Collapse' }));
 
       await waitFor(() => {
-        expect(screen.queryByText('Brackets')).not.toBeInTheDocument();
+        expect(within(screen.getByTestId('folder-sidebar')).queryByText('Brackets')).not.toBeInTheDocument();
       });
       expect(setItemMock).toHaveBeenCalledWith('library-collapse-folders', 'true');
     });
@@ -1003,14 +1010,14 @@ describe('FileManagerPage', () => {
       render(<FileManagerPage />);
 
       await waitFor(() => {
-        expect(screen.getByText('Functional Parts')).toBeInTheDocument();
+        expect(within(screen.getByTestId('folder-sidebar')).getByText('Functional Parts')).toBeInTheDocument();
       });
-      expect(screen.queryByText('Brackets')).not.toBeInTheDocument();
+      expect(within(screen.getByTestId('folder-sidebar')).queryByText('Brackets')).not.toBeInTheDocument();
 
       await user.click(screen.getByRole('button', { name: 'Collapse' }));
 
       await waitFor(() => {
-        expect(screen.getByText('Brackets')).toBeInTheDocument();
+        expect(within(screen.getByTestId('folder-sidebar')).getByText('Brackets')).toBeInTheDocument();
       });
       expect(setItemMock).toHaveBeenCalledWith('library-collapse-folders', 'false');
     });
@@ -1191,7 +1198,7 @@ describe('FileManagerPage', () => {
       render(<FileManagerPage />);
 
       await waitFor(() => {
-        expect(screen.getByText('Functional Parts')).toBeInTheDocument();
+        expect(within(screen.getByTestId('folder-sidebar')).getByText('Functional Parts')).toBeInTheDocument();
       });
 
       expect(screen.queryByText(/2031/)).not.toBeInTheDocument();
@@ -1206,7 +1213,7 @@ describe('FileManagerPage', () => {
 
       // A folder with no activity timestamp renders nothing rather than an
       // "Invalid Date" string.
-      const artRow = screen.getByText('Art Projects').closest('div.group')!;
+      const artRow = within(screen.getByTestId('folder-sidebar')).getByText('Art Projects').closest('div.group')!;
       expect(artRow.textContent).not.toMatch(/Invalid/);
 
       await user.click(screen.getByTitle('Hide modified dates'));
