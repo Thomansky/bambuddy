@@ -643,7 +643,7 @@ async def _capture_rtsp_frame(url: str, timeout: int) -> bytes | None:
         try:
             from urllib.parse import urlparse
 
-            from backend.app.services.camera import create_tls_proxy
+            from backend.app.services.camera import close_tls_proxy, create_tls_proxy
 
             parsed = urlparse(safe_url)
             target_port = parsed.port or 322
@@ -722,8 +722,7 @@ async def _capture_rtsp_frame(url: str, timeout: int) -> bytes | None:
         return None
     finally:
         if proxy_server:
-            proxy_server.close()
-            await proxy_server.wait_closed()
+            await close_tls_proxy(proxy_server)
 
 
 def _transcode_to_jpeg(data: bytes) -> bytes | None:
@@ -1076,7 +1075,7 @@ async def _stream_rtsp(
         try:
             from urllib.parse import urlparse
 
-            from backend.app.services.camera import create_tls_proxy
+            from backend.app.services.camera import close_tls_proxy, create_tls_proxy
 
             parsed = urlparse(safe_url)
             target_port = parsed.port or 322
@@ -1204,8 +1203,7 @@ async def _stream_rtsp(
                 process.kill()
                 await process.wait()
         if proxy_server:
-            proxy_server.close()
-            await proxy_server.wait_closed()
+            await close_tls_proxy(proxy_server)
 
 
 async def _stream_usb(

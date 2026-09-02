@@ -887,6 +887,80 @@ async def _migrate_scope_run_filament_to_plate(conn) -> None:
         )
 
 
+async def _reclassify_sliced_3mf_library_files(conn) -> None:
+    """Re-type library rows holding a sliced 3MF that does not say so (#2993).
+
+    ``file_type`` was decided from the filename alone, so a sliced 3MF whose
+    name lacks the ``.gcode`` infix landed as a source-only project. That is
+    not a rare shape: a plate exported from Studio, or a print dispatched
+    through the cloud, reaches the archive as ``Foo.3mf`` with its G-code
+    intact, and downloading one and re-importing it produced a library file
+    Bambuddy refused to offer a Print button for. The forward fix classifies on
+    content; this pass reaches the rows already stored.
+
+    One-shot, for the same reason the #2614 backfill is: a genuine source 3MF
+    keeps matching ``file_type = '3mf'`` forever, so without the gate every
+    boot would re-open every model file in the library.
+
+    External rows are deliberately skipped. They point at a mount that may be
+    slow, unmounted, or enormous, and startup is the worst possible place to
+    find that out -- the folder's own scan re-types them with no such risk.
+    """
+    from pathlib import Path
+
+    from sqlalchemy import text
+
+    from backend.app.utils.threemf_tools import carries_gcode
+
+    flag = "_backfill_2993_sliced_3mf_type_done"
+
+    async with conn.begin_nested():
+        already = (
+            await conn.execute(text('SELECT value FROM settings WHERE "key" = :k'), {"k": flag})
+        ).scalar_one_or_none()
+        if already:
+            return
+
+        rows = (
+            await conn.execute(
+                text(
+                    "SELECT id, file_path FROM library_files "
+                    "WHERE file_type = '3mf' AND deleted_at IS NULL "
+                    "AND file_path IS NOT NULL AND file_path <> '' "
+                    "AND (is_external IS NULL OR is_external = :false_val)"
+                ),
+                {"false_val": False},
+            )
+        ).fetchall()
+
+        reclassified = 0
+        for row in rows:
+            path = Path(row.file_path)
+            if not path.is_absolute():
+                path = settings.base_dir / row.file_path
+            # carries_gcode swallows a missing or unreadable file, so a library
+            # with holes in it still finishes the pass.
+            if not carries_gcode(path):
+                continue
+            await conn.execute(
+                text("UPDATE library_files SET file_type = 'gcode.3mf' WHERE id = :id"),
+                {"id": row.id},
+            )
+            reclassified += 1
+
+        if reclassified:
+            logger.info(
+                "[#2993] Re-typed %d library file(s) from source 3MF to sliced -- they carry G-code",
+                reclassified,
+            )
+
+        # Marked done even when nothing matched, so the scan never repeats.
+        await conn.execute(
+            text('INSERT INTO settings ("key", value) VALUES (:k, :v)'),
+            {"k": flag, "v": "true"},
+        )
+
+
 async def _backfill_archive_bed_temperature(conn) -> None:
     """Fill in ``print_archives.bed_temperature`` for archives written before #2989.
 
@@ -1635,11 +1709,15 @@ async def _migrate_failure_reason_vocabulary(conn):
 
     total = 0
     async with conn.begin_nested():
+        # nosec B608 — the only interpolated fragment is `table`, which the loop
+        # below draws from a literal tuple; no caller value reaches the string.
+        # Both the key and the label list are bound parameters. A table name
+        # cannot be expressed as one, which is why it is interpolated at all.
         for table in ("print_archives", "print_log_entries"):
             for key, labels in by_key.items():
                 result = await conn.execute(
                     text(
-                        f"UPDATE {table} SET failure_reason = :key "  # noqa: S608 - table name is a literal
+                        f"UPDATE {table} SET failure_reason = :key "  # noqa: S608  # nosec B608
                         "WHERE failure_reason IN :labels"
                     ).bindparams(bindparam("key"), bindparam("labels", expanding=True)),
                     {"key": key, "labels": labels},
@@ -4728,6 +4806,11 @@ async def run_migrations(conn):
     # the extractor looked for a key BambuStudio never writes. Re-reads the 3MF
     # already on disk. One-shot; see the function for why it is gated.
     await _backfill_archive_bed_temperature(conn)
+
+    # Backfill: library rows typed from the filename alone kept a sliced 3MF
+    # named `Foo.3mf` filed as a source-only project (#2993). Re-reads the zip
+    # already on disk. One-shot, internal rows only; see the function.
+    await _reclassify_sliced_3mf_library_files(conn)
 
     # Migration: Add controls_printer_power to smart_plugs (#2629). Marks
     # whether a plug actually feeds the printer's own power — only then may an
