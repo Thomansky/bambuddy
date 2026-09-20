@@ -4955,6 +4955,18 @@ async def run_migrations(conn):
         conn, "ALTER TABLE notification_providers ADD COLUMN on_ams_drying_suspended BOOLEAN DEFAULT TRUE"
     )
 
+    # Migration: actionable maintenance — scheduled printer calibration (#3127).
+    # The maintenance_runs table itself is new, so create_all() above builds
+    # it; only the columns on the two existing tables need adding here. JSON
+    # and VARCHAR are spelled identically on SQLite and Postgres.
+    await _safe_execute(conn, "ALTER TABLE maintenance_types ADD COLUMN action VARCHAR(32)")
+    await _safe_execute(conn, "ALTER TABLE printer_maintenance ADD COLUMN action_options JSON")
+    await _safe_execute(conn, "ALTER TABLE printer_maintenance ADD COLUMN trigger_mode VARCHAR(16) DEFAULT 'manual'")
+    await _safe_execute(conn, "ALTER TABLE printer_maintenance ADD COLUMN schedule_days JSON")
+    await _safe_execute(conn, "ALTER TABLE printer_maintenance ADD COLUMN schedule_time VARCHAR(5)")
+    await _safe_execute(conn, "ALTER TABLE printer_maintenance ADD COLUMN schedule_next_at TIMESTAMP")
+    await _safe_execute(conn, "ALTER TABLE printer_maintenance ADD COLUMN last_auto_run_at TIMESTAMP")
+
     # Migration: storage location sensor alerts (#2824), own column rather than
     # reusing on_ha_sensor_alert. That column can be scoped to one printer
     # (printer_id), and a location alert has no printer to scope by — sharing
