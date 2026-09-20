@@ -757,6 +757,10 @@ interface FileCardProps {
   onOpenInSlicer?: (file: LibraryFileListItem) => void;
   onRunPipeline?: (file: LibraryFileListItem) => void;
   useSlicerApi?: boolean;
+  // Which slicer the desktop handoff targets. Decides whether an STL or STEP
+  // gets a Slice action at all: Bambu Studio's protocol handler takes 3MF only
+  // (#3029), so offering one there would only ever fail.
+  desktopSlicer: SlicerType;
   canSlice?: boolean;
   onPreview3d?: (file: LibraryFileListItem) => void;
   onRename?: (file: LibraryFileListItem) => void;
@@ -770,7 +774,7 @@ interface FileCardProps {
   t: TFunction;
 }
 
-function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, onSlice, onOpenInSlicer, onRunPipeline, useSlicerApi, canSlice, onPreview3d, onRename, onGenerateThumbnail, onTagClick, thumbnailVersion, hasPermission, canModify, authEnabled, showModified, t }: FileCardProps) {
+function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, onSlice, onOpenInSlicer, onRunPipeline, useSlicerApi, desktopSlicer, canSlice, onPreview3d, onRename, onGenerateThumbnail, onTagClick, thumbnailVersion, hasPermission, canModify, authEnabled, showModified, t }: FileCardProps) {
   // Viewport coordinates rather than a flag, because the menu is rendered by
   // `ContextMenu` at `position: fixed` and anchored to the button (#2846). The
   // card it belongs to is only ~270px tall for a bare STL, which is shorter
@@ -794,7 +798,7 @@ function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, o
       title: !hasPermission('queue:create') ? t('fileManager.noPermissionAddToQueue') : undefined,
     });
   }
-  if (isSliceableLibraryFile(file, !!useSlicerApi) && (useSlicerApi ? onSlice : onOpenInSlicer)) {
+  if (isSliceableLibraryFile(file, !!useSlicerApi, desktopSlicer) && (useSlicerApi ? onSlice : onOpenInSlicer)) {
     menuItems.push({
       label: t('slice.action'),
       icon: useSlicerApi ? <Cog className="w-4 h-4" /> : <ExternalLink className="w-4 h-4" />,
@@ -803,7 +807,7 @@ function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, o
       title: !canSlice ? (useSlicerApi ? t('fileManager.noPermissionSlice') : t('fileManager.noPermissionDownload')) : undefined,
     });
   }
-  if (onRunPipeline && useSlicerApi && isSliceableLibraryFile(file, true)) {
+  if (onRunPipeline && useSlicerApi && isSliceableLibraryFile(file, true, desktopSlicer)) {
     menuItems.push({
       label: t('library.runWithPipeline.actionLabel'),
       icon: <Play className="w-4 h-4" />,
@@ -2729,6 +2733,7 @@ export function FileManagerPage() {
                     onPrint={setPrintFile}
                     onSlice={setSliceFile}
                     onOpenInSlicer={handleOpenInSlicer}
+                    desktopSlicer={preferredSlicer}
                     onRunPipeline={setRunPipelineFile}
                     useSlicerApi={settings?.use_slicer_api ?? false}
                     canSlice={canSlice()}
@@ -2907,7 +2912,7 @@ export function FileManagerPage() {
                           </button>
                         </>
                       )}
-                      {isSliceableLibraryFile(file, !!settings?.use_slicer_api) && (
+                      {isSliceableLibraryFile(file, !!settings?.use_slicer_api, preferredSlicer) && (
                         <button
                           onClick={() => {
                             if (!canSlice()) return;
@@ -2924,7 +2929,7 @@ export function FileManagerPage() {
                           {settings?.use_slicer_api ? <Cog className="w-4 h-4" /> : <ExternalLink className="w-4 h-4" />}
                         </button>
                       )}
-                      {(settings?.use_slicer_api ?? false) && isSliceableLibraryFile(file, true) && (
+                      {(settings?.use_slicer_api ?? false) && isSliceableLibraryFile(file, true, preferredSlicer) && (
                         <button
                           onClick={() => hasPermission('pipelines:run') && setRunPipelineFile(file)}
                           className={`p-1.5 rounded transition-colors ${
@@ -3170,7 +3175,7 @@ export function FileManagerPage() {
           onSliceWithBambuddy={
             // Only offer in-app slicing on files the SliceModal can actually
             // handle (matches the file-row Cog visibility check at :2127).
-            isSliceableLibraryFile(viewerFile, true) && hasPermission('library:upload')
+            isSliceableLibraryFile(viewerFile, true, preferredSlicer) && hasPermission('library:upload')
               ? () => {
                   const f = viewerFile;
                   setViewerFile(null);
