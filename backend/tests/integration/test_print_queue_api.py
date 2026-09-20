@@ -787,6 +787,55 @@ class TestPrintQueueAPI:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    async def test_reassign_clears_the_rfid_precheck_stamp(
+        self, async_client: AsyncClient, queue_item_factory, printer_factory, db_session
+    ):
+        """The pre-dispatch RFID read is per printer: an item moved to another
+        printer is asked about again there. An edit that keeps the printer
+        keeps the stamp."""
+        from datetime import datetime, timezone
+
+        item = await queue_item_factory(rfid_precheck_at=datetime.now(timezone.utc))
+        other = await printer_factory()
+
+        response = await async_client.patch(f"/api/v1/queue/{item.id}", json={"manual_start": True})
+        assert response.status_code == 200
+        await db_session.refresh(item)
+        assert item.rfid_precheck_at is not None
+
+        response = await async_client.patch(f"/api/v1/queue/{item.id}", json={"printer_id": other.id})
+        assert response.status_code == 200
+        await db_session.refresh(item)
+        assert item.printer_id == other.id
+        assert item.rfid_precheck_at is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_bulk_reassign_clears_the_rfid_precheck_stamp(
+        self, async_client: AsyncClient, queue_item_factory, printer_factory, db_session
+    ):
+        """Same contract through /queue/bulk: the stamp goes only for the rows
+        that actually change printer."""
+        from datetime import datetime, timezone
+
+        other = await printer_factory()
+        moved = await queue_item_factory(rfid_precheck_at=datetime.now(timezone.utc))
+        staying = await queue_item_factory(printer_id=other.id, rfid_precheck_at=datetime.now(timezone.utc))
+
+        response = await async_client.patch(
+            "/api/v1/queue/bulk", json={"item_ids": [moved.id, staying.id], "printer_id": other.id}
+        )
+        assert response.status_code == 200
+        assert response.json()["updated_count"] == 2
+
+        await db_session.refresh(moved)
+        await db_session.refresh(staying)
+        assert moved.printer_id == other.id
+        assert moved.rfid_precheck_at is None
+        assert staying.rfid_precheck_at is not None
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_update_allowed_on_unclaimed_pending_item(
         self, async_client: AsyncClient, queue_item_factory, db_session
     ):

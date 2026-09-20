@@ -1343,6 +1343,9 @@ export default {
       rowBadge: 'AMS slots saved for this printer',
       rowTooltip: 'This archive carries the exact AMS slots the slicer picked, saved for the printer this item targets. A reprint on it can reuse those trays instead of matching again by type and colour.',
     },
+    rfidReread: {
+      reading: 'Reading AMS spools…',
+    },
     // Print modal
     editQueueItem: 'Edit Queue Item',
     selectAllPlates: 'Select All {{count}} Plates',
@@ -2446,6 +2449,9 @@ export default {
     concurrentUploadsDescription: 'How many printers the queue may send files to at the same time. Printers receive files slowly (a large print can take several minutes), and each one waits its turn — so on a bigger fleet, raising this is what stops the last printer in a batch from waiting out every transfer before it. Lower it if your network or Bambuddy host struggles with parallel transfers.',
     concurrentUploadsLabel: 'Printers uploaded to at once',
     concurrentUploadsHelp: '1 sends to one printer at a time (the old behaviour). Default is 4.',
+    rfidRereadTitle: 'Unidentified AMS Spools',
+    rfidRereadLabel: 'Re-read unidentified AMS spools before starting a job',
+    rfidRereadDescription: 'Spools inserted while the printer was busy are not identified by the AMS. With this on, the queue asks the AMS to read every occupied but unidentified slot before the job is mapped and started — once per job, and the job starts regardless of the result.',
     staggeredStart: 'Staggered Start',
     staggeredStartDescription: 'Default group size and interval when staggering multi-printer batch starts. Can be overridden per batch in the print modal.',
     preheatTitle: 'Preheat & Heat Soak',

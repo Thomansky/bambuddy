@@ -1330,6 +1330,9 @@ export default {
       rowBadge: 'Slot AMS salvati per questa stampante',
       rowTooltip: 'Questo archivio conserva gli slot AMS esatti scelti dallo slicer, salvati per la stampante di questo elemento. Una ristampa su di essa può riutilizzare quelle bobine invece di rifare l\'abbinamento per tipo e colore.',
     },
+    rfidReread: {
+      reading: 'Lettura delle bobine AMS…',
+    },
     title: 'Coda di stampa',
     subtitle: 'Programma e gestisci i tuoi lavori di stampa',
     // Print modal
@@ -2380,6 +2383,9 @@ export default {
     concurrentUploadsDescription: "Quante stampanti possono ricevere file dalla coda contemporaneamente. Le stampanti ricevono i file lentamente (una stampa grande può richiedere diversi minuti) e ognuna aspetta il proprio turno: su un parco macchine ampio, aumentare questo valore evita che l'ultima stampante di un lotto debba attendere la fine di tutti i trasferimenti precedenti. Riducilo se la rete o l'host Bambuddy fatica con i trasferimenti paralleli.",
     concurrentUploadsLabel: 'Stampanti servite contemporaneamente',
     concurrentUploadsHelp: '1 invia a una stampante alla volta (il comportamento precedente). Il valore predefinito è 4.',
+    rfidRereadTitle: 'Bobine AMS non identificate',
+    rfidRereadLabel: 'Rileggi le bobine AMS non identificate prima di avviare un lavoro',
+    rfidRereadDescription: "Le bobine inserite mentre la stampante era occupata non vengono identificate dall'AMS. Con questa opzione la coda chiede all'AMS di leggere ogni slot occupato ma non identificato prima che il lavoro venga mappato e avviato: una volta per lavoro, e il lavoro parte comunque, qualunque sia il risultato.",
     staggeredStart: 'Avvio scaglionato',
     staggeredStartDescription: 'Dimensione gruppo e intervallo predefiniti per scaglionare avvii di batch multi-stampante. Sovrascrivibili per batch nella finestra di stampa.',
     preheatTitle: 'Preriscaldo & Heat Soak',

@@ -63,6 +63,7 @@ import {
   PlayCircle,
   Workflow,
   ThumbsUp,
+  Loader2,
 } from 'lucide-react';
 import { api, ApiError } from '../api/client';
 import { PipelineRunsView } from './PipelineRunsPage';
@@ -79,6 +80,7 @@ import { QueueStatsBar } from '../components/QueueStatsBar';
 import { CompactHistoryRow } from '../components/CompactHistoryRow';
 import { QueueTimelineView } from '../components/QueueTimelineView';
 import { compareQueueOrder, compareQueueOrderAcrossLanes } from '../utils/queueOrder';
+import { RFID_REREAD_WAITING_REASON } from '../utils/waitingReason';
 import { BatchOrdersView } from '../components/BatchOrdersView';
 
 function formatWeight(g: number, useKg = false): string {
@@ -776,8 +778,22 @@ function SortableQueueItem({
             );
           })()}
 
+          {/* The printer is reading this item's unidentified AMS slots before
+              dispatch (queue_rfid_reread_before_start). Nothing to do, so it
+              is muted rather than purple: the job goes out on its own once the
+              read ends. */}
+          {item.waiting_reason === RFID_REREAD_WAITING_REASON && item.status === 'pending' && (
+            <p
+              className="text-[10px] sm:text-xs text-bambu-gray mt-1.5 sm:mt-2 flex items-start gap-1"
+              data-testid="queue-item-rfid-reread"
+            >
+              <Loader2 className="w-3 h-3 mt-0.5 flex-shrink-0 animate-spin" />
+              <span>{t('queue.rfidReread.reading')}</span>
+            </p>
+          )}
+
           {/* Waiting reason for model-based assignments */}
-          {item.waiting_reason && item.status === 'pending' && (
+          {item.waiting_reason && item.waiting_reason !== RFID_REREAD_WAITING_REASON && item.status === 'pending' && (
             <p className="text-[10px] sm:text-xs text-purple-700 dark:text-purple-400 mt-1.5 sm:mt-2 flex items-start gap-1">
               <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />
               <span>{item.waiting_reason}</span>

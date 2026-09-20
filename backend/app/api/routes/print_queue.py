@@ -1334,6 +1334,11 @@ async def bulk_update_queue_items(
                 exclude_queue_item_id=item.id,
             )
 
+        # A pre-dispatch RFID read is per printer: moving the item means asking
+        # the new one. Same rule as the single-item route.
+        if item_update_data.get("printer_id", item.printer_id) != item.printer_id:
+            item.rfid_precheck_at = None
+
         for field, value in item_update_data.items():
             setattr(item, field, value)
         updated_count += 1
@@ -2035,6 +2040,11 @@ async def update_queue_item(
     if claimed is not None:
         raise HTTPException(409, "Item is being dispatched — cancel it first to make changes")
 
+    # A pre-dispatch RFID read is per printer: moving the item means asking
+    # the new one.
+    if update_data.get("printer_id", item.printer_id) != item.printer_id:
+        item.rfid_precheck_at = None
+
     for field, value in update_data.items():
         setattr(item, field, value)
 
@@ -2179,6 +2189,7 @@ async def resume_queue_after_failure(
         skipped_item.status = "pending"
         skipped_item.error_message = None
         skipped_item.completed_at = None
+        skipped_item.rfid_precheck_at = None
 
     await db.commit()
 

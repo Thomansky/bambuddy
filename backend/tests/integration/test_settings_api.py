@@ -275,6 +275,25 @@ class TestSettingsAPI:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    async def test_queue_rfid_reread_before_start_round_trips(self, async_client: AsyncClient):
+        """Off by default, on after PUT, still on after a fresh GET, off again after PUT."""
+        response = await async_client.get("/api/v1/settings/")
+        assert response.status_code == 200
+        assert response.json()["queue_rfid_reread_before_start"] is False
+
+        response = await async_client.put("/api/v1/settings/", json={"queue_rfid_reread_before_start": True})
+        assert response.status_code == 200
+        assert response.json()["queue_rfid_reread_before_start"] is True
+
+        response = await async_client.get("/api/v1/settings/")
+        assert response.json()["queue_rfid_reread_before_start"] is True
+
+        response = await async_client.put("/api/v1/settings/", json={"queue_rfid_reread_before_start": False})
+        assert response.status_code == 200
+        assert (await async_client.get("/api/v1/settings/")).json()["queue_rfid_reread_before_start"] is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_update_notification_language(self, async_client: AsyncClient):
         """Verify notification language can be updated."""
         response = await async_client.put("/api/v1/settings/", json={"notification_language": "de"})

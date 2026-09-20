@@ -431,6 +431,37 @@ describe('QueuePage', () => {
       ).not.toBeInTheDocument();
     });
 
+    // queue_rfid_reread_before_start: the scheduler parks the item for one pass
+    // while the printer reads its unidentified AMS slots and writes the token
+    // `rfid_reread` as the reason. The row has to say what is happening in
+    // words, muted rather than as a purple "needs you" line, and must never
+    // show the raw token.
+    it('shows a muted "Reading AMS spools" line while the pre-dispatch RFID read runs', async () => {
+      server.use(
+        http.get('/api/v1/queue/', () => {
+          return HttpResponse.json([
+            {
+              ...mockQueueItems[0],
+              archive_name: 'Reread Print',
+              waiting_reason: 'rfid_reread',
+            },
+          ]);
+        }),
+      );
+
+      render(<QueuePage />);
+
+      const name = await screen.findByText('Reread Print');
+      const row = name.closest('.group') as HTMLElement;
+
+      const line = within(row).getByTestId('queue-item-rfid-reread');
+      expect(line).toHaveTextContent('Reading AMS spools…');
+      expect(line.className).toContain('text-bambu-gray');
+      expect(within(row).queryByText('rfid_reread')).not.toBeInTheDocument();
+      // Still parked, so no if-started-now ETA either.
+      expect(within(row).queryByTestId('queue-item-eta')).not.toBeInTheDocument();
+    });
+
     it('does not show an if-started-now ETA for a scheduled item', async () => {
       server.use(
         http.get('/api/v1/queue/', () => {

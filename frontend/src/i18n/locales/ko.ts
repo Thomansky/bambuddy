@@ -1577,6 +1577,9 @@ export default {
       rowBadge: '이 프린터용으로 저장된 AMS 슬롯',
       rowTooltip: '이 아카이브에는 슬라이서가 선택한 정확한 AMS 슬롯이 이 항목의 대상 프린터용으로 저장되어 있습니다. 해당 프린터에서 재인쇄하면 유형과 색상으로 다시 맞추는 대신 그 트레이를 재사용할 수 있습니다.',
     },
+    rfidReread: {
+      reading: 'AMS 스풀 읽는 중…',
+    },
   },
   stats: {
     title: '대시보드',
@@ -2303,6 +2306,9 @@ export default {
     concurrentUploadsDescription: '대기열이 동시에 파일을 보낼 수 있는 프린터 수입니다. 프린터는 파일을 느리게 받으며(큰 출력물은 몇 분이 걸릴 수 있습니다) 각 프린터는 자기 차례를 기다립니다. 따라서 프린터가 많은 환경에서는 이 값을 높이면 배치의 마지막 프린터가 앞선 모든 전송이 끝나기를 기다리지 않아도 됩니다. 네트워크나 Bambuddy 호스트가 병렬 전송을 버거워하면 값을 낮추세요.',
     concurrentUploadsLabel: '동시에 전송할 프린터 수',
     concurrentUploadsHelp: '1이면 한 번에 한 대씩 전송합니다(기존 동작). 기본값은 4입니다.',
+    rfidRereadTitle: '식별되지 않은 AMS 스풀',
+    rfidRereadLabel: '작업 시작 전 식별되지 않은 AMS 스풀 다시 읽기',
+    rfidRereadDescription: '프린터가 작업 중일 때 삽입된 스풀은 AMS가 식별하지 못합니다. 이 옵션을 켜면 작업을 매핑하고 시작하기 전에 큐가 AMS에 사용 중이지만 식별되지 않은 모든 슬롯을 읽도록 요청합니다. 작업당 한 번만 수행되며, 결과와 관계없이 작업은 시작됩니다.',
     staggeredStart: '엇갈린 시작',
     staggeredStartDescription: '다중 프린터 일괄 시작 시 기본 그룹 크기 및 간격. 인쇄 모달에서 배치별로 재정의할 수 있습니다.',
     preheatTitle: '예열 & 히트 소크',

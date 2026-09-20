@@ -144,6 +144,15 @@ class PrintQueueItem(Base):
     # (no coroutine survives a restart), so a stale claim never wedges an item.
     dispatching_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
+    # When the scheduler last asked the AMS to read this item's unidentified
+    # slots before dispatch (queue_rfid_reread_before_start). Stamped on the
+    # first pass that considers it -- whether a re-read went out, was skipped
+    # because filament was loaded, or found nothing to read -- so an item gets
+    # at most one round; the job starts on the next pass whatever the outcome.
+    # Cleared wherever the item is handed back to the queue for another go
+    # (watchdog revert, busy deferral, resume-after-failure, printer change).
+    rfid_precheck_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     # Cleared by the per-printer "Resume after failure" action (#1818) so the
     # scheduler's `_check_previous_success` lookback skips this row. Without
     # this, a single `failed` or `aborted` print poisoned every later

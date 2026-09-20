@@ -1330,6 +1330,9 @@ export default {
       rowBadge: '已為此印表機儲存 AMS 槽位',
       rowTooltip: '此封存保留了切片軟體選擇的確切 AMS 槽位，並為此項目的目標印表機儲存。在該印表機上重新列印時，可重複使用這些料盤，而不必再依類型與顏色重新比對。',
     },
+    rfidReread: {
+      reading: '正在讀取 AMS 線材卷…',
+    },
     title: '列印佇列',
     subtitle: '排程和管理您的列印任務',
     // Print modal
@@ -2424,6 +2427,9 @@ export default {
     concurrentUploadsDescription: '佇列可同時向多少台印表機傳送檔案。印表機接收檔案的速度很慢（大型列印可能需要數分鐘），而且每台都得排隊等候——因此在印表機較多時，調高此值可避免批次中最後一台印表機等完前面所有傳輸。若網路或 Bambuddy 主機難以負荷並行傳輸，請調低此值。',
     concurrentUploadsLabel: '同時上傳的印表機數量',
     concurrentUploadsHelp: '設為 1 時一次只傳送給一台印表機（舊行為）。預設值為 4。',
+    rfidRereadTitle: '未識別的 AMS 線材卷',
+    rfidRereadLabel: '開始工作前重新讀取未識別的 AMS 線材卷',
+    rfidRereadDescription: '印表機忙碌時放入的線材卷不會被 AMS 識別。開啟後，佇列會在工作對應並啟動之前，要求 AMS 讀取每個已佔用但未識別的槽位——每個工作只執行一次，且無論結果如何工作都會啟動。',
     staggeredStart: '錯開啟動',
     staggeredStartDescription: '多台印表機批次啟動時的預設群組大小與間隔。可在列印對話框中逐批覆寫。',
     preheatTitle: '預熱與熱保溫',

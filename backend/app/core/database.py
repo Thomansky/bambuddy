@@ -5041,6 +5041,13 @@ async def run_migrations(conn):
     # Run-result notification opt-in (#3127). Off by default: a provider set
     # up before the event existed must not start receiving new messages.
     await _safe_execute(conn, "ALTER TABLE notification_providers ADD COLUMN on_maintenance_run BOOLEAN DEFAULT FALSE")
+    # Migration: once-per-item stamp for the pre-dispatch AMS RFID re-read
+    # (queue_rfid_reread_before_start). Same dialect split as dispatching_at
+    # above, and placed after the print_queue_new2 recreate for the same reason.
+    if is_sqlite():
+        await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN rfid_precheck_at DATETIME")
+    else:
+        await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN rfid_precheck_at TIMESTAMP")
 
     # Migration: storage location sensor alerts (#2824), own column rather than
     # reusing on_ha_sensor_alert. That column can be scoped to one printer
