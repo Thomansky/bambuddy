@@ -1590,8 +1590,11 @@ describe('PrintModal', () => {
     // The pill outside the collapsed Print Options panel and the row inside it
     // edit the same printOptions.confirm_outcome, so flipping either must be
     // reflected by the other and land in the submitted payload.
-    const pill = () => screen.getByRole('button', { name: 'Ask for outcome' });
-    const panelRow = () => screen.getByText('Ask for Outcome').closest('div')!.parentElement!;
+    // Both carry the label "Ask for Outcome"; the pill is the only button with
+    // that name, the panel row is found through its description text.
+    const pill = () => screen.getByRole('button', { name: 'Ask for Outcome' });
+    const panelRowDesc = 'Ask whether the print came out well after it completes';
+    const panelRow = () => screen.getByText(panelRowDesc).closest('div')!.parentElement!;
 
     it('starts off and toggles on a click', async () => {
       const user = userEvent.setup();
@@ -1612,7 +1615,7 @@ describe('PrintModal', () => {
 
       await user.click(pill());
       // The panel opens expanded when a printer is preselected; expand otherwise.
-      if (!screen.queryByText('Ask for Outcome')) await user.click(screen.getByText('Print Options'));
+      if (!screen.queryByText(panelRowDesc)) await user.click(screen.getByText('Print Options'));
       const row = panelRow();
       expect(within(row).getByRole('button', { name: 'On' })).toHaveClass('bg-bambu-green');
 

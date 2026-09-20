@@ -5144,7 +5144,7 @@ export default {
     insufficientBudget: 'Insufficient Budget',
     unlimitedNoBudget: 'Unlimited – no budget limit is set.',
     noPrintableCostCenters: 'No active cost center is available for printing. Ask an administrator to grant you print access.',
-    askForOutcome: 'Ask for outcome',
+    askForOutcome: 'Ask for Outcome',
     askForOutcomeTitle: 'Ask how the print came out after it completes',
   },
 

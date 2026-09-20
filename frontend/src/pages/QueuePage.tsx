@@ -723,7 +723,7 @@ function SortableQueueItem({
             {item.confirm_outcome && (
               <span
                 title={t('queue.badges.confirmOutcomeTitle')}
-                className="text-[10px] sm:text-xs px-1.5 sm:px-2 py-0.5 bg-bambu-green/10 text-bambu-green rounded-full border border-bambu-green/30 flex items-center gap-1"
+                className="text-[10px] sm:text-xs px-1.5 sm:px-2 py-0.5 bg-green-50 dark:bg-green-500/10 text-green-700 dark:text-green-400 rounded-full border border-green-200 dark:border-green-500/20 flex items-center gap-1"
               >
                 <ThumbsUp className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
                 {t('queue.badges.confirmOutcome')}
