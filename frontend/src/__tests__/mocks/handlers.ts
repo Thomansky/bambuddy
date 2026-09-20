@@ -53,6 +53,7 @@ const mockNotificationProviders = [
     on_ai_failure_detection: false,
     on_filament_low: false,
     on_maintenance_due: false,
+    on_maintenance_run: false,
     on_ams_humidity_high: false,
     on_ams_temperature_high: false,
     on_ams_ht_humidity_high: false,

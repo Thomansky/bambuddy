@@ -2949,6 +2949,7 @@ export interface NotificationProvider {
   on_ai_failure_detection: boolean;
   on_filament_low: boolean;
   on_maintenance_due: boolean;
+  on_maintenance_run: boolean;
   // AMS environmental alarms (regular AMS)
   on_ams_humidity_high: boolean;
   on_ams_temperature_high: boolean;
@@ -3013,6 +3014,7 @@ export interface NotificationProviderCreate {
   on_ai_failure_detection?: boolean;
   on_filament_low?: boolean;
   on_maintenance_due?: boolean;
+  on_maintenance_run?: boolean;
   // AMS environmental alarms (regular AMS)
   on_ams_humidity_high?: boolean;
   on_ams_temperature_high?: boolean;
@@ -3070,6 +3072,7 @@ export interface NotificationProviderUpdate {
   on_ai_failure_detection?: boolean;
   on_filament_low?: boolean;
   on_maintenance_due?: boolean;
+  on_maintenance_run?: boolean;
   // AMS environmental alarms (regular AMS)
   on_ams_humidity_high?: boolean;
   on_ams_temperature_high?: boolean;
@@ -3900,6 +3903,7 @@ export interface MaintenanceItemUpdate {
   custom_interval_hours?: number | null;
   custom_interval_type?: 'hours' | 'days' | null;
   enabled?: boolean;
+  notifications_enabled?: boolean;  // off = no due reminder, no run result for this item
   action_options?: CalibrationOptions;
   trigger_mode?: MaintenanceTriggerMode;
   schedule_days?: number[];  // 0 = Monday
@@ -3925,6 +3929,7 @@ export interface MaintenanceStatus {
   maintenance_type_icon: string | null;
   maintenance_type_wiki_url: string | null;  // Custom wiki URL from type
   enabled: boolean;
+  notifications_enabled: boolean;  // the bell on the card (#3127)
   interval_hours: number;  // For hours type: print hours; for days type: number of days
   interval_type: 'hours' | 'days';
   current_hours: number;
@@ -3955,6 +3960,8 @@ export interface PrinterMaintenanceOverview {
   maintenance_items: MaintenanceStatus[];
   due_count: number;
   warning_count: number;
+  // The plate-clear gate the automatic calibration triggers wait behind (#3127)
+  require_plate_clear: boolean;
 }
 
 export interface MaintenanceHistory {

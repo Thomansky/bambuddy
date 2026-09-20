@@ -1849,6 +1849,8 @@ export default {
     noPermissionEditIntervals: 'メンテナンス間隔を編集する権限がありません',
     // Configure link
     configureSettings: 'メンテナンスタイプと間隔を設定',
+    notificationsOn: '通知オン',
+    notificationsOff: '通知オフ',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
@@ -1868,6 +1870,8 @@ export default {
       triggerManual: '手動',
       triggerWhenDue: '期限到来時',
       triggerSchedule: 'スケジュール',
+      triggerGatePlateClear: '（プレートが解放された後のみ）',
+      triggerGateIdle: '（プリンターがアイドルになり次第）',
       scheduleDays: '曜日',
       scheduleTime: '最早開始時刻',
       runNow: '今すぐ実行',
@@ -6252,6 +6256,8 @@ export default {
     lowFilamentLabel: 'フィラメント残量低下',
     maintenanceDue: 'メンテナンス期限',
     maintenanceDueDescription: 'メンテナンスが必要な場合に通知',
+    maintenanceRun: 'メンテナンス実行完了',
+    maintenanceRunDescription: 'Bambuddy が開始したキャリブレーションが完了・失敗・キャンセルされたときに通知',
     amsHumidityHigh: 'AMS湿度高',
     amsHumidityHighDescription: '通常AMSの湿度がしきい値を超過',
     amsTemperatureHigh: 'AMS温度高',
@@ -6416,6 +6422,7 @@ export default {
       printer_error: 'プリンターエラー',
       filament_low: 'フィラメント残量低下',
       maintenance_due: 'メンテナンス期限',
+      maintenance_run: 'メンテナンス実行完了',
       test: 'テスト',
     },
     // User email notification preferences

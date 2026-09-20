@@ -1851,6 +1851,8 @@ export default {
     noPermissionEditIntervals: 'No tiene permiso para editar intervalos',
     // Configure link
     configureSettings: 'Configurar tipos e intervalos de mantenimiento',
+    notificationsOn: 'Notificaciones activadas',
+    notificationsOff: 'Notificaciones desactivadas',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
@@ -1870,6 +1872,8 @@ export default {
       triggerManual: 'Manual',
       triggerWhenDue: 'Al vencer',
       triggerSchedule: 'Según programación',
+      triggerGatePlateClear: '(solo cuando se haya liberado la placa)',
+      triggerGateIdle: '(en cuanto la impresora esté libre)',
       scheduleDays: 'Días de la semana',
       scheduleTime: 'Hora más temprana',
       runNow: 'Ejecutar ahora',
@@ -6259,6 +6263,8 @@ export default {
     lowFilamentLabel: 'Filamento bajo',
     maintenanceDue: 'Mantenimiento pendiente',
     maintenanceDueDescription: 'Notificar cuando se necesite mantenimiento',
+    maintenanceRun: 'Ejecución de mantenimiento finalizada',
+    maintenanceRunDescription: 'Notificar cuando una calibración iniciada por Bambuddy se complete, falle o se cancele',
     amsHumidityHigh: 'Humedad alta del AMS',
     amsHumidityHighDescription: 'La humedad del AMS normal supera el umbral',
     amsTemperatureHigh: 'Temperatura alta del AMS',
@@ -6423,6 +6429,7 @@ export default {
       printer_error: 'Error de la impresora',
       filament_low: 'Filamento bajo',
       maintenance_due: 'Mantenimiento pendiente',
+      maintenance_run: 'Ejecución de mantenimiento finalizada',
       test: 'Prueba',
     },
     // User email notification preferences

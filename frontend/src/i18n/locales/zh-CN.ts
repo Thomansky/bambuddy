@@ -1850,6 +1850,8 @@ export default {
     noPermissionEditIntervals: '您没有编辑间隔的权限',
     // Configure link
     configureSettings: '配置维护类型和间隔',
+    notificationsOn: '通知已开启',
+    notificationsOff: '通知已关闭',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
@@ -1869,6 +1871,8 @@ export default {
       triggerManual: '手动',
       triggerWhenDue: '到期时',
       triggerSchedule: '按计划',
+      triggerGatePlateClear: '（仅在打印板清空确认后）',
+      triggerGateIdle: '（打印机空闲后）',
       scheduleDays: '星期',
       scheduleTime: '最早时间',
       runNow: '立即运行',
@@ -6239,6 +6243,8 @@ export default {
     lowFilamentLabel: '耗材不足',
     maintenanceDue: '需要维护',
     maintenanceDueDescription: '需要维护时通知',
+    maintenanceRun: '维护运行已结束',
+    maintenanceRunDescription: '当 Bambuddy 启动的校准完成、失败或被取消时通知',
     amsHumidityHigh: 'AMS 湿度过高',
     amsHumidityHighDescription: '普通 AMS 湿度超过阈值',
     amsTemperatureHigh: 'AMS 温度过高',
@@ -6403,6 +6409,7 @@ export default {
       printer_error: '打印机错误',
       filament_low: '耗材不足',
       maintenance_due: '需要维护',
+      maintenance_run: '维护运行已结束',
       test: '测试',
     },
     userEmail: {

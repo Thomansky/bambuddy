@@ -1868,6 +1868,8 @@ export default {
     noPermissionEditIntervals: 'You do not have permission to edit intervals',
     // Configure link
     configureSettings: 'Configure maintenance types and intervals',
+    notificationsOn: 'Notifications on',
+    notificationsOff: 'Notifications off',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
@@ -1887,6 +1889,8 @@ export default {
       triggerManual: 'Manual',
       triggerWhenDue: 'When due',
       triggerSchedule: 'On a schedule',
+      triggerGatePlateClear: '(only once the plate has been released)',
+      triggerGateIdle: '(once the printer is idle)',
       scheduleDays: 'Weekdays',
       scheduleTime: 'Earliest time',
       runNow: 'Run now',
@@ -6302,6 +6306,8 @@ export default {
     lowFilamentLabel: 'Low Filament',
     maintenanceDue: 'Maintenance Due',
     maintenanceDueDescription: 'Notify when maintenance is needed',
+    maintenanceRun: 'Maintenance Run Finished',
+    maintenanceRunDescription: 'Notify when a calibration run Bambuddy queued completed, failed or was cancelled',
     amsHumidityHigh: 'AMS Humidity High',
     amsHumidityHighDescription: 'Regular AMS humidity exceeds threshold',
     amsTemperatureHigh: 'AMS Temperature High',
@@ -6466,6 +6472,7 @@ export default {
       printer_error: 'Printer Error',
       filament_low: 'Low Filament',
       maintenance_due: 'Maintenance Due',
+      maintenance_run: 'Maintenance Run Finished',
       test: 'Test',
     },
     // User email notification preferences

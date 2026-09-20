@@ -1766,6 +1766,8 @@ export default {
     noPermissionAssignPrinter: '프린터를 할당할 권한이 없습니다',
     noPermissionEditIntervals: '간격을 편집할 권한이 없습니다',
     configureSettings: '유지보수 유형 및 간격 설정',
+    notificationsOn: '알림 켜짐',
+    notificationsOff: '알림 꺼짐',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
@@ -1785,6 +1787,8 @@ export default {
       triggerManual: '수동',
       triggerWhenDue: '기한 도래 시',
       triggerSchedule: '일정에 따라',
+      triggerGatePlateClear: '(플레이트가 해제된 후에만)',
+      triggerGateIdle: '(프린터가 유휴 상태가 되면)',
       scheduleDays: '요일',
       scheduleTime: '가장 이른 시간',
       runNow: '지금 실행',
@@ -5970,6 +5974,8 @@ export default {
     lowFilamentLabel: '필라멘트 부족',
     maintenanceDue: '유지 관리 필요',
     maintenanceDueDescription: '유지 관리가 필요할 때 알림',
+    maintenanceRun: '유지 관리 실행 완료',
+    maintenanceRunDescription: 'Bambuddy가 시작한 캘리브레이션이 완료, 실패 또는 취소되면 알림',
     amsHumidityHigh: 'AMS 습도 높음',
     amsHumidityHighDescription: '일반 AMS 습도가 임계값 초과',
     amsTemperatureHigh: 'AMS 온도 높음',
@@ -6123,6 +6129,7 @@ export default {
       printer_error: '프린터 오류',
       filament_low: '필라멘트 부족',
       maintenance_due: '유지 관리 필요',
+      maintenance_run: '유지 관리 실행 완료',
       test: '테스트'
     },
     userEmail: {
