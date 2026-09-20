@@ -358,6 +358,156 @@ async def test_recently_dispatched_printer_is_busy_only_briefly(scheduler, db_se
     assert scheduler._calibrating_printer_ids == set()
 
 
+# ============== Bed-temperature start condition ==============
+
+
+def _state_with_bed(bed_temp, state="IDLE"):
+    """A connected printer whose last push_status carried this bed_temper."""
+    mock = _mock_state(state)
+    mock.temperatures = {"bed": bed_temp} if bed_temp is not None else {}
+    return mock
+
+
+async def _run_idle_pass(scheduler, db_session, state):
+    with (
+        patch("backend.app.services.print_scheduler.printer_manager") as mock_pm,
+        patch.object(scheduler, "_is_printer_idle", return_value=True),
+    ):
+        mock_pm.get_status.return_value = state
+        mock_pm.start_calibration.return_value = True
+        mock_pm.start_internal_gcode_file.return_value = True
+        mock_pm.await_internal_gcode_ack = AsyncMock(return_value=(True, ""))
+        await scheduler._check_maintenance_runs(db_session, True)
+    return mock_pm
+
+
+@pytest.mark.asyncio
+async def test_warm_bed_waits_with_the_temperature_and_dispatches_once_below(scheduler, db_session, printer_factory):
+    item = await _make_item(db_session, printer_factory, action_options={"bed_leveling": True, "bed_temp_below": 30})
+    run = await _make_run(db_session, item)
+
+    mock_pm = await _run_idle_pass(scheduler, db_session, _state_with_bed(34.24))
+    mock_pm.start_calibration.assert_not_called()
+    await db_session.refresh(run)
+    assert run.status == "pending"
+    assert run.waiting_reason == "bed_too_warm"
+    assert run.waiting_detail == {"bed_temp": 34.2, "threshold": 30.0}
+
+    # The next pass sees a cooler bed: the reason is replaced, not left standing.
+    mock_pm = await _run_idle_pass(scheduler, db_session, _state_with_bed(29.9))
+    mock_pm.start_calibration.assert_called_once()
+    await db_session.refresh(run)
+    assert run.status == "running"
+    assert run.waiting_reason is None
+    assert run.waiting_detail is None
+
+
+@pytest.mark.asyncio
+async def test_a_bed_exactly_at_the_threshold_is_not_below_it(scheduler, db_session, printer_factory):
+    item = await _make_item(db_session, printer_factory, action_options={"bed_leveling": True, "bed_temp_below": 30})
+    run = await _make_run(db_session, item)
+    mock_pm = await _run_idle_pass(scheduler, db_session, _state_with_bed(30.0))
+    mock_pm.start_calibration.assert_not_called()
+    await db_session.refresh(run)
+    assert run.waiting_reason == "bed_too_warm"
+
+
+@pytest.mark.asyncio
+async def test_unknown_bed_temperature_waits_with_its_own_reason(scheduler, db_session, printer_factory):
+    """No bed_temper seen yet (fresh connection): wait, do not guess."""
+    item = await _make_item(db_session, printer_factory, action_options={"bed_leveling": True, "bed_temp_below": 30})
+    run = await _make_run(db_session, item)
+    mock_pm = await _run_idle_pass(scheduler, db_session, _state_with_bed(None))
+    mock_pm.start_calibration.assert_not_called()
+    await db_session.refresh(run)
+    assert run.status == "pending"
+    assert run.waiting_reason == "bed_temp_unknown"
+    assert run.waiting_detail is None
+
+
+@pytest.mark.asyncio
+async def test_no_condition_ignores_the_bed_temperature(scheduler, db_session, printer_factory):
+    item = await _make_item(db_session, printer_factory, action_options={"bed_leveling": True})
+    run = await _make_run(db_session, item)
+    mock_pm = await _run_idle_pass(scheduler, db_session, _state_with_bed(95.0))
+    mock_pm.start_calibration.assert_called_once()
+    await db_session.refresh(run)
+    assert run.status == "running"
+
+
+@pytest.mark.asyncio
+async def test_the_condition_is_read_from_the_item_not_frozen_on_the_run(scheduler, db_session, printer_factory):
+    """Raising the threshold releases a run that is already waiting."""
+    item = await _make_item(db_session, printer_factory, action_options={"bed_leveling": True, "bed_temp_below": 30})
+    run = await _make_run(db_session, item)
+    assert "bed_temp_below" not in (run.options or {})
+    await _run_idle_pass(scheduler, db_session, _state_with_bed(40.0))
+    await db_session.refresh(run)
+    assert run.waiting_reason == "bed_too_warm"
+
+    item.action_options = {"bed_leveling": True, "bed_temp_below": 45}
+    await db_session.commit()
+    mock_pm = await _run_idle_pass(scheduler, db_session, _state_with_bed(40.0))
+    mock_pm.start_calibration.assert_called_once()
+    await db_session.refresh(run)
+    assert run.status == "running"
+
+
+@pytest.mark.asyncio
+async def test_the_condition_holds_the_vision_encoder_run_too(scheduler, db_session, printer_factory):
+    item = await _make_item(
+        db_session, printer_factory, action="motion_precision", model="H2S", action_options={"bed_temp_below": 30}
+    )
+    run = await _make_run(db_session, item)
+    state = _state_with_bed(31.0)
+    state.internal_gcode_dir = "O1S"
+    mock_pm = await _run_idle_pass(scheduler, db_session, state)
+    mock_pm.start_internal_gcode_file.assert_not_called()
+    await db_session.refresh(run)
+    assert run.waiting_reason == "bed_too_warm"
+    assert run.waiting_detail["bed_temp"] == 31.0
+
+    state = _state_with_bed(25.0)
+    state.internal_gcode_dir = "O1S"
+    mock_pm = await _run_idle_pass(scheduler, db_session, state)
+    mock_pm.start_internal_gcode_file.assert_called_once()
+    await db_session.refresh(run)
+    assert run.status == "running"
+
+
+@pytest.mark.asyncio
+async def test_a_busy_printer_is_reported_before_its_bed(scheduler, db_session, printer_factory):
+    """The bed is the last gate: a printing printer says "busy", whatever its bed reads."""
+    item = await _make_item(db_session, printer_factory, action_options={"bed_leveling": True, "bed_temp_below": 30})
+    run = await _make_run(db_session, item)
+    with (
+        patch("backend.app.services.print_scheduler.printer_manager") as mock_pm,
+        patch.object(scheduler, "_is_printer_idle", return_value=False),
+    ):
+        mock_pm.get_status.return_value = _state_with_bed(60.0, "RUNNING")
+        mock_pm.is_awaiting_plate_clear.return_value = False
+        await scheduler._check_maintenance_runs(db_session, True)
+    await db_session.refresh(run)
+    assert run.waiting_reason == "printer_busy"
+    assert run.waiting_detail is None
+
+
+@pytest.mark.asyncio
+async def test_a_later_reason_clears_the_temperature_detail(scheduler, db_session, printer_factory):
+    item = await _make_item(db_session, printer_factory, action_options={"bed_leveling": True, "bed_temp_below": 30})
+    run = await _make_run(db_session, item)
+    await _run_idle_pass(scheduler, db_session, _state_with_bed(50.0))
+    await db_session.refresh(run)
+    assert run.waiting_detail is not None
+
+    with patch("backend.app.services.print_scheduler.printer_manager") as mock_pm:
+        mock_pm.get_status.return_value = None
+        await scheduler._check_maintenance_runs(db_session, True)
+    await db_session.refresh(run)
+    assert run.waiting_reason == "printer_offline"
+    assert run.waiting_detail is None
+
+
 # ============== Triggers ==============
 
 

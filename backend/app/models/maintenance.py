@@ -136,7 +136,12 @@ class MaintenanceRun(Base):
     # Earliest start instant, naive UTC (same convention as
     # scheduled_dryings.start_after). None = as soon as the printer is idle.
     start_after: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Why the last scheduler pass left the run pending (a token the card
+    # translates) and, for reasons that carry a measurement, its figures:
+    # {"bed_temp": 34.2, "threshold": 30.0} for bed_too_warm. Written and
+    # cleared together.
     waiting_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    waiting_detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

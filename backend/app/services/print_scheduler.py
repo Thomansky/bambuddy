@@ -4838,7 +4838,8 @@ class PrintScheduler:
         Same shape as the scheduled-drying check. A pending run is deferred with
         a ``waiting_reason`` the card shows, never dropped: the printer being
         offline, a drying run holding it, the print queue having claimed it
-        (``queue_reserved``), or it not being idle. Unlike drying,
+        (``queue_reserved``), it not being idle, or its bed still being at or
+        above the item's ``bed_temp_below`` threshold. Unlike drying,
         the plate-clear gate is honoured here when the setting is on -- bed
         levelling with parts on the plate is a crash -- so "Saturday, as soon as
         the plate is released" is literally what a scheduled run waits for.
@@ -4877,27 +4878,38 @@ class PrintScheduler:
 
             printer_id = row.printer_id
             if printer_id in running_printer_ids:
-                row.waiting_reason = "printer_busy"
+                maintenance_actions.set_waiting(row, "printer_busy")
                 continue
 
             state = printer_manager.get_status(printer_id)
             if not state or not state.connected:
-                row.waiting_reason = "printer_offline"
+                maintenance_actions.set_waiting(row, "printer_offline")
                 continue
 
             if self._drying_in_progress.get(printer_id) or printer_id in self._scheduled_drying_printer_ids:
-                row.waiting_reason = "already_drying"
+                maintenance_actions.set_waiting(row, "already_drying")
                 continue
 
             if queue_reserved and printer_id in queue_reserved:
-                row.waiting_reason = "printer_busy"
+                maintenance_actions.set_waiting(row, "printer_busy")
                 continue
 
             if not self._is_printer_idle(printer_id, require_plate_clear):
                 if require_plate_clear and printer_manager.is_awaiting_plate_clear(printer_id):
-                    row.waiting_reason = "awaiting_plate_clear"
+                    maintenance_actions.set_waiting(row, "awaiting_plate_clear")
                 else:
-                    row.waiting_reason = "printer_busy"
+                    maintenance_actions.set_waiting(row, "printer_busy")
+                continue
+
+            # Last gate, re-read every pass: the bed cools on its own, and the
+            # threshold comes from the item so a change to it takes effect on
+            # the run that is waiting.
+            bed_wait = maintenance_actions.bed_condition_wait(
+                maintenance_actions.bed_temp_below(row.printer_maintenance.action_options),
+                maintenance_actions.current_bed_temperature(state),
+            )
+            if bed_wait is not None:
+                maintenance_actions.set_waiting(row, *bed_wait)
                 continue
 
             action = row.printer_maintenance.maintenance_type.action
@@ -4913,7 +4925,7 @@ class PrintScheduler:
                         f"Vision encoder calibration needs an H2-series printer; this one is {row.printer.model}"
                     )
                     row.completed_at = now
-                    row.waiting_reason = None
+                    maintenance_actions.set_waiting(row, None)
                     logger.warning("Maintenance run %d refused: %s", row.id, row.error_message)
                     continue
                 logger.info(
@@ -4932,7 +4944,7 @@ class PrintScheduler:
                         row.status = "failed"
                         row.error_message = f"Printer refused the vision encoder calibration file {path} ({detail})"
                         row.completed_at = now
-                        row.waiting_reason = None
+                        maintenance_actions.set_waiting(row, None)
                         logger.warning("Maintenance run %d failed: %s", row.id, row.error_message)
                         continue
             else:
@@ -4947,11 +4959,11 @@ class PrintScheduler:
             if sent:
                 row.status = "running"
                 row.started_at = now
-                row.waiting_reason = None
+                maintenance_actions.set_waiting(row, None)
                 running_printer_ids.add(printer_id)
                 recently_dispatched.add(printer_id)
             else:
-                row.waiting_reason = "printer_offline"
+                maintenance_actions.set_waiting(row, "printer_offline")
 
         self._calibrating_printer_ids = recently_dispatched
         await db.commit()

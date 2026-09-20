@@ -544,3 +544,109 @@ class TestVisionEncoderType:
             response = await async_client.delete(f"/api/v1/maintenance/runs/{run.id}")
         assert response.status_code == 200
         mock_pm.stop_print.assert_not_called()
+
+
+# ============== Bed-temperature start condition ==============
+
+
+class TestBedTempBelowSetting:
+    async def test_set_read_back_and_clear(self, async_client, printer_factory):
+        printer = await printer_factory()
+        item = await _calibration_item(async_client, printer.id)
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}",
+            json={"action_options": {**item["action_options"], "bed_temp_below": 28}},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["action_options"]["bed_temp_below"] == 28.0
+        assert response.json()["action_options"]["bed_leveling"] is True
+
+        item = await _calibration_item(async_client, printer.id)
+        assert item["action_options"]["bed_temp_below"] == 28.0
+
+        # The run carries the flags only; the condition stays on the item.
+        response = await async_client.post(f"/api/v1/maintenance/items/{item['id']}/run")
+        assert response.status_code == 200, response.text
+        assert "bed_temp_below" not in response.json()["options"]
+
+        # null clears it, and so does leaving the key out
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}",
+            json={"action_options": {"bed_leveling": True, "bed_temp_below": None}},
+        )
+        assert response.status_code == 200, response.text
+        assert "bed_temp_below" not in response.json()["action_options"]
+        item = await _calibration_item(async_client, printer.id)
+        assert "bed_temp_below" not in item["action_options"]
+
+    async def test_one_decimal_is_kept(self, async_client, printer_factory):
+        printer = await printer_factory()
+        item = await _calibration_item(async_client, printer.id)
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}",
+            json={"action_options": {"bed_leveling": True, "bed_temp_below": 29.5}},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["action_options"]["bed_temp_below"] == 29.5
+
+    @pytest.mark.parametrize("value", [0, -1, 120.5, 1000, "28", True, [28], 28.25])
+    async def test_out_of_range_and_non_numeric_are_a_422(self, async_client, printer_factory, value):
+        printer = await printer_factory()
+        item = await _calibration_item(async_client, printer.id)
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}",
+            json={"action_options": {"bed_leveling": True, "bed_temp_below": value}},
+        )
+        assert response.status_code == 422, response.text
+
+    async def test_the_vision_encoder_item_takes_the_condition_but_no_flags(self, async_client, printer_factory):
+        printer = await printer_factory(model="H2S")
+        item = await _motion_item(async_client, printer.id)
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}", json={"action_options": {"bed_temp_below": 30}}
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["action_options"] == {"bed_temp_below": 30.0}
+        item = await _motion_item(async_client, printer.id)
+        assert item["action_options"] == {"bed_temp_below": 30.0}
+        assert item["action_available_options"] is None
+
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}",
+            json={"action_options": {"bed_temp_below": 30, "bed_leveling": True}},
+        )
+        assert response.status_code == 400
+
+        response = await async_client.patch(f"/api/v1/maintenance/items/{item['id']}", json={"action_options": {}})
+        assert response.status_code == 200, response.text
+        item = await _motion_item(async_client, printer.id)
+        assert item["action_options"] is None
+
+    async def test_the_waiting_temperature_reaches_the_card(self, async_client, printer_factory, db_session):
+        printer = await printer_factory()
+        item = await _calibration_item(async_client, printer.id)
+        db_session.add(
+            MaintenanceRun(
+                printer_maintenance_id=item["id"],
+                printer_id=printer.id,
+                status="pending",
+                source="due",
+                waiting_reason="bed_too_warm",
+                waiting_detail={"bed_temp": 34.2, "threshold": 30.0},
+            )
+        )
+        await db_session.commit()
+        item = await _calibration_item(async_client, printer.id)
+        assert item["current_run"]["waiting_reason"] == "bed_too_warm"
+        assert item["current_run"]["waiting_detail"] == {"bed_temp": 34.2, "threshold": 30.0}
+
+        response = await async_client.get(f"/api/v1/maintenance/items/{item['id']}/runs")
+        assert response.json()[0]["waiting_detail"] == {"bed_temp": 34.2, "threshold": 30.0}
+
+        # Cancelling clears reason and detail together
+        with patch("backend.app.api.routes.maintenance.printer_manager"):
+            response = await async_client.delete(f"/api/v1/maintenance/runs/{item['current_run']['id']}")
+        assert response.status_code == 200
+        item = await _calibration_item(async_client, printer.id)
+        assert item["last_run"]["waiting_reason"] is None
+        assert item["last_run"]["waiting_detail"] is None
