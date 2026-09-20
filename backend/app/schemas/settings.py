@@ -435,6 +435,15 @@ class AppSettings(BaseModel):
         default=False,
         description="Shortest Job First — scheduler prioritizes shorter print jobs over longer ones",
     )
+    queue_rfid_reread_before_start: bool = Field(
+        default=False,
+        description=(
+            "Before a queued job is mapped and started, ask the AMS to read every occupied slot it has "
+            "not identified yet (a spool inserted while the printer was busy is detected but never read). "
+            "Once per job; the job starts regardless of the outcome, and the read is skipped while "
+            "filament is loaded because the AMS cannot move it then."
+        ),
+    )
     queue_max_concurrent_uploads: int = Field(
         default=4,
         ge=1,
@@ -745,6 +754,7 @@ class AppSettingsUpdate(BaseModel):
     finance_budget_reset_timezone: str | None = None
     require_plate_clear: bool | None = None
     queue_shortest_first: bool | None = None
+    queue_rfid_reread_before_start: bool | None = None
     queue_max_concurrent_uploads: int | None = Field(default=None, ge=1, le=16)
     preheat_enabled: bool | None = None
     preheat_filament_targets: str | None = None

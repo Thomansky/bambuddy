@@ -2033,6 +2033,11 @@ async def update_queue_item(
     if claimed is not None:
         raise HTTPException(409, "Item is being dispatched — cancel it first to make changes")
 
+    # A pre-dispatch RFID read is per printer: moving the item means asking
+    # the new one.
+    if update_data.get("printer_id", item.printer_id) != item.printer_id:
+        item.rfid_precheck_at = None
+
     for field, value in update_data.items():
         setattr(item, field, value)
 
@@ -2177,6 +2182,7 @@ async def resume_queue_after_failure(
         skipped_item.status = "pending"
         skipped_item.error_message = None
         skipped_item.completed_at = None
+        skipped_item.rfid_precheck_at = None
 
     await db.commit()
 
