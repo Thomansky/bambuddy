@@ -209,7 +209,7 @@ type LogSortState = { column: string; direction: 'asc' | 'desc' };
  *  in both. */
 const SORTABLE_LOG_COLUMNS = new Set(Object.keys(LOG_COLUMN_LABEL_KEYS));
 // Columns holding an amount of money: their header carries the VAT basis.
-const LOG_MONEY_COLUMNS = new Set(['cost', 'energy_cost']);
+const LOG_MONEY_COLUMNS = new Set(['cost', 'energy_cost', 'depreciation_cost']);
 
 const DEFAULT_LOG_SORT: LogSortState = { column: 'date', direction: 'desc' };
 
@@ -1308,7 +1308,7 @@ function ArchiveCard({
                 {archive.depreciation_cost != null && (
                   <div className="flex items-center gap-1.5" title={printerWearTitle(archive, currency, t)}>
                     <Hourglass className="w-3 h-3" />
-                    {currency}{archive.depreciation_cost.toFixed(2)}
+                    {currency}{archive.depreciation_cost.toFixed(2)}<VatBadge />
                   </div>
                 )}
             </div>

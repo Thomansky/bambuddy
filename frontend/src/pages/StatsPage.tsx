@@ -177,6 +177,7 @@ function QuickStatsWidget({
       color: 'text-purple-600 dark:text-purple-400',
       label: t('stats.depreciationCost'),
       value: `${currency} ${wear.toFixed(2)}`,
+      money: true,
       warning: false,
       tooltip: undefined,
     });
