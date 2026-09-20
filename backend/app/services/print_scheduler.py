@@ -4848,10 +4848,14 @@ class PrintScheduler:
         acknowledgement is awaited, because a refused path is the one failure
         the completion event never reports. Completion is not tracked here; the printer's own completion event
         closes the run through ``maintenance_actions.on_internal_job_finished``.
+        The runs this pass itself closes -- stale ones and refused dispatches
+        -- are reported to the notification providers after the commit.
         """
         now = utcnow_naive()
 
-        await maintenance_actions.fail_stale_running_runs(db, now)
+        # Runs this pass closes without the printer's say-so; told to the
+        # providers once the commit below has made the outcome final.
+        closed = await maintenance_actions.fail_stale_running_runs(db, now)
         await maintenance_actions.queue_triggered_runs(db, now)
 
         result = await db.execute(
@@ -4927,6 +4931,7 @@ class PrintScheduler:
                     row.completed_at = now
                     maintenance_actions.set_waiting(row, None)
                     logger.warning("Maintenance run %d refused: %s", row.id, row.error_message)
+                    closed.append(row)
                     continue
                 logger.info(
                     "Maintenance run %d: starting vision encoder calibration on printer %d (%s)",
@@ -4946,6 +4951,7 @@ class PrintScheduler:
                         row.completed_at = now
                         maintenance_actions.set_waiting(row, None)
                         logger.warning("Maintenance run %d failed: %s", row.id, row.error_message)
+                        closed.append(row)
                         continue
             else:
                 options = maintenance_actions.normalize_calibration_options(row.options)
@@ -4967,6 +4973,9 @@ class PrintScheduler:
 
         self._calibrating_printer_ids = recently_dispatched
         await db.commit()
+
+        for run in closed:
+            await maintenance_actions.notify_run_finished(db, run)
 
     def _update_running_scheduled_drying(self, row: ScheduledDrying, now: datetime):
         """Detect completion or interruption of a running scheduled drying.

@@ -2460,6 +2460,124 @@ class TestBedCooledNotifications:
             assert captured_variables["filename"] == "Unknown"
 
 
+class TestMaintenanceRunNotifications:
+    """The run-result event of actionable maintenance (#3127)."""
+
+    @pytest.fixture
+    def service(self):
+        return NotificationService()
+
+    @pytest.fixture
+    def mock_provider(self):
+        provider = MagicMock()
+        provider.id = 1
+        provider.name = "Test Provider"
+        provider.provider_type = "webhook"
+        provider.enabled = True
+        provider.config = json.dumps({"webhook_url": "http://test.local/webhook"})
+        provider.on_maintenance_run = True
+        provider.quiet_hours_enabled = False
+        provider.daily_digest_enabled = False
+        provider.printer_id = None
+        return provider
+
+    @pytest.fixture
+    def mock_db(self):
+        db = AsyncMock()
+        db.commit = AsyncMock()
+        return db
+
+    @pytest.mark.asyncio
+    async def test_routed_to_the_providers_that_opted_in(self, service, mock_provider, mock_db):
+        with (
+            patch.object(service, "_get_providers_for_event", new_callable=AsyncMock) as mock_get,
+            patch.object(service, "_send_to_providers", new_callable=AsyncMock) as mock_send,
+            patch.object(service, "_build_message_from_template", new_callable=AsyncMock) as mock_build,
+        ):
+            mock_get.return_value = [mock_provider]
+            mock_build.return_value = ("Maintenance Run Completed", "H2S: Printer Calibration")
+
+            await service.on_maintenance_run(
+                printer_id=3,
+                printer_name="H2S",
+                item_name="Printer Calibration",
+                result="completed",
+                error_message=None,
+                db=mock_db,
+            )
+
+            mock_get.assert_awaited_once_with(mock_db, "on_maintenance_run", 3)
+            mock_send.assert_awaited_once()
+            assert mock_send.call_args.args[4] == "maintenance_run"
+
+    @pytest.mark.asyncio
+    async def test_variables_carry_the_item_the_result_label_and_the_error(self, service, mock_provider, mock_db):
+        captured: dict = {}
+
+        async def capture(db, event_type, variables):
+            captured.update(variables)
+            return "title", "body"
+
+        with (
+            patch.object(service, "_get_providers_for_event", new_callable=AsyncMock) as mock_get,
+            patch.object(service, "_send_to_providers", new_callable=AsyncMock),
+            patch.object(service, "_build_message_from_template", side_effect=capture),
+        ):
+            mock_get.return_value = [mock_provider]
+            await service.on_maintenance_run(
+                printer_id=3,
+                printer_name="H2S",
+                item_name="Printer Calibration",
+                result="failed",
+                error_message="Calibration failed (print_error 83886081)",
+                db=mock_db,
+            )
+
+        assert captured["printer"] == "H2S"
+        assert captured["item"] == "Printer Calibration"
+        assert captured["result"] == "Failed"
+        assert captured["error"] == "Calibration failed (print_error 83886081)"
+
+    @pytest.mark.asyncio
+    async def test_a_completed_run_renders_with_an_empty_error(self, service, mock_provider, mock_db):
+        """The default body ends in {error}; a completed run must not print "None"."""
+        captured: dict = {}
+
+        async def capture(db, event_type, variables):
+            captured.update(variables)
+            return "title", "body"
+
+        with (
+            patch.object(service, "_get_providers_for_event", new_callable=AsyncMock) as mock_get,
+            patch.object(service, "_send_to_providers", new_callable=AsyncMock),
+            patch.object(service, "_build_message_from_template", side_effect=capture),
+        ):
+            mock_get.return_value = [mock_provider]
+            await service.on_maintenance_run(3, "H2S", "Printer Calibration", "cancelled", None, mock_db)
+
+        assert captured["result"] == "Cancelled"
+        assert captured["error"] == ""
+
+    @pytest.mark.asyncio
+    async def test_skipped_when_no_provider_opted_in(self, service, mock_db):
+        with (
+            patch.object(service, "_get_providers_for_event", new_callable=AsyncMock) as mock_get,
+            patch.object(service, "_send_to_providers", new_callable=AsyncMock) as mock_send,
+        ):
+            mock_get.return_value = []
+            await service.on_maintenance_run(3, "H2S", "Printer Calibration", "completed", None, mock_db)
+            mock_send.assert_not_called()
+
+    def test_the_default_template_is_seeded_with_its_variables(self):
+        from backend.app.models.notification_template import DEFAULT_TEMPLATES
+        from backend.app.schemas.notification_template import EVENT_VARIABLES
+
+        template = next(t for t in DEFAULT_TEMPLATES if t["event_type"] == "maintenance_run")
+        assert "{result}" in template["title_template"]
+        assert "{item}" in template["body_template"] and "{error}" in template["body_template"]
+        assert set(EVENT_VARIABLES["maintenance_run"]) >= {"printer", "item", "result", "error"}
+
+
 class TestFirstLayerCompleteNotifications:
     """Tests for first layer complete notifications."""
 

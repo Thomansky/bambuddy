@@ -100,6 +100,8 @@ class PrinterMaintenanceUpdate(BaseModel):
     custom_interval_hours: float | None = None
     custom_interval_type: str | None = Field(default=None, pattern="^(hours|days)$")
     enabled: bool | None = None
+    # Off mutes the item: no due/warning reminder, no run-result message (#3127)
+    notifications_enabled: bool | None = None
     # Automatic action settings (#3127); only meaningful on items whose type
     # carries an action. Cross-field rules (schedule needs days and time, a
     # non-manual trigger needs at least one flag) are checked in the route,
@@ -149,6 +151,7 @@ class PrinterMaintenanceResponse(BaseModel):
     maintenance_type: MaintenanceTypeResponse
     custom_interval_hours: float | None
     enabled: bool
+    notifications_enabled: bool = True
     last_performed_at: datetime | None
     last_performed_hours: float
     action_options: ActionOptions | None = None
@@ -231,6 +234,7 @@ class MaintenanceStatus(BaseModel):
     maintenance_type_icon: str | None
     maintenance_type_wiki_url: str | None  # Custom wiki URL for the type
     enabled: bool
+    notifications_enabled: bool = True  # False = muted: no reminder, no run result (#3127)
     # Interval configuration
     interval_hours: float  # custom or default (hours for print-based, days for time-based)
     interval_type: str  # "hours" or "days"
@@ -268,6 +272,10 @@ class PrinterMaintenanceOverview(BaseModel):
     maintenance_items: list[MaintenanceStatus]
     due_count: int
     warning_count: int
+    # The require_plate_clear setting, so the card can say what an automatic
+    # trigger actually waits for (#3127): both go through the scheduler's
+    # idle check with this gate.
+    require_plate_clear: bool = False
 
 
 class PerformMaintenanceRequest(BaseModel):

@@ -7774,10 +7774,12 @@ async def on_print_complete(printer_id: int, data: dict):
                 await ensure_default_types(db)
                 overview = await _get_printer_maintenance_internal(printer_id, db, commit=True)
 
+                # A muted item (#3127) is left out here, so neither the
+                # provider notification nor the MQTT alert below mentions it.
                 items_needing_attention = [
                     {"name": item.maintenance_type_name, "is_due": item.is_due, "is_warning": item.is_warning}
                     for item in overview.maintenance_items
-                    if item.enabled and (item.is_due or item.is_warning)
+                    if item.enabled and item.notifications_enabled and (item.is_due or item.is_warning)
                 ]
 
                 if items_needing_attention:

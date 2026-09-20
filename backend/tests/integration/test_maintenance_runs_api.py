@@ -2,13 +2,14 @@
 
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
 from backend.app.models.maintenance import MaintenanceRun, MaintenanceType, PrinterMaintenance
+from backend.app.models.settings import Settings
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
@@ -671,3 +672,134 @@ class TestBedTempBelowSetting:
         item = await _calibration_item(async_client, printer.id)
         assert item["last_run"]["waiting_reason"] is None
         assert item["last_run"]["waiting_detail"] is None
+
+
+class TestNotificationToggle:
+    """The bell on every card (#3127): notifications_enabled per item."""
+
+    async def test_every_item_starts_with_notifications_on(self, async_client, printer_factory):
+        printer = await printer_factory()
+        response = await async_client.get(f"/api/v1/maintenance/printers/{printer.id}")
+        items = response.json()["maintenance_items"]
+        assert items
+        assert all(i["notifications_enabled"] is True for i in items)
+
+    async def test_patch_mutes_a_reminder_only_item_too(self, async_client, printer_factory):
+        """Not gated on the action: due reminders exist for every item."""
+        printer = await printer_factory()
+        response = await async_client.get(f"/api/v1/maintenance/printers/{printer.id}")
+        other = next(i for i in response.json()["maintenance_items"] if i["action"] is None)
+
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{other['id']}", json={"notifications_enabled": False}
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["notifications_enabled"] is False
+        assert response.json()["enabled"] is True
+
+        response = await async_client.get(f"/api/v1/maintenance/printers/{printer.id}")
+        muted = next(i for i in response.json()["maintenance_items"] if i["id"] == other["id"])
+        assert muted["notifications_enabled"] is False
+        assert muted["enabled"] is True
+
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{other['id']}", json={"notifications_enabled": True}
+        )
+        assert response.json()["notifications_enabled"] is True
+
+    async def test_perform_response_carries_the_flag(self, async_client, printer_factory):
+        printer = await printer_factory()
+        item = await _calibration_item(async_client, printer.id)
+        await async_client.patch(f"/api/v1/maintenance/items/{item['id']}", json={"notifications_enabled": False})
+        response = await async_client.post(f"/api/v1/maintenance/items/{item['id']}/perform", json={})
+        assert response.status_code == 200
+        assert response.json()["notifications_enabled"] is False
+
+    async def _two_due_items(self, async_client, printer_id):
+        """Leave exactly two enabled hours-based items on the printer, both due."""
+        response = await async_client.get(f"/api/v1/maintenance/printers/{printer_id}")
+        items = [i for i in response.json()["maintenance_items"] if i["interval_type"] == "hours"]
+        keep, mute = items[0], items[1]
+        for item in response.json()["maintenance_items"]:
+            if item["id"] not in (keep["id"], mute["id"]):
+                await async_client.patch(f"/api/v1/maintenance/items/{item['id']}", json={"enabled": False})
+        return keep, mute
+
+    async def test_a_muted_item_is_left_out_of_the_due_reminder(self, async_client, printer_factory):
+        """Two items due on one printer, one muted: the reminder names exactly the other."""
+        printer = await printer_factory()
+        keep, mute = await self._two_due_items(async_client, printer.id)
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{mute['id']}", json={"notifications_enabled": False}
+        )
+        assert response.status_code == 200
+
+        with patch("backend.app.api.routes.maintenance.notification_service") as notify:
+            notify.on_maintenance_due = AsyncMock()
+            response = await async_client.patch(f"/api/v1/maintenance/printers/{printer.id}/hours?total_hours=5000")
+        assert response.status_code == 200, response.text
+        notify.on_maintenance_due.assert_awaited_once()
+        sent = notify.on_maintenance_due.await_args.args[2]
+        assert [i["name"] for i in sent] == [keep["maintenance_type_name"]]
+        assert sent[0]["is_due"] is True
+
+    async def test_no_reminder_when_every_due_item_is_muted(self, async_client, printer_factory):
+        printer = await printer_factory()
+        keep, mute = await self._two_due_items(async_client, printer.id)
+        for item in (keep, mute):
+            await async_client.patch(f"/api/v1/maintenance/items/{item['id']}", json={"notifications_enabled": False})
+
+        with patch("backend.app.api.routes.maintenance.notification_service") as notify:
+            notify.on_maintenance_due = AsyncMock()
+            response = await async_client.patch(f"/api/v1/maintenance/printers/{printer.id}/hours?total_hours=5000")
+        assert response.status_code == 200
+        notify.on_maintenance_due.assert_not_awaited()
+
+        # The mute changes nothing about the item's own state
+        response = await async_client.get(f"/api/v1/maintenance/printers/{printer.id}")
+        muted = next(i for i in response.json()["maintenance_items"] if i["id"] == keep["id"])
+        assert muted["is_due"] is True
+        assert response.json()["due_count"] == 2
+
+    async def test_cancel_from_bambuddy_sends_no_run_result(self, async_client, printer_factory):
+        printer = await printer_factory()
+        item = await _calibration_item(async_client, printer.id)
+        run = (await async_client.post(f"/api/v1/maintenance/items/{item['id']}/run")).json()
+        with (
+            patch("backend.app.api.routes.maintenance.printer_manager"),
+            patch(
+                "backend.app.services.notification_service.notification_service.on_maintenance_run",
+                new_callable=AsyncMock,
+            ) as notify,
+        ):
+            response = await async_client.delete(f"/api/v1/maintenance/runs/{run['id']}")
+        assert response.status_code == 200
+        notify.assert_not_awaited()
+
+
+class TestTriggerGate:
+    """The overview says which gate the automatic triggers wait behind (#3127)."""
+
+    async def test_defaults_to_the_idle_gate_when_the_setting_is_absent(self, async_client, printer_factory):
+        printer = await printer_factory()
+        response = await async_client.get(f"/api/v1/maintenance/printers/{printer.id}")
+        assert response.json()["require_plate_clear"] is False
+        response = await async_client.get("/api/v1/maintenance/overview")
+        assert response.status_code == 200
+        assert all(o["require_plate_clear"] is False for o in response.json())
+
+    async def test_reports_the_plate_clear_gate_when_the_setting_is_on(self, async_client, printer_factory, db_session):
+        printer = await printer_factory()
+        db_session.add(Settings(key="require_plate_clear", value="true"))
+        await db_session.commit()
+        response = await async_client.get(f"/api/v1/maintenance/printers/{printer.id}")
+        assert response.json()["require_plate_clear"] is True
+        response = await async_client.get("/api/v1/maintenance/overview")
+        assert [o["require_plate_clear"] for o in response.json()] == [True]
+
+    async def test_a_false_setting_row_reads_as_off(self, async_client, printer_factory, db_session):
+        printer = await printer_factory()
+        db_session.add(Settings(key="require_plate_clear", value="false"))
+        await db_session.commit()
+        response = await async_client.get(f"/api/v1/maintenance/printers/{printer.id}")
+        assert response.json()["require_plate_clear"] is False

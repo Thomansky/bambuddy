@@ -110,6 +110,12 @@ DEFAULT_TEMPLATES = [
         "body_template": "{printer}:\n{items}",
     },
     {
+        "event_type": "maintenance_run",
+        "name": "Maintenance Run Finished",
+        "title_template": "Maintenance Run {result}",
+        "body_template": "{printer}: {item}\n{error}",
+    },
+    {
         "event_type": "ams_humidity_high",
         "name": "AMS Humidity High",
         "title_template": "AMS Humidity Alert",

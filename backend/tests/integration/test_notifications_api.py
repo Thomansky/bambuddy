@@ -520,7 +520,13 @@ class TestNotificationsAPI:
     @pytest.mark.integration
     @pytest.mark.parametrize(
         "field",
-        ["on_ha_sensor_alert", "on_location_ha_sensor_alert", "on_stock_reorder_alert", "on_stock_break_alert"],
+        [
+            "on_ha_sensor_alert",
+            "on_location_ha_sensor_alert",
+            "on_stock_reorder_alert",
+            "on_stock_break_alert",
+            "on_maintenance_run",
+        ],
     )
     async def test_create_persists_and_returns_the_toggle(self, async_client: AsyncClient, field: str):
         response = await async_client.post(
@@ -546,7 +552,13 @@ class TestNotificationsAPI:
     @pytest.mark.integration
     @pytest.mark.parametrize(
         "field",
-        ["on_ha_sensor_alert", "on_location_ha_sensor_alert", "on_stock_reorder_alert", "on_stock_break_alert"],
+        [
+            "on_ha_sensor_alert",
+            "on_location_ha_sensor_alert",
+            "on_stock_reorder_alert",
+            "on_stock_break_alert",
+            "on_maintenance_run",
+        ],
     )
     async def test_patch_is_reflected_by_every_read_route(
         self, async_client: AsyncClient, notification_provider_factory, field: str

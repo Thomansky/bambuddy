@@ -29,6 +29,14 @@ logger = logging.getLogger(__name__)
 # bot signature for upstream WAFs.
 _USER_AGENT = "Bambuddy/1.0 (+https://github.com/maziggy/bambuddy)"
 
+# How a maintenance run's terminal status reads in the {result} variable of
+# the maintenance_run template (#3127).
+MAINTENANCE_RUN_RESULT_LABELS = {
+    "completed": "Completed",
+    "failed": "Failed",
+    "cancelled": "Cancelled",
+}
+
 
 def _looks_like_cloudflare_challenge(response: httpx.Response) -> bool:
     """Return True if ``response`` looks like a Cloudflare mitigation
@@ -1630,6 +1638,38 @@ class NotificationService:
         title, message = await self._build_message_from_template(db, "maintenance_due", variables)
         await self._send_to_providers(
             providers, title, message, db, "maintenance_due", printer_id, printer_name, variables=variables
+        )
+
+    async def on_maintenance_run(
+        self,
+        printer_id: int,
+        printer_name: str,
+        item_name: str,
+        result: str,
+        error_message: str | None,
+        db: AsyncSession,
+    ):
+        """A maintenance run Bambuddy queued has closed (#3127).
+
+        ``result`` is the run's terminal status -- completed, failed or
+        cancelled -- and ``error_message`` the run's error for a failed one.
+        Off by default on every provider: the event did not exist when they
+        were set up, so nobody gets new messages after the upgrade.
+        """
+        providers = await self._get_providers_for_event(db, "on_maintenance_run", printer_id)
+        if not providers:
+            return
+
+        variables = {
+            "printer": printer_name,
+            "item": item_name,
+            "result": MAINTENANCE_RUN_RESULT_LABELS.get(result, result),
+            "error": error_message or "",
+        }
+
+        title, message = await self._build_message_from_template(db, "maintenance_run", variables)
+        await self._send_to_providers(
+            providers, title, message, db, "maintenance_run", printer_id, printer_name, variables=variables
         )
 
     async def on_ams_humidity_high(

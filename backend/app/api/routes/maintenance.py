@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from backend.app.api.routes.settings import get_setting, setting_is_true
 from backend.app.core.auth import RequirePermissionIfAuthEnabled
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
@@ -300,13 +301,29 @@ async def restore_default_maintenance_types(
 # ============== Printer Maintenance ==============
 
 
+async def _require_plate_clear(db: AsyncSession) -> bool:
+    """The plate-clear gate the automatic calibration triggers wait behind.
+
+    Default False like the scheduler's own read (#1865): a missing row is
+    the gate being off.
+    """
+    return setting_is_true(await get_setting(db, "require_plate_clear"))
+
+
 async def _get_printer_maintenance_internal(
     printer_id: int,
     db: AsyncSession,
     commit: bool = True,
+    require_plate_clear: bool | None = None,
 ) -> PrinterMaintenanceOverview:
-    """Internal helper to get maintenance overview for a specific printer."""
+    """Internal helper to get maintenance overview for a specific printer.
+
+    ``require_plate_clear`` is read from the settings when not given; the
+    all-printers overview reads it once and passes it in.
+    """
     await ensure_default_types(db)
+    if require_plate_clear is None:
+        require_plate_clear = await _require_plate_clear(db)
 
     # Get printer
     result = await db.execute(select(Printer).where(Printer.id == printer_id))
@@ -357,6 +374,7 @@ async def _get_printer_maintenance_internal(
             # Use custom interval type if set, otherwise use type's default
             interval_type = getattr(item, "custom_interval_type", None) or default_interval_type
             enabled = item.enabled
+            notifications_enabled = item.notifications_enabled
             last_performed_hours = item.last_performed_hours
             last_performed_at = item.last_performed_at
             item_id = item.id
@@ -379,6 +397,7 @@ async def _get_printer_maintenance_internal(
             interval = maint_type.default_interval_hours
             interval_type = default_interval_type
             enabled = True
+            notifications_enabled = True
             last_performed_hours = 0.0
             last_performed_at = None
             item_id = item.id
@@ -425,6 +444,7 @@ async def _get_printer_maintenance_internal(
                 maintenance_type_icon=maint_type.icon,
                 maintenance_type_wiki_url=getattr(maint_type, "wiki_url", None),
                 enabled=enabled,
+                notifications_enabled=notifications_enabled,
                 interval_hours=interval,
                 interval_type=interval_type,
                 current_hours=total_hours,
@@ -462,6 +482,7 @@ async def _get_printer_maintenance_internal(
         maintenance_items=maintenance_items,
         due_count=due_count,
         warning_count=warning_count,
+        require_plate_clear=require_plate_clear,
     )
 
 
@@ -485,11 +506,14 @@ async def get_all_maintenance_overview(
 
     result = await db.execute(select(Printer).where(Printer.is_active.is_(True)))
     printers = result.scalars().all()
+    require_plate_clear = await _require_plate_clear(db)
 
     overviews = []
     for printer in printers:
         # Don't commit after each printer, commit once at the end
-        overview = await _get_printer_maintenance_internal(printer.id, db, commit=False)
+        overview = await _get_printer_maintenance_internal(
+            printer.id, db, commit=False, require_plate_clear=require_plate_clear
+        )
         overviews.append(overview)
 
     # Commit any new maintenance items created
@@ -680,6 +704,7 @@ async def perform_maintenance(
         maintenance_type_icon=item.maintenance_type.icon,
         maintenance_type_wiki_url=getattr(item.maintenance_type, "wiki_url", None),
         enabled=item.enabled,
+        notifications_enabled=item.notifications_enabled,
         interval_hours=interval,
         interval_type=interval_type,
         current_hours=current_hours,
@@ -897,7 +922,7 @@ async def set_printer_hours(
                 "is_warning": item.is_warning,
             }
             for item in overview.maintenance_items
-            if item.enabled and (item.is_due or item.is_warning)
+            if item.enabled and item.notifications_enabled and (item.is_due or item.is_warning)
         ]
 
         if items_needing_attention:
