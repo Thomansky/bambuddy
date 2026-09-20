@@ -1493,6 +1493,8 @@ export default {
       requiresPrevious: 'Erfordert vorherigen Erfolg',
       autoPowerOff: 'Automatisch ausschalten',
       gcodeInjection: 'G-Code',
+      confirmOutcome: 'Ergebnisabfrage',
+      confirmOutcomeTitle: 'Fragt nach Abschluss, wie der Druck geworden ist',
     },
     // Empty state
     empty: {
@@ -1534,6 +1536,7 @@ export default {
       layerInspection: 'Erste-Schicht-Prüfung',
       timelapse: 'Zeitraffer',
       useAms: 'AMS verwenden',
+      confirmOutcome: 'Nach Ergebnis fragen',
       nozzleOffsetCali: 'Düsenversatz-Kalibrierung',
       applyChanges: 'Änderungen übernehmen',
       selectAll: 'Alle auswählen',
@@ -5096,6 +5099,8 @@ export default {
     insufficientBudget: 'Budget nicht ausreichend',
     unlimitedNoBudget: 'Unbegrenzt – es ist kein Budgetlimit festgelegt.',
     noPrintableCostCenters: 'Es ist keine aktive Kostenstelle zum Drucken verfügbar. Bitte einen Administrator, dir Druckzugriff zu gewähren.',
+    askForOutcome: 'Nach Ergebnis fragen',
+    askForOutcomeTitle: 'Nach Abschluss fragen, wie der Druck geworden ist',
   },
 
   // Backup

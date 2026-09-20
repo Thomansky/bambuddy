@@ -1509,6 +1509,8 @@ export default {
       requiresPrevious: 'Requires previous success',
       autoPowerOff: 'Auto power off',
       gcodeInjection: 'G-code',
+      confirmOutcome: 'Outcome prompt',
+      confirmOutcomeTitle: 'Asks how the print came out after it completes',
     },
     // Empty state
     empty: {
@@ -1550,6 +1552,7 @@ export default {
       layerInspection: 'First layer inspection',
       timelapse: 'Timelapse',
       useAms: 'Use AMS',
+      confirmOutcome: 'Ask for outcome',
       nozzleOffsetCali: 'Nozzle offset calibration',
       applyChanges: 'Apply Changes',
       selectAll: 'Select All',
@@ -5141,6 +5144,8 @@ export default {
     insufficientBudget: 'Insufficient Budget',
     unlimitedNoBudget: 'Unlimited – no budget limit is set.',
     noPrintableCostCenters: 'No active cost center is available for printing. Ask an administrator to grant you print access.',
+    askForOutcome: 'Ask for outcome',
+    askForOutcomeTitle: 'Ask how the print came out after it completes',
   },
 
   // Backup

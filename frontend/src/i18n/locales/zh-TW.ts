@@ -1493,6 +1493,8 @@ export default {
       requiresPrevious: '需要前一個成功',
       autoPowerOff: '自動關機',
       gcodeInjection: 'G-code',
+      confirmOutcome: '結果確認',
+      confirmOutcomeTitle: '列印完成後詢問列印效果如何',
     },
     // Empty state
     empty: {
@@ -1534,6 +1536,7 @@ export default {
       layerInspection: '首層檢查',
       timelapse: '縮時攝影',
       useAms: '使用 AMS',
+      confirmOutcome: '詢問列印結果',
       nozzleOffsetCali: '噴嘴偏移校準',
       applyChanges: '套用更改',
       selectAll: '全選',
@@ -5084,6 +5087,8 @@ export default {
     insufficientBudget: '預算不足',
     unlimitedNoBudget: '無限制 – 未設定預算上限。',
     noPrintableCostCenters: '沒有可用於列印的有效成本中心。請聯絡管理員授予你列印權限。',
+    askForOutcome: '詢問列印結果',
+    askForOutcomeTitle: '列印完成後詢問列印效果如何',
   },
 
   // Backup

@@ -1423,7 +1423,9 @@ export default {
       staged: '준비됨',
       requiresPrevious: '이전 성공 필요',
       autoPowerOff: '자동 전원 끄기',
-      gcodeInjection: 'G코드'
+      gcodeInjection: 'G코드',
+      confirmOutcome: '결과 확인',
+      confirmOutcomeTitle: '완료 후 출력 결과가 어땠는지 물어봅니다',
     },
     empty: {
       title: '예약된 인쇄 없음',
@@ -1461,6 +1463,7 @@ export default {
       layerInspection: '첫 번째 층 검사',
       timelapse: '타임랩스',
       useAms: 'AMS 사용',
+      confirmOutcome: '결과 묻기',
       nozzleOffsetCali: '노즐 오프셋 보정',
       applyChanges: '변경사항 적용',
       selectAll: '전체 선택',
@@ -4866,6 +4869,8 @@ export default {
     insufficientBudget: '예산 부족',
     unlimitedNoBudget: '무제한 – 예산 한도가 설정되지 않았습니다.',
     noPrintableCostCenters: '인쇄에 사용할 수 있는 활성 비용 센터가 없습니다. 관리자에게 인쇄 권한을 요청하세요.',
+    askForOutcome: '결과 묻기',
+    askForOutcomeTitle: '완료 후 출력 결과가 어땠는지 물어보기',
   },
   backup: {
     includesEncryptionKey: '로컬 백업에는 MFA 암호화 키 파일(DATA_DIR/.mfa_encryption_key)이 포함되어 백업 ZIP이 자체 완결됩니다. ZIP 파일을 민감하게 취급하세요 — 파일을 가진 누구나 내부에 저장된 OIDC 클라이언트 비밀과 TOTP 비밀을 복호화할 수 있습니다.',
