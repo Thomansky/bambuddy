@@ -93,6 +93,23 @@ class TestExternalUrlAndNotes:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    @pytest.mark.parametrize(
+        "url",
+        ["javascript:alert(1)", "data:text/html,hi", "ftp://example.com/x", "www.printables.com/model/1"],
+    )
+    async def test_non_http_external_url_is_rejected(
+        self, async_client: AsyncClient, file_factory, isolated_storage, url: str
+    ):
+        library_file = await file_factory(external_url="https://example.com/x")
+
+        response = await async_client.put(f"/api/v1/library/files/{library_file.id}", json={"external_url": url})
+        assert response.status_code == 422
+
+        detail = await async_client.get(f"/api/v1/library/files/{library_file.id}")
+        assert detail.json()["external_url"] == "https://example.com/x"
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_omitted_external_url_is_left_alone(self, async_client: AsyncClient, file_factory, isolated_storage):
         library_file = await file_factory(external_url="https://example.com/x")
 

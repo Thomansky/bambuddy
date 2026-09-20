@@ -38,8 +38,12 @@ export function LibraryFileDetailsModal({ file, canEdit, onClose }: LibraryFileD
   const [galleryOpen, setGalleryOpen] = useState(false);
   const photoInputRef = useRef<HTMLInputElement>(null);
 
+  // Seed the form once per file. Later refetches (photo changes below, window
+  // focus) must not overwrite notes or a link the user is still typing.
+  const seededForId = useRef<number | null>(null);
   useEffect(() => {
-    if (!details) return;
+    if (!details || seededForId.current === details.id) return;
+    seededForId.current = details.id;
     setNotes(details.notes ?? '');
     setExternalUrl(details.external_url ?? '');
     setPhotos(details.photos ?? []);

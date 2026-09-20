@@ -152,4 +152,36 @@ describe('LibraryFileDetailsModal', () => {
       expect(screen.queryByAltText('Photos')).not.toBeInTheDocument();
     });
   });
+
+  it('keeps unsaved notes when a photo change refetches the file', async () => {
+    // Deleting a photo invalidates the detail query; the refetched file has a
+    // different photo list, so it is a new object and must not reseed the form.
+    let serverPhotos = ['abc123.jpg'];
+    let detailFetches = 0;
+    server.use(
+      http.get('/api/v1/library/files/7', () => {
+        detailFetches += 1;
+        return HttpResponse.json({ ...details, photos: serverPhotos });
+      }),
+      http.delete('/api/v1/library/files/7/photos/:filename', () => {
+        serverPhotos = [];
+        return HttpResponse.json({ status: 'deleted', photos: [] });
+      })
+    );
+    const user = userEvent.setup();
+    render(<LibraryFileDetailsModal file={listItem} canEdit onClose={onClose} />);
+
+    const notes = await screen.findByDisplayValue('Print with brim');
+    await user.clear(notes);
+    await user.type(notes, 'Draft not saved yet');
+
+    await user.click(screen.getByLabelText('Delete photo'));
+    await waitFor(() => {
+      expect(screen.queryByAltText('Photos')).not.toBeInTheDocument();
+    });
+    await waitFor(() => expect(detailFetches).toBeGreaterThan(1));
+
+    expect(screen.getByDisplayValue('Draft not saved yet')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /save/i })).toBeEnabled();
+  });
 });

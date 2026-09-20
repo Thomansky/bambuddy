@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # ============ Folder Schemas ============
 
@@ -125,6 +125,18 @@ class FileUpdate(BaseModel):
     # Empty string clears the link, like ``notes`` (#3077).
     external_url: str | None = Field(None, max_length=500)
 
+    @field_validator("external_url")
+    @classmethod
+    def validate_external_url(cls, v: str | None) -> str | None:
+        # The link is rendered as an href for every reader of the library, so
+        # only web URLs are accepted (no javascript:/data: schemes).
+        if v is None:
+            return None
+        v = v.strip()
+        if v and not v.lower().startswith(("http://", "https://")):
+            raise ValueError("external_url must start with http:// or https://")
+        return v
+
 
 class FileDuplicate(BaseModel):
     """Reference to a duplicate file."""
@@ -234,7 +246,7 @@ class FileListResponse(BaseModel):
     variant_group_id: int | None = None
     variant_count: int = 0
 
-    # Metadata indicators (#3077). The list never ships the notes text itself â€”
+    # Metadata indicators (#3077). The list never ships the notes text itself —
     # ``has_notes`` is enough for the card badge; the details modal loads the rest.
     external_url: str | None = None
     has_notes: bool = False

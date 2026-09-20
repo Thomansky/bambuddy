@@ -4,25 +4,22 @@ import { api } from '../api/client';
 import { Button } from './Button';
 import { ConfirmModal } from './ConfirmModal';
 
-interface PhotoGalleryModalProps {
-  // Archive photos resolve through `archiveId`; any other owner (a library
-  // file, #3077) passes `getPhotoUrl` instead and leaves `archiveId` out.
-  archiveId?: number;
+// Archive photos resolve through `archiveId`; any other owner (a library
+// file, #3077) passes `getPhotoUrl` instead. Exactly one of the two is
+// required so a caller cannot silently end up requesting archive 0.
+type PhotoSource =
+  | { archiveId: number; getPhotoUrl?: undefined }
+  | { archiveId?: undefined; getPhotoUrl: (filename: string) => string };
+
+type PhotoGalleryModalProps = PhotoSource & {
   archiveName: string;
   photos: string[];
   onClose: () => void;
   onDelete?: (filename: string) => void;
-  getPhotoUrl?: (filename: string) => string;
-}
+};
 
-export function PhotoGalleryModal({
-  archiveId,
-  archiveName,
-  photos,
-  onClose,
-  onDelete,
-  getPhotoUrl,
-}: PhotoGalleryModalProps) {
+export function PhotoGalleryModal(props: PhotoGalleryModalProps) {
+  const { archiveName, photos, onClose, onDelete } = props;
   const [currentIndex, setCurrentIndex] = useState(0);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
@@ -50,7 +47,7 @@ export function PhotoGalleryModal({
   }
 
   const resolvePhotoUrl = (filename: string) =>
-    getPhotoUrl ? getPhotoUrl(filename) : api.getArchivePhotoUrl(archiveId ?? 0, filename);
+    props.getPhotoUrl ? props.getPhotoUrl(filename) : api.getArchivePhotoUrl(props.archiveId, filename);
 
   const currentPhoto = photos[currentIndex];
   const photoUrl = resolvePhotoUrl(currentPhoto);

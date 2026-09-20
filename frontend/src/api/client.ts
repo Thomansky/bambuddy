@@ -7480,7 +7480,7 @@ export const api = {
   },
   getLibraryFilePlateThumbnail: (id: number, plateIndex: number) =>
     withMediaToken(`${API_BASE}/library/files/${id}/plate-thumbnail/${plateIndex}`),
-  // Photos of the printed result (#3077) â€” same shape as the archive photo API.
+  // Photos of the printed result (#3077) — same shape as the archive photo API.
   getLibraryFilePhotoUrl: (fileId: number, filename: string) =>
     withMediaToken(`${API_BASE}/library/files/${fileId}/photos/${encodeURIComponent(filename)}`),
   uploadLibraryFilePhoto: async (fileId: number, file: File): Promise<{ status: string; filename: string; photos: string[] }> => {
