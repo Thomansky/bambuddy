@@ -1891,7 +1891,32 @@ class PrintScheduler:
                             skip_reasons["powered_on_printer"] = skip_reasons.get("powered_on_printer", 0) + 1
                             continue
 
-                    waiting_reason = None if printer_id else _collapse_waiting_reasons(per_model_reasons)
+                    # The matcher counts identified spools only, so the printer
+                    # whose one PETG is the spool put in during its last print
+                    # is turned down for "needs PETG" -- and the pre-dispatch
+                    # read further down, which would identify it, needs a
+                    # matched printer to run on. Read those printers now and
+                    # let the next pass match against what the AMS found.
+                    # After the wake step on purpose: a printer known to have
+                    # the filament beats one that might.
+                    if printer_id is None and rfid_reread_enabled:
+                        reading_on = await self._hold_for_rfid_reread_on_model_candidates(
+                            db, item, wakeable_candidates, busy_printers | interlocked.keys(), require_plate_clear
+                        )
+                        for reread_pid in reading_on:
+                            mark_busy(reread_pid, "reading unidentified AMS spools before dispatch")
+                        if reading_on:
+                            skip_reasons["rfid_reread"] = skip_reasons.get("rfid_reread", 0) + 1
+
+                    if printer_id:
+                        waiting_reason = None
+                    elif item.id in self._rfid_rereads.values():
+                        # A read this item asked for is still running; the
+                        # printers doing it read as Busy to the matcher, which
+                        # is not what this row should say.
+                        waiting_reason = RFID_REREAD_HOLD
+                    else:
+                        waiting_reason = _collapse_waiting_reasons(per_model_reasons)
 
                     # Fold the winning variant's file and settings onto the item
                     # before anything else looks at them — the guards below and
@@ -1901,7 +1926,10 @@ class PrintScheduler:
 
                     # Update waiting_reason if changed and send notification when first waiting
                     if item.waiting_reason != waiting_reason:
-                        was_waiting = item.waiting_reason is not None
+                        # The read hold is a step on the way to an answer, not
+                        # a wait: whatever the matcher says once the AMS has
+                        # spoken is the first thing the user hears about.
+                        was_waiting = item.waiting_reason not in (None, RFID_REREAD_HOLD)
                         item.waiting_reason = waiting_reason
                         await db.commit()
 
@@ -3993,56 +4021,118 @@ class PrintScheduler:
         """
         if item.rfid_precheck_at is not None:
             return False
-        if not printer_manager.is_connected(printer_id):
-            return False
-        client = printer_manager.get_client(printer_id)
-        state = printer_manager.get_status(printer_id)
-        if client is None or state is None:
+        slots = self._slots_to_reread(printer_id, item.id)
+        if slots is None:
             return False
 
         item.rfid_precheck_at = datetime.now(timezone.utc)
-
-        if state.tray_now != 255:
-            logger.info(
-                "Queue item %s: RFID pre-read skipped, filament loaded (printer %d, tray_now=%s)",
-                item.id,
-                printer_id,
-                state.tray_now,
-            )
-            return False
-
-        slots = unread_ams_slots(state)
         if not slots:
-            logger.debug("Queue item %s: RFID pre-read — no unidentified AMS slots on printer %d", item.id, printer_id)
             return False
-        if len(slots) > _RFID_REREAD_MAX_SLOTS:
-            logger.info(
-                "Queue item %s: %d unidentified AMS slots on printer %d, reading the first %d",
-                item.id,
-                len(slots),
-                printer_id,
-                _RFID_REREAD_MAX_SLOTS,
-            )
-            slots = slots[:_RFID_REREAD_MAX_SLOTS]
 
         # The stamp has to outlive this pass whatever the caller does with the
         # row afterwards: a stamp lost to a rolled-back session would buy the
         # item a second round once the read task lets go.
         await db.commit()
+        self._start_rfid_reread(printer_id, item.id, slots)
+        return True
+
+    async def _hold_for_rfid_reread_on_model_candidates(
+        self,
+        db: AsyncSession,
+        item: PrintQueueItem,
+        candidates: list[_ModelCandidate],
+        exclude_ids: set[int],
+        require_plate_clear: bool,
+    ) -> list[int]:
+        """Read the unidentified slots of the idle printers a model-based *item* was turned down by.
+
+        Called once the matcher has come back with nothing. Every printer of
+        the candidates' models that is connected, idle and not taken was then
+        turned down for what is loaded in it -- and what is loaded in an
+        unidentified slot is exactly what the matcher cannot know. Those are
+        the printers asked here, each on its own reservation and read task,
+        so the next pass matches against everything the AMS units found.
+
+        Returns the printers now reading. The item is stamped only when at
+        least one read started: a printer that finishes its print later with
+        an unidentified spool in it still gets its turn for this item.
+        """
+        if item.rfid_precheck_at is not None:
+            return []
+        to_read: list[tuple[int, list[tuple[int, int]]]] = []
+        seen: set[int] = set()
+        for candidate in candidates:
+            for printer in await self._printers_for_model(db, candidate.target_model, item.target_location):
+                if printer.id in seen or printer.id in exclude_ids:
+                    continue
+                seen.add(printer.id)
+                if not self._is_printer_idle(printer.id, require_plate_clear):
+                    continue
+                slots = self._slots_to_reread(printer.id, item.id)
+                if slots:
+                    to_read.append((printer.id, slots))
+        if not to_read:
+            return []
+
+        item.rfid_precheck_at = datetime.now(timezone.utc)
+        await db.commit()
+        for printer_id, slots in to_read:
+            self._start_rfid_reread(printer_id, item.id, slots)
+        return [printer_id for printer_id, _slots in to_read]
+
+    def _slots_to_reread(self, printer_id: int, item_id: int) -> list[tuple[int, int]] | None:
+        """The slots a pre-dispatch read on *printer_id* would ask about, capped.
+
+        None when the printer cannot be asked at all (not connected, no
+        client or status yet); an empty list when it can but there is
+        nothing to read -- every occupied slot already identified, or
+        filament loaded (the AMS has to move filament to reach a tag).
+        """
+        if not printer_manager.is_connected(printer_id):
+            return None
+        client = printer_manager.get_client(printer_id)
+        state = printer_manager.get_status(printer_id)
+        if client is None or state is None:
+            return None
+
+        slots = unread_ams_slots(state)
+        if not slots:
+            logger.debug("Queue item %s: RFID pre-read — no unidentified AMS slots on printer %d", item_id, printer_id)
+            return []
+        if state.tray_now != 255:
+            logger.info(
+                "Queue item %s: RFID pre-read skipped, filament loaded (printer %d, tray_now=%s)",
+                item_id,
+                printer_id,
+                state.tray_now,
+            )
+            return []
+        if len(slots) > _RFID_REREAD_MAX_SLOTS:
+            logger.info(
+                "Queue item %s: %d unidentified AMS slots on printer %d, reading the first %d",
+                item_id,
+                len(slots),
+                printer_id,
+                _RFID_REREAD_MAX_SLOTS,
+            )
+            slots = slots[:_RFID_REREAD_MAX_SLOTS]
+        return slots
+
+    def _start_rfid_reread(self, printer_id: int, item_id: int, slots: list[tuple[int, int]]) -> None:
+        """Reserve *printer_id* for *item_id* and spawn the task that reads *slots*."""
         self._dispatch_holds[printer_id] = (time.monotonic(), _RFID_REREAD_HOLD_MARKER, None)
-        self._rfid_rereads[printer_id] = item.id
+        self._rfid_rereads[printer_id] = item_id
         logger.info(
             "Queue item %s: reading %d unidentified AMS slot(s) on printer %d before dispatch: %s",
-            item.id,
+            item_id,
             len(slots),
             printer_id,
             ", ".join(f"AMS {a} slot {t}" for a, t in slots),
         )
         spawn_background_task(
-            self._reread_unknown_slots(printer_id, item.id, slots),
-            name=f"rfid-reread-{printer_id}-{item.id}",
+            self._reread_unknown_slots(printer_id, item_id, slots),
+            name=f"rfid-reread-{printer_id}-{item_id}",
         )
-        return True
 
     def _release_rfid_reread_hold(self, printer_id: int) -> None:
         """Hand *printer_id* back to the queue after its pre-dispatch RFID read.

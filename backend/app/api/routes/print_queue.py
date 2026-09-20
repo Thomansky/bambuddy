@@ -1332,6 +1332,11 @@ async def bulk_update_queue_items(
                 exclude_queue_item_id=item.id,
             )
 
+        # A pre-dispatch RFID read is per printer: moving the item means asking
+        # the new one. Same rule as the single-item route.
+        if item_update_data.get("printer_id", item.printer_id) != item.printer_id:
+            item.rfid_precheck_at = None
+
         for field, value in item_update_data.items():
             setattr(item, field, value)
         updated_count += 1

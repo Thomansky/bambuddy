@@ -17,7 +17,12 @@ The contract these tests pin:
   pass -- even when no tray ever changed;
 - on, but filament loaded, or nothing to read: no command, dispatched at once;
 - one round per item, and a slot whose read completed gets the same K-profile
-  re-apply the manual Re-read RFID button triggers.
+  re-apply the manual Re-read RFID button triggers;
+- the read runs before ``_ensure_ams_mapping``, never after it: the mapping
+  is the reader that has to see the identified spools;
+- an "Any <model>" item the matcher turns down because the only spool it
+  needs is the unidentified one gets those printers read first, unpinned,
+  and is matched again against what the AMS found.
 """
 
 import asyncio
@@ -65,7 +70,7 @@ async def ctx():
         await engine.dispose()
 
 
-async def _add_item(ctx, *, printer_id=1, target_model=None, position=1):
+async def _add_item(ctx, *, printer_id=1, target_model=None, position=1, required_filament_types=None):
     async with ctx.session_maker() as db:
         lib = LibraryFile(
             filename="job.gcode.3mf",
@@ -82,6 +87,7 @@ async def _add_item(ctx, *, printer_id=1, target_model=None, position=1):
             printer_id=printer_id,
             target_model=target_model,
             library_file_id=lib.id,
+            required_filament_types=required_filament_types,
         )
         db.add(item)
         await db.commit()
@@ -99,9 +105,9 @@ async def _item(ctx, item_id):
         return (await db.execute(select(PrintQueueItem).where(PrintQueueItem.id == item_id))).scalar_one()
 
 
-def _tray(tray_id, *, read=True):
+def _tray(tray_id, *, read=True, tray_type="PLA"):
     if read:
-        return {"id": str(tray_id), "tray_type": "PLA", "tray_info_idx": "GFA01", "tag_uid": "3CA4E7DF00000100"}
+        return {"id": str(tray_id), "tray_type": tray_type, "tray_info_idx": "GFA01", "tag_uid": "3CA4E7DF00000100"}
     return {"id": str(tray_id), "tray_type": "", "tray_info_idx": "", "tag_uid": "0000000000000000"}
 
 
@@ -124,15 +130,19 @@ def _printer_state(*, tray_now=255, unread=(3,), exist="f"):
 class _Harness:
     """One scheduler pass with a fake printer, plus the read task it spawned."""
 
-    def __init__(self, ctx, scheduler, state, *, refresh=None):
+    def __init__(self, ctx, scheduler, state, *, refresh=None, states=None):
         self.ctx = ctx
         self.scheduler = scheduler
         self.state = state
+        # Per-printer states for a farm; printers not listed report `state`.
+        self.states = states or {}
         self.client = MagicMock()
         self.client.ams_refresh_tray = refresh or MagicMock(return_value=(True, "Refreshing"))
         self.tasks: list[asyncio.Task] = []
         self.launched = MagicMock()
         self.pa_applied = AsyncMock()
+        self.ensure_mapping = AsyncMock(return_value=None)
+        self.waiting_notified = AsyncMock()
 
     def _spawn(self, coro, *, name=None):
         task = asyncio.ensure_future(coro)
@@ -158,6 +168,10 @@ class _Harness:
     def dispatched(self):
         return [ids for (ids, *_rest) in (c.args for c in self.launched.call_args_list)]
 
+    def mapped(self):
+        """(printer_id, item_id) per `_ensure_ams_mapping` call, in order."""
+        return [(c.args[1], c.args[2].id) for c in self.ensure_mapping.await_args_list]
+
 
 class TestSettingOff:
     @pytest.mark.asyncio
@@ -167,6 +181,7 @@ class TestSettingOff:
 
         h.client.ams_refresh_tray.assert_not_called()
         assert h.dispatched() == [[item_id]]
+        assert h.mapped() == [(1, item_id)]
         assert h.tasks == []
         assert (await _item(ctx, item_id)).rfid_precheck_at is None
 
@@ -192,9 +207,11 @@ class TestSettingOn:
         h.client.ams_refresh_tray = MagicMock(side_effect=refresh)
         await h.run()
 
-        # One ams_get_rfid per unread slot, in slot order, nothing dispatched.
+        # One ams_get_rfid per unread slot, in slot order, nothing dispatched
+        # -- and nothing mapped: the mapping is what has to wait for the read.
         assert h.client.ams_refresh_tray.call_args_list == [((0, 1),), ((0, 3),)]
         assert h.dispatched() == []
+        h.ensure_mapping.assert_not_called()
         row = await _item(ctx, item_id)
         assert row.waiting_reason == RFID_REREAD_HOLD
         assert row.rfid_precheck_at is not None
@@ -206,9 +223,11 @@ class TestSettingOn:
         assert 1 not in scheduler._rfid_rereads
         h.pa_applied.assert_not_called()
 
-        # Next pass: the stamp keeps it from asking again; the item goes out.
+        # Next pass: the stamp keeps it from asking again; the mapping is
+        # resolved against the printer the read ran on, and the item goes out.
         h2 = await _Harness(ctx, scheduler, state).run()
         h2.client.ams_refresh_tray.assert_not_called()
+        assert h2.mapped() == [(1, item_id)]
         assert h2.dispatched() == [[item_id]]
         assert (await _item(ctx, item_id)).waiting_reason is None
 
@@ -269,6 +288,7 @@ class TestSettingOn:
 
         h.client.ams_refresh_tray.assert_not_called()
         assert h.tasks == []
+        assert h.mapped() == [(1, item_id)]
         assert h.dispatched() == [[item_id]]
         assert (await _item(ctx, item_id)).rfid_precheck_at is not None
 
@@ -280,6 +300,7 @@ class TestSettingOn:
         h = await _Harness(ctx, PrintScheduler(), _printer_state(unread=())).run()
 
         h.client.ams_refresh_tray.assert_not_called()
+        assert h.mapped() == [(1, item_id)]
         assert h.dispatched() == [[item_id]]
         assert (await _item(ctx, item_id)).rfid_precheck_at is not None
 
@@ -314,6 +335,7 @@ class TestSettingOn:
 
         h.pa_applied.assert_awaited_once_with(1, 0, 3)
         assert h.dispatched() == []
+        h.ensure_mapping.assert_not_called()
         assert (await _item(ctx, item_id)).waiting_reason == RFID_REREAD_HOLD
 
     @pytest.mark.asyncio
@@ -383,14 +405,187 @@ class TestModelBasedItems:
 
         assert h.client.ams_refresh_tray.call_args_list == [((0, 3),)]
         assert h.dispatched() == []
+        h.ensure_mapping.assert_not_called()
         row = await _item(ctx, item_id)
         assert row.printer_id == 1
         assert row.waiting_reason == RFID_REREAD_HOLD
 
-        # Now pinned, the next pass takes the fixed-printer branch and goes out.
+        # Now pinned, the next pass takes the fixed-printer branch: mapping
+        # resolved against the read printer, then out.
         h2 = await _Harness(ctx, scheduler, _printer_state()).run()
         h2.client.ams_refresh_tray.assert_not_called()
+        assert h2.mapped() == [(1, item_id)]
         assert h2.dispatched() == [[item_id]]
+
+
+class TestModelBasedItemsTurnedDownForFilament:
+    """The real matcher counts identified spools only. An "Any X1C" job for
+    PETG on a printer whose one PETG is the spool put in mid-print is turned
+    down for "needs PETG" -- so the read has to happen before a printer is
+    matched, not after."""
+
+    NEEDS_PETG = '["PETG"]'
+
+    def _reveals(self, state, tray_type):
+        def refresh(ams_id, slot_id):
+            state.raw_data["ams"][0]["tray"][slot_id] = _tray(slot_id, tray_type=tray_type)
+            state.tray_read_done_bits = "f"
+            return True, "Refreshing"
+
+        return MagicMock(side_effect=refresh)
+
+    @pytest.mark.asyncio
+    async def test_the_turned_down_printer_is_read_and_matched_on_the_next_pass(self, ctx):
+        await _set(ctx, "queue_rfid_reread_before_start", "true")
+        item_id = await _add_item(ctx, printer_id=None, target_model="X1C", required_filament_types=self.NEEDS_PETG)
+        scheduler = PrintScheduler()
+        state = _printer_state(unread=(3,))
+
+        h = await _Harness(ctx, scheduler, state, refresh=self._reveals(state, "PETG")).run()
+
+        # Read, held, reserved -- and not pinned: the matcher decides next pass.
+        assert h.client.ams_refresh_tray.call_args_list == [((0, 3),)]
+        assert h.dispatched() == []
+        h.ensure_mapping.assert_not_called()
+        h.waiting_notified.assert_not_called()
+        row = await _item(ctx, item_id)
+        assert row.printer_id is None
+        assert row.waiting_reason == RFID_REREAD_HOLD
+        assert row.rfid_precheck_at is not None
+        assert 1 not in scheduler._dispatch_holds
+
+        # The AMS found PETG: matched, mapped against it, dispatched. No
+        # second read -- the stamp holds on the model-based path too.
+        h2 = await _Harness(ctx, scheduler, state).run()
+        h2.client.ams_refresh_tray.assert_not_called()
+        assert h2.mapped() == [(1, item_id)]
+        assert h2.dispatched() == [[item_id]]
+        assert (await _item(ctx, item_id)).printer_id == 1
+
+    @pytest.mark.asyncio
+    async def test_a_read_that_finds_the_wrong_spool_leaves_the_job_waiting_for_filament(self, ctx):
+        await _set(ctx, "queue_rfid_reread_before_start", "true")
+        item_id = await _add_item(ctx, printer_id=None, target_model="X1C", required_filament_types=self.NEEDS_PETG)
+        scheduler = PrintScheduler()
+        state = _printer_state(unread=(3,))
+
+        h = await _Harness(ctx, scheduler, state, refresh=self._reveals(state, "PLA")).run()
+        assert (await _item(ctx, item_id)).waiting_reason == RFID_REREAD_HOLD
+        h.waiting_notified.assert_not_called()
+
+        h2 = await _Harness(ctx, scheduler, state).run()
+
+        assert h2.dispatched() == []
+        h2.ensure_mapping.assert_not_called()
+        row = await _item(ctx, item_id)
+        assert row.printer_id is None
+        assert "PETG" in row.waiting_reason
+        # The read hold was a step, not a wait: this is the first thing the
+        # user hears about the job, so it is said out loud.
+        h2.waiting_notified.assert_awaited_once()
+        assert h2.waiting_notified.await_args.kwargs["waiting_reason"] == row.waiting_reason
+
+    @pytest.mark.asyncio
+    async def test_the_row_keeps_saying_reading_while_the_read_runs(self, ctx):
+        """Mid-read the printer reads as Busy to the matcher; the item whose
+        read it is must not say so."""
+        await _set(ctx, "queue_rfid_reread_before_start", "true")
+        item_id = await _add_item(ctx, printer_id=None, target_model="X1C", required_filament_types=self.NEEDS_PETG)
+        scheduler = PrintScheduler()
+        h = _Harness(ctx, scheduler, _printer_state(unread=(3,)))
+        started = asyncio.Event()
+
+        def refresh(ams_id, slot_id):
+            started.set()
+            return True, "Refreshing"
+
+        h.client.ams_refresh_tray = MagicMock(side_effect=refresh)
+
+        with h.patched(slot_timeout=30.0):
+            await scheduler.check_queue()
+            await started.wait()
+            await scheduler.check_queue()
+            assert (await _item(ctx, item_id)).waiting_reason == RFID_REREAD_HOLD
+            assert h.dispatched() == []
+            assert len(h.tasks) == 1
+            h.tasks[0].cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await h.tasks[0]
+        assert 1 not in scheduler._rfid_rereads
+
+    @pytest.mark.asyncio
+    async def test_nothing_to_read_leaves_the_item_unstamped(self, ctx):
+        """No read, no stamp: a printer that finishes its print later with an
+        unidentified spool in it still gets its turn for this item."""
+        await _set(ctx, "queue_rfid_reread_before_start", "true")
+        item_id = await _add_item(ctx, printer_id=None, target_model="X1C", required_filament_types=self.NEEDS_PETG)
+
+        h = await _Harness(ctx, PrintScheduler(), _printer_state(unread=())).run()
+
+        h.client.ams_refresh_tray.assert_not_called()
+        assert h.dispatched() == []
+        row = await _item(ctx, item_id)
+        assert "PETG" in row.waiting_reason
+        assert row.rfid_precheck_at is None
+
+    @pytest.mark.asyncio
+    async def test_filament_loaded_on_the_turned_down_printer_means_no_read(self, ctx):
+        await _set(ctx, "queue_rfid_reread_before_start", "true")
+        item_id = await _add_item(ctx, printer_id=None, target_model="X1C", required_filament_types=self.NEEDS_PETG)
+
+        h = await _Harness(ctx, PrintScheduler(), _printer_state(unread=(3,), tray_now=3)).run()
+
+        h.client.ams_refresh_tray.assert_not_called()
+        assert h.dispatched() == []
+        assert (await _item(ctx, item_id)).rfid_precheck_at is None
+
+    @pytest.mark.asyncio
+    async def test_setting_off_changes_nothing_here(self, ctx):
+        item_id = await _add_item(ctx, printer_id=None, target_model="X1C", required_filament_types=self.NEEDS_PETG)
+
+        h = await _Harness(ctx, PrintScheduler(), _printer_state(unread=(3,))).run()
+
+        h.client.ams_refresh_tray.assert_not_called()
+        assert h.tasks == []
+        assert "PETG" in (await _item(ctx, item_id)).waiting_reason
+
+    @pytest.mark.asyncio
+    async def test_every_turned_down_printer_of_the_model_is_read_at_once(self, ctx):
+        """A farm: one round per item reads every idle printer of the model
+        that was passed over, so the next pass sees the whole fleet."""
+        await _set(ctx, "queue_rfid_reread_before_start", "true")
+        async with ctx.session_maker() as db:
+            db.add(
+                Printer(
+                    id=2,
+                    name="X1C-02",
+                    serial_number="X1C0002",
+                    ip_address="10.0.0.2",
+                    access_code="x",
+                    model="X1C",
+                    is_active=True,
+                )
+            )
+            await db.commit()
+        item_id = await _add_item(ctx, printer_id=None, target_model="X1C", required_filament_types=self.NEEDS_PETG)
+        scheduler = PrintScheduler()
+        states = {1: _printer_state(unread=(3,)), 2: _printer_state(unread=(0,))}
+        seen: dict[int, tuple] = {}
+
+        def refresh(ams_id, slot_id):
+            seen[slot_id] = (scheduler._printer_in_dispatch_hold(1), scheduler._printer_in_dispatch_hold(2))
+            return True, "Refreshing"
+
+        h = _Harness(ctx, scheduler, states[1], states=states, refresh=MagicMock(side_effect=refresh))
+        await h.run()
+
+        assert sorted(h.client.ams_refresh_tray.call_args_list) == [((0, 0),), ((0, 3),)]
+        assert seen == {3: (True, True), 0: (True, True)}
+        assert len(h.tasks) == 2
+        assert h.dispatched() == []
+        assert (await _item(ctx, item_id)).waiting_reason == RFID_REREAD_HOLD
+        assert scheduler._dispatch_holds == {}
+        assert scheduler._rfid_rereads == {}
 
 
 class TestTheHoldReasonIsSelfResolving:
@@ -405,21 +600,26 @@ def _patches(h: _Harness):
         patch("backend.app.services.print_scheduler.async_session", h.ctx.session_maker),
         patch("backend.app.core.database.async_session", h.ctx.session_maker),
         patch("backend.app.services.print_scheduler.printer_manager.is_connected", MagicMock(return_value=True)),
-        patch("backend.app.services.print_scheduler.printer_manager.get_status", MagicMock(return_value=h.state)),
+        patch(
+            "backend.app.services.print_scheduler.printer_manager.get_status",
+            MagicMock(side_effect=lambda printer_id: h.states.get(printer_id, h.state)),
+        ),
         patch("backend.app.services.print_scheduler.printer_manager.get_client", MagicMock(return_value=h.client)),
         patch(
             "backend.app.services.print_scheduler.printer_manager.is_awaiting_plate_clear",
             MagicMock(return_value=False),
         ),
         patch("backend.app.services.print_scheduler.ha_sensor_manager.blocked_printers", AsyncMock(return_value={})),
-        patch("backend.app.services.notification_service.notification_service.on_queue_job_waiting", AsyncMock()),
+        patch(
+            "backend.app.services.notification_service.notification_service.on_queue_job_waiting", h.waiting_notified
+        ),
         patch("backend.app.services.notification_service.notification_service.on_queue_job_assigned", AsyncMock()),
         patch("backend.app.services.print_scheduler.spawn_background_task", h._spawn),
         patch("backend.app.api.routes.printers._apply_pa_after_refresh", h.pa_applied),
         patch("backend.app.services.print_scheduler._RFID_REREAD_POLL_INTERVAL", 0.01),
         patch.object(h.scheduler, "_is_printer_idle", MagicMock(return_value=True)),
         patch.object(h.scheduler, "_check_auto_drying", AsyncMock()),
-        patch.object(h.scheduler, "_ensure_ams_mapping", AsyncMock(return_value=None)),
+        patch.object(h.scheduler, "_ensure_ams_mapping", h.ensure_mapping),
         patch.object(h.scheduler, "_block_on_filament_deficit", AsyncMock(return_value=False)),
         patch.object(h.scheduler, "_get_smart_plugs", AsyncMock(return_value=[])),
         patch.object(h.scheduler, "_launch_uploads", h.launched),
