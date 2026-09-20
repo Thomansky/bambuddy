@@ -2498,6 +2498,8 @@ async def start_calibration(
     motor_noise: bool = False,
     nozzle_offset: bool = False,
     high_temp_heatbed: bool = False,
+    micro_lidar: bool = False,
+    nozzle_clumping: bool = False,
     _=RequirePermissionIfAuthEnabled(Permission.PRINTERS_CONTROL),
     db: AsyncSession = Depends(get_db),
 ):
@@ -2511,6 +2513,8 @@ async def start_calibration(
     - motor_noise: Run motor noise cancellation calibration
     - nozzle_offset: Run nozzle offset calibration (dual nozzle printers)
     - high_temp_heatbed: Run high-temperature heatbed calibration
+    - micro_lidar: Run Micro Lidar calibration (X1 series)
+    - nozzle_clumping: Run nozzle clumping detection calibration
     """
     result = await db.execute(select(Printer).where(Printer.id == printer_id))
     printer = result.scalar_one_or_none()
@@ -2522,7 +2526,7 @@ async def start_calibration(
         raise HTTPException(400, "Printer not connected")
 
     # Check that at least one option is selected
-    if not any([bed_leveling, vibration, motor_noise, nozzle_offset, high_temp_heatbed]):
+    if not any([bed_leveling, vibration, motor_noise, nozzle_offset, high_temp_heatbed, micro_lidar, nozzle_clumping]):
         raise HTTPException(400, "At least one calibration option must be selected")
 
     success = client.start_calibration(
@@ -2531,6 +2535,8 @@ async def start_calibration(
         motor_noise=motor_noise,
         nozzle_offset=nozzle_offset,
         high_temp_heatbed=high_temp_heatbed,
+        micro_lidar=micro_lidar,
+        nozzle_clumping=nozzle_clumping,
     )
 
     if not success:
@@ -2543,6 +2549,8 @@ async def start_calibration(
         "motor_noise": motor_noise,
         "nozzle_offset": nozzle_offset,
         "high_temp_heatbed": high_temp_heatbed,
+        "micro_lidar": micro_lidar,
+        "nozzle_clumping": nozzle_clumping,
     }
 
 

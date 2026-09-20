@@ -6319,6 +6319,8 @@ class BambuMQTTClient:
         motor_noise: bool = False,
         nozzle_offset: bool = False,
         high_temp_heatbed: bool = False,
+        micro_lidar: bool = False,
+        nozzle_clumping: bool = False,
     ) -> bool:
         """Start printer calibration with selected options.
 
@@ -6328,6 +6330,8 @@ class BambuMQTTClient:
             motor_noise: Run motor noise cancellation calibration
             nozzle_offset: Run nozzle offset calibration (dual nozzle printers)
             high_temp_heatbed: Run high-temperature heatbed calibration
+            micro_lidar: Run Micro Lidar calibration (X1 series)
+            nozzle_clumping: Run nozzle clumping detection calibration
 
         Returns:
             True if command was sent, False if not connected
@@ -6336,14 +6340,16 @@ class BambuMQTTClient:
             return False
 
         # Build calibration bitmask based on OrcaSlicer DeviceManager.cpp
-        # Bit 0: xcam_cali (not exposed in UI)
+        # Bit 0: xcam_cali (Micro Lidar)
         # Bit 1: bed_leveling
         # Bit 2: vibration
         # Bit 3: motor_noise
         # Bit 4: nozzle_cali
         # Bit 5: bed_cali (high-temp heatbed)
-        # Bit 6: clumppos_cali (not exposed in UI)
+        # Bit 6: clumppos_cali (nozzle clumping detection)
         option = 0
+        if micro_lidar:
+            option |= 1 << 0
         if bed_leveling:
             option |= 1 << 1
         if vibration:
@@ -6354,6 +6360,8 @@ class BambuMQTTClient:
             option |= 1 << 4
         if high_temp_heatbed:
             option |= 1 << 5
+        if nozzle_clumping:
+            option |= 1 << 6
 
         if option == 0:
             logger.warning("[%s] No calibration options selected", self.serial_number)
@@ -6375,7 +6383,8 @@ class BambuMQTTClient:
             f"[{self.serial_number}] Starting calibration: "
             f"bed_leveling={bed_leveling}, vibration={vibration}, "
             f"motor_noise={motor_noise}, nozzle_offset={nozzle_offset}, "
-            f"high_temp_heatbed={high_temp_heatbed} (option={option})"
+            f"high_temp_heatbed={high_temp_heatbed}, micro_lidar={micro_lidar}, "
+            f"nozzle_clumping={nozzle_clumping} (option={option})"
         )
 
         return True
