@@ -95,8 +95,10 @@ def is_calibration_job(filename: str | None, subtask_name: str | None = None) ->
     Narrower than :func:`is_internal_printer_job`: the pressure-advance line
     is internal too, but it is not what a maintenance calibration run (#3127)
     is waiting for, and closing that run on the wrong job would mark the
-    printer calibrated when only a K-profile line was drawn.
+    printer calibrated when only a K-profile line was drawn. The same goes for
+    the other system jobs under ``/usr/`` -- the H2's motion-precision
+    calibration, say -- so the path prefix is deliberately not enough here:
+    only the levelling run's own name counts, and the firmware reports it in
+    both fields.
     """
-    if filename and filename.startswith("/usr/"):
-        return True
     return any(_normalize_job_name(value) in CALIBRATION_JOB_NAMES for value in (filename, subtask_name) if value)

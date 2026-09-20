@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -32,6 +33,7 @@ from backend.app.services.maintenance_actions import get_printer_total_hours
 from backend.app.services.notification_service import notification_service
 from backend.app.services.printer_manager import printer_manager
 from backend.app.utils.local_time import utcnow_naive
+from backend.app.utils.print_jobs import is_calibration_job
 from backend.app.utils.printer_models import get_rod_type
 
 logger = logging.getLogger(__name__)
@@ -692,8 +694,14 @@ async def run_maintenance_item(
     if await maintenance_actions.get_active_run(db, item.id) is not None:
         raise HTTPException(status_code=409, detail="A run is already pending or running for this item")
 
-    run = await maintenance_actions.create_run(db, item, "manual")
-    await db.commit()
+    try:
+        run = await maintenance_actions.create_run(db, item, "manual")
+        await db.commit()
+    except IntegrityError:
+        # Two "Run now" clicks racing past the read above: the partial unique
+        # index on active runs lets exactly one through.
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="A run is already pending or running for this item")
     await db.refresh(run)
     return run
 
@@ -715,6 +723,19 @@ async def list_maintenance_runs(
     return list(result.scalars().all())
 
 
+def _printer_is_running_calibration(printer_id: int) -> bool:
+    """Is the printer, right now, on the calibration a run dispatched?
+
+    Cancelling a run must only ever stop that job. A row can say "running"
+    long after the calibration ended (missed completion, refused command),
+    and by then the printer may be hours into somebody's print.
+    """
+    state = printer_manager.get_status(printer_id)
+    if not state or state.state not in ("RUNNING", "PAUSE", "PREPARE"):
+        return False
+    return is_calibration_job(state.gcode_file or state.current_print, state.subtask_name)
+
+
 @router.delete("/runs/{run_id}")
 async def cancel_maintenance_run(
     run_id: int,
@@ -733,10 +754,19 @@ async def cancel_maintenance_run(
     if run.status not in maintenance_actions.RUN_ACTIVE_STATUSES:
         raise HTTPException(status_code=400, detail="Only pending or running runs can be cancelled")
 
-    if run.status == "running":
-        # Best effort; the row is closed even if the printer is offline, and
-        # the printer's own FAILED report then finds nothing left to close.
+    if run.status == "running" and _printer_is_running_calibration(run.printer_id):
+        # Best effort; the row is closed even if the publish fails, and the
+        # printer's own FAILED report then finds nothing left to close.
         printer_manager.stop_print(run.printer_id)
+    elif run.status == "running":
+        # The row outlived the calibration -- a completion missed across a
+        # restart, or a command the firmware never acted on. Whatever the
+        # printer is doing now is not ours to stop.
+        logger.info(
+            "Maintenance run %d cancelled without a stop: printer %d is not running the calibration",
+            run.id,
+            run.printer_id,
+        )
 
     run.status = "cancelled"
     run.waiting_reason = None

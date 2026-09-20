@@ -1,6 +1,7 @@
 """Integration tests for actionable maintenance: runs, triggers, overview fields (#3127)."""
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -130,7 +131,7 @@ class TestCancel:
         assert item["current_run"] is None
         assert item["last_run"]["status"] == "cancelled"
 
-    async def test_cancel_running_sends_stop(self, async_client, printer_factory, db_session):
+    async def _running_run(self, async_client, printer_factory, db_session):
         printer = await printer_factory()
         item = await _calibration_item(async_client, printer.id)
         run = MaintenanceRun(
@@ -143,8 +144,18 @@ class TestCancel:
         )
         db_session.add(run)
         await db_session.commit()
+        return printer, run
+
+    async def test_cancel_running_sends_stop(self, async_client, printer_factory, db_session):
+        printer, run = await self._running_run(async_client, printer_factory, db_session)
 
         with patch("backend.app.api.routes.maintenance.printer_manager") as mock_pm:
+            mock_pm.get_status.return_value = SimpleNamespace(
+                state="RUNNING",
+                gcode_file="/usr/etc/print/H2S/auto_cali_for_user_param.gcode",
+                current_print=None,
+                subtask_name="auto_cali_for_user_param.gcode",
+            )
             mock_pm.stop_print.return_value = True
             response = await async_client.delete(f"/api/v1/maintenance/runs/{run.id}")
         assert response.status_code == 200
@@ -152,6 +163,39 @@ class TestCancel:
         await db_session.refresh(run)
         assert run.status == "cancelled"
         assert run.completed_at is not None
+
+    async def test_cancel_running_never_stops_somebody_elses_print(self, async_client, printer_factory, db_session):
+        """A row can outlive its calibration (missed completion across a
+        restart); by the time Cancel is clicked the printer may be hours into
+        a real print. The row is closed, the printer is left alone."""
+        printer, run = await self._running_run(async_client, printer_factory, db_session)
+
+        with patch("backend.app.api.routes.maintenance.printer_manager") as mock_pm:
+            mock_pm.get_status.return_value = SimpleNamespace(
+                state="RUNNING",
+                gcode_file="/data/Metadata/plate_1.gcode",
+                current_print="Benchy.gcode.3mf",
+                subtask_name="Benchy",
+            )
+            response = await async_client.delete(f"/api/v1/maintenance/runs/{run.id}")
+        assert response.status_code == 200
+        mock_pm.stop_print.assert_not_called()
+        await db_session.refresh(run)
+        assert run.status == "cancelled"
+        assert run.completed_at is not None
+
+    async def test_cancel_running_on_an_idle_or_offline_printer_just_closes_the_row(
+        self, async_client, printer_factory, db_session
+    ):
+        _printer, run = await self._running_run(async_client, printer_factory, db_session)
+
+        with patch("backend.app.api.routes.maintenance.printer_manager") as mock_pm:
+            mock_pm.get_status.return_value = None
+            response = await async_client.delete(f"/api/v1/maintenance/runs/{run.id}")
+        assert response.status_code == 200
+        mock_pm.stop_print.assert_not_called()
+        await db_session.refresh(run)
+        assert run.status == "cancelled"
 
     async def test_cancel_finished_run_is_a_400(self, async_client, printer_factory, db_session):
         printer = await printer_factory()

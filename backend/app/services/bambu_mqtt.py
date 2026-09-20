@@ -862,6 +862,14 @@ class PrinterState:
     gcode_file: str | None = None
     subtask_id: str | None = None
     hms_errors: list = field(default_factory=list)  # List of HMSError
+    # time.monotonic() of the last user-cancel echo (_HMS_USER_ACTION_CODES)
+    # the firmware reported. The echo is filtered out of hms_errors because it
+    # is not a fault, but it is the only thing that tells a calibration
+    # cancelled from the screen apart from one that failed: the FAILED edge
+    # itself still carries print_error 0 and the code follows seconds later
+    # (H2S capture, #3127). Never cleared; consumers compare it to their own
+    # stamp of the edge they are judging.
+    last_cancel_echo_at: float | None = None
     kprofiles: list = field(default_factory=list)  # List of KProfile
     sdcard: bool = False  # SD card inserted
     # Whether the printer has ever actually told us about `sdcard`. Without this
@@ -4801,6 +4809,7 @@ class BambuMQTTClient:
                         # already suppresses 0500_400E for the same reason.
                         short_code = f"{(attr >> 16) & 0xFFFF:04X}_{code & 0xFFFF:04X}"
                         if short_code in _HMS_USER_ACTION_CODES:
+                            self.state.last_cancel_echo_at = time.monotonic()
                             continue
                         # Catalog has both 8-char keys (base class) and 16-char keys
                         # (specific variants). The full 16-char identifier preserves
@@ -4858,7 +4867,9 @@ class BambuMQTTClient:
                     # carries the same cancel echoes (e.g. 0500_400E) and they must
                     # not surface as faults on the printer card.
                     if short_code in _HMS_USER_ACTION_CODES:
-                        pass  # cancel echo — silently drop
+                        # Cancel echo: not a fault, but stamped so a FAILED
+                        # calibration can be told from a cancelled one (#3127).
+                        self.state.last_cancel_echo_at = time.monotonic()
                     else:
                         # Only add if not already in HMS errors (avoid duplicates)
                         existing_short_codes = set()

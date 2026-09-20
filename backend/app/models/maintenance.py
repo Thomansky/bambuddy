@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, String, Text, func
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.core.database import Base
@@ -108,6 +108,18 @@ class MaintenanceRun(Base):
     """
 
     __tablename__ = "maintenance_runs"
+    __table_args__ = (
+        # The one-active-run-per-item rule, enforced where two concurrent
+        # "Run now" requests cannot both slip past the route's read-then-
+        # insert. Partial on both engines: finished runs pile up freely.
+        Index(
+            "uq_maintenance_runs_active",
+            "printer_maintenance_id",
+            unique=True,
+            sqlite_where=text("status IN ('pending', 'running')"),
+            postgresql_where=text("status IN ('pending', 'running')"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     printer_maintenance_id: Mapped[int] = mapped_column(ForeignKey("printer_maintenance.id", ondelete="CASCADE"))

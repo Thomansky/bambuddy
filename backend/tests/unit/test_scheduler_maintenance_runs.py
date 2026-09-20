@@ -11,6 +11,7 @@ import pytest
 from sqlalchemy import select
 
 from backend.app.models.maintenance import MaintenanceHistory, MaintenanceRun, MaintenanceType, PrinterMaintenance
+from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer import Printer
 from backend.app.services import maintenance_actions
 from backend.app.services.print_scheduler import PrintScheduler
@@ -114,6 +115,78 @@ async def test_busy_printer_waits_with_reason(scheduler, db_session, printer_fac
     mock_pm.start_calibration.assert_not_called()
     await db_session.refresh(run)
     assert run.waiting_reason == "printer_busy"
+
+
+async def _run_pass_with_queue_reservations(scheduler, db_session, require_plate_clear=False):
+    """Drive the maintenance pass the way check_queue does: seed first."""
+    reserved = await scheduler._queue_reserved_printers(db_session)
+    await scheduler._check_maintenance_runs(db_session, require_plate_clear, reserved)
+
+
+@pytest.mark.asyncio
+async def test_queue_item_already_printing_holds_the_calibration(scheduler, db_session, printer_factory):
+    """The queue sent project_file seconds ago; the printer still says IDLE."""
+    item = await _make_item(db_session, printer_factory)
+    run = await _make_run(db_session, item)
+    db_session.add(PrintQueueItem(printer_id=item.printer_id, status="printing"))
+    await db_session.commit()
+    with patch("backend.app.services.print_scheduler.printer_manager") as mock_pm:
+        mock_pm.get_status.return_value = _mock_state("IDLE")
+        mock_pm.is_connected.return_value = True
+        await _run_pass_with_queue_reservations(scheduler, db_session)
+    mock_pm.start_calibration.assert_not_called()
+    await db_session.refresh(run)
+    assert run.status == "pending"
+    assert run.waiting_reason == "printer_busy"
+
+
+@pytest.mark.asyncio
+async def test_upload_in_flight_holds_the_calibration(scheduler, db_session, printer_factory):
+    """The queue row is still pending while its 3MF uploads; the printer is IDLE."""
+    item = await _make_item(db_session, printer_factory)
+    run = await _make_run(db_session, item)
+    scheduler._inflight[999] = (MagicMock(), item.printer_id)
+    with patch("backend.app.services.print_scheduler.printer_manager") as mock_pm:
+        mock_pm.get_status.return_value = _mock_state("IDLE")
+        mock_pm.is_connected.return_value = True
+        await _run_pass_with_queue_reservations(scheduler, db_session)
+    mock_pm.start_calibration.assert_not_called()
+    await db_session.refresh(run)
+    assert run.status == "pending"
+    assert run.waiting_reason == "printer_busy"
+
+
+@pytest.mark.asyncio
+async def test_post_dispatch_hold_holds_the_calibration(scheduler, db_session, printer_factory):
+    item = await _make_item(db_session, printer_factory)
+    run = await _make_run(db_session, item)
+    scheduler._mark_printer_dispatched(item.printer_id, "IDLE", None)
+    with patch("backend.app.services.print_scheduler.printer_manager") as mock_pm:
+        mock_pm.get_status.return_value = _mock_state("IDLE")
+        mock_pm.is_connected.return_value = True
+        await _run_pass_with_queue_reservations(scheduler, db_session)
+    mock_pm.start_calibration.assert_not_called()
+    await db_session.refresh(run)
+    assert run.status == "pending"
+    assert run.waiting_reason == "printer_busy"
+
+
+@pytest.mark.asyncio
+async def test_queue_reservations_on_another_printer_do_not_hold_it(scheduler, db_session, printer_factory):
+    item = await _make_item(db_session, printer_factory)
+    other = await printer_factory(name="Other")
+    run = await _make_run(db_session, item)
+    db_session.add(PrintQueueItem(printer_id=other.id, status="printing"))
+    await db_session.commit()
+    scheduler._inflight[998] = (MagicMock(), other.id)
+    with patch("backend.app.services.print_scheduler.printer_manager") as mock_pm:
+        mock_pm.get_status.return_value = _mock_state("IDLE")
+        mock_pm.is_connected.return_value = True
+        mock_pm.start_calibration.return_value = True
+        await _run_pass_with_queue_reservations(scheduler, db_session)
+    mock_pm.start_calibration.assert_called_once()
+    await db_session.refresh(run)
+    assert run.status == "running"
 
 
 @pytest.mark.asyncio
@@ -462,6 +535,171 @@ async def test_cancel_from_the_printer_screen_cancels_the_run(db_session, printe
     assert item.last_performed_at is None
     history = (await db_session.execute(select(MaintenanceHistory))).scalars().all()
     assert history == []
+
+
+# The H2S capture (tap-0938BJ611001133-20260920-103100.jsonl, lines 1094 and
+# 1100): a cancel from the printer screen first reports FAILED with
+# print_error 0 and the 0300_400C code only seconds later.
+_CAPTURE_RUNNING = {
+    "print": {
+        "command": "push_status",
+        "gcode_state": "RUNNING",
+        "gcode_file": "/usr/etc/print/O1S/auto_cali_for_user_param.gcode",
+        "subtask_name": "auto_cali_for_user_param.gcode",
+        "print_type": "system",
+        "print_error": 0,
+        "mc_percent": 10,
+    }
+}
+_CAPTURE_FAILED_NO_CODE = {"print": {**_CAPTURE_RUNNING["print"], "gcode_state": "FAILED", "mc_percent": 0}}
+_CAPTURE_FAILED_CANCEL_CODE = {"print": {**_CAPTURE_FAILED_NO_CODE["print"], "print_error": 50348044}}
+
+
+def _client_with_completion_capture():
+    from backend.app.services.bambu_mqtt import BambuMQTTClient
+
+    client = BambuMQTTClient(ip_address="192.168.1.100", serial_number="0938BJ611001133", access_code="12345678")
+    completions: list[dict] = []
+    client.on_print_start = lambda data: None
+    client.on_print_complete = completions.append
+    return client, completions
+
+
+def test_the_capture_fires_completion_before_the_cancel_code_arrives():
+    """Replays the real ordering: the completion payload carries no code, and
+    the code that follows is stamped on the state rather than dropped."""
+    client, completions = _client_with_completion_capture()
+    client._process_message(_CAPTURE_RUNNING)
+    client._process_message(_CAPTURE_FAILED_NO_CODE)
+
+    assert len(completions) == 1
+    assert completions[0]["status"] == "failed"
+    assert completions[0]["raw_data"]["print_error"] == 0
+    assert maintenance_actions.resolve_run_outcome("failed", None) == "failed"
+    assert client.state.last_cancel_echo_at is None
+
+    client._process_message(_CAPTURE_FAILED_CANCEL_CODE)
+    assert len(completions) == 1
+    assert client.state.last_cancel_echo_at is not None
+    assert client.state.hms_errors == []  # still not a fault
+
+
+def test_a_cancel_echo_in_the_hms_array_is_stamped_too():
+    client, _ = _client_with_completion_capture()
+    client._process_message({"print": {"hms": [{"attr": 0x05000000, "code": 0x0000400E}]}})
+    assert client.state.last_cancel_echo_at is not None
+    assert client.state.hms_errors == []
+
+
+class TestCancelEchoSeen:
+    def _state(self, echo_at):
+        state = MagicMock()
+        state.last_cancel_echo_at = echo_at
+        return state
+
+    def test_echo_after_the_edge(self):
+        with patch("backend.app.services.printer_manager.printer_manager") as pm:
+            pm.get_status.return_value = self._state(107.0)
+            assert maintenance_actions.cancel_echo_seen(1, 100.0, now=115.0)
+
+    def test_echo_shortly_before_the_edge(self):
+        with patch("backend.app.services.printer_manager.printer_manager") as pm:
+            pm.get_status.return_value = self._state(95.0)
+            assert maintenance_actions.cancel_echo_seen(1, 100.0, now=115.0)
+
+    def test_an_old_echo_from_an_earlier_print_does_not_count(self):
+        with patch("backend.app.services.printer_manager.printer_manager") as pm:
+            pm.get_status.return_value = self._state(100.0 - maintenance_actions.CANCEL_ECHO_LOOKBACK_SECONDS - 1)
+            assert not maintenance_actions.cancel_echo_seen(1, 100.0, now=115.0)
+
+    def test_no_echo_and_no_state(self):
+        with patch("backend.app.services.printer_manager.printer_manager") as pm:
+            pm.get_status.return_value = self._state(None)
+            assert not maintenance_actions.cancel_echo_seen(1, 100.0, now=115.0)
+            pm.get_status.return_value = None
+            assert not maintenance_actions.cancel_echo_seen(1, 100.0, now=115.0)
+
+
+@pytest.mark.asyncio
+async def test_failed_without_a_code_is_cancelled_once_the_echo_arrives(
+    db_session, printer_factory, completion_session
+):
+    """The capture's sequence end to end: FAILED with print_error 0 closes
+    nothing yet; after the grace the stamped echo turns the run cancelled."""
+    item = await _make_item(db_session, printer_factory)
+    run = await _make_run(db_session, item, status="running", started_at=_utcnow_naive())
+    state = MagicMock()
+    state.last_cancel_echo_at = None
+
+    async def sleep_then_echo(_seconds):
+        state.last_cancel_echo_at = 100.0 + 7.0  # the code lands during the grace
+
+    with (
+        patch("backend.app.services.printer_manager.printer_manager") as pm,
+        patch("backend.app.services.maintenance_actions.asyncio.sleep", sleep_then_echo),
+    ):
+        pm.get_status.return_value = state
+        closed = await maintenance_actions.on_internal_job_failed(
+            item.printer_id,
+            "/usr/etc/print/O1S/auto_cali_for_user_param.gcode",
+            "auto_cali_for_user_param.gcode",
+            100.0,
+        )
+    assert closed is True
+    await db_session.refresh(run)
+    await db_session.refresh(item)
+    assert run.status == "cancelled"
+    assert run.error_message is None
+    assert item.last_performed_at is None
+
+
+@pytest.mark.asyncio
+async def test_failed_without_a_code_and_no_echo_is_a_failure(db_session, printer_factory, completion_session):
+    item = await _make_item(db_session, printer_factory)
+    run = await _make_run(db_session, item, status="running", started_at=_utcnow_naive())
+    state = MagicMock()
+    state.last_cancel_echo_at = None
+
+    async def no_sleep(_seconds):
+        return None
+
+    with (
+        patch("backend.app.services.printer_manager.printer_manager") as pm,
+        patch("backend.app.services.maintenance_actions.asyncio.sleep", no_sleep),
+    ):
+        pm.get_status.return_value = state
+        assert await maintenance_actions.on_internal_job_failed(
+            item.printer_id, "/usr/etc/print/O1S/auto_cali_for_user_param.gcode", None, 100.0
+        )
+    await db_session.refresh(run)
+    assert run.status == "failed"
+    assert run.error_message == "Calibration failed"
+
+
+@pytest.mark.asyncio
+async def test_failed_grace_ignores_jobs_that_are_not_the_calibration(db_session, printer_factory, completion_session):
+    item = await _make_item(db_session, printer_factory)
+    run = await _make_run(db_session, item, status="running", started_at=_utcnow_naive())
+    with patch("backend.app.services.maintenance_actions.asyncio.sleep") as sleep:
+        assert not await maintenance_actions.on_internal_job_failed(item.printer_id, "", "auto_pa_line_calib_mode", 1.0)
+    sleep.assert_not_called()
+    await db_session.refresh(run)
+    assert run.status == "running"
+
+
+@pytest.mark.asyncio
+async def test_a_second_active_run_for_the_same_item_is_rejected_by_the_database(db_session, printer_factory):
+    """Two "Run now" clicks racing past the route's read: the partial unique
+    index lets exactly one active row exist. Finished runs pile up freely."""
+    from sqlalchemy.exc import IntegrityError
+
+    item = await _make_item(db_session, printer_factory)
+    await _make_run(db_session, item, status="completed")
+    await _make_run(db_session, item, status="failed")
+    await _make_run(db_session, item, status="pending")
+    db_session.add(MaintenanceRun(printer_maintenance_id=item.id, printer_id=item.printer_id, status="running"))
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
 
 
 @pytest.mark.asyncio

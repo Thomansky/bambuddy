@@ -462,10 +462,11 @@ class TestSchedulerQueueCheckLogging:
         empty_result.scalars.return_value.all.return_value = []
 
         async def _execute_side_effect(stmt, *args, **kwargs):
-            # The scheduled-drying dispatch check (#2638) runs its own query
-            # every tick; keep it isolated from the pending-items mock above
-            # so it doesn't misread mock_item as a ScheduledDrying row.
-            if "scheduled_dryings" in str(stmt):
+            # The scheduled-drying (#2638) and maintenance-run (#3127) checks
+            # run their own queries every tick; keep them isolated from the
+            # pending-items mock above so they don't misread mock_item as one
+            # of their rows.
+            if "scheduled_dryings" in str(stmt) or "maintenance" in str(stmt):
                 return empty_result
             return mock_result
 
