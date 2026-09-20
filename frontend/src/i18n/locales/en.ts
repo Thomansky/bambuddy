@@ -566,7 +566,7 @@ export default {
       locationGroup: 'Location / Group (optional)',
       locationPlaceholder: 'e.g., Workshop, Office, Basement',
       autoArchiveLabel: 'Auto-archive completed prints',
-      wearCostPerHour: 'Wear cost per printing hour (optional)',
+      wearCostPerHour: 'Wear cost per printing hour',
       wearCostPerHourHelp: 'Include what a printing hour really costs you — depreciation, maintenance, parts. Leave empty to disable.',
       fromPrinterSettings: 'From printer settings',
       modelOptional: 'Model (optional)',

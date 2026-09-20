@@ -563,7 +563,7 @@ export default {
       locationGroup: 'Localização / Grupo (opcional)',
       locationPlaceholder: 'ex.: Oficina, Escritório, Porão',
       autoArchiveLabel: 'Arquivar automaticamente impressões concluídas',
-      wearCostPerHour: 'Custo de desgaste por hora de impressão (opcional)',
+      wearCostPerHour: 'Custo de desgaste por hora de impressão',
       wearCostPerHourHelp: 'Inclua o que uma hora de impressão realmente custa para você: depreciação, manutenção, peças. Deixe vazio para desativar.',
       fromPrinterSettings: 'A partir das configurações da impressora',
       modelOptional: 'Modelo (opcional)',

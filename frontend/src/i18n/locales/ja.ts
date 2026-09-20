@@ -562,7 +562,7 @@ export default {
       locationGroup: 'ロケーション / グループ',
       locationPlaceholder: '例: 工房、オフィス、地下室',
       autoArchiveLabel: '完了した印刷を自動アーカイブ',
-      wearCostPerHour: '印刷1時間あたりの摩耗コスト（任意）',
+      wearCostPerHour: '印刷1時間あたりの摩耗コスト',
       wearCostPerHourHelp: '印刷1時間に実際にかかる費用を含めてください — 減価償却、メンテナンス、部品など。空欄にすると無効になります。',
       fromPrinterSettings: 'プリンターの設定から取得',
       modelOptional: 'モデル（任意）',

@@ -563,7 +563,7 @@ export default {
       locationGroup: 'Konum / Grup (isteğe bağlı)',
       locationPlaceholder: 'örn., Atölye, Ofis, Bodrum',
       autoArchiveLabel: 'Tamamlanan baskıları otomatik arşivle',
-      wearCostPerHour: 'Baskı saati başına aşınma maliyeti (isteğe bağlı)',
+      wearCostPerHour: 'Baskı saati başına aşınma maliyeti',
       wearCostPerHourHelp: 'Bir baskı saatinin size gerçekte neye mal olduğunu dahil edin: amortisman, bakım, parçalar. Devre dışı bırakmak için boş bırakın.',
       fromPrinterSettings: 'Yazıcı ayarlarından',
       modelOptional: 'Model (isteğe bağlı)',

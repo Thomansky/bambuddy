@@ -563,7 +563,7 @@ export default {
       locationGroup: 'Emplacement / Groupe (optionnel)',
       locationPlaceholder: 'ex: Atelier, Bureau',
       autoArchiveLabel: 'Auto-archiver les impressions terminées',
-      wearCostPerHour: 'Coût d\'usure par heure d\'impression (facultatif)',
+      wearCostPerHour: 'Coût d\'usure par heure d\'impression',
       wearCostPerHourHelp: 'Incluez ce qu\'une heure d\'impression vous coûte réellement : amortissement, entretien, pièces. Laissez vide pour désactiver.',
       fromPrinterSettings: 'Depuis les paramètres imprimante',
       modelOptional: 'Modèle (optionnel)',

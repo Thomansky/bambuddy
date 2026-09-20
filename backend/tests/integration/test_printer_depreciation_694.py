@@ -129,6 +129,26 @@ class TestPrinterFields:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    async def test_stored_value_outside_input_rules_still_lists(
+        self, async_client: AsyncClient, printer_factory, db_session
+    ):
+        # The decimal cap and ge=0 guard the input shapes only. A row that
+        # bypassed them (direct SQL edit, future import path) must not turn
+        # the whole printer list into a 500.
+        printer = await printer_factory(wear_cost_per_hour=0.12345)
+        await printer_factory(wear_cost_per_hour=0.5)
+
+        listed = await async_client.get("/api/v1/printers/")
+        assert listed.status_code == 200
+        row = next(p for p in listed.json() if p["id"] == printer.id)
+        assert row["wear_cost_per_hour"] == 0.12345
+
+        single = await async_client.get(f"/api/v1/printers/{printer.id}")
+        assert single.status_code == 200
+        assert single.json()["wear_cost_per_hour"] == 0.12345
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_negative_values_rejected(self, async_client: AsyncClient, printer_factory, db_session):
         printer = await printer_factory()
 

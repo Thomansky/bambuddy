@@ -566,7 +566,7 @@ export default {
       locationGroup: 'Locatie / groep (optioneel)',
       locationPlaceholder: 'bijv. Werkplaats, kantoor, kelder',
       autoArchiveLabel: 'Voltooide afdrukken automatisch archiveren',
-      wearCostPerHour: 'Slijtagekosten per printuur (optioneel)',
+      wearCostPerHour: 'Slijtagekosten per printuur',
       wearCostPerHourHelp: 'Reken mee wat een printuur je werkelijk kost: afschrijving, onderhoud, onderdelen. Laat leeg om uit te schakelen.',
       fromPrinterSettings: 'Uit printerinstellingen',
       modelOptional: 'Model (optioneel)',

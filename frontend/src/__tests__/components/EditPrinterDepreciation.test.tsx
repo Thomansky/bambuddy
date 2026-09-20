@@ -44,7 +44,7 @@ const mockStatus = {
   vt_tray: [],
 };
 
-const RATE_LABEL = 'Wear cost per printing hour (optional)';
+const RATE_LABEL = 'Wear cost per printing hour';
 
 async function openEditModal() {
   render(<PrintersPage />);

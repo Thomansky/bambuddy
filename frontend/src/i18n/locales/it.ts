@@ -563,7 +563,7 @@ export default {
       locationGroup: 'Posizione / Gruppo (opzionale)',
       locationPlaceholder: 'es. Officina, Ufficio, Cantina',
       autoArchiveLabel: 'Archivia automaticamente stampe completate',
-      wearCostPerHour: 'Costo di usura per ora di stampa (opzionale)',
+      wearCostPerHour: 'Costo di usura per ora di stampa',
       wearCostPerHourHelp: 'Includi quanto ti costa davvero un\'ora di stampa: ammortamento, manutenzione, ricambi. Lascia vuoto per disattivare.',
       fromPrinterSettings: 'Dalle impostazioni della stampante',
       modelOptional: 'Modello (opzionale)',

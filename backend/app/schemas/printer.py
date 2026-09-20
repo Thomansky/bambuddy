@@ -6,7 +6,12 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from backend.app.utils.printer_models import supports_nozzle_flow_type
 
 # Wear cost per printing hour (#694): a currency amount, so at most 4 decimals
-# (0.1234). Checked on the shortest repr so 0.1 does not fail as 0.1000...0055.
+# (0.1234); finer input is rejected (422), not rounded. Checked on the
+# shortest repr so 0.1 does not fail as 0.1000...0055. Applied on the input
+# shapes only (PrinterCreate / PrinterUpdate, together with ge=0 and
+# allow_inf_nan=False — "inf" parses as a float by default and would snapshot
+# an infinite rate onto every run). PrinterResponse serialises whatever the
+# row holds, or one out-of-range value would take down GET /printers/ as a whole.
 _WEAR_COST_MAX_DECIMALS = 4
 
 
@@ -51,15 +56,9 @@ class PrinterBase(BaseModel):
     external_camera_snapshot_url: str | None = None  # Optional single-frame override; #1177
     camera_rotation: int = 0  # 0, 90, 180, 270 degrees
     # Wear cost per printing hour (#694): optional, 0/None = off. Read at print
-    # completion — edits never recalculate past runs. "inf" parses as a float
-    # by default and would snapshot an infinite rate onto every run, hence
-    # allow_inf_nan=False.
-    wear_cost_per_hour: float | None = Field(default=None, ge=0, allow_inf_nan=False)
-
-    @field_validator("wear_cost_per_hour")
-    @classmethod
-    def _check_wear_cost_decimals(cls, v: float | None) -> float | None:
-        return _validate_wear_cost_per_hour(v)
+    # completion — edits never recalculate past runs. Constrained on the input
+    # shapes (PrinterCreate / PrinterUpdate).
+    wear_cost_per_hour: float | None = None
 
 
 class PrinterCreate(PrinterBase):
@@ -67,6 +66,12 @@ class PrinterCreate(PrinterBase):
     # PrinterResponse. Direct exposure on PRINTERS_READ would let a Viewer
     # connect to the printer's MQTT and bypass Bambuddy's RBAC.
     access_code: str = Field(..., min_length=1, max_length=20)
+    wear_cost_per_hour: float | None = Field(default=None, ge=0, allow_inf_nan=False)  # #694
+
+    @field_validator("wear_cost_per_hour")
+    @classmethod
+    def _check_wear_cost_decimals(cls, v: float | None) -> float | None:
+        return _validate_wear_cost_per_hour(v)
 
 
 class PlateDetectionROI(BaseModel):

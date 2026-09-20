@@ -563,7 +563,7 @@ export default {
       locationGroup: '位置 / 分組（可選）',
       locationPlaceholder: '例如：工作室、辦公室、地下室',
       autoArchiveLabel: '自動歸檔已完成的列印',
-      wearCostPerHour: '每列印小時損耗成本（選填）',
+      wearCostPerHour: '每列印小時損耗成本',
       wearCostPerHourHelp: '計入一個列印小時的真實成本——折舊、維護、零件。留空即為停用。',
       fromPrinterSettings: '來自印表機設定',
       modelOptional: '型號（可選）',

@@ -563,7 +563,7 @@ export default {
       locationGroup: 'Standort / Gruppe (optional)',
       locationPlaceholder: 'z.B. Werkstatt, Büro, Keller',
       autoArchiveLabel: 'Abgeschlossene Drucke automatisch archivieren',
-      wearCostPerHour: 'Verschleißkosten pro Druckstunde (optional)',
+      wearCostPerHour: 'Verschleißkosten pro Druckstunde',
       wearCostPerHourHelp: 'Rechne ein, was dich eine Druckstunde wirklich kostet – Abschreibung, Wartung, Ersatzteile. Leer lassen, um zu deaktivieren.',
       fromPrinterSettings: 'Aus Druckereinstellungen',
       modelOptional: 'Modell (optional)',
