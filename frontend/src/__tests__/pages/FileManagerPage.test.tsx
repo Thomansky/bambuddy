@@ -27,6 +27,11 @@ vi.mock('../../components/SliceModal', () => ({
   ),
 }));
 
+// The viewer pulls in three.js; the tests only care whether it opened.
+vi.mock('../../components/ModelViewerModal', () => ({
+  ModelViewerModal: ({ title }: { title: string }) => <div data-testid="model-viewer-modal">{title}</div>,
+}));
+
 // Mock data
 const mockFolders = [
   {
@@ -474,8 +479,10 @@ describe('FileManagerPage', () => {
 
       await user.click(screen.getByTitle('Column view'));
       const columns = within(screen.getByTestId('columns-view'));
+      // The highlight sits on the row, which also hosts the folder kebab —
+      // the name button itself is unstyled.
       const activeClassOf = (name: string) =>
-        columns.getByText(name).closest('button')?.className ?? '';
+        columns.getByText(name).closest('[data-folder-id]')?.className ?? '';
 
       // The pane auto-focuses when the view opens, so keys work immediately.
       // Down from the root selects the first folder (name-sorted: Art
@@ -553,6 +560,243 @@ describe('FileManagerPage', () => {
       await waitFor(() => {
         expect(within(screen.getByTestId('columns-view')).getByText('Benchy')).toBeInTheDocument();
       });
+    });
+
+    // #3020 follow-up: the files pane carries the list row's icon strip, so
+    // the columns view offers every per-file action in the same order.
+    const listRow = (name: string) => screen.getByText(name).closest('div[class*="cursor-pointer"]') as HTMLElement;
+    const actionTitlesOf = (row: HTMLElement) =>
+      Array.from(row.querySelector('[data-file-actions]')!.querySelectorAll('button')).map((b) => b.title);
+
+    it('offers the same per-file actions as the list view, in the same order', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await user.click(screen.getByTitle('List view'));
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+      const listBenchy = actionTitlesOf(listRow('Benchy'));
+      const listBracket = actionTitlesOf(listRow('bracket.stl'));
+      expect(listBenchy).toEqual(['Print', '3D Preview', 'Download', 'File details', 'Rename', 'Delete']);
+      expect(listBracket).toContain('Generate Thumbnail');
+
+      await user.click(screen.getByTitle('Column view'));
+      const columns = within(screen.getByTestId('columns-view'));
+      await waitFor(() => expect(columns.getByText('Benchy')).toBeInTheDocument());
+      expect(actionTitlesOf(columns.getByText('Benchy').closest('[data-file-id]') as HTMLElement)).toEqual(listBenchy);
+      expect(actionTitlesOf(columns.getByText('bracket.stl').closest('[data-file-id]') as HTMLElement)).toEqual(listBracket);
+    });
+
+    it('fires a row action without toggling the row selection', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await user.click(screen.getByTitle('Column view'));
+      const columns = within(screen.getByTestId('columns-view'));
+      const row = columns.getByText('Benchy').closest('[data-file-id]') as HTMLElement;
+
+      await user.click(within(row).getByTitle('Rename'));
+      // The rename modal edits the base name; the extension is fixed.
+      expect(await screen.findByDisplayValue('benchy')).toBeInTheDocument();
+      expect(row.className).not.toContain('bg-bambu-green/10');
+
+      await user.click(screen.getByText('Cancel'));
+      await user.click(within(row).getByTitle('Delete'));
+      expect(await screen.findByText('Delete File')).toBeInTheDocument();
+    });
+
+    it('reveals the focused row\'s actions and keeps the rest touch-reachable (#2865)', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await user.click(screen.getByTitle('Column view'));
+      const columns = within(screen.getByTestId('columns-view'));
+      const stripWrapper = (name: string) =>
+        (columns.getByText(name).closest('[data-file-id]') as HTMLElement).querySelector('[data-file-actions]')!.parentElement!;
+
+      // Right from the root moves the focus into the files pane.
+      await user.keyboard('{ArrowRight}');
+      await waitFor(() => expect(stripWrapper('Benchy').className).not.toContain('opacity-0'));
+
+      // Other rows hide the strip only for pointers that can hover — never a
+      // bare opacity-0 — and stay out of the Tab order.
+      expect(stripWrapper('bracket.stl').className).not.toMatch(/(^|\s)opacity-0(\s|$)/);
+      expect(stripWrapper('bracket.stl').className).toContain('can-hover:opacity-0');
+      expect(within(stripWrapper('bracket.stl')).getByTitle('Download')).toHaveAttribute('tabindex', '-1');
+      expect(within(stripWrapper('Benchy')).getByTitle('Download')).toHaveAttribute('tabindex', '0');
+
+      // Tab from the pane lands on the focused row's first action.
+      await user.tab();
+      expect(document.activeElement).toBe(within(stripWrapper('Benchy')).getByTitle('Print'));
+    });
+
+    it('reaches and triggers the focused file\'s actions from the keyboard', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await user.click(screen.getByTitle('Column view'));
+      const columns = within(screen.getByTestId('columns-view'));
+      await user.keyboard('{ArrowRight}');
+      await waitFor(() => {
+        expect(columns.getByText('Benchy').closest('[title="Benchy"]')?.className).toContain('ring-1');
+      });
+      const row = columns.getByText('Benchy').closest('[data-file-id]') as HTMLElement;
+
+      // The context-menu key jumps into the strip; Left/Right walk it.
+      await user.keyboard('{ContextMenu}');
+      expect(document.activeElement).toBe(within(row).getByTitle('Print'));
+      await user.keyboard('{ArrowRight}{ArrowRight}{ArrowRight}{ArrowRight}');
+      expect(document.activeElement).toBe(within(row).getByTitle('Rename'));
+      await user.keyboard('{ArrowLeft}{ArrowLeft}');
+      expect(document.activeElement).toBe(within(row).getByTitle('Download'));
+
+      // Escape hands focus back to the pane, so the arrows walk rows again.
+      await user.keyboard('{Escape}');
+      expect(document.activeElement).toBe(screen.getByTestId('columns-view'));
+      await user.keyboard('{ArrowDown}');
+      await waitFor(() => {
+        expect(columns.getByText('bracket.stl').closest('[title="bracket.stl"]')?.className).toContain('ring-1');
+      });
+
+      // Enter on a strip button activates that button, not the row.
+      await user.keyboard('{Shift>}{F10}{/Shift}');
+      const bracketRow = columns.getByText('bracket.stl').closest('[data-file-id]') as HTMLElement;
+      expect(document.activeElement?.closest('[data-file-id]')).toBe(bracketRow);
+      within(bracketRow).getByTitle('Rename').focus();
+      await user.keyboard('{Enter}');
+      // .stl is not a split-off extension, so the whole name is editable.
+      expect(await screen.findByDisplayValue('bracket.stl')).toBeInTheDocument();
+    });
+
+    it('offers the tree\'s folder actions on folder rows', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await user.click(screen.getByTitle('Column view'));
+      const columns = within(screen.getByTestId('columns-view'));
+      const row = columns.getByText('Art Projects').closest('[data-folder-id]') as HTMLElement;
+      const kebab = within(row).getByTitle('Actions');
+      // Unselected row: kebab hidden only for pointers that can hover (#2865).
+      expect(kebab.closest('.flex-shrink-0')!.className).toContain('can-hover:opacity-0');
+
+      await user.click(kebab);
+      expect(within(row).getByRole('button', { name: 'Rename' })).toBeInTheDocument();
+      // Art Projects is linked to a project, so the link entry offers a change.
+      expect(within(row).getByRole('button', { name: 'Change Link...' })).toBeInTheDocument();
+      expect(within(row).getByRole('button', { name: 'Delete' })).toBeInTheDocument();
+      // Opening the menu did not select the folder.
+      expect(row.className).not.toContain('bg-bambu-green/20');
+
+      await user.click(within(row).getByRole('button', { name: 'Rename' }));
+      expect(await screen.findByDisplayValue('Art Projects')).toBeInTheDocument();
+    });
+
+    it('opens the selected folder\'s kebab from the keyboard', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await user.click(screen.getByTitle('Column view'));
+      const columns = within(screen.getByTestId('columns-view'));
+      await user.keyboard('{ArrowDown}');
+      const row = columns.getByText('Art Projects').closest('[data-folder-id]') as HTMLElement;
+      await waitFor(() => expect(row.className).toContain('bg-bambu-green/20'));
+      // The selected row's kebab is the only folder control in the Tab order.
+      expect(within(row).getByTitle('Actions')).toHaveAttribute('tabindex', '0');
+      expect(
+        within(columns.getByText('Functional Parts').closest('[data-folder-id]') as HTMLElement).getByTitle('Actions'),
+      ).toHaveAttribute('tabindex', '-1');
+
+      await user.keyboard('{ContextMenu}');
+      expect(within(row).getByRole('button', { name: 'Delete' })).toBeInTheDocument();
+    });
+
+    it('closes the folder kebab menu on a second click and keeps it opaque while open', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await user.click(screen.getByTitle('Column view'));
+      const columns = within(screen.getByTestId('columns-view'));
+      const row = columns.getByText('Art Projects').closest('[data-folder-id]') as HTMLElement;
+      const kebab = within(row).getByTitle('Actions');
+      const wrapper = kebab.closest('[data-folder-actions]') as HTMLElement;
+      expect(wrapper.className).toContain('can-hover:opacity-0');
+
+      await user.click(kebab);
+      expect(within(row).getByRole('button', { name: 'Rename' })).toBeInTheDocument();
+      // The menu is a descendant of the hover-revealed wrapper: while it is
+      // open the wrapper must not depend on hover/focus to stay visible.
+      expect(wrapper.className).not.toContain('opacity-0');
+
+      await user.click(kebab);
+      expect(within(row).queryByRole('button', { name: 'Rename' })).not.toBeInTheDocument();
+      expect(wrapper.className).toContain('can-hover:opacity-0');
+    });
+
+    it('hands focus back to the pane after the folder kebab', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await user.click(screen.getByTitle('Column view'));
+      const columns = within(screen.getByTestId('columns-view'));
+      await user.keyboard('{ArrowDown}');
+      const artRow = columns.getByText('Art Projects').closest('[data-folder-id]') as HTMLElement;
+      const functionalRow = columns.getByText('Functional Parts').closest('[data-folder-id]') as HTMLElement;
+      await waitFor(() => expect(artRow.className).toContain('bg-bambu-green/20'));
+
+      // Escape closes the menu and returns focus to the pane, so the arrows
+      // keep walking rows instead of dying on the kebab.
+      await user.keyboard('{ContextMenu}');
+      expect(within(artRow).getByRole('button', { name: 'Delete' })).toBeInTheDocument();
+      expect(document.activeElement).toBe(within(artRow).getByTitle('Actions'));
+      await user.keyboard('{Escape}');
+      expect(within(artRow).queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
+      expect(document.activeElement).toBe(screen.getByTestId('columns-view'));
+      await user.keyboard('{ArrowDown}');
+      await waitFor(() => expect(functionalRow.className).toContain('bg-bambu-green/20'));
+      await user.keyboard('{ArrowUp}');
+      await waitFor(() => expect(artRow.className).toContain('bg-bambu-green/20'));
+
+      // Down straight out of an open menu closes it and moves the selection.
+      await user.keyboard('{ContextMenu}');
+      expect(within(artRow).getByRole('button', { name: 'Delete' })).toBeInTheDocument();
+      await user.keyboard('{ArrowDown}');
+      expect(within(artRow).queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
+      await waitFor(() => expect(functionalRow.className).toContain('bg-bambu-green/20'));
+      expect(document.activeElement).toBe(screen.getByTestId('columns-view'));
+
+      // Activating an entry with Enter must not strand focus on <body>.
+      await user.keyboard('{ContextMenu}');
+      await user.tab();
+      expect(document.activeElement).toBe(within(functionalRow).getByRole('button', { name: 'Rename' }));
+      await user.keyboard('{Enter}');
+      expect(await screen.findByDisplayValue('Functional Parts')).toBeInTheDocument();
+      expect(document.activeElement).not.toBe(document.body);
+    });
+
+    it('does not open the row preview when a strip icon is double-clicked', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await user.click(screen.getByTitle('Column view'));
+      const columns = within(screen.getByTestId('columns-view'));
+      const row = columns.getByText('bracket.stl').closest('[data-file-id]') as HTMLElement;
+
+      await user.dblClick(within(row).getByTitle('Rename'));
+      expect(await screen.findByDisplayValue('bracket.stl')).toBeInTheDocument();
+      expect(screen.queryByTestId('model-viewer-modal')).not.toBeInTheDocument();
+
+      // The row itself still opens the viewer.
+      await user.click(screen.getByText('Cancel'));
+      await user.dblClick(columns.getByText('bracket.stl'));
+      expect(await screen.findByTestId('model-viewer-modal')).toBeInTheDocument();
     });
   });
 
