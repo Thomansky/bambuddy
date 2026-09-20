@@ -39,6 +39,12 @@ class PrinterBase(BaseModel):
     external_camera_enabled: bool = False
     external_camera_snapshot_url: str | None = None  # Optional single-frame override; #1177
     camera_rotation: int = 0  # 0, 90, 180, 270 degrees
+    # Depreciation inputs (#694): both optional, the hourly rate is derived only
+    # when both are > 0. Read at print completion — edits never recalculate
+    # past runs. "inf" parses as a float by default and would snapshot an
+    # infinite rate onto every run, hence allow_inf_nan=False.
+    purchase_price: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    expected_lifetime_hours: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
 
 class PrinterCreate(PrinterBase):
@@ -77,6 +83,8 @@ class PrinterUpdate(BaseModel):
     camera_rotation: int | None = None  # 0, 90, 180, 270 degrees
     plate_detection_enabled: bool | None = None
     plate_detection_roi: PlateDetectionROI | None = None
+    purchase_price: float | None = Field(default=None, ge=0, allow_inf_nan=False)  # #694
+    expected_lifetime_hours: float | None = Field(default=None, ge=0, allow_inf_nan=False)  # #694
 
 
 class PrinterResponse(PrinterBase):
@@ -122,6 +130,8 @@ class PrinterResponse(PrinterBase):
             "nozzle_count": printer.nozzle_count,
             "supports_nozzle_flow_type": supports_nozzle_flow_type(printer.model),
             "print_hours_offset": printer.print_hours_offset,
+            "purchase_price": printer.purchase_price,
+            "expected_lifetime_hours": printer.expected_lifetime_hours,
             "plate_detection_enabled": printer.plate_detection_enabled,
             "created_at": printer.created_at,
             "updated_at": printer.updated_at,

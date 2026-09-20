@@ -401,6 +401,10 @@ export interface Printer {
   camera_rotation: number;  // 0, 90, 180, 270 degrees
   plate_detection_enabled: boolean;  // Check plate before print
   plate_detection_roi?: PlateDetectionROI;  // ROI for plate detection
+  // Depreciation inputs (#694): purchase_price / expected_lifetime_hours is the
+  // wear cost per printing hour. Both null = feature off for this printer.
+  purchase_price: number | null;
+  expected_lifetime_hours: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -702,6 +706,8 @@ export interface PrinterCreate {
   camera_rotation?: number;
   plate_detection_enabled?: boolean;
   plate_detection_roi?: PlateDetectionROI;
+  purchase_price?: number | null;  // #694
+  expected_lifetime_hours?: number | null;  // #694
 }
 
 // Plate Detection
@@ -823,6 +829,8 @@ export interface Archive {
   quantity: number;
   energy_kwh: number | null;
   energy_cost: number | null;
+  // First-run printer wear (#694); null when the printer has no price set.
+  depreciation_cost: number | null;
   created_at: string;
   // User tracking (Issue #206)
   created_by_id: number | null;
@@ -849,6 +857,7 @@ export interface ArchiveSlim {
   cost: number | null;
   energy_kwh: number | null;
   energy_cost: number | null;
+  depreciation_cost: number | null;
   quantity: number;
   created_at: string;
 }
@@ -869,6 +878,7 @@ export interface PrintLogEntry {
   cost: number | null;
   energy_kwh: number | null;
   energy_cost: number | null;
+  depreciation_cost: number | null;
   failure_reason: string | null;
   thumbnail_path: string | null;
   created_by_id: number | null;
@@ -898,6 +908,8 @@ export interface ArchiveStats {
   time_accuracy_by_printer: Record<string, number> | null;
   total_energy_kwh: number;
   total_energy_cost: number;
+  // Printer wear summed over every run's depreciation_cost (#694).
+  total_depreciation_cost: number;
   // True when a date-filtered total-consumption query is running on incomplete
   // snapshot history (e.g. right after upgrade, before hourly snapshots have
   // a baseline). UI should explain why the number may undercount.

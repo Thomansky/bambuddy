@@ -22,6 +22,7 @@ import {
   ChevronDown,
   Users,
   BarChart3,
+  Hourglass,
 } from 'lucide-react';
 import {
   BarChart,
@@ -133,6 +134,7 @@ function QuickStatsWidget({
     total_cost: number;
     total_energy_kwh: number;
     total_energy_cost: number;
+    total_depreciation_cost?: number;
     energy_data_warming_up?: boolean;
   } | undefined;
   currency: string;
@@ -164,6 +166,19 @@ function QuickStatsWidget({
       tooltip: warmingUpTooltip,
     },
   ];
+  // Printer wear (#694) is opt-in per printer; a farm with no prices set has
+  // nothing to show here, so the tile only appears once something accrued.
+  const wear = stats?.total_depreciation_cost ?? 0;
+  if (wear > 0) {
+    items.push({
+      icon: Hourglass,
+      color: 'text-purple-600 dark:text-purple-400',
+      label: t('stats.depreciationCost'),
+      value: `${currency} ${wear.toFixed(2)}`,
+      warning: false,
+      tooltip: undefined,
+    });
+  }
 
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
@@ -897,9 +912,9 @@ function RecordsWidget({ archives, currency }: { archives: ArchiveSlim[]; curren
       });
     }
 
-    // Filament + measured energy (#1432); prints without a smart plug have
-    // energy_cost null and compete on filament cost alone.
-    const costliest = findMax(a => (a.cost ?? 0) + (a.energy_cost ?? 0));
+    // Filament + measured energy (#1432) + printer wear (#694); prints without
+    // a smart plug or a priced printer have those null and compete on the rest.
+    const costliest = findMax(a => (a.cost ?? 0) + (a.energy_cost ?? 0) + (a.depreciation_cost ?? 0));
     if (costliest.archive) {
       result.push({
         icon: DollarSign, iconColor: 'text-green-600 dark:text-green-400', label: t('stats.mostExpensivePrint'),

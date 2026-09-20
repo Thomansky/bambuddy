@@ -170,6 +170,13 @@ import { HeaterHistoryModal } from '../components/HeaterHistoryModal';
 import type { HeaterSensorKind } from '../api/client';
 import { FilamentHoverCard, EmptySlotHoverCard } from '../components/FilamentHoverCard';
 import { LinkSpoolModal } from '../components/LinkSpoolModal';
+import { PrinterDepreciationFields } from '../components/PrinterDepreciationFields';
+import {
+  depreciationFieldFromApi,
+  depreciationFieldToApi,
+  type DepreciationFormValues,
+} from '../utils/depreciation';
+import { getCurrencySymbol } from '../utils/currency';
 import { AssignSpoolModal } from '../components/AssignSpoolModal';
 import { ConfigureAmsSlotModal } from '../components/ConfigureAmsSlotModal';
 import { useToast } from '../contexts/ToastContext';
@@ -7670,6 +7677,12 @@ export function AddPrinterModal({
     location: '',
     auto_archive: true,
   });
+  const [depreciation, setDepreciation] = useState<DepreciationFormValues>({
+    purchase_price: '',
+    expected_lifetime_hours: '',
+  });
+  const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.getSettings });
+  const currencySymbol = getCurrencySymbol(settings?.currency || 'USD');
 
   // Discovery state
   const [discovering, setDiscovering] = useState(false);
@@ -7719,6 +7732,12 @@ export function AddPrinterModal({
   // Filter out already-added printers
   const newPrinters = discovered.filter(p => !existingSerials.includes(p.serial));
 
+  const withDepreciation = (data: PrinterCreate): PrinterCreate => ({
+    ...data,
+    purchase_price: depreciationFieldToApi(depreciation.purchase_price),
+    expected_lifetime_hours: depreciationFieldToApi(depreciation.expected_lifetime_hours),
+  });
+
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setCheckingSave(true);
@@ -7737,7 +7756,7 @@ export function AddPrinterModal({
     } finally {
       setCheckingSave(false);
     }
-    onAdd(form);
+    onAdd(withDepreciation(form));
   };
 
   const startDiscovery = async () => {
@@ -8099,6 +8118,12 @@ export function AddPrinterModal({
                 {t('printers.modal.autoArchiveLabel')}
               </label>
             </div>
+            <PrinterDepreciationFields
+              idPrefix="add"
+              values={depreciation}
+              onChange={setDepreciation}
+              currencySymbol={currencySymbol}
+            />
             <button
               type="button"
               onClick={() => setShowDiagnostic(true)}
@@ -8124,7 +8149,7 @@ export function AddPrinterModal({
                   >
                     {t('printers.addPreflight.back')}
                   </Button>
-                  <Button type="button" onClick={() => onAdd(form)} className="flex-1">
+                  <Button type="button" onClick={() => onAdd(withDepreciation(form))} className="flex-1">
                     {t('printers.addPreflight.saveAnyway')}
                   </Button>
                 </div>
@@ -8457,6 +8482,12 @@ function EditPrinterModal({
     auto_archive: printer.auto_archive,
     is_active: printer.is_active,
   });
+  const [depreciation, setDepreciation] = useState<DepreciationFormValues>({
+    purchase_price: depreciationFieldFromApi(printer.purchase_price),
+    expected_lifetime_hours: depreciationFieldFromApi(printer.expected_lifetime_hours),
+  });
+  const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.getSettings });
+  const currencySymbol = getCurrencySymbol(settings?.currency || 'USD');
 
   // Setup-time pre-flight — same warn-on-save as the Add-Printer dialog, so an
   // edit that breaks connectivity (e.g. a mistyped IP) is caught before save.
@@ -8490,6 +8521,8 @@ function EditPrinterModal({
       location: form.location || undefined,
       auto_archive: form.auto_archive,
       is_active: form.is_active,
+      purchase_price: depreciationFieldToApi(depreciation.purchase_price),
+      expected_lifetime_hours: depreciationFieldToApi(depreciation.expected_lifetime_hours),
     };
     // Only include access_code if it was changed
     if (form.access_code) {
@@ -8630,6 +8663,12 @@ function EditPrinterModal({
                 {t('printers.modal.autoArchiveLabel')}
               </label>
             </div>
+            <PrinterDepreciationFields
+              idPrefix="edit"
+              values={depreciation}
+              onChange={setDepreciation}
+              currencySymbol={currencySymbol}
+            />
             {/* Maintenance Mode toggle (#1476) — checkbox is the inverse of
                 is_active because the user-facing concept is "is this printer
                 in maintenance" not "is it active". */}

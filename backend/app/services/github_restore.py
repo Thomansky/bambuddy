@@ -1079,6 +1079,7 @@ class GitHubRestoreService:
                 "quantity": entry.get("quantity") or 1,
                 "energy_kwh": entry.get("energy_kwh"),
                 "energy_cost": entry.get("energy_cost"),
+                "depreciation_cost": entry.get("depreciation_cost"),
             }
 
             printer_id = entry.get("printer_id")
