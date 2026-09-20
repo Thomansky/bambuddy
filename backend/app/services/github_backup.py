@@ -870,6 +870,7 @@ class GitHubBackupService:
                 "quantity": a.quantity,
                 "energy_kwh": a.energy_kwh,
                 "energy_cost": a.energy_cost,
+                "depreciation_cost": a.depreciation_cost,
                 "created_at": str(a.created_at) if a.created_at else None,
                 # Soft-deleted archives are collected too — their row is kept on
                 # purpose so the stats endpoint keeps counting their filament and

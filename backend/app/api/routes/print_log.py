@@ -44,6 +44,7 @@ _SORTABLE_COLUMNS = {
     "cost": PrintLogEntry.cost,
     "energy": PrintLogEntry.energy_kwh,
     "energy_cost": PrintLogEntry.energy_cost,
+    "depreciation_cost": PrintLogEntry.depreciation_cost,
 }
 
 

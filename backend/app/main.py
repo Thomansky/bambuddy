@@ -7056,7 +7056,8 @@ async def on_print_complete(printer_id: int, data: dict):
     try:
         async with async_session() as db:
             from backend.app.models.archive import PrintArchive
-            from backend.app.services.print_log import write_log_entry
+            from backend.app.services.depreciation import snapshot_run_depreciation
+            from backend.app.services.print_log import run_duration_seconds, write_log_entry
 
             archive = await db.get(PrintArchive, archive_id)
             if archive:
@@ -7105,6 +7106,17 @@ async def on_print_complete(printer_id: int, data: dict):
                 if _run_cost is None and _run_status == "completed":
                     _run_cost = _est_cost
 
+                # Printer wear for THIS run (#694): measured duration × the
+                # printer's hourly rate as configured right now. Snapshot onto
+                # the archive on its first run only, like cost / energy (#1378).
+                _reconciled = bool(data.get("_reconciled"))
+                _depreciation_cost = await snapshot_run_depreciation(
+                    db,
+                    archive,
+                    printer_id,
+                    run_duration_seconds(archive.started_at, archive.completed_at, reconciled=_reconciled),
+                )
+
                 await write_log_entry(
                     db,
                     archive_id=archive.id,
@@ -7122,13 +7134,14 @@ async def on_print_complete(printer_id: int, data: dict):
                     filament_color=archive.filament_color,
                     filament_used_grams=_run_grams,
                     cost=_run_cost,
+                    depreciation_cost=_depreciation_cost,
                     failure_reason=archive.failure_reason,
                     thumbnail_path=archive.thumbnail_path,
                     created_by_id=archive.created_by_id,
                     created_by_username=_print_user_info.get("username") if _print_user_info else None,
                     # Reconciled completions have an unknown real end time —
                     # log 0 duration instead of the whole disconnect gap (#2592).
-                    reconciled=bool(data.get("_reconciled")),
+                    reconciled=_reconciled,
                 )
                 await db.commit()
                 logger.info("[PRINT_LOG] Log entry written for archive %s", archive_id)

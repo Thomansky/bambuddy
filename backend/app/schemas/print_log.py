@@ -27,6 +27,7 @@ class PrintLogEntrySchema(BaseModel):
     cost: float | None = None
     energy_kwh: float | None = None
     energy_cost: float | None = None
+    depreciation_cost: float | None = None
     failure_reason: str | None = None
     thumbnail_path: str | None = None
     created_by_id: int | None = None

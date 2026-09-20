@@ -13,6 +13,24 @@ from backend.app.models.print_log import PrintLogEntry
 logger = logging.getLogger(__name__)
 
 
+def run_duration_seconds(
+    started_at: datetime | None,
+    completed_at: datetime | None,
+    *,
+    reconciled: bool = False,
+) -> int | None:
+    """The measured runtime a log entry stores as ``duration_seconds``.
+
+    Exposed so callers that price the run before writing it (printer
+    depreciation, #694) use exactly the value the entry will carry.
+    """
+    if reconciled:
+        return 0
+    if started_at and completed_at:
+        return int((completed_at - started_at).total_seconds())
+    return None
+
+
 async def write_log_entry(
     db: AsyncSession,
     *,
@@ -30,6 +48,7 @@ async def write_log_entry(
     cost: float | None = None,
     energy_kwh: float | None = None,
     energy_cost: float | None = None,
+    depreciation_cost: float | None = None,
     failure_reason: str | None = None,
     thumbnail_path: str | None = None,
     created_by_id: int | None = None,
@@ -48,12 +67,7 @@ async def write_log_entry(
     fabricated duration; the stats total trusts a stored 0 instead of
     recomputing from the stale timestamps.
     """
-    if reconciled:
-        duration: int | None = 0
-    elif started_at and completed_at:
-        duration = int((completed_at - started_at).total_seconds())
-    else:
-        duration = None
+    duration = run_duration_seconds(started_at, completed_at, reconciled=reconciled)
 
     entry = PrintLogEntry(
         archive_id=archive_id,
@@ -71,6 +85,7 @@ async def write_log_entry(
         cost=cost,
         energy_kwh=energy_kwh,
         energy_cost=energy_cost,
+        depreciation_cost=depreciation_cost,
         failure_reason=failure_reason,
         thumbnail_path=thumbnail_path,
         created_by_id=created_by_id,

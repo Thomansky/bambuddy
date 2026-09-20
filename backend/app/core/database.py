@@ -4955,6 +4955,15 @@ async def run_migrations(conn):
         conn, "ALTER TABLE notification_providers ADD COLUMN on_ams_drying_suspended BOOLEAN DEFAULT TRUE"
     )
 
+    # Migration: optional printer depreciation (#694). The two printer inputs
+    # give an hourly wear rate; each completed run snapshots duration × rate onto
+    # its PrintLogEntry, and the archive keeps the first run's value only
+    # (#1378). REAL is spelled identically on SQLite and Postgres.
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN purchase_price REAL")
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN expected_lifetime_hours REAL")
+    await _safe_execute(conn, "ALTER TABLE print_log_entries ADD COLUMN depreciation_cost REAL")
+    await _safe_execute(conn, "ALTER TABLE print_archives ADD COLUMN depreciation_cost REAL")
+
     # Migration: storage location sensor alerts (#2824), own column rather than
     # reusing on_ha_sensor_alert. That column can be scoped to one printer
     # (printer_id), and a location alert has no printer to scope by — sharing

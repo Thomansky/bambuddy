@@ -112,6 +112,10 @@ class PrintArchive(Base):
     # Plug lifetime counter captured at print start; delta at print end becomes energy_kwh.
     # Persisted so per-print tracking survives backend restarts mid-print (#941).
     energy_start_kwh: Mapped[float | None] = mapped_column(Float)
+    # Printer wear for the first run, snapshot at completion from the printer's
+    # purchase price / expected lifetime (#694). Reprints keep theirs on their
+    # PrintLogEntry, never here (#1378).
+    depreciation_cost: Mapped[float | None] = mapped_column(Float)
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

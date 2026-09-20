@@ -369,6 +369,7 @@ def archive_to_response(
         "quantity": archive.quantity,
         "energy_kwh": archive.energy_kwh,
         "energy_cost": archive.energy_cost,
+        "depreciation_cost": archive.depreciation_cost,
         "created_at": archive.created_at,
         # User tracking (Issue #206)
         "created_by_id": archive.created_by_id,
@@ -683,6 +684,7 @@ async def list_archives_slim(
             PrintLogEntry.cost,
             PrintLogEntry.energy_kwh,
             PrintLogEntry.energy_cost,
+            PrintLogEntry.depreciation_cost,
             PrintLogEntry.created_at,
         )
         .outerjoin(PrintArchive, PrintArchive.id == PrintLogEntry.archive_id)
@@ -727,6 +729,7 @@ async def list_archives_slim(
             "cost": r.cost,
             "energy_kwh": r.energy_kwh,
             "energy_cost": r.energy_cost,
+            "depreciation_cost": r.depreciation_cost,
             "quantity": 1,
             "created_at": r.created_at,
         }
@@ -1211,6 +1214,9 @@ async def get_archive_stats(
     cost_result = await db.execute(select(func.sum(PrintLogEntry.cost)).where(*base_conditions))
     total_cost = cost_result.scalar() or 0
 
+    depreciation_result = await db.execute(select(func.sum(PrintLogEntry.depreciation_cost)).where(*base_conditions))
+    total_depreciation_cost = depreciation_result.scalar() or 0
+
     # By filament type (split comma-separated values for multi-material prints)
     filament_type_result = await db.execute(
         select(PrintLogEntry.filament_type).where(PrintLogEntry.filament_type.isnot(None), *base_conditions)
@@ -1358,6 +1364,7 @@ async def get_archive_stats(
         time_accuracy_by_printer=accuracy_by_printer if accuracy_by_printer else None,
         total_energy_kwh=round(total_energy_kwh, 3),
         total_energy_cost=round(total_energy_cost, 3),
+        total_depreciation_cost=round(total_depreciation_cost, 3),
         energy_data_warming_up=energy_data_warming_up,
     )
 
