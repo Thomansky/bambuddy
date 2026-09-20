@@ -394,3 +394,153 @@ class TestOverviewWaitingReason:
         assert item["current_run"]["source"] == "schedule"
         assert item["current_run"]["waiting_reason"] == "awaiting_plate_clear"
         assert item["last_run"] is None  # an active run takes the slot
+
+
+# ============== Vision encoder calibration (second action) ==============
+
+
+async def _motion_item(async_client: AsyncClient, printer_id: int) -> dict | None:
+    response = await async_client.get(f"/api/v1/maintenance/printers/{printer_id}")
+    assert response.status_code == 200, response.text
+    items = [i for i in response.json()["maintenance_items"] if i["action"] == "motion_precision"]
+    assert len(items) <= 1
+    return items[0] if items else None
+
+
+class TestVisionEncoderType:
+    async def test_seeded_as_a_seven_day_system_type(self, async_client):
+        response = await async_client.get("/api/v1/maintenance/types")
+        vision = [t for t in response.json() if t["name"] == "Vision Encoder Calibration"]
+        assert len(vision) == 1
+        assert vision[0]["is_system"] is True
+        assert vision[0]["action"] == "motion_precision"
+        assert vision[0]["default_interval_hours"] == 7.0
+        assert vision[0]["interval_type"] == "days"
+
+    @pytest.mark.parametrize("model", ["H2S", "H2D", "H2D Pro", "H2C", "O1S"])
+    async def test_offered_on_the_h2_series(self, async_client, printer_factory, model):
+        printer = await printer_factory(model=model)
+        item = await _motion_item(async_client, printer.id)
+        assert item is not None
+        assert item["interval_type"] == "days"
+        assert item["interval_hours"] == 7.0
+        assert item["is_due"] is True  # never performed
+        # No option set: the job has none
+        assert item["action_options"] is None
+        assert item["action_available_options"] is None
+        assert item["trigger_mode"] == "manual"
+
+    @pytest.mark.parametrize("model", ["X1C", "P1S", "A1", "X2D", None])
+    async def test_not_offered_on_printers_without_a_vision_encoder(self, async_client, printer_factory, model):
+        printer = await printer_factory(model=model)
+        assert await _motion_item(async_client, printer.id) is None
+        # ...while the bed-levelling calibration still is
+        assert await _calibration_item(async_client, printer.id)
+
+    async def test_run_now_needs_no_options(self, async_client, printer_factory):
+        printer = await printer_factory(model="H2S")
+        item = await _motion_item(async_client, printer.id)
+        response = await async_client.post(f"/api/v1/maintenance/items/{item['id']}/run")
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "pending"
+        assert response.json()["options"] is None
+        assert (await async_client.post(f"/api/v1/maintenance/items/{item['id']}/run")).status_code == 409
+
+    async def test_triggers_need_no_options_either(self, async_client, printer_factory, monkeypatch):
+        monkeypatch.setenv("TZ", "UTC")
+        printer = await printer_factory(model="H2S")
+        item = await _motion_item(async_client, printer.id)
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}", json={"trigger_mode": "when_due"}
+        )
+        assert response.status_code == 200, response.text
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}",
+            json={"trigger_mode": "schedule", "schedule_days": [5], "schedule_time": "06:00"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["schedule_next_at"] is not None
+
+    async def test_options_cannot_be_set_on_it(self, async_client, printer_factory):
+        printer = await printer_factory(model="H2S")
+        item = await _motion_item(async_client, printer.id)
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}", json={"action_options": {"bed_leveling": True}}
+        )
+        assert response.status_code == 400
+        assert "no options" in response.json()["detail"]
+
+    async def _running_motion_run(self, async_client, printer_factory, db_session):
+        printer = await printer_factory(model="H2S")
+        item = await _motion_item(async_client, printer.id)
+        run = MaintenanceRun(
+            printer_maintenance_id=item["id"],
+            printer_id=printer.id,
+            status="running",
+            source="manual",
+            started_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        )
+        db_session.add(run)
+        await db_session.commit()
+        return printer, run
+
+    async def test_cancel_stops_the_printer_only_on_the_vision_encoder_job(
+        self, async_client, printer_factory, db_session
+    ):
+        printer, run = await self._running_motion_run(async_client, printer_factory, db_session)
+        with patch("backend.app.api.routes.maintenance.printer_manager") as mock_pm:
+            mock_pm.get_status.return_value = SimpleNamespace(
+                state="RUNNING",
+                gcode_file="/usr/etc/print/O1S/calibrate_motion_precision.gcode",
+                current_print=None,
+                subtask_name="calibrate_motion_precision.gcode",
+            )
+            mock_pm.stop_print.return_value = True
+            response = await async_client.delete(f"/api/v1/maintenance/runs/{run.id}")
+        assert response.status_code == 200
+        mock_pm.stop_print.assert_called_once_with(printer.id)
+        await db_session.refresh(run)
+        assert run.status == "cancelled"
+
+    async def test_cancel_leaves_the_other_calibration_alone(self, async_client, printer_factory, db_session):
+        """The printer is on the bed-levelling run (started from the screen,
+        say) while a stale motion_precision row says running: not ours to stop."""
+        _printer, run = await self._running_motion_run(async_client, printer_factory, db_session)
+        with patch("backend.app.api.routes.maintenance.printer_manager") as mock_pm:
+            mock_pm.get_status.return_value = SimpleNamespace(
+                state="RUNNING",
+                gcode_file="/usr/etc/print/O1S/auto_cali_for_user_param.gcode",
+                current_print=None,
+                subtask_name="auto_cali_for_user_param.gcode",
+            )
+            response = await async_client.delete(f"/api/v1/maintenance/runs/{run.id}")
+        assert response.status_code == 200
+        mock_pm.stop_print.assert_not_called()
+        await db_session.refresh(run)
+        assert run.status == "cancelled"
+
+    async def test_a_calibration_run_is_not_stopped_while_the_vision_encoder_runs(
+        self, async_client, printer_factory, db_session
+    ):
+        printer = await printer_factory(model="H2S")
+        item = await _calibration_item(async_client, printer.id)
+        run = MaintenanceRun(
+            printer_maintenance_id=item["id"],
+            printer_id=printer.id,
+            status="running",
+            source="manual",
+            options={"bed_leveling": True},
+            started_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        )
+        db_session.add(run)
+        await db_session.commit()
+        with patch("backend.app.api.routes.maintenance.printer_manager") as mock_pm:
+            mock_pm.get_status.return_value = SimpleNamespace(
+                state="RUNNING",
+                gcode_file="/usr/etc/print/O1S/calibrate_motion_precision.gcode",
+                current_print=None,
+                subtask_name="calibrate_motion_precision.gcode",
+            )
+            response = await async_client.delete(f"/api/v1/maintenance/runs/{run.id}")
+        assert response.status_code == 200
+        mock_pm.stop_print.assert_not_called()

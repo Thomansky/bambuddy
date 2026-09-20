@@ -22,7 +22,7 @@ from backend.app.core.tasks import spawn_background_task
 from backend.app.core.websocket import ws_manager
 from backend.app.models.archive import PrintArchive
 from backend.app.models.library import LibraryFile
-from backend.app.models.maintenance import MaintenanceRun
+from backend.app.models.maintenance import MaintenanceRun, PrinterMaintenance
 from backend.app.models.print_queue import PrintQueueItem, PrintQueueVariant
 from backend.app.models.printer import Printer
 from backend.app.models.scheduled_drying import ScheduledDrying
@@ -4842,6 +4842,8 @@ class PrintScheduler:
         the plate-clear gate is honoured here when the setting is on -- bed
         levelling with parts on the plate is a crash -- so "Saturday, as soon as
         the plate is released" is literally what a scheduled run waits for.
+        What is sent depends on the item's action: the calibration command with
+        the run's options, or the vision encoder's system gcode file.
         Completion is not tracked here; the printer's own completion event
         closes the run through ``maintenance_actions.on_internal_job_finished``.
         """
@@ -4853,6 +4855,10 @@ class PrintScheduler:
         result = await db.execute(
             select(MaintenanceRun)
             .where(MaintenanceRun.status.in_(("pending", "running")))
+            .options(
+                selectinload(MaintenanceRun.printer_maintenance).selectinload(PrinterMaintenance.maintenance_type),
+                selectinload(MaintenanceRun.printer),
+            )
             .order_by(MaintenanceRun.start_after.asc().nullsfirst(), MaintenanceRun.id.asc())
         )
         rows = list(result.scalars().all())
@@ -4893,14 +4899,39 @@ class PrintScheduler:
                     row.waiting_reason = "printer_busy"
                 continue
 
-            options = maintenance_actions.normalize_calibration_options(row.options)
-            logger.info(
-                "Maintenance run %d: starting calibration on printer %d (%s)",
-                row.id,
-                printer_id,
-                ", ".join(flag for flag, on in options.items() if on),
-            )
-            if printer_manager.start_calibration(printer_id, **options):
+            action = row.printer_maintenance.maintenance_type.action
+            if action == maintenance_actions.ACTION_MOTION_PRECISION:
+                path = maintenance_actions.motion_precision_gcode_path(
+                    row.printer.model, getattr(state, "internal_gcode_dir", None)
+                )
+                if path is None:
+                    # Belt and braces: the type gate keeps the item off other
+                    # models, but a row is a row.
+                    row.status = "failed"
+                    row.error_message = (
+                        f"Vision encoder calibration needs an H2-series printer; this one is {row.printer.model}"
+                    )
+                    row.completed_at = now
+                    row.waiting_reason = None
+                    logger.warning("Maintenance run %d refused: %s", row.id, row.error_message)
+                    continue
+                logger.info(
+                    "Maintenance run %d: starting vision encoder calibration on printer %d (%s)",
+                    row.id,
+                    printer_id,
+                    path,
+                )
+                sent = printer_manager.start_internal_gcode_file(printer_id, path)
+            else:
+                options = maintenance_actions.normalize_calibration_options(row.options)
+                logger.info(
+                    "Maintenance run %d: starting calibration on printer %d (%s)",
+                    row.id,
+                    printer_id,
+                    ", ".join(flag for flag, on in options.items() if on),
+                )
+                sent = printer_manager.start_calibration(printer_id, **options)
+            if sent:
                 row.status = "running"
                 row.started_at = now
                 row.waiting_reason = None

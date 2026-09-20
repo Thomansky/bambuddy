@@ -847,6 +847,20 @@ class PrintOptions:
     filament_tangle_detect: bool = False
 
 
+_INTERNAL_GCODE_PREFIX = "/usr/etc/print/"
+
+
+def _internal_gcode_dir(gcode_file: str | None) -> str | None:
+    """The ``<dir>`` of a reported ``/usr/etc/print/<dir>/<file>`` path, else None."""
+    if not gcode_file or not gcode_file.startswith(_INTERNAL_GCODE_PREFIX):
+        return None
+    rest = gcode_file[len(_INTERNAL_GCODE_PREFIX) :]
+    directory, sep, name = rest.partition("/")
+    if not sep or not directory or not name or "/" in name:
+        return None
+    return directory
+
+
 @dataclass
 class PrinterState:
     connected: bool = False
@@ -870,6 +884,12 @@ class PrinterState:
     # (H2S capture, #3127). Never cleared; consumers compare it to their own
     # stamp of the edge they are judging.
     last_cancel_echo_at: float | None = None
+    # The model-specific directory under /usr/etc/print/ the firmware keeps its
+    # own calibration gcode in ("O1S" on every H2S), learned from the path the
+    # printer reports for any internal job it runs. Never cleared: the
+    # maintenance executor needs it to start the vision encoder calibration
+    # by path (#3127), and the model map is only a fallback.
+    internal_gcode_dir: str | None = None
     kprofiles: list = field(default_factory=list)  # List of KProfile
     sdcard: bool = False  # SD card inserted
     # Whether the printer has ever actually told us about `sdcard`. Without this
@@ -3990,6 +4010,9 @@ class BambuMQTTClient:
         if "gcode_file" in data:
             self.state.gcode_file = data["gcode_file"]
             self.state.current_print = data["gcode_file"]
+            internal_dir = _internal_gcode_dir(data["gcode_file"])
+            if internal_dir:
+                self.state.internal_gcode_dir = internal_dir
         if "subtask_name" in data:
             self.state.subtask_name = data["subtask_name"]
             # Prefer subtask_name as current_print if available
@@ -6399,6 +6422,37 @@ class BambuMQTTClient:
             f"nozzle_clumping={nozzle_clumping} (option={option})"
         )
 
+        return True
+
+    def start_internal_gcode_file(self, path: str) -> bool:
+        """Start one of the firmware's own gcode files by path.
+
+        The vision encoder (motion precision) calibration of the H2 series has
+        no ``calibration`` option bit; the printer runs it as
+        ``/usr/etc/print/<dir>/calibrate_motion_precision.gcode`` through the
+        plain ``gcode_file`` command (H2S capture, #3127), reporting it like
+        any other internal job. Only system paths are accepted: this is not a
+        way to print a user's file.
+
+        Returns:
+            True if command was sent, False if not connected or not a system path
+        """
+        if not path.startswith(_INTERNAL_GCODE_PREFIX):
+            logger.warning("[%s] Refusing to start non-system gcode file %s", self.serial_number, path)
+            return False
+        if not self._client or not self.state.connected:
+            return False
+
+        self._sequence_id += 1
+        command = {
+            "print": {
+                "command": "gcode_file",
+                "sequence_id": str(self._sequence_id),
+                "param": path,
+            }
+        }
+        self._client.publish(self.topic_publish, json.dumps(command), qos=1)
+        logger.info("[%s] Starting internal gcode file %s", self.serial_number, path)
         return True
 
     def disconnect(self, timeout: float = 0):

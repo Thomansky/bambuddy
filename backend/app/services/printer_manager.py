@@ -993,6 +993,12 @@ class PrinterManager:
             return self._clients[printer_id].start_calibration(**options)
         return False
 
+    def start_internal_gcode_file(self, printer_id: int, path: str) -> bool:
+        """Start one of the printer's own system gcode files; see BambuMQTTClient.start_internal_gcode_file."""
+        if printer_id in self._clients:
+            return self._clients[printer_id].start_internal_gcode_file(path)
+        return False
+
     async def wait_for_cooldown(
         self,
         printer_id: int,
