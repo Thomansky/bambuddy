@@ -53,7 +53,24 @@ const reminderItem: MaintenanceStatus = {
   action_available_options: null,
 };
 
-function overviewWith(item: Partial<MaintenanceStatus>) {
+// The H2 series' vision encoder calibration: an action without options.
+const motionItem: MaintenanceStatus = {
+  ...baseItem,
+  id: 9,
+  maintenance_type_id: 12,
+  maintenance_type_name: 'Vision Encoder Calibration',
+  maintenance_type_icon: 'ScanEye',
+  interval_hours: 7,
+  interval_type: 'days',
+  days_since_maintenance: 8,
+  days_until_due: -1,
+  is_due: true,
+  action: 'motion_precision',
+  action_options: null,
+  action_available_options: null,
+};
+
+function overviewWith(item: Partial<MaintenanceStatus>, extra: MaintenanceStatus[] = []) {
   return [
     {
       printer_id: 1,
@@ -62,7 +79,7 @@ function overviewWith(item: Partial<MaintenanceStatus>) {
       total_print_hours: 40,
       due_count: 0,
       warning_count: 0,
-      maintenance_items: [{ ...baseItem, ...item }, reminderItem],
+      maintenance_items: [{ ...baseItem, ...item }, reminderItem, ...extra],
     },
   ];
 }
@@ -220,5 +237,41 @@ describe('MaintenancePage calibration card', () => {
     render(<MaintenancePage />);
     fireEvent.click(await screen.findByRole('button', { name: 'Settings' }));
     expect(await screen.findByText('Runs a calibration')).toBeInTheDocument();
+  });
+
+  it('renders the vision encoder item without the option row but with the shared controls', async () => {
+    server.use(
+      http.get('/api/v1/maintenance/overview', () => HttpResponse.json(overviewWith({}, [motionItem]))),
+      http.post('/api/v1/maintenance/items/9/run', () => {
+        runCalls += 1;
+        return HttpResponse.json({ id: 100, printer_maintenance_id: 9, printer_id: 1, status: 'pending', source: 'manual', options: null, start_after: null, waiting_reason: null, error_message: null, created_at: '2026-09-19T05:00:00Z', started_at: null, completed_at: null });
+      })
+    );
+    await expandPrinter();
+    const panel = await screen.findByTestId('calibration-panel-9');
+    expect(within(panel).queryByRole('checkbox')).toBeNull();
+    expect(within(panel).queryByLabelText('Bed leveling')).toBeNull();
+    expect(within(panel).getByRole('combobox', { name: 'Trigger' })).toHaveValue('manual');
+    const runNow = within(panel).getByRole('button', { name: /Run now/ });
+    expect(runNow).toBeEnabled();
+    fireEvent.click(runNow);
+    await waitFor(() => expect(runCalls).toBe(1));
+    // ...while the bed-levelling card next to it still has its options
+    expect(within(screen.getByTestId('calibration-panel-7')).getByLabelText('Bed leveling')).toBeInTheDocument();
+  });
+
+  it('badges every actionable type on the settings tab', async () => {
+    server.use(
+      http.get('/api/v1/maintenance/types', () =>
+        HttpResponse.json([
+          { id: 10, name: 'Printer Calibration', description: '', default_interval_hours: 100, interval_type: 'hours', icon: 'Target', wiki_url: null, is_system: true, action: 'calibration', created_at: '2026-01-01T00:00:00Z' },
+          { id: 12, name: 'Vision Encoder Calibration', description: '', default_interval_hours: 7, interval_type: 'days', icon: 'ScanEye', wiki_url: null, is_system: true, action: 'motion_precision', created_at: '2026-01-01T00:00:00Z' },
+          { id: 11, name: 'Clean Build Plate', description: '', default_interval_hours: 25, interval_type: 'hours', icon: 'Square', wiki_url: null, is_system: true, action: null, created_at: '2026-01-01T00:00:00Z' },
+        ])
+      )
+    );
+    render(<MaintenancePage />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings' }));
+    expect(await screen.findAllByText('Runs a calibration')).toHaveLength(2);
   });
 });

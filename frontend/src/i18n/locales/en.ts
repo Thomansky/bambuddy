@@ -1842,6 +1842,8 @@ export default {
       replaceHepaFilter: 'Replace HEPA Filter',
       replaceCarbonFilter: 'Replace Carbon Filter',
       lubricateLeftNozzleRail: 'Lubricate Left Nozzle Rail',
+      printerCalibration: 'Printer Calibration',
+      visionEncoderCalibration: 'Vision Encoder Calibration',
     },
     // Toast
     maintenanceComplete: 'Maintenance marked as complete',
@@ -5864,6 +5866,8 @@ export default {
     replaceHepaFilter: 'Replace HEPA filter for air quality',
     replaceCarbonFilter: 'Replace activated carbon filter',
     lubricateLeftNozzleRail: 'Lubricate left nozzle rail (H2 series)',
+    printerCalibration: 'Bed leveling, vibration compensation and motor noise cancellation, run by the printer itself',
+    visionEncoderCalibration: 'Motion precision calibration of the vision encoder (H2 series), run by the printer itself',
   },
 
   // Smart Plugs

@@ -1824,6 +1824,8 @@ export default {
       replaceHepaFilter: 'Substituir Filtro HEPA',
       replaceCarbonFilter: 'Substituir Filtro de Carbono',
       lubricateLeftNozzleRail: 'Lubrificar Trilho do Bico Esquerdo',
+      printerCalibration: 'Calibração da impressora',
+      visionEncoderCalibration: 'Calibração do codificador de visão',
     },
     // Toast
     maintenanceComplete: 'Manutenção marcada como concluída',
@@ -5802,6 +5804,8 @@ export default {
     replaceHepaFilter: 'Substitua o filtro HEPA para qualidade do ar',
     replaceCarbonFilter: 'Substitua o filtro de carbono ativado',
     lubricateLeftNozzleRail: 'Lubrifique o trilho do bico esquerdo (série H2)',
+    printerCalibration: 'Nivelamento da mesa, compensação de vibração e cancelamento do ruído dos motores, executados pela própria impressora',
+    visionEncoderCalibration: 'Calibração de precisão de movimento do codificador de visão (série H2), executada pela própria impressora',
   },
 
   // Smart Plugs

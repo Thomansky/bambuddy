@@ -1824,6 +1824,8 @@ export default {
       replaceHepaFilter: 'Remplacer le filtre HEPA',
       replaceCarbonFilter: 'Remplacer le filtre charbon',
       lubricateLeftNozzleRail: 'Lubrifier le rail de buse gauche',
+      printerCalibration: 'Calibration de l\'imprimante',
+      visionEncoderCalibration: 'Calibration de l\'encodeur de vision',
     },
     // Toast
     maintenanceComplete: 'Maintenance marquée comme faite',
@@ -5803,6 +5805,8 @@ export default {
     replaceHepaFilter: 'Filtre HEPA pour la qualité de l\'air',
     replaceCarbonFilter: 'Filtre charbon actif (odeurs)',
     lubricateLeftNozzleRail: 'Lubrifier le rail de buse gauche (Série H2)',
+    printerCalibration: 'Nivellement du plateau, compensation des vibrations et annulation du bruit des moteurs, exécutés par l\'imprimante elle-même',
+    visionEncoderCalibration: 'Calibration de la précision de mouvement de l\'encodeur de vision (série H2), exécutée par l\'imprimante elle-même',
   },
 
   // Smart Plugs

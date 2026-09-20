@@ -1823,6 +1823,8 @@ export default {
       replaceHepaFilter: 'HEPAフィルター交換',
       replaceCarbonFilter: 'カーボンフィルター交換',
       lubricateLeftNozzleRail: '左ノズルレールの潤滑',
+      printerCalibration: 'プリンターキャリブレーション',
+      visionEncoderCalibration: 'ビジョンエンコーダーキャリブレーション',
     },
     // Toast
     maintenanceComplete: 'メンテナンスを完了としてマークしました',
@@ -5814,6 +5816,8 @@ export default {
     replaceHepaFilter: 'HEPAフィルター交換',
     replaceCarbonFilter: 'カーボンフィルター交換',
     lubricateLeftNozzleRail: '左ノズルレールの潤滑',
+    printerCalibration: 'ベッドレベリング、振動補正、モーターノイズキャンセルをプリンター自身が実行します',
+    visionEncoderCalibration: 'ビジョンエンコーダーの運動精度キャリブレーション（H2 シリーズ）をプリンター自身が実行します',
   },
 
   // Smart Plugs

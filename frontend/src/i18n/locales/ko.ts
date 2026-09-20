@@ -1743,7 +1743,9 @@ export default {
       checkPtfeTube: 'PTFE 튜브 확인',
       replaceHepaFilter: 'HEPA 필터 교체',
       replaceCarbonFilter: '활성탄 필터 교체',
-      lubricateLeftNozzleRail: '좌측 노즐 레일 윤활'
+      lubricateLeftNozzleRail: '좌측 노즐 레일 윤활',
+      printerCalibration: '프린터 캘리브레이션',
+      visionEncoderCalibration: '비전 인코더 캘리브레이션'
     },
     maintenanceComplete: '유지보수가 완료로 표시되었습니다',
     typeUpdated: '유지보수 유형이 업데이트되었습니다',
@@ -5544,7 +5546,9 @@ export default {
     checkPtfeTube: '마모 또는 손상 여부 확인을 위해 PTFE 튜브 점검',
     replaceHepaFilter: '공기 품질을 위해 HEPA 필터 교체',
     replaceCarbonFilter: '활성탄 필터 교체',
-    lubricateLeftNozzleRail: '왼쪽 노즐 레일 윤활 (H2 시리즈)'
+    lubricateLeftNozzleRail: '왼쪽 노즐 레일 윤활 (H2 시리즈)',
+    printerCalibration: '베드 레벨링, 진동 보정, 모터 소음 제거를 프린터가 직접 실행합니다',
+    visionEncoderCalibration: '비전 인코더의 모션 정밀도 캘리브레이션(H2 시리즈)을 프린터가 직접 실행합니다'
   },
   haSensors: {
     label: '센서',
