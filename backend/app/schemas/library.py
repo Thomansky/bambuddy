@@ -122,6 +122,8 @@ class FileUpdate(BaseModel):
     folder_id: int | None = None
     project_id: int | None = None
     notes: str | None = None
+    # Empty string clears the link, like ``notes`` (#3077).
+    external_url: str | None = Field(None, max_length=500)
 
 
 class FileDuplicate(BaseModel):
@@ -157,6 +159,11 @@ class FileResponse(BaseModel):
     last_printed_at: datetime | None
 
     notes: str | None
+    # User link + photos of the printed result (#3077); ``source_url`` is the
+    # read-only import provenance (MakerWorld) shown next to it.
+    external_url: str | None = None
+    photos: list[str] = []
+    source_url: str | None = None
 
     # Duplicate detection
     duplicates: list[FileDuplicate] | None = None
@@ -226,6 +233,12 @@ class FileListResponse(BaseModel):
     # query so the badge and the smart-print decision cost no extra request.
     variant_group_id: int | None = None
     variant_count: int = 0
+
+    # Metadata indicators (#3077). The list never ships the notes text itself â€”
+    # ``has_notes`` is enough for the card badge; the details modal loads the rest.
+    external_url: str | None = None
+    has_notes: bool = False
+    photo_count: int = 0
 
     class Config:
         from_attributes = True
