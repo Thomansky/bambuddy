@@ -113,8 +113,8 @@ class PrintArchive(Base):
     # Persisted so per-print tracking survives backend restarts mid-print (#941).
     energy_start_kwh: Mapped[float | None] = mapped_column(Float)
     # Printer wear for the first run, snapshot at completion from the printer's
-    # purchase price / expected lifetime (#694). Reprints keep theirs on their
-    # PrintLogEntry, never here (#1378).
+    # hourly wear rate (#694). Reprints keep theirs on their PrintLogEntry,
+    # never here (#1378).
     depreciation_cost: Mapped[float | None] = mapped_column(Float)
 
     # Timestamps

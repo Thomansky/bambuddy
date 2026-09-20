@@ -401,10 +401,8 @@ export interface Printer {
   camera_rotation: number;  // 0, 90, 180, 270 degrees
   plate_detection_enabled: boolean;  // Check plate before print
   plate_detection_roi?: PlateDetectionROI;  // ROI for plate detection
-  // Depreciation inputs (#694): purchase_price / expected_lifetime_hours is the
-  // wear cost per printing hour. Both null = feature off for this printer.
-  purchase_price: number | null;
-  expected_lifetime_hours: number | null;
+  // Wear cost per printing hour (#694); null or 0 = feature off for this printer.
+  wear_cost_per_hour: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -706,8 +704,7 @@ export interface PrinterCreate {
   camera_rotation?: number;
   plate_detection_enabled?: boolean;
   plate_detection_roi?: PlateDetectionROI;
-  purchase_price?: number | null;  // #694
-  expected_lifetime_hours?: number | null;  // #694
+  wear_cost_per_hour?: number | null;  // #694
 }
 
 // Plate Detection

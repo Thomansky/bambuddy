@@ -113,7 +113,7 @@ describe('ArchivesPage printer wear', () => {
     await waitFor(() => expect(screen.getByText('All Statuses')).toBeInTheDocument());
 
     // Off by default, like cost / energy: the table stays narrow for the
-    // farms that never set a purchase price.
+    // farms that never set a wear rate.
     const table = await screen.findByRole('table');
     expect(within(table).queryByText('Printer Wear')).not.toBeInTheDocument();
     expect(within(table).queryByText('$0.50')).not.toBeInTheDocument();

@@ -20,10 +20,8 @@ class Printer(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     auto_archive: Mapped[bool] = mapped_column(Boolean, default=True)
     print_hours_offset: Mapped[float] = mapped_column(Float, default=0.0)  # Baseline hours to add
-    # Optional depreciation inputs (#694): purchase_price / expected_lifetime_hours
-    # is the wear cost charged per printing hour. Either unset = feature off.
-    purchase_price: Mapped[float | None] = mapped_column(Float, nullable=True)
-    expected_lifetime_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Optional wear cost charged per printing hour (#694). Unset or 0 = off.
+    wear_cost_per_hour: Mapped[float | None] = mapped_column(Float, nullable=True)
     runtime_seconds: Mapped[int] = mapped_column(
         default=0
     )  # Accumulated active runtime (RUNNING state only — see #1521)

@@ -2,7 +2,7 @@
  * Printer wear on the Statistics page (#694).
  *
  * The Quick Stats "Wear & Tear" tile is opt-in by nature — it only exists once
- * some printer has a purchase price and a run has accrued wear — and the
+ * some printer has a wear rate and a run has accrued wear — and the
  * "costliest print" record adds depreciation to filament and energy.
  */
 

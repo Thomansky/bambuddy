@@ -530,10 +530,8 @@ export default {
       locationGroup: '위치 / 그룹 (선택사항)',
       locationPlaceholder: '예: 작업실, 사무실, 지하실',
       autoArchiveLabel: '완료된 인쇄 자동 아카이브',
-      purchasePrice: '구매 가격 (선택)',
-      expectedLifetimeHours: '예상 수명 (시간)',
-      depreciationHelp: '이후 출력물에 출력 시간당 프린터 마모 비용을 부과합니다. 둘 다 비워 두면 비활성화됩니다.',
-      depreciationRate: '≈ {{rate}} {{currency}}/시간 프린터 마모',
+      wearCostPerHour: '출력 시간당 마모 비용 (선택)',
+      wearCostPerHourHelp: '출력 1시간에 실제로 드는 비용을 포함하세요 — 감가상각, 유지보수, 부품. 비워 두면 비활성화됩니다.',
       fromPrinterSettings: '프린터 설정에서',
       modelOptional: '모델 (선택사항)',
       saveChanges: '변경사항 저장'
