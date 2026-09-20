@@ -3849,9 +3849,18 @@ export type CalibrationOption =
   | 'nozzle_offset'
   | 'high_temp_heatbed'
   | 'nozzle_clumping';
-export type CalibrationOptions = Partial<Record<CalibrationOption, boolean>>;
+// The flags plus the start condition both actions share: bed_temp_below in
+// °C, absent = no condition. Sent back whole on every change.
+export type CalibrationOptions = Partial<Record<CalibrationOption, boolean>> & { bed_temp_below?: number | null };
 export type MaintenanceRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 export type MaintenanceRunSource = 'manual' | 'due' | 'schedule';
+
+// Figures behind a waiting_reason that has any: bed_too_warm carries the
+// bed temperature and the threshold it has to fall below.
+export interface MaintenanceRunWaitingDetail {
+  bed_temp?: number;
+  threshold?: number;
+}
 
 export interface MaintenanceRun {
   id: number;
@@ -3859,9 +3868,10 @@ export interface MaintenanceRun {
   printer_id: number;
   status: MaintenanceRunStatus;
   source: MaintenanceRunSource;
-  options: CalibrationOptions | null;
+  options: Partial<Record<CalibrationOption, boolean>> | null;
   start_after: string | null;
   waiting_reason: string | null;
+  waiting_detail: MaintenanceRunWaitingDetail | null;
   error_message: string | null;
   created_at: string;
   started_at: string | null;
@@ -3873,6 +3883,7 @@ export interface MaintenanceCurrentRun {
   status: MaintenanceRunStatus;
   source: MaintenanceRunSource;
   waiting_reason: string | null;
+  waiting_detail: MaintenanceRunWaitingDetail | null;
   started_at: string | null;
 }
 

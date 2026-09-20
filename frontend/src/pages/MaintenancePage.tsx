@@ -42,6 +42,7 @@ import {
 import { api } from '../api/client';
 import type {
   CalibrationOption,
+  CalibrationOptions,
   MaintenanceItemUpdate,
   MaintenanceStatus,
   MaintenanceTriggerMode,
@@ -157,7 +158,20 @@ const WAITING_REASON_KEYS: Record<string, string> = {
   printer_busy: 'maintenance.calibration.waitingPrinterBusy',
   awaiting_plate_clear: 'maintenance.calibration.waitingPlateClear',
   already_drying: 'maintenance.calibration.waitingAlreadyDrying',
+  bed_too_warm: 'maintenance.calibration.waitingBedTooWarm',
+  bed_temp_unknown: 'maintenance.calibration.waitingBedTempUnknown',
 };
+
+// Start condition "only when the bed is below N °C" (#3127): the value the
+// box is first ticked with, and the range the backend accepts.
+const DEFAULT_BED_TEMP_BELOW = 30;
+const BED_TEMP_BELOW_MAX = 120;
+
+function parseBedTemp(text: string): number | null {
+  const value = Number(text);
+  if (text.trim() === '' || !Number.isFinite(value) || value <= 0 || value > BED_TEMP_BELOW_MAX) return null;
+  return Math.round(value * 10) / 10;
+}
 
 // Short weekday names in the UI language, index 0 = Monday like the backend.
 // 2024-01-01 is a Monday; built as local dates so the label is not shifted
@@ -194,8 +208,10 @@ function CalibrationActionPanel({
   const options = item.action_options ?? {};
   const available = new Set<CalibrationOption>(item.action_available_options ?? CALIBRATION_OPTION_ORDER);
   const run = item.current_run;
+  const bedTempBelow = options.bed_temp_below ?? null;
   const [scheduleDays, setScheduleDays] = useState<number[]>(item.schedule_days ?? DEFAULT_SCHEDULE_DAYS);
   const [scheduleTime, setScheduleTime] = useState(item.schedule_time ?? DEFAULT_SCHEDULE_TIME);
+  const [bedTempInput, setBedTempInput] = useState(bedTempBelow != null ? String(bedTempBelow) : '');
   const weekdays = useMemo(() => weekdayLabels(language), [language]);
 
   // Follow the server once it has answered (a PATCH from another tab, say).
@@ -203,9 +219,31 @@ function CalibrationActionPanel({
     if (item.schedule_days && item.schedule_days.length > 0) setScheduleDays(item.schedule_days);
     if (item.schedule_time) setScheduleTime(item.schedule_time);
   }, [item.schedule_days, item.schedule_time]);
+  useEffect(() => {
+    setBedTempInput(bedTempBelow != null ? String(bedTempBelow) : '');
+  }, [bedTempBelow]);
 
   const toggleOption = (flag: CalibrationOption) => {
     onUpdate(item.id, { action_options: { ...options, [flag]: !options[flag] } });
+  };
+
+  const toggleBedCondition = () => {
+    if (bedTempBelow != null) {
+      const rest: CalibrationOptions = { ...options };
+      delete rest.bed_temp_below;
+      onUpdate(item.id, { action_options: rest });
+    } else {
+      onUpdate(item.id, { action_options: { ...options, bed_temp_below: DEFAULT_BED_TEMP_BELOW } });
+    }
+  };
+
+  const commitBedTemp = () => {
+    const value = parseBedTemp(bedTempInput);
+    if (value === null) {
+      setBedTempInput(bedTempBelow != null ? String(bedTempBelow) : '');
+      return;
+    }
+    if (value !== bedTempBelow) onUpdate(item.id, { action_options: { ...options, bed_temp_below: value } });
   };
 
   const setTrigger = (mode: MaintenanceTriggerMode) => {
@@ -236,7 +274,11 @@ function CalibrationActionPanel({
     }
     if (run) {
       const key = run.waiting_reason ? WAITING_REASON_KEYS[run.waiting_reason] : null;
-      if (key) return { text: t(key), tone: 'text-amber-700 dark:text-amber-400' };
+      if (key) {
+        const temp = run.waiting_detail?.bed_temp;
+        const text = t(key, { temp: temp != null ? Math.round(temp * 10) / 10 : '?' });
+        return { text, tone: 'text-amber-700 dark:text-amber-400' };
+      }
       if (run.waiting_reason) {
         return { text: t('maintenance.calibration.waitingOther', { reason: run.waiting_reason }), tone: 'text-amber-700 dark:text-amber-400' };
       }
@@ -279,6 +321,41 @@ function CalibrationActionPanel({
           ))}
         </div>
       )}
+
+      {/* Start condition: a cold, settled bed (both actions) */}
+      <div className="flex flex-wrap items-center gap-1.5 text-xs text-bambu-gray-light">
+        <label className="flex items-center gap-1.5 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={bedTempBelow != null}
+            onChange={toggleBedCondition}
+            disabled={!canUpdate || !item.enabled}
+            className="accent-bambu-green"
+          />
+          {t('maintenance.calibration.bedTempBelow')}
+        </label>
+        {bedTempBelow != null && (
+          <>
+            <input
+              type="number"
+              inputMode="decimal"
+              min={0.1}
+              max={BED_TEMP_BELOW_MAX}
+              step={0.1}
+              value={bedTempInput}
+              onChange={(e) => setBedTempInput(e.target.value)}
+              onBlur={commitBedTemp}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+              }}
+              disabled={!canUpdate || !item.enabled}
+              className={`${selectClass} w-16`}
+              aria-label={t('maintenance.calibration.bedTempBelowValue')}
+            />
+            <span>{t('maintenance.calibration.bedTempUnit')}</span>
+          </>
+        )}
+      </div>
 
       {/* Trigger + schedule */}
       <div className="flex flex-wrap items-center gap-2">

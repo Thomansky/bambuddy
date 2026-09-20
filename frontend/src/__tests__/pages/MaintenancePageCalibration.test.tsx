@@ -193,7 +193,7 @@ describe('MaintenancePage calibration card', () => {
       http.get('/api/v1/maintenance/overview', () =>
         HttpResponse.json(
           overviewWith({
-            current_run: { id: 42, status: 'pending', source: 'schedule', waiting_reason: 'awaiting_plate_clear', started_at: null },
+            current_run: { id: 42, status: 'pending', source: 'schedule', waiting_reason: 'awaiting_plate_clear', waiting_detail: null, started_at: null },
           })
         )
       )
@@ -210,7 +210,7 @@ describe('MaintenancePage calibration card', () => {
       http.get('/api/v1/maintenance/overview', () =>
         HttpResponse.json(
           overviewWith({
-            current_run: { id: 43, status: 'running', source: 'manual', waiting_reason: null, started_at: '2026-09-19T05:02:00Z' },
+            current_run: { id: 43, status: 'running', source: 'manual', waiting_reason: null, waiting_detail: null, started_at: '2026-09-19T05:02:00Z' },
           })
         )
       )
@@ -224,7 +224,7 @@ describe('MaintenancePage calibration card', () => {
       http.get('/api/v1/maintenance/overview', () =>
         HttpResponse.json(
           overviewWith({
-            last_run: { id: 40, printer_maintenance_id: 7, printer_id: 1, status: 'failed', source: 'due', options: {}, start_after: null, waiting_reason: null, error_message: 'Calibration failed (print_error 83886081)', created_at: '2026-09-18T05:00:00Z', started_at: '2026-09-18T05:01:00Z', completed_at: '2026-09-18T05:20:00Z' },
+            last_run: { id: 40, printer_maintenance_id: 7, printer_id: 1, status: 'failed', source: 'due', options: {}, start_after: null, waiting_reason: null, waiting_detail: null, error_message: 'Calibration failed (print_error 83886081)', created_at: '2026-09-18T05:00:00Z', started_at: '2026-09-18T05:01:00Z', completed_at: '2026-09-18T05:20:00Z' },
           })
         )
       )
@@ -249,7 +249,8 @@ describe('MaintenancePage calibration card', () => {
     );
     await expandPrinter();
     const panel = await screen.findByTestId('calibration-panel-9');
-    expect(within(panel).queryByRole('checkbox')).toBeNull();
+    // The only checkbox is the shared bed-temperature condition
+    expect(within(panel).getAllByRole('checkbox')).toHaveLength(1);
     expect(within(panel).queryByLabelText('Bed leveling')).toBeNull();
     expect(within(panel).getByRole('combobox', { name: 'Trigger' })).toHaveValue('manual');
     const runNow = within(panel).getByRole('button', { name: /Run now/ });
@@ -258,6 +259,88 @@ describe('MaintenancePage calibration card', () => {
     await waitFor(() => expect(runCalls).toBe(1));
     // ...while the bed-levelling card next to it still has its options
     expect(within(screen.getByTestId('calibration-panel-7')).getByLabelText('Bed leveling')).toBeInTheDocument();
+  });
+
+  it('ticking the bed condition adds bed_temp_below at 30; unticking removes the key', async () => {
+    const panel = await expandPrinter();
+    const box = within(panel).getByLabelText('Only when the bed is below');
+    expect(box).not.toBeChecked();
+    expect(within(panel).queryByLabelText('Bed temperature threshold (°C)')).toBeNull();
+    fireEvent.click(box);
+    await waitFor(() => expect(patches).toHaveLength(1));
+    expect(patches[0]).toEqual({
+      action_options: { bed_leveling: true, vibration: true, motor_noise: true, bed_temp_below: 30 },
+    });
+  });
+
+  it('the threshold input round-trips and unticking drops the key while keeping the flags', async () => {
+    server.use(
+      http.get('/api/v1/maintenance/overview', () =>
+        HttpResponse.json(overviewWith({ action_options: { bed_leveling: true, vibration: true, motor_noise: true, bed_temp_below: 28.5 } }))
+      )
+    );
+    const panel = await expandPrinter();
+    expect(within(panel).getByLabelText('Only when the bed is below')).toBeChecked();
+    const input = within(panel).getByLabelText('Bed temperature threshold (°C)');
+    expect(input).toHaveValue(28.5);
+    expect(within(panel).getByText('°C')).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: '35' } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(patches).toHaveLength(1));
+    expect(patches[0]).toEqual({
+      action_options: { bed_leveling: true, vibration: true, motor_noise: true, bed_temp_below: 35 },
+    });
+
+    // An out-of-range value is not sent; the field snaps back
+    fireEvent.change(input, { target: { value: '500' } });
+    fireEvent.blur(input);
+    expect(patches).toHaveLength(1);
+    expect(input).toHaveValue(28.5);
+
+    // Toggling a flag keeps the condition
+    fireEvent.click(within(panel).getByLabelText('Nozzle clumping detection'));
+    await waitFor(() => expect(patches).toHaveLength(2));
+    expect(patches[1]).toEqual({
+      action_options: { bed_leveling: true, vibration: true, motor_noise: true, bed_temp_below: 28.5, nozzle_clumping: true },
+    });
+
+    fireEvent.click(within(panel).getByLabelText('Only when the bed is below'));
+    await waitFor(() => expect(patches).toHaveLength(3));
+    expect(patches[2]).toEqual({ action_options: { bed_leveling: true, vibration: true, motor_noise: true } });
+  });
+
+  it('the vision encoder item offers the bed condition without any flags', async () => {
+    server.use(http.get('/api/v1/maintenance/overview', () => HttpResponse.json(overviewWith({}, [motionItem]))));
+    await expandPrinter();
+    const panel = await screen.findByTestId('calibration-panel-9');
+    fireEvent.click(within(panel).getByLabelText('Only when the bed is below'));
+    await waitFor(() => expect(patches).toHaveLength(1));
+    expect(patches[0]).toEqual({ action_options: { bed_temp_below: 30 } });
+  });
+
+  it('a run waiting for the bed shows the temperature; an unknown one says so', async () => {
+    server.use(
+      http.get('/api/v1/maintenance/overview', () =>
+        HttpResponse.json(
+          overviewWith(
+            {
+              current_run: { id: 44, status: 'pending', source: 'due', waiting_reason: 'bed_too_warm', waiting_detail: { bed_temp: 34.2, threshold: 30 }, started_at: null },
+            },
+            [
+              {
+                ...motionItem,
+                current_run: { id: 45, status: 'pending', source: 'manual', waiting_reason: 'bed_temp_unknown', waiting_detail: null, started_at: null },
+              },
+            ]
+          )
+        )
+      )
+    );
+    const panel = await expandPrinter();
+    expect(within(panel).getByText('Waiting: bed still warm (34.2 °C)')).toBeInTheDocument();
+    const motionPanel = await screen.findByTestId('calibration-panel-9');
+    expect(within(motionPanel).getByText('Waiting: bed temperature unknown')).toBeInTheDocument();
   });
 
   it('badges every actionable type on the settings tab', async () => {
