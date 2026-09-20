@@ -22,6 +22,7 @@ from backend.app.core.tasks import spawn_background_task
 from backend.app.core.websocket import ws_manager
 from backend.app.models.archive import PrintArchive
 from backend.app.models.library import LibraryFile
+from backend.app.models.maintenance import MaintenanceRun
 from backend.app.models.print_queue import PrintQueueItem, PrintQueueVariant
 from backend.app.models.printer import Printer
 from backend.app.models.scheduled_drying import ScheduledDrying
@@ -29,7 +30,7 @@ from backend.app.models.settings import Settings
 from backend.app.models.smart_plug import SmartPlug
 from backend.app.models.spool_assignment import SpoolAssignment
 from backend.app.models.spoolman_slot_assignment import SpoolmanSlotAssignment
-from backend.app.services import drying_preflight, print_dispatch_context
+from backend.app.services import drying_preflight, maintenance_actions, print_dispatch_context
 from backend.app.services.bambu_ftp import (
     FtpFailureReport,
     UploadCancelled,
@@ -914,6 +915,11 @@ class PrintScheduler:
         # Monotonic stamp of the last scheduled-drying prune. None = never, so
         # the first pass after a restart reaps anything left behind.
         self._last_scheduled_drying_prune: float | None = None
+        # Printers whose maintenance calibration was dispatched moments ago
+        # (#3127). Rebuilt from the DB on every _check_maintenance_runs call and
+        # merged into check_queue's busy set: the printer may still report IDLE
+        # for a few seconds after the command, like it does after project_file.
+        self._calibrating_printer_ids: set[int] = set()
         # Defensive in-memory dispatch hold (#1157): a printer that just received
         # a project_file command must not get a second dispatch until either it
         # transitions out of pre_state OR the hard timeout expires. The H2D Pro
@@ -1222,6 +1228,9 @@ class PrintScheduler:
             # Dispatch and track scheduled drying runs (#2638)
             await self._check_scheduled_dryings(db)
 
+            # Queue and dispatch maintenance calibration runs (#3127)
+            await self._check_maintenance_runs(db, require_plate_clear)
+
             if not items:
                 # No dispatchable pending items — still check auto-drying on idle
                 # printers, but keep any printer with an upload still in flight
@@ -1273,6 +1282,12 @@ class PrintScheduler:
             # which are opposite facts. It is the first line anyone greps for
             # "why did my item not go out", so it has to say which.
             busy_reasons: dict[int, str] = dict.fromkeys(busy_printers, "an item is already printing on it")
+
+            # A calibration dispatched moments ago (#3127): same IDLE-to-RUNNING
+            # lag as the "printing" seed above guards against.
+            for pid in self._calibrating_printer_ids - busy_printers:
+                busy_printers.add(pid)
+                busy_reasons[pid] = "a maintenance calibration was just started on it"
 
             # Printers this pass is dispatching to. They are in busy_printers so
             # nothing else in the pass targets them -- that is a reservation, not
@@ -4787,6 +4802,81 @@ class PrintScheduler:
         for printer_id in (previously_running | running_printer_ids) - self._scheduled_drying_printer_ids:
             self._drying_in_progress.pop(printer_id, None)
 
+        await db.commit()
+
+    async def _check_maintenance_runs(self, db: AsyncSession, require_plate_clear: bool) -> None:
+        """Queue triggered calibration runs and dispatch the pending ones (#3127).
+
+        Same shape as the scheduled-drying check. A pending run is deferred with
+        a ``waiting_reason`` the card shows, never dropped: the printer being
+        offline, a drying run holding it, or it not being idle. Unlike drying,
+        the plate-clear gate is honoured here when the setting is on -- bed
+        levelling with parts on the plate is a crash -- so "Saturday, as soon as
+        the plate is released" is literally what a scheduled run waits for.
+        Completion is not tracked here; the printer's own completion event
+        closes the run through ``maintenance_actions.on_internal_job_finished``.
+        """
+        now = utcnow_naive()
+
+        await maintenance_actions.fail_stale_running_runs(db, now)
+        await maintenance_actions.queue_triggered_runs(db, now)
+
+        result = await db.execute(
+            select(MaintenanceRun)
+            .where(MaintenanceRun.status.in_(("pending", "running")))
+            .order_by(MaintenanceRun.start_after.asc().nullsfirst(), MaintenanceRun.id.asc())
+        )
+        rows = list(result.scalars().all())
+
+        running_printer_ids = {row.printer_id for row in rows if row.status == "running"}
+        recently_dispatched: set[int] = set()
+        for row in rows:
+            if row.status == "running":
+                if row.started_at and now - row.started_at < maintenance_actions.DISPATCH_BUSY_WINDOW:
+                    recently_dispatched.add(row.printer_id)
+                continue
+
+            if row.start_after is not None and row.start_after > now:
+                continue
+
+            printer_id = row.printer_id
+            if printer_id in running_printer_ids:
+                row.waiting_reason = "printer_busy"
+                continue
+
+            state = printer_manager.get_status(printer_id)
+            if not state or not state.connected:
+                row.waiting_reason = "printer_offline"
+                continue
+
+            if self._drying_in_progress.get(printer_id) or printer_id in self._scheduled_drying_printer_ids:
+                row.waiting_reason = "already_drying"
+                continue
+
+            if not self._is_printer_idle(printer_id, require_plate_clear):
+                if require_plate_clear and printer_manager.is_awaiting_plate_clear(printer_id):
+                    row.waiting_reason = "awaiting_plate_clear"
+                else:
+                    row.waiting_reason = "printer_busy"
+                continue
+
+            options = maintenance_actions.normalize_calibration_options(row.options)
+            logger.info(
+                "Maintenance run %d: starting calibration on printer %d (%s)",
+                row.id,
+                printer_id,
+                ", ".join(flag for flag, on in options.items() if on),
+            )
+            if printer_manager.start_calibration(printer_id, **options):
+                row.status = "running"
+                row.started_at = now
+                row.waiting_reason = None
+                running_printer_ids.add(printer_id)
+                recently_dispatched.add(printer_id)
+            else:
+                row.waiting_reason = "printer_offline"
+
+        self._calibrating_printer_ids = recently_dispatched
         await db.commit()
 
     def _update_running_scheduled_drying(self, row: ScheduledDrying, now: datetime):
