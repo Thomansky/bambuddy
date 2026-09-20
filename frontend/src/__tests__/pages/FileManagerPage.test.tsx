@@ -27,6 +27,11 @@ vi.mock('../../components/SliceModal', () => ({
   ),
 }));
 
+// The viewer pulls in three.js; the tests only care whether it opened.
+vi.mock('../../components/ModelViewerModal', () => ({
+  ModelViewerModal: ({ title }: { title: string }) => <div data-testid="model-viewer-modal">{title}</div>,
+}));
+
 // Mock data
 const mockFolders = [
   {
@@ -663,6 +668,90 @@ describe('FileManagerPage', () => {
 
       await user.keyboard('{ContextMenu}');
       expect(within(row).getByRole('button', { name: 'Delete' })).toBeInTheDocument();
+    });
+
+    it('closes the folder kebab menu on a second click and keeps it opaque while open', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await user.click(screen.getByTitle('Column view'));
+      const columns = within(screen.getByTestId('columns-view'));
+      const row = columns.getByText('Art Projects').closest('[data-folder-id]') as HTMLElement;
+      const kebab = within(row).getByTitle('Actions');
+      const wrapper = kebab.closest('[data-folder-actions]') as HTMLElement;
+      expect(wrapper.className).toContain('can-hover:opacity-0');
+
+      await user.click(kebab);
+      expect(within(row).getByRole('button', { name: 'Rename' })).toBeInTheDocument();
+      // The menu is a descendant of the hover-revealed wrapper: while it is
+      // open the wrapper must not depend on hover/focus to stay visible.
+      expect(wrapper.className).not.toContain('opacity-0');
+
+      await user.click(kebab);
+      expect(within(row).queryByRole('button', { name: 'Rename' })).not.toBeInTheDocument();
+      expect(wrapper.className).toContain('can-hover:opacity-0');
+    });
+
+    it('hands focus back to the pane after the folder kebab', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await user.click(screen.getByTitle('Column view'));
+      const columns = within(screen.getByTestId('columns-view'));
+      await user.keyboard('{ArrowDown}');
+      const artRow = columns.getByText('Art Projects').closest('[data-folder-id]') as HTMLElement;
+      const functionalRow = columns.getByText('Functional Parts').closest('[data-folder-id]') as HTMLElement;
+      await waitFor(() => expect(artRow.className).toContain('bg-bambu-green/20'));
+
+      // Escape closes the menu and returns focus to the pane, so the arrows
+      // keep walking rows instead of dying on the kebab.
+      await user.keyboard('{ContextMenu}');
+      expect(within(artRow).getByRole('button', { name: 'Delete' })).toBeInTheDocument();
+      expect(document.activeElement).toBe(within(artRow).getByTitle('Actions'));
+      await user.keyboard('{Escape}');
+      expect(within(artRow).queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
+      expect(document.activeElement).toBe(screen.getByTestId('columns-view'));
+      await user.keyboard('{ArrowDown}');
+      await waitFor(() => expect(functionalRow.className).toContain('bg-bambu-green/20'));
+      await user.keyboard('{ArrowUp}');
+      await waitFor(() => expect(artRow.className).toContain('bg-bambu-green/20'));
+
+      // Down straight out of an open menu closes it and moves the selection.
+      await user.keyboard('{ContextMenu}');
+      expect(within(artRow).getByRole('button', { name: 'Delete' })).toBeInTheDocument();
+      await user.keyboard('{ArrowDown}');
+      expect(within(artRow).queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
+      await waitFor(() => expect(functionalRow.className).toContain('bg-bambu-green/20'));
+      expect(document.activeElement).toBe(screen.getByTestId('columns-view'));
+
+      // Activating an entry with Enter must not strand focus on <body>.
+      await user.keyboard('{ContextMenu}');
+      await user.tab();
+      expect(document.activeElement).toBe(within(functionalRow).getByRole('button', { name: 'Rename' }));
+      await user.keyboard('{Enter}');
+      expect(await screen.findByDisplayValue('Functional Parts')).toBeInTheDocument();
+      expect(document.activeElement).not.toBe(document.body);
+    });
+
+    it('does not open the row preview when a strip icon is double-clicked', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await user.click(screen.getByTitle('Column view'));
+      const columns = within(screen.getByTestId('columns-view'));
+      const row = columns.getByText('bracket.stl').closest('[data-file-id]') as HTMLElement;
+
+      await user.dblClick(within(row).getByTitle('Rename'));
+      expect(await screen.findByDisplayValue('bracket.stl')).toBeInTheDocument();
+      expect(screen.queryByTestId('model-viewer-modal')).not.toBeInTheDocument();
+
+      // The row itself still opens the viewer.
+      await user.click(screen.getByText('Cancel'));
+      await user.dblClick(columns.getByText('bracket.stl'));
+      expect(await screen.findByTestId('model-viewer-modal')).toBeInTheDocument();
     });
   });
 
