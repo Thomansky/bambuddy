@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError, ValidationInfo, field_validator, model_validator
 
 from backend.app.schemas.print_queue import UTCDatetime
 from backend.app.services.maintenance_actions import (
@@ -100,7 +100,8 @@ class PrinterMaintenanceUpdate(BaseModel):
     custom_interval_hours: float | None = None
     custom_interval_type: str | None = Field(default=None, pattern="^(hours|days)$")
     enabled: bool | None = None
-    # Off mutes the item: no due/warning reminder, no run-result message (#3127)
+    # Off mutes the item: no due/warning reminder, no run-result message (#3127).
+    # Both flags are NOT NULL columns: leaving one out keeps it, null is refused.
     notifications_enabled: bool | None = None
     # Automatic action settings (#3127); only meaningful on items whose type
     # carries an action. Cross-field rules (schedule needs days and time, a
@@ -126,6 +127,13 @@ class PrinterMaintenanceUpdate(BaseModel):
         if BED_TEMP_BELOW_KEY in value:
             checked[BED_TEMP_BELOW_KEY] = normalize_bed_temp_below(value[BED_TEMP_BELOW_KEY])
         return checked
+
+    @field_validator("enabled", "notifications_enabled")
+    @classmethod
+    def _flag_not_null(cls, value: bool | None, info: ValidationInfo) -> bool:
+        if value is None:
+            raise ValueError(f"{info.field_name} must be true or false")
+        return value
 
     @field_validator("schedule_days")
     @classmethod

@@ -7,9 +7,13 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.app.models.maintenance import MaintenanceRun, MaintenanceType, PrinterMaintenance
 from backend.app.models.settings import Settings
+from backend.app.services import maintenance_actions
+
+_NOTIFY_RUN = "backend.app.services.notification_service.notification_service.on_maintenance_run"
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
@@ -707,6 +711,18 @@ class TestNotificationToggle:
         )
         assert response.json()["notifications_enabled"] is True
 
+    async def test_null_is_refused_rather_than_written(self, async_client, printer_factory):
+        """Both flags are NOT NULL columns: an explicit null is a 422, not a crash on commit."""
+        printer = await printer_factory()
+        item = await _calibration_item(async_client, printer.id)
+        for key in ("notifications_enabled", "enabled"):
+            response = await async_client.patch(f"/api/v1/maintenance/items/{item['id']}", json={key: None})
+            assert response.status_code == 422, response.text
+            assert key in response.text
+        item = await _calibration_item(async_client, printer.id)
+        assert item["notifications_enabled"] is True
+        assert item["enabled"] is True
+
     async def test_perform_response_carries_the_flag(self, async_client, printer_factory):
         printer = await printer_factory()
         item = await _calibration_item(async_client, printer.id)
@@ -761,20 +777,74 @@ class TestNotificationToggle:
         assert muted["is_due"] is True
         assert response.json()["due_count"] == 2
 
-    async def test_cancel_from_bambuddy_sends_no_run_result(self, async_client, printer_factory):
+    async def test_cancel_from_bambuddy_reports_a_cancelled_run(self, async_client, printer_factory):
+        """The event promises completed, failed or cancelled; a Cancel on the card is the third."""
         printer = await printer_factory()
         item = await _calibration_item(async_client, printer.id)
         run = (await async_client.post(f"/api/v1/maintenance/items/{item['id']}/run")).json()
         with (
             patch("backend.app.api.routes.maintenance.printer_manager"),
-            patch(
-                "backend.app.services.notification_service.notification_service.on_maintenance_run",
-                new_callable=AsyncMock,
-            ) as notify,
+            patch(_NOTIFY_RUN, new_callable=AsyncMock) as notify,
+        ):
+            response = await async_client.delete(f"/api/v1/maintenance/runs/{run['id']}")
+        assert response.status_code == 200
+        notify.assert_awaited_once()
+        assert notify.await_args.args[:5] == (printer.id, printer.name, "Printer Calibration", "cancelled", None)
+
+    async def test_cancel_of_a_muted_item_reports_nothing(self, async_client, printer_factory):
+        printer = await printer_factory()
+        item = await _calibration_item(async_client, printer.id)
+        await async_client.patch(f"/api/v1/maintenance/items/{item['id']}", json={"notifications_enabled": False})
+        run = (await async_client.post(f"/api/v1/maintenance/items/{item['id']}/run")).json()
+        with (
+            patch("backend.app.api.routes.maintenance.printer_manager"),
+            patch(_NOTIFY_RUN, new_callable=AsyncMock) as notify,
         ):
             response = await async_client.delete(f"/api/v1/maintenance/runs/{run['id']}")
         assert response.status_code == 200
         notify.assert_not_awaited()
+        item = await _calibration_item(async_client, printer.id)
+        assert item["last_run"]["status"] == "cancelled"
+
+    async def test_a_running_run_cancelled_from_bambuddy_reports_once(
+        self, async_client, printer_factory, db_session, test_engine
+    ):
+        """The stop makes the printer report FAILED a moment later; that edge
+        finds the row already closed and must not report the run a second time."""
+        printer = await printer_factory()
+        item = await _calibration_item(async_client, printer.id)
+        run = MaintenanceRun(
+            printer_maintenance_id=item["id"],
+            printer_id=printer.id,
+            status="running",
+            source="manual",
+            options={"bed_leveling": True},
+            started_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        )
+        db_session.add(run)
+        await db_session.commit()
+        gcode = "/usr/etc/print/H2S/auto_cali_for_user_param.gcode"
+        maker = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+        with (
+            patch("backend.app.api.routes.maintenance.printer_manager") as mock_pm,
+            patch("backend.app.services.maintenance_actions.async_session", maker),
+            patch(_NOTIFY_RUN, new_callable=AsyncMock) as notify,
+        ):
+            mock_pm.get_status.return_value = SimpleNamespace(
+                state="RUNNING", gcode_file=gcode, current_print=None, subtask_name="auto_cali_for_user_param.gcode"
+            )
+            mock_pm.stop_print.return_value = True
+            response = await async_client.delete(f"/api/v1/maintenance/runs/{run.id}")
+            assert response.status_code == 200
+            mock_pm.stop_print.assert_called_once_with(printer.id)
+            closed_again = await maintenance_actions.on_internal_job_finished(
+                printer.id, gcode, "auto_cali_for_user_param.gcode", "failed", None
+            )
+        assert closed_again is False
+        notify.assert_awaited_once()
+        assert notify.await_args.args[3] == "cancelled"
+        await db_session.refresh(run)
+        assert run.status == "cancelled"
 
 
 class TestTriggerGate:

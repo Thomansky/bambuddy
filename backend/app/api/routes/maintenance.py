@@ -801,7 +801,10 @@ async def cancel_maintenance_run(
     result = await db.execute(
         select(MaintenanceRun)
         .where(MaintenanceRun.id == run_id)
-        .options(selectinload(MaintenanceRun.printer_maintenance).selectinload(PrinterMaintenance.maintenance_type))
+        .options(
+            selectinload(MaintenanceRun.printer_maintenance).selectinload(PrinterMaintenance.maintenance_type),
+            selectinload(MaintenanceRun.printer),
+        )
     )
     run = result.scalar_one_or_none()
     if not run:
@@ -829,6 +832,7 @@ async def cancel_maintenance_run(
     run.completed_at = utcnow_naive()
     maintenance_actions.refresh_schedule(run.printer_maintenance)
     await db.commit()
+    await maintenance_actions.notify_run_finished(db, run)
     return {"status": "cancelled", "id": run.id}
 
 

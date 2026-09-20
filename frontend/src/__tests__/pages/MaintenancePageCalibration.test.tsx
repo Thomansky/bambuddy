@@ -445,27 +445,46 @@ describe('MaintenancePage calibration card', () => {
     expect(patches[0]).toEqual({ notifications_enabled: true });
   });
 
-  it('a failed PATCH puts the bell back', async () => {
-    let answer!: () => void;
-    const answered = new Promise<void>((resolve) => {
-      answer = resolve;
+  it('a failed PATCH puts the bell back before the refetch answers', async () => {
+    // The overview is held once the bell is clicked, so the only way back to
+    // "on" while it hangs is the mutation's own rollback, not the invalidation.
+    let answerPatch!: () => void;
+    const patchAnswered = new Promise<void>((resolve) => {
+      answerPatch = resolve;
     });
+    let answerOverview!: () => void;
+    const overviewAnswered = new Promise<void>((resolve) => {
+      answerOverview = resolve;
+    });
+    let holdOverview = false;
+    let overviewAnswers = 0;
     server.use(
+      http.get('/api/v1/maintenance/overview', async () => {
+        if (holdOverview) await overviewAnswered;
+        overviewAnswers += 1;
+        return HttpResponse.json(overviewWith({}));
+      }),
       http.patch('/api/v1/maintenance/items/8', async () => {
-        await answered;
+        await patchAnswered;
         return HttpResponse.json({ detail: 'nope' }, { status: 500 });
       })
     );
     await expandPrinter();
     const reminderCard = screen.getByText('Clean Build Plate').closest('div.rounded-xl')!;
+    const answersBeforeClick = overviewAnswers;
+    holdOverview = true;
     fireEvent.click(within(reminderCard).getByRole('button', { name: 'Notifications on' }));
     await waitFor(() =>
       expect(within(reminderCard).getByRole('button', { name: 'Notifications off' })).toBeInTheDocument()
     );
-    answer();
+    answerPatch();
     await waitFor(() =>
       expect(within(reminderCard).getByRole('button', { name: 'Notifications on' })).toBeInTheDocument()
     );
+    expect(overviewAnswers).toBe(answersBeforeClick);
+    answerOverview();
+    await waitFor(() => expect(overviewAnswers).toBeGreaterThan(answersBeforeClick));
+    expect(within(reminderCard).getByRole('button', { name: 'Notifications on' })).toBeInTheDocument();
   });
 
   it('badges every actionable type on the settings tab', async () => {
