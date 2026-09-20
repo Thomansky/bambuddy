@@ -595,12 +595,26 @@ interface FolderActionsMenuProps {
   onLink: (folder: LibraryFolderTree) => void;
   onRename: (folder: LibraryFolderTree) => void;
   hasPermission: (permission: Permission) => boolean;
+  // Hide the kebab until its `group` row is hovered or focused — only for
+  // pointers that can hover (#2865). The menu is a DOM descendant, so the
+  // wrapper stays opaque while it is open: browsers that don't focus a button
+  // on click (Safari) would otherwise fade the open menu out with the row.
+  revealOnHover?: boolean;
   tabIndex?: number;
   t: TFunction;
 }
 
-function FolderActionsMenu({ folder, onDelete, onLink, onRename, hasPermission, tabIndex, t }: FolderActionsMenuProps) {
+function FolderActionsMenu({ folder, onDelete, onLink, onRename, hasPermission, revealOnHover = false, tabIndex, t }: FolderActionsMenuProps) {
   const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number } | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const closeMenu = () => {
+    setMenuAnchor(null);
+    // A menu entry activated by Enter unmounts with the menu; hand focus back
+    // to the kebab rather than letting it drop to <body>. Focus that already
+    // moved elsewhere (click-outside, the columns pane) is left alone.
+    if (rootRef.current?.contains(document.activeElement)) buttonRef.current?.focus();
+  };
   const hasChildren = folder.children.length > 0;
   const isLinked = folder.project_id || folder.archive_id;
   const isExternal = folder.is_external;
@@ -643,13 +657,27 @@ function FolderActionsMenu({ folder, onDelete, onLink, onRename, hasPermission, 
   ];
 
   return (
-    <div className="relative" data-folder-actions>
+    <div
+      ref={rootRef}
+      className={`relative flex-shrink-0 flex items-center transition-opacity ${
+        revealOnHover && !menuAnchor ? 'can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100' : ''
+      }`}
+      data-folder-actions
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        // The menu has no arrow-key navigation; Up/Down mean "leave it".
+        if (menuAnchor && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) closeMenu();
+      }}
+    >
       <button
+        ref={buttonRef}
         type="button"
         tabIndex={tabIndex}
         onClick={(e) => {
-          // No open/close toggle: the menu's own outside-mousedown handler
-          // has already dismissed it by the time this click lands.
+          if (menuAnchor) {
+            closeMenu();
+            return;
+          }
           const rect = e.currentTarget.getBoundingClientRect();
           setMenuAnchor({ x: rect.left, y: rect.bottom + 4 });
         }}
@@ -659,7 +687,7 @@ function FolderActionsMenu({ folder, onDelete, onLink, onRename, hasPermission, 
         <MoreVertical className="w-3.5 h-3.5 text-bambu-gray" />
       </button>
       {menuAnchor && (
-        <ContextMenu x={menuAnchor.x} y={menuAnchor.y} items={items} onClose={() => setMenuAnchor(null)} />
+        <ContextMenu x={menuAnchor.x} y={menuAnchor.y} items={items} onClose={closeMenu} anchorRef={buttonRef} />
       )}
     </div>
   );
@@ -748,16 +776,15 @@ function FolderTreeItem({ folder, selectedFolderId, onSelect, onDelete, onLink, 
             <Link2 className="w-3.5 h-3.5 text-bambu-gray hover:text-bambu-green" />
           </button>
         )}
-        <div className={`flex-shrink-0 flex items-center gap-0.5 transition-opacity ${wrapNames ? '' : 'can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'}`} onClick={(e) => e.stopPropagation()}>
-          <FolderActionsMenu
-            folder={folder}
-            onDelete={onDelete}
-            onLink={onLink}
-            onRename={onRename}
-            hasPermission={hasPermission}
-            t={t}
-          />
-        </div>
+        <FolderActionsMenu
+          folder={folder}
+          onDelete={onDelete}
+          onLink={onLink}
+          onRename={onRename}
+          hasPermission={hasPermission}
+          revealOnHover={!wrapNames}
+          t={t}
+        />
       </div>
       {hasChildren && expanded && (
         <div>
@@ -1057,7 +1084,14 @@ function FileActionStrip({ file, onPrint, onSlice, onOpenInSlicer, onRunPipeline
   const canRename = canModify('library', 'update', file.created_by_id);
   const canDelete = canModify('library', 'delete', file.created_by_id);
   return (
-    <div className="flex items-center gap-1" data-file-actions onClick={(e) => e.stopPropagation()}>
+    <div
+      className="flex items-center gap-1"
+      data-file-actions
+      onClick={(e) => e.stopPropagation()}
+      // The columns row opens the viewer on double-click; two clicks on an
+      // icon must not bubble up as one.
+      onDoubleClick={(e) => e.stopPropagation()}
+    >
       {isSlicedLibraryFile(file) && (
         <button
           tabIndex={tabIndex}
@@ -2011,8 +2045,18 @@ export function FileManagerPage() {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const target = e.target as HTMLElement;
     if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable) return;
-    // A folder kebab (and the menu it opens) handles its own keys.
-    if (target.closest('[data-folder-actions]')) return;
+    if (target.closest('[data-folder-actions]')) {
+      // A folder kebab (and the menu it opens) handles its own keys, except
+      // that Escape and Up/Down hand focus back to the pane — otherwise the
+      // arrows are dead until the user clicks or Shift+Tabs out of the kebab.
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        columnsViewRef.current?.focus({ preventScroll: true });
+        return;
+      }
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+      columnsViewRef.current?.focus({ preventScroll: true });
+    }
     const strip = target.closest<HTMLElement>('[data-file-actions]');
     if (strip) {
       if (e.key === 'Enter' || e.key === ' ') return;
@@ -2904,22 +2948,16 @@ export function FileManagerPage() {
                           </button>
                           {/* Kebab: hover-revealed with a mouse, always there
                               without one (#2865) and on the selected row. */}
-                          <div
-                            className={`flex-shrink-0 transition-opacity ${
-                              isSelectedFolder ? '' : 'can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
-                            }`}
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <FolderActionsMenu
-                              folder={folder}
-                              onDelete={(id) => setDeleteConfirm({ type: 'folder', id })}
-                              onLink={setLinkFolder}
-                              onRename={(f) => setRenameItem({ type: 'folder', id: f.id, name: f.name })}
-                              hasPermission={hasPermission}
-                              tabIndex={isSelectedFolder ? 0 : -1}
-                              t={t}
-                            />
-                          </div>
+                          <FolderActionsMenu
+                            folder={folder}
+                            onDelete={(id) => setDeleteConfirm({ type: 'folder', id })}
+                            onLink={setLinkFolder}
+                            onRename={(f) => setRenameItem({ type: 'folder', id: f.id, name: f.name })}
+                            hasPermission={hasPermission}
+                            revealOnHover={!isSelectedFolder}
+                            tabIndex={isSelectedFolder ? 0 : -1}
+                            t={t}
+                          />
                         </div>
                       );
                     })}
