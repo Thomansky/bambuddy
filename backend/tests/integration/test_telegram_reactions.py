@@ -51,6 +51,9 @@ class _FakeBotApi:
             return nxt
         return httpx.Response(200, json={"ok": True, "result": []})
 
+    async def aclose(self):
+        self.is_closed = True
+
     def urls(self) -> list[str]:
         return [c["url"].rsplit("/", 1)[-1] for c in self.calls]
 
@@ -75,12 +78,17 @@ def _reaction(update_id: int, message_id: int, emoji: str | None, chat_id: str =
 
 
 @pytest.fixture
-def poller(test_engine):
+async def poller(test_engine):
     p = TelegramReactionPoller()
     p._session_factory = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
     p._http_client = _FakeBotApi()
     yield p
-    p.stop()
+    await p.aclose()
+
+
+def _track(poller: TelegramReactionPoller, *providers, token: str = BOT_TOKEN):
+    """What sync() would record for these providers, without starting a task."""
+    poller._providers.setdefault(token, set()).update(p.id for p in providers)
 
 
 @pytest.fixture
@@ -306,10 +314,11 @@ class TestPoller:
         printer = await printer_factory()
         archive = await archive_factory(printer.id, confirm_requested=True, confirm_token="tok")
         provider = await telegram_provider()
+        _track(poller, provider)
         await pending_factory(provider.id, archive.id, message_id=777)
         poller._http_client = _FakeBotApi([_updates(_reaction(10, 777, THUMBS_UP))])
 
-        assert await poller.poll_once(provider.id, BOT_TOKEN) == "ok"
+        assert await poller.poll_once(BOT_TOKEN) == "ok"
 
         await db_session.refresh(archive)
         assert archive.user_verdict == "good"
@@ -327,17 +336,35 @@ class TestPoller:
         assert "Test\\_Print" in edit["text"], "stored body is re-escaped for Markdown"
         assert "reply_markup" not in edit
         # The getUpdates that follows confirms the update we handled.
-        assert poller._offsets[provider.id] == 10
+        assert poller._offsets[BOT_TOKEN] == 10
 
     @pytest.mark.asyncio
     @pytest.mark.integration
     async def test_getupdates_request_shape(self, poller, telegram_provider):
         provider = await telegram_provider()
-        poller._offsets[provider.id] = 41
-        await poller.poll_once(provider.id, BOT_TOKEN)
+        _track(poller, provider)
+        poller._offsets[BOT_TOKEN] = 41
+        await poller.poll_once(BOT_TOKEN)
         call = poller._http_client.calls[0]
         assert call["url"] == f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
         assert call["json"] == {"timeout": 50, "allowed_updates": ["message_reaction"], "offset": 42}
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_offset_belongs_to_the_bot_not_the_provider(self, poller, telegram_provider):
+        """update_ids are a per-bot sequence: after a provider is re-pointed at
+        another bot, the first getUpdates for it must not carry the old bot's
+        offset, or the new bot's lower ids are confirmed away unseen."""
+        provider = await telegram_provider()
+        _track(poller, provider)
+        poller._offsets[BOT_TOKEN] = 900_000_123
+
+        _track(poller, provider, token="999:newtoken")
+        await poller.poll_once("999:newtoken")
+
+        call = poller._http_client.calls[0]
+        assert call["url"].startswith("https://api.telegram.org/bot999:newtoken/")
+        assert "offset" not in call["json"]
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -347,10 +374,11 @@ class TestPoller:
         printer = await printer_factory()
         archive = await archive_factory(printer.id, confirm_requested=True)
         provider = await telegram_provider()
+        _track(poller, provider)
         await pending_factory(provider.id, archive.id, message_id=778)
         poller._http_client = _FakeBotApi([_updates(_reaction(11, 778, THUMBS_DOWN))])
 
-        await poller.poll_once(provider.id, BOT_TOKEN)
+        await poller.poll_once(BOT_TOKEN)
 
         await db_session.refresh(archive)
         assert archive.user_verdict == "reject"
@@ -364,10 +392,11 @@ class TestPoller:
         printer = await printer_factory()
         archive = await archive_factory(printer.id, confirm_requested=True)
         provider = await telegram_provider()
+        _track(poller, provider)
         await pending_factory(provider.id, archive.id, message_id=779, has_caption=True)
         poller._http_client = _FakeBotApi([_updates(_reaction(12, 779, THUMBS_UP))])
 
-        await poller.poll_once(provider.id, BOT_TOKEN)
+        await poller.poll_once(BOT_TOKEN)
 
         assert poller._http_client.urls() == ["getUpdates", "editMessageCaption"]
         assert poller._http_client.calls[1]["json"]["caption"].endswith("✅ marked as good")
@@ -380,18 +409,19 @@ class TestPoller:
         printer = await printer_factory()
         archive = await archive_factory(printer.id, confirm_requested=True)
         provider = await telegram_provider()
+        _track(poller, provider)
         await pending_factory(provider.id, archive.id, message_id=780)
         poller._http_client = _FakeBotApi(
             [_updates(_reaction(13, 999, THUMBS_UP), _reaction(14, 780, THUMBS_UP, chat_id="-100999"))]
         )
 
-        await poller.poll_once(provider.id, BOT_TOKEN)
+        await poller.poll_once(BOT_TOKEN)
 
         await db_session.refresh(archive)
         assert archive.user_verdict is None
         assert await _pending_count(db_session) == 1
         assert poller._http_client.urls() == ["getUpdates"]
-        assert poller._offsets[provider.id] == 14
+        assert poller._offsets[BOT_TOKEN] == 14
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -401,10 +431,11 @@ class TestPoller:
         printer = await printer_factory()
         archive = await archive_factory(printer.id, confirm_requested=True)
         provider = await telegram_provider()
+        _track(poller, provider)
         await pending_factory(provider.id, archive.id, message_id=781)
         poller._http_client = _FakeBotApi([_updates(_reaction(15, 781, "❤"), _reaction(16, 781, None))])
 
-        await poller.poll_once(provider.id, BOT_TOKEN)
+        await poller.poll_once(BOT_TOKEN)
 
         await db_session.refresh(archive)
         assert archive.user_verdict is None
@@ -420,10 +451,11 @@ class TestPoller:
         printer = await printer_factory()
         archive = await archive_factory(printer.id, confirm_requested=True, user_verdict="reject")
         provider = await telegram_provider()
+        _track(poller, provider)
         await pending_factory(provider.id, archive.id, message_id=782)
         poller._http_client = _FakeBotApi([_updates(_reaction(17, 782, THUMBS_UP))])
 
-        await poller.poll_once(provider.id, BOT_TOKEN)
+        await poller.poll_once(BOT_TOKEN)
 
         await db_session.refresh(archive)
         assert archive.user_verdict == "reject"
@@ -438,13 +470,14 @@ class TestPoller:
         printer = await printer_factory()
         archive = await archive_factory(printer.id, confirm_requested=True)
         provider = await telegram_provider()
+        _track(poller, provider)
         await pending_factory(provider.id, archive.id, message_id=783)
         poller._http_client = _FakeBotApi(
             [_updates(_reaction(18, 783, THUMBS_UP)), _updates(_reaction(19, 783, THUMBS_DOWN))]
         )
 
-        await poller.poll_once(provider.id, BOT_TOKEN)
-        await poller.poll_once(provider.id, BOT_TOKEN)
+        await poller.poll_once(BOT_TOKEN)
+        await poller.poll_once(BOT_TOKEN)
 
         await db_session.refresh(archive)
         assert archive.user_verdict == "good"
@@ -458,12 +491,13 @@ class TestPoller:
         printer = await printer_factory()
         archive = await archive_factory(printer.id, confirm_requested=True)
         provider = await telegram_provider()
+        _track(poller, provider)
         await pending_factory(provider.id, archive.id, message_id=784)
         poller._http_client = _FakeBotApi(
             [_updates(_reaction(20, 784, THUMBS_UP)), httpx.ConnectError("telegram gone")]
         )
 
-        assert await poller.poll_once(provider.id, BOT_TOKEN) == "ok"
+        assert await poller.poll_once(BOT_TOKEN) == "ok"
 
         await db_session.refresh(archive)
         assert archive.user_verdict == "good"
@@ -475,13 +509,14 @@ class TestPoller:
         """409 = webhook set or a second poller: report it on the provider and
         wait the cooldown instead of looping on the next getUpdates."""
         provider = await telegram_provider()
+        _track(poller, provider)
         conflict = httpx.Response(
             409,
             json={"ok": False, "error_code": 409, "description": "Conflict: terminated by other getUpdates request"},
         )
         poller._http_client = _FakeBotApi([conflict, conflict])
 
-        assert await poller.poll_once(provider.id, BOT_TOKEN) == "conflict"
+        assert await poller.poll_once(BOT_TOKEN) == "conflict"
 
         await db_session.refresh(provider)
         assert "Conflict: terminated by other getUpdates request" in provider.last_error
@@ -496,14 +531,61 @@ class TestPoller:
 
         poller._sleep = _sleep
         with pytest.raises(CancelledForTest):
-            await poller._run(provider.id, BOT_TOKEN)
+            await poller._run(BOT_TOKEN)
         assert sleeps == [CONFLICT_COOLDOWN]
         assert len(poller._http_client.calls) == 2, "one getUpdates per cooldown, not a tight loop"
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    async def test_bad_bot_token_is_surfaced_and_cooled_down(self, poller, db_session, telegram_provider):
+        """401/404 = wrong or deleted bot token: it never fixes itself, so it
+        lands on the provider card and waits the cooldown instead of a warning
+        every minute forever."""
+        provider = await telegram_provider()
+        _track(poller, provider)
+        unauthorized = httpx.Response(401, json={"ok": False, "error_code": 401, "description": "Unauthorized"})
+        poller._http_client = _FakeBotApi([unauthorized, unauthorized])
+
+        assert await poller.poll_once(BOT_TOKEN) == "rejected"
+
+        await db_session.refresh(provider)
+        assert "HTTP 401" in provider.last_error
+        assert "Unauthorized" in provider.last_error
+        assert "bot token" in provider.last_error
+        assert provider.last_error_at is not None
+
+        sleeps: list[float] = []
+
+        async def _sleep(seconds):
+            sleeps.append(seconds)
+            raise CancelledForTest
+
+        poller._sleep = _sleep
+        with pytest.raises(CancelledForTest):
+            await poller._run(BOT_TOKEN)
+        assert sleeps == [CONFLICT_COOLDOWN]
+        assert len(poller._http_client.calls) == 2
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_conflict_is_recorded_on_every_provider_of_the_bot(self, poller, db_session, telegram_provider):
+        first = await telegram_provider(name="X1C")
+        second = await telegram_provider(name="P1S")
+        _track(poller, first, second)
+        conflict = httpx.Response(409, json={"ok": False, "error_code": 409, "description": "Conflict"})
+        poller._http_client = _FakeBotApi([conflict])
+
+        assert await poller.poll_once(BOT_TOKEN) == "conflict"
+
+        for provider in (first, second):
+            await db_session.refresh(provider)
+            assert provider.last_error and "Conflict" in provider.last_error
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_network_errors_back_off_exponentially(self, poller, telegram_provider):
         provider = await telegram_provider()
+        _track(poller, provider)
         poller._http_client = _FakeBotApi([httpx.ConnectError("down")] * 10)
         sleeps: list[float] = []
 
@@ -514,7 +596,7 @@ class TestPoller:
 
         poller._sleep = _sleep
         with pytest.raises(CancelledForTest):
-            await poller._run(provider.id, BOT_TOKEN)
+            await poller._run(BOT_TOKEN)
         assert sleeps == [1, 2, 4, 8, 16, 32, 60, 60]
         assert max(sleeps) == MAX_BACKOFF
 
@@ -526,6 +608,7 @@ class TestPoller:
         printer = await printer_factory()
         archive = await archive_factory(printer.id, confirm_requested=True)
         provider = await telegram_provider()
+        _track(poller, provider)
         await pending_factory(provider.id, archive.id, message_id=1, created_at=utcnow_naive() - timedelta(days=8))
         fresh = await pending_factory(provider.id, archive.id, message_id=2)
 
@@ -547,26 +630,91 @@ class TestPoller:
         assert poller.is_polling(reactions.id)
         assert not poller.is_polling(buttons.id)
         assert not poller.is_polling(disabled.id)
+        assert set(poller._tasks) == {BOT_TOKEN}
 
-        # Switching back to buttons stops the poll; a token change restarts it.
-        first_task = poller._tasks[reactions.id]
+        # The bot keeps its single poll while any provider wants it; the
+        # provider set behind it follows the edits.
+        first_task = poller._tasks[BOT_TOKEN]
         reactions.telegram_verdict_mode = "buttons"
         buttons.telegram_verdict_mode = "both"
         await db_session.commit()
         await poller.sync()
         assert not poller.is_polling(reactions.id)
-        assert first_task.cancelled() or first_task.cancelling()
         assert poller.is_polling(buttons.id)
+        assert poller._tasks[BOT_TOKEN] is first_task
+        assert poller._providers[BOT_TOKEN] == {buttons.id}
 
-        running = poller._tasks[buttons.id]
+        # A token change moves the provider to a new bot: the old bot's poll
+        # stops because nobody uses it any more, a fresh one starts.
         buttons.config = '{"bot_token": "999:newtoken", "chat_id": "1"}'
         await db_session.commit()
         await poller.sync()
-        assert poller._tasks[buttons.id] is not running
-        assert poller._tokens[buttons.id] == "999:newtoken"
+        assert first_task.cancelled() or first_task.cancelling()
+        assert set(poller._tasks) == {"999:newtoken"}
+        assert poller.is_polling(buttons.id)
 
-        poller.stop()
+        await poller.aclose()
         assert poller._tasks == {}
+        assert never.is_closed
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_providers_sharing_a_bot_share_one_poll(
+        self, poller, db_session, printer_factory, archive_factory, telegram_provider, pending_factory
+    ):
+        """The usual farm layout: one bot, one provider per printer. Telegram
+        serves a single getUpdates consumer per bot, so both providers ride
+        one task and a reaction to either prompt lands on its archive."""
+        poller._http_client = _NeverAnswers()
+        x1c = await printer_factory(name="X1C")
+        p1s = await printer_factory(name="P1S")
+        first = await telegram_provider(name="X1C", printer_id=x1c.id, config={"bot_token": BOT_TOKEN, "chat_id": "1"})
+        second = await telegram_provider(name="P1S", printer_id=p1s.id, config={"bot_token": BOT_TOKEN, "chat_id": "2"})
+
+        await poller.sync()
+        assert len(poller._tasks) == 1
+        assert poller.is_polling(first.id) and poller.is_polling(second.id)
+        poller.stop()
+        _track(poller, first, second)
+
+        archive_a = await archive_factory(x1c.id, confirm_requested=True)
+        archive_b = await archive_factory(p1s.id, confirm_requested=True)
+        await pending_factory(first.id, archive_a.id, message_id=100, chat_id="1")
+        await pending_factory(second.id, archive_b.id, message_id=100, chat_id="2")
+        poller._http_client = _FakeBotApi(
+            [_updates(_reaction(30, 100, THUMBS_DOWN, chat_id="2"), _reaction(31, 100, THUMBS_UP, chat_id="1"))]
+        )
+
+        await poller.poll_once(BOT_TOKEN)
+
+        await db_session.refresh(archive_a)
+        await db_session.refresh(archive_b)
+        assert archive_a.user_verdict == "good"
+        assert archive_b.user_verdict == "reject"
+        assert await _pending_count(db_session) == 0
+        assert poller._http_client.urls() == ["getUpdates", "editMessageText", "editMessageText"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_reaction_for_another_bots_provider_is_not_matched(
+        self, poller, db_session, printer_factory, archive_factory, telegram_provider, pending_factory
+    ):
+        """Two bots in private chat with the same person number their
+        messages independently, so a match is scoped to the bot's providers."""
+        printer = await printer_factory()
+        archive = await archive_factory(printer.id, confirm_requested=True)
+        other = await telegram_provider(name="other bot", config={"bot_token": "999:other", "chat_id": CHAT_ID})
+        mine = await telegram_provider(name="mine")
+        _track(poller, mine)
+        _track(poller, other, token="999:other")
+        await pending_factory(other.id, archive.id, message_id=5)
+        poller._http_client = _FakeBotApi([_updates(_reaction(40, 5, THUMBS_UP))])
+
+        await poller.poll_once(BOT_TOKEN)
+
+        await db_session.refresh(archive)
+        assert archive.user_verdict is None
+        assert await _pending_count(db_session) == 1
 
 
 class CancelledForTest(BaseException):
@@ -576,12 +724,16 @@ class CancelledForTest(BaseException):
 class _NeverAnswers:
     """getUpdates that stays open forever, like a quiet chat would."""
 
-    is_closed = False
+    def __init__(self):
+        self.is_closed = False
 
     async def post(self, url, json=None, data=None, files=None):
         import asyncio
 
         await asyncio.Event().wait()
+
+    async def aclose(self):
+        self.is_closed = True
 
 
 # ---------------------------------------------------------------------------

@@ -9278,8 +9278,8 @@ async def lifespan(app: FastAPI):
     # Start the notification digest scheduler
     notification_service.start_digest_scheduler()
 
-    # Start the Telegram reaction pollers (#3046), one per provider in
-    # reactions/both mode; the notification routes resync them on change.
+    # Start the Telegram reaction pollers (#3046), one per bot token used by a
+    # provider in reactions/both mode; the notification routes resync them.
     await telegram_reaction_poller.start()
 
     # Start the GitHub backup scheduler
@@ -9361,7 +9361,7 @@ async def lifespan(app: FastAPI):
     ha_sensor_manager.stop()
     location_ha_sensor_manager.stop()
     notification_service.stop_digest_scheduler()
-    telegram_reaction_poller.stop()
+    await telegram_reaction_poller.aclose()
     github_backup_service.stop_scheduler()
     local_backup_service.stop_scheduler()
     library_trash_service.stop_scheduler()
