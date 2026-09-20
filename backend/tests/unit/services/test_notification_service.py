@@ -4,6 +4,7 @@ Tests event-based notifications and toggle behavior.
 """
 
 import json
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -962,6 +963,49 @@ class TestNtfyPriority:
 
         headers = mock_client.post.call_args.kwargs["headers"]
         assert headers.get("Priority") == "2"
+
+    @pytest.mark.asyncio
+    async def test_daily_digest_never_carries_a_priority(self, service):
+        """The digest is a summary, not an event: send_digest hands the send
+        path no event_type (only its log entry is tagged "daily_digest"), so
+        the map cannot address it under either spelling and the request goes
+        out without a Priority header."""
+        provider = self._ntfy_provider({"daily_digest": 5, "on_daily_digest": 5, "on_print_failed": 4})
+        provider.daily_digest_enabled = True
+        provider.daily_digest_time = "09:00"
+
+        entry = MagicMock()
+        entry.event_type = "print_failed"
+        entry.title = "Print Failed"
+        entry.printer_name = "Test Printer"
+        entry.created_at = datetime(2026, 9, 20, 8, 30)
+
+        provider_result = MagicMock()
+        provider_result.scalar_one_or_none.return_value = provider
+        queue_result = MagicMock()
+        queue_result.scalars.return_value.all.return_value = [entry]
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(side_effect=[provider_result, queue_result])
+
+        mock_client = self._mock_client(service)
+        with (
+            patch("backend.app.core.database.async_session") as mock_session_ctx,
+            patch.object(service, "_get_client", new_callable=AsyncMock) as mock_get,
+            patch.object(service, "_send_to_provider", wraps=service._send_to_provider) as spy_send,
+            patch.object(service, "_log_notification", new_callable=AsyncMock) as mock_log,
+        ):
+            mock_session_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_db)
+            mock_session_ctx.return_value.__aexit__ = AsyncMock()
+            mock_get.return_value = mock_client
+
+            await service.send_digest(provider.id)
+
+        spy_send.assert_called_once()
+        assert spy_send.call_args.kwargs.get("event_type") is None
+        mock_client.post.assert_called_once()
+        headers = mock_client.post.call_args.kwargs["headers"]
+        assert "Priority" not in headers
+        assert mock_log.call_args.kwargs["event_type"] == "daily_digest"
 
 
 class TestHomeAssistantProvider:
