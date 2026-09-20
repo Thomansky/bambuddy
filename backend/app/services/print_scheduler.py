@@ -4843,8 +4843,9 @@ class PrintScheduler:
         levelling with parts on the plate is a crash -- so "Saturday, as soon as
         the plate is released" is literally what a scheduled run waits for.
         What is sent depends on the item's action: the calibration command with
-        the run's options, or the vision encoder's system gcode file.
-        Completion is not tracked here; the printer's own completion event
+        the run's options, or the vision encoder's system gcode file -- whose
+        acknowledgement is awaited, because a refused path is the one failure
+        the completion event never reports. Completion is not tracked here; the printer's own completion event
         closes the run through ``maintenance_actions.on_internal_job_finished``.
         """
         now = utcnow_naive()
@@ -4922,6 +4923,18 @@ class PrintScheduler:
                     path,
                 )
                 sent = printer_manager.start_internal_gcode_file(printer_id, path)
+                if sent:
+                    # The reply is the only immediate sign that the directory
+                    # was guessed wrong for this model; without it the run
+                    # would sit "running" until the stale sweep closed it.
+                    accepted, detail = await printer_manager.await_internal_gcode_ack(printer_id, path)
+                    if not accepted:
+                        row.status = "failed"
+                        row.error_message = f"Printer refused the vision encoder calibration file {path} ({detail})"
+                        row.completed_at = now
+                        row.waiting_reason = None
+                        logger.warning("Maintenance run %d failed: %s", row.id, row.error_message)
+                        continue
             else:
                 options = maintenance_actions.normalize_calibration_options(row.options)
                 logger.info(
