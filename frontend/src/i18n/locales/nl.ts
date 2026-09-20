@@ -1842,6 +1842,8 @@ export default {
       replaceHepaFilter: 'HEPA-filter vervangen',
       replaceCarbonFilter: 'Koolstoffilter vervangen',
       lubricateLeftNozzleRail: 'Linker nozzle-rail smeren',
+      printerCalibration: 'Printerkalibratie',
+      visionEncoderCalibration: 'Vision-encoderkalibratie',
     },
     // Toast
     maintenanceComplete: 'Onderhoud als voltooid gemarkeerd',
@@ -5912,6 +5914,8 @@ export default {
     replaceHepaFilter: 'Vervang het HEPA-filter voor een goede luchtkwaliteit',
     replaceCarbonFilter: 'Vervang het actieve-koolfilter',
     lubricateLeftNozzleRail: 'Smeer de linker nozzlerail (H2-serie)',
+    printerCalibration: 'Bedkalibratie, trillingscompensatie en motorgeluidsonderdrukking, door de printer zelf uitgevoerd',
+    visionEncoderCalibration: 'Bewegingsprecisiekalibratie van de vision-encoder (H2-serie), door de printer zelf uitgevoerd',
   },
 
   // Smart Plugs

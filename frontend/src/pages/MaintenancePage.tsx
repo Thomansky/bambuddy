@@ -33,6 +33,7 @@ import {
   Settings,
   Filter,
   CircleDot,
+  ScanEye,
   Printer,
   ExternalLink,
   Play,
@@ -80,6 +81,7 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   Settings,
   Filter,
   CircleDot,
+  ScanEye,
 };
 
 function getIcon(iconName: string | null) {
@@ -168,6 +170,8 @@ const DEFAULT_SCHEDULE_DAYS = [5]; // Saturday
 const DEFAULT_SCHEDULE_TIME = '06:00';
 
 // Options, trigger, schedule and run status of an actionable item (#3127).
+// The option row belongs to the calibration action only; the vision encoder
+// calibration has no options and shares the rest.
 function CalibrationActionPanel({
   item,
   onUpdate,
@@ -258,20 +262,22 @@ function CalibrationActionPanel({
   return (
     <div className="mt-3 pt-3 border-t border-bambu-dark-tertiary/60 space-y-2.5" data-testid={`calibration-panel-${item.id}`}>
       {/* Options */}
-      <div className="flex flex-wrap gap-x-3 gap-y-1.5">
-        {CALIBRATION_OPTION_ORDER.filter((flag) => available.has(flag)).map((flag) => (
-          <label key={flag} className="flex items-center gap-1.5 text-xs text-bambu-gray-light cursor-pointer">
-            <input
-              type="checkbox"
-              checked={!!options[flag]}
-              onChange={() => toggleOption(flag)}
-              disabled={!canUpdate || !item.enabled}
-              className="accent-bambu-green"
-            />
-            {t(`maintenance.calibration.option.${flag}`)}
-          </label>
-        ))}
-      </div>
+      {item.action === 'calibration' && (
+        <div className="flex flex-wrap gap-x-3 gap-y-1.5">
+          {CALIBRATION_OPTION_ORDER.filter((flag) => available.has(flag)).map((flag) => (
+            <label key={flag} className="flex items-center gap-1.5 text-xs text-bambu-gray-light cursor-pointer">
+              <input
+                type="checkbox"
+                checked={!!options[flag]}
+                onChange={() => toggleOption(flag)}
+                disabled={!canUpdate || !item.enabled}
+                className="accent-bambu-green"
+              />
+              {t(`maintenance.calibration.option.${flag}`)}
+            </label>
+          ))}
+        </div>
+      )}
 
       {/* Trigger + schedule */}
       <div className="flex flex-wrap items-center gap-2">
@@ -523,7 +529,7 @@ function MaintenanceCard({
           </Button>
         </div>
       </div>
-      {item.action === 'calibration' && (
+      {item.action && (
         <CalibrationActionPanel
           item={item}
           onUpdate={onUpdate}
@@ -1034,7 +1040,7 @@ function SettingsSection({
                     <div className="text-xs text-bambu-gray mt-0.5 flex items-center gap-1">
                       {intervalType === 'days' ? <Calendar className="w-3 h-3" /> : <Timer className="w-3 h-3" />}
                       {formatIntervalLabel(type.default_interval_hours, intervalType, t)}
-                      {type.action === 'calibration' && (
+                      {type.action && (
                         <span className="ml-1 px-1.5 py-0.5 rounded-full bg-bambu-green/20 text-bambu-green flex items-center gap-1">
                           <Play className="w-2.5 h-2.5" />
                           {t('maintenance.calibration.runsCalibration')}

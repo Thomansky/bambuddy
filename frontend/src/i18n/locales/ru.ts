@@ -1741,6 +1741,8 @@ export default {
       replaceHepaFilter: "Заменить HEPA-фильтр",
       replaceCarbonFilter: "Заменить угольный фильтр",
       lubricateLeftNozzleRail: "Смазать направляющую левого сопла",
+      printerCalibration: "Калибровка принтера",
+      visionEncoderCalibration: "Калибровка визуального энкодера",
     },
     maintenanceComplete: "Обслуживание отмечено выполненным",
     typeUpdated: "Вид обслуживания обновлён",
@@ -5581,6 +5583,8 @@ export default {
     replaceHepaFilter: "Заменить HEPA-фильтр",
     replaceCarbonFilter: "Заменить угольный фильтр",
     lubricateLeftNozzleRail: "Смазать направляющую левого сопла (серия H2)",
+    printerCalibration: "Выравнивание стола, компенсация вибраций и подавление шума моторов, выполняемые самим принтером",
+    visionEncoderCalibration: "Калибровка точности движения визуального энкодера (серия H2), выполняемая самим принтером",
   },
   haSensors: {
     label: "Датчики",

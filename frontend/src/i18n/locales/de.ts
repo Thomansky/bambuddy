@@ -1824,6 +1824,8 @@ export default {
       replaceHepaFilter: 'HEPA-Filter ersetzen',
       replaceCarbonFilter: 'Aktivkohlefilter ersetzen',
       lubricateLeftNozzleRail: 'Linke Düsenschiene schmieren',
+      printerCalibration: 'Druckerkalibrierung',
+      visionEncoderCalibration: 'Vision-Encoder-Kalibrierung',
     },
     // Toast
     maintenanceComplete: 'Wartung als abgeschlossen markiert',
@@ -5861,6 +5863,8 @@ export default {
     replaceHepaFilter: 'HEPA-Filter für Luftqualität ersetzen',
     replaceCarbonFilter: 'Aktivkohlefilter ersetzen',
     lubricateLeftNozzleRail: 'Linke Düsenschiene schmieren (H2-Serie)',
+    printerCalibration: 'Bettnivellierung, Vibrationskompensation und Motorgeräuschunterdrückung, vom Drucker selbst ausgeführt',
+    visionEncoderCalibration: 'Bewegungspräzisions-Kalibrierung des Vision-Encoders (H2-Serie), vom Drucker selbst ausgeführt',
   },
 
   // Smart Plugs

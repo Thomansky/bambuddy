@@ -1824,6 +1824,8 @@ export default {
       replaceHepaFilter: '更换 HEPA 过滤器',
       replaceCarbonFilter: '更换活性炭过滤器',
       lubricateLeftNozzleRail: '润滑左喷嘴导轨',
+      printerCalibration: '打印机校准',
+      visionEncoderCalibration: '视觉编码器校准',
     },
     // Toast
     maintenanceComplete: '维护已标记为完成',
@@ -5850,6 +5852,8 @@ export default {
     replaceHepaFilter: '更换 HEPA 过滤器以保证空气质量',
     replaceCarbonFilter: '更换活性炭过滤器',
     lubricateLeftNozzleRail: '润滑左喷嘴导轨（H2 系列）',
+    printerCalibration: '由打印机自行执行的热床调平、振动补偿和电机降噪',
+    visionEncoderCalibration: '由打印机自行执行的视觉编码器运动精度校准（H2 系列）',
   },
 
   // Smart Plugs

@@ -3842,12 +3842,13 @@ export interface MaintenanceType {
   icon: string | null;
   wiki_url: string | null;  // Documentation link
   is_system: boolean;
-  action: MaintenanceAction | null;  // "calibration" when Bambuddy performs the task itself (#3127)
+  action: MaintenanceAction | null;  // set when Bambuddy performs the task itself (#3127)
   created_at: string;
 }
 
-// Actionable maintenance (#3127)
-export type MaintenanceAction = 'calibration';
+// Actionable maintenance (#3127): the bed-levelling calibration with its
+// option set, and the H2 series' vision encoder calibration without one.
+export type MaintenanceAction = 'calibration' | 'motion_precision';
 export type MaintenanceTriggerMode = 'manual' | 'when_due' | 'schedule';
 export type CalibrationOption =
   | 'micro_lidar'

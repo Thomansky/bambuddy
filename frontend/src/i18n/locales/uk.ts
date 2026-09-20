@@ -1841,6 +1841,8 @@ export default {
       replaceHepaFilter: "Замінити HEPA-фільтр",
       replaceCarbonFilter: "Замінити вугільний фільтр",
       lubricateLeftNozzleRail: "Змастити ліву напрямну сопла",
+      printerCalibration: "Калібрування принтера",
+      visionEncoderCalibration: "Калібрування візуального енкодера",
     },
     // Toast
     maintenanceComplete: "Технічне обслуговування позначено як завершене",
@@ -5904,6 +5906,8 @@ export default {
     replaceHepaFilter: "Замініть фільтр HEPA для забезпечення якості повітря",
     replaceCarbonFilter: "Замініть фільтр з активованим вугіллям",
     lubricateLeftNozzleRail: "Змастіть ліву рейку сопла (серія H2)",
+    printerCalibration: "Вирівнювання столу, компенсація вібрацій і придушення шуму моторів, які виконує сам принтер",
+    visionEncoderCalibration: "Калібрування точності руху візуального енкодера (серія H2), яке виконує сам принтер",
   },
 
   // Smart Plugs

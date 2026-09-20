@@ -1826,6 +1826,8 @@ export default {
       replaceHepaFilter: 'HEPA Filtresini Değiştir',
       replaceCarbonFilter: 'Karbon Filtresini Değiştir',
       lubricateLeftNozzleRail: 'Sol Nozul Rayını Yağla',
+      printerCalibration: 'Yazıcı Kalibrasyonu',
+      visionEncoderCalibration: 'Görüntü Kodlayıcı Kalibrasyonu',
     },
     // Toast
     maintenanceComplete: 'Bakım tamamlandı olarak işaretlendi',
@@ -5825,6 +5827,8 @@ export default {
     replaceHepaFilter: 'Hava kalitesi için HEPA filtresini değiştir',
     replaceCarbonFilter: 'Aktif karbon filtresini değiştir',
     lubricateLeftNozzleRail: 'Sol nozul rayını yağla (H2 serisi)',
+    printerCalibration: 'Tabla seviyeleme, titreşim telafisi ve motor gürültüsü bastırma, yazıcının kendisi tarafından çalıştırılır',
+    visionEncoderCalibration: 'Görüntü kodlayıcının hareket hassasiyeti kalibrasyonu (H2 serisi), yazıcının kendisi tarafından çalıştırılır',
   },
 
   // Akıllı Prizler
