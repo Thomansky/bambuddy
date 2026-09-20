@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -35,10 +35,21 @@ import {
   CircleDot,
   Printer,
   ExternalLink,
+  Play,
+  X,
 } from 'lucide-react';
 import { api } from '../api/client';
-import type { MaintenanceStatus, PrinterMaintenanceOverview, MaintenanceType, Permission } from '../api/client';
+import type {
+  CalibrationOption,
+  MaintenanceItemUpdate,
+  MaintenanceStatus,
+  MaintenanceTriggerMode,
+  PrinterMaintenanceOverview,
+  MaintenanceType,
+  Permission,
+} from '../api/client';
 import { getMaintenanceWikiUrl } from '../utils/maintenanceWikiUrls';
+import { formatDate } from '../utils/date';
 import { Card, CardContent } from '../components/Card';
 import { Button } from '../components/Button';
 import { Toggle } from '../components/Toggle';
@@ -126,19 +137,250 @@ function formatIntervalLabel(value: number, type: 'hours' | 'days', t?: TFunctio
   return `${value}h`;
 }
 
+// Calibration flags in the order the card shows them; the backend says which
+// of these the printer model can run (#3127).
+const CALIBRATION_OPTION_ORDER: CalibrationOption[] = [
+  'bed_leveling',
+  'vibration',
+  'motor_noise',
+  'nozzle_offset',
+  'high_temp_heatbed',
+  'micro_lidar',
+  'nozzle_clumping',
+];
+
+const WAITING_REASON_KEYS: Record<string, string> = {
+  printer_offline: 'maintenance.calibration.waitingPrinterOffline',
+  printer_busy: 'maintenance.calibration.waitingPrinterBusy',
+  awaiting_plate_clear: 'maintenance.calibration.waitingPlateClear',
+  already_drying: 'maintenance.calibration.waitingAlreadyDrying',
+};
+
+// Short weekday names in the UI language, index 0 = Monday like the backend.
+// 2024-01-01 is a Monday; built as local dates so the label is not shifted
+// by the timezone.
+function weekdayLabels(language: string): string[] {
+  const fmt = new Intl.DateTimeFormat(language, { weekday: 'short' });
+  return [0, 1, 2, 3, 4, 5, 6].map((i) => fmt.format(new Date(2024, 0, 1 + i)));
+}
+
+const DEFAULT_SCHEDULE_DAYS = [5]; // Saturday
+const DEFAULT_SCHEDULE_TIME = '06:00';
+
+// Options, trigger, schedule and run status of an actionable item (#3127).
+function CalibrationActionPanel({
+  item,
+  onUpdate,
+  onRun,
+  onCancelRun,
+  hasPermission,
+  language,
+  t,
+}: {
+  item: MaintenanceStatus;
+  onUpdate: (id: number, data: MaintenanceItemUpdate) => void;
+  onRun: (id: number) => void;
+  onCancelRun: (runId: number) => void;
+  hasPermission: (permission: Permission) => boolean;
+  language: string;
+  t: TFunction;
+}) {
+  const canUpdate = hasPermission('maintenance:update');
+  const options = item.action_options ?? {};
+  const available = new Set<CalibrationOption>(item.action_available_options ?? CALIBRATION_OPTION_ORDER);
+  const run = item.current_run;
+  const [scheduleDays, setScheduleDays] = useState<number[]>(item.schedule_days ?? DEFAULT_SCHEDULE_DAYS);
+  const [scheduleTime, setScheduleTime] = useState(item.schedule_time ?? DEFAULT_SCHEDULE_TIME);
+  const weekdays = useMemo(() => weekdayLabels(language), [language]);
+
+  // Follow the server once it has answered (a PATCH from another tab, say).
+  useEffect(() => {
+    if (item.schedule_days && item.schedule_days.length > 0) setScheduleDays(item.schedule_days);
+    if (item.schedule_time) setScheduleTime(item.schedule_time);
+  }, [item.schedule_days, item.schedule_time]);
+
+  const toggleOption = (flag: CalibrationOption) => {
+    onUpdate(item.id, { action_options: { ...options, [flag]: !options[flag] } });
+  };
+
+  const setTrigger = (mode: MaintenanceTriggerMode) => {
+    if (mode === 'schedule') {
+      onUpdate(item.id, { trigger_mode: mode, schedule_days: scheduleDays, schedule_time: scheduleTime });
+    } else {
+      onUpdate(item.id, { trigger_mode: mode });
+    }
+  };
+
+  const toggleDay = (day: number) => {
+    const next = scheduleDays.includes(day)
+      ? scheduleDays.filter((d) => d !== day)
+      : [...scheduleDays, day].sort((a, b) => a - b);
+    setScheduleDays(next);
+    if (next.length > 0) onUpdate(item.id, { schedule_days: next });
+  };
+
+  const commitTime = () => {
+    if (/^\d{1,2}:\d{2}$/.test(scheduleTime) && scheduleTime !== item.schedule_time) {
+      onUpdate(item.id, { schedule_time: scheduleTime });
+    }
+  };
+
+  const runStatus = (() => {
+    if (run?.status === 'running') {
+      return { text: t('maintenance.calibration.runningSince', { time: formatDate(run.started_at) }), tone: 'text-bambu-green' };
+    }
+    if (run) {
+      const key = run.waiting_reason ? WAITING_REASON_KEYS[run.waiting_reason] : null;
+      if (key) return { text: t(key), tone: 'text-amber-700 dark:text-amber-400' };
+      if (run.waiting_reason) {
+        return { text: t('maintenance.calibration.waitingOther', { reason: run.waiting_reason }), tone: 'text-amber-700 dark:text-amber-400' };
+      }
+      return { text: t('maintenance.calibration.runQueued'), tone: 'text-bambu-gray' };
+    }
+    return null;
+  })();
+
+  const lastRun = !run ? item.last_run : null;
+  const lastRunText = (() => {
+    if (!lastRun) return null;
+    const time = formatDate(lastRun.completed_at ?? lastRun.created_at);
+    if (lastRun.status === 'completed') return t('maintenance.calibration.lastRunCompleted', { time });
+    if (lastRun.status === 'failed') {
+      return t('maintenance.calibration.lastRunFailed', { time, error: lastRun.error_message ?? '' });
+    }
+    if (lastRun.status === 'cancelled') return t('maintenance.calibration.lastRunCancelled', { time });
+    return null;
+  })();
+
+  const selectClass =
+    'px-2 py-1 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-xs focus:border-bambu-green focus:outline-none disabled:opacity-50';
+
+  return (
+    <div className="mt-3 pt-3 border-t border-bambu-dark-tertiary/60 space-y-2.5" data-testid={`calibration-panel-${item.id}`}>
+      {/* Options */}
+      <div className="flex flex-wrap gap-x-3 gap-y-1.5">
+        {CALIBRATION_OPTION_ORDER.filter((flag) => available.has(flag)).map((flag) => (
+          <label key={flag} className="flex items-center gap-1.5 text-xs text-bambu-gray-light cursor-pointer">
+            <input
+              type="checkbox"
+              checked={!!options[flag]}
+              onChange={() => toggleOption(flag)}
+              disabled={!canUpdate || !item.enabled}
+              className="accent-bambu-green"
+            />
+            {t(`maintenance.calibration.option.${flag}`)}
+          </label>
+        ))}
+      </div>
+
+      {/* Trigger + schedule */}
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="text-xs text-bambu-gray">{t('maintenance.calibration.trigger')}</label>
+        <select
+          value={item.trigger_mode}
+          onChange={(e) => setTrigger(e.target.value as MaintenanceTriggerMode)}
+          disabled={!canUpdate || !item.enabled}
+          className={selectClass}
+          aria-label={t('maintenance.calibration.trigger')}
+        >
+          <option value="manual">{t('maintenance.calibration.triggerManual')}</option>
+          <option value="when_due">{t('maintenance.calibration.triggerWhenDue')}</option>
+          <option value="schedule">{t('maintenance.calibration.triggerSchedule')}</option>
+        </select>
+        {item.trigger_mode === 'schedule' && (
+          <>
+            <div className="flex gap-1" role="group" aria-label={t('maintenance.calibration.scheduleDays')}>
+              {weekdays.map((label, day) => (
+                <button
+                  key={day}
+                  type="button"
+                  onClick={() => toggleDay(day)}
+                  disabled={!canUpdate || !item.enabled}
+                  aria-pressed={scheduleDays.includes(day)}
+                  className={`px-1.5 py-0.5 rounded text-xs transition-colors ${
+                    scheduleDays.includes(day)
+                      ? 'bg-bambu-green text-white'
+                      : 'bg-bambu-dark text-bambu-gray hover:text-white'
+                  } disabled:opacity-50`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <input
+              type="time"
+              value={scheduleTime}
+              onChange={(e) => setScheduleTime(e.target.value)}
+              onBlur={commitTime}
+              disabled={!canUpdate || !item.enabled}
+              className={selectClass}
+              aria-label={t('maintenance.calibration.scheduleTime')}
+            />
+          </>
+        )}
+      </div>
+
+      {/* Status line + buttons */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-xs space-y-0.5 min-w-0">
+          {runStatus && <div className={runStatus.tone}>{runStatus.text}</div>}
+          {!run && item.trigger_mode === 'schedule' && item.schedule_next_at && (
+            <div className="text-bambu-gray">{t('maintenance.calibration.nextRunAt', { time: formatDate(item.schedule_next_at) })}</div>
+          )}
+          {lastRunText && (
+            <div className={lastRun?.status === 'failed' ? 'text-red-700 dark:text-red-400' : 'text-bambu-gray'}>{lastRunText}</div>
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {run && (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => onCancelRun(run.id)}
+              disabled={!canUpdate}
+              className="!px-3"
+            >
+              <X className="w-3.5 h-3.5" />
+              {t('maintenance.calibration.cancelRun')}
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={() => onRun(item.id)}
+            disabled={!!run || !item.enabled || !canUpdate}
+            title={!canUpdate ? t('maintenance.noPermissionUpdate') : undefined}
+            className="!px-3"
+          >
+            <Play className="w-3.5 h-3.5" />
+            {t('maintenance.calibration.runNow')}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // Maintenance item card - cleaner, more visual design
 function MaintenanceCard({
   item,
   onPerform,
   onToggle,
+  onUpdate,
+  onRun,
+  onCancelRun,
   hasPermission,
+  language,
   t,
 }: {
   item: MaintenanceStatus;
   onPerform: (id: number) => void;
   onToggle: (id: number, enabled: boolean) => void;
+  onUpdate: (id: number, data: MaintenanceItemUpdate) => void;
+  onRun: (id: number) => void;
+  onCancelRun: (runId: number) => void;
   hasPermission: (permission: Permission) => boolean;
+  language: string;
   t: TFunction;
 }) {
   const Icon = getIcon(item.maintenance_type_icon);
@@ -281,6 +523,17 @@ function MaintenanceCard({
           </Button>
         </div>
       </div>
+      {item.action === 'calibration' && (
+        <CalibrationActionPanel
+          item={item}
+          onUpdate={onUpdate}
+          onRun={onRun}
+          onCancelRun={onCancelRun}
+          hasPermission={hasPermission}
+          language={language}
+          t={t}
+        />
+      )}
     </div>
   );
 }
@@ -290,15 +543,23 @@ function PrinterSection({
   overview,
   onPerform,
   onToggle,
+  onUpdate,
+  onRun,
+  onCancelRun,
   onSetHours,
   hasPermission,
+  language,
   t,
 }: {
   overview: PrinterMaintenanceOverview;
   onPerform: (id: number) => void;
   onToggle: (id: number, enabled: boolean) => void;
+  onUpdate: (id: number, data: MaintenanceItemUpdate) => void;
+  onRun: (id: number) => void;
+  onCancelRun: (runId: number) => void;
   onSetHours: (printerId: number, hours: number) => void;
   hasPermission: (permission: Permission) => boolean;
+  language: string;
   t: TFunction;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -443,7 +704,11 @@ function PrinterSection({
                 item={item}
                 onPerform={onPerform}
                 onToggle={onToggle}
+                onUpdate={onUpdate}
+                onRun={onRun}
+                onCancelRun={onCancelRun}
                 hasPermission={hasPermission}
+                language={language}
                 t={t}
               />
             ))}
@@ -769,6 +1034,12 @@ function SettingsSection({
                     <div className="text-xs text-bambu-gray mt-0.5 flex items-center gap-1">
                       {intervalType === 'days' ? <Calendar className="w-3 h-3" /> : <Timer className="w-3 h-3" />}
                       {formatIntervalLabel(type.default_interval_hours, intervalType, t)}
+                      {type.action === 'calibration' && (
+                        <span className="ml-1 px-1.5 py-0.5 rounded-full bg-bambu-green/20 text-bambu-green flex items-center gap-1">
+                          <Play className="w-2.5 h-2.5" />
+                          {t('maintenance.calibration.runsCalibration')}
+                        </span>
+                      )}
                     </div>
                   </div>
                   <button
@@ -1084,7 +1355,7 @@ function SettingsSection({
 type TabType = 'status' | 'settings';
 
 export function MaintenancePage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
   const { hasPermission } = useAuth();
@@ -1093,6 +1364,10 @@ export function MaintenancePage() {
   const { data: overview, isLoading } = useQuery({
     queryKey: ['maintenanceOverview'],
     queryFn: api.getMaintenanceOverview,
+    // A queued calibration changes state on the scheduler's clock, not the
+    // user's: poll while any item has a run pending or running.
+    refetchInterval: (query) =>
+      query.state.data?.some((p) => p.maintenance_items.some((i) => i.current_run)) ? 5000 : false,
   });
 
   const { data: types } = useQuery({
@@ -1114,10 +1389,33 @@ export function MaintenancePage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: number; data: { custom_interval_hours?: number | null; custom_interval_type?: 'hours' | 'days' | null; enabled?: boolean } }) =>
+    mutationFn: ({ id, data }: { id: number; data: MaintenanceItemUpdate }) =>
       api.updateMaintenanceItem(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['maintenanceOverview'] });
+    },
+    onError: (error: Error) => {
+      showToast(error.message, 'error');
+      queryClient.invalidateQueries({ queryKey: ['maintenanceOverview'] });
+    },
+  });
+
+  const runMutation = useMutation({
+    mutationFn: api.runMaintenanceItem,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['maintenanceOverview'] });
+      showToast(t('maintenance.calibration.runQueuedToast'));
+    },
+    onError: (error: Error) => {
+      showToast(error.message, 'error');
+    },
+  });
+
+  const cancelRunMutation = useMutation({
+    mutationFn: api.cancelMaintenanceRun,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['maintenanceOverview'] });
+      showToast(t('maintenance.calibration.runCancelledToast'));
     },
     onError: (error: Error) => {
       showToast(error.message, 'error');
@@ -1212,6 +1510,10 @@ export function MaintenancePage() {
     updateMutation.mutate({ id, data: { enabled } });
   };
 
+  const handleUpdate = (id: number, data: MaintenanceItemUpdate) => {
+    updateMutation.mutate({ id, data });
+  };
+
   const handleSetHours = (printerId: number, hours: number) => {
     setHoursMutation.mutate({ printerId, hours });
   };
@@ -1289,8 +1591,12 @@ export function MaintenancePage() {
                 overview={printerOverview}
                 onPerform={handlePerform}
                 onToggle={handleToggle}
+                onUpdate={handleUpdate}
+                onRun={(id) => runMutation.mutate(id)}
+                onCancelRun={(runId) => cancelRunMutation.mutate(runId)}
                 onSetHours={handleSetHours}
                 hasPermission={hasPermission}
+                language={i18n.language}
                 t={t}
               />
             ))
