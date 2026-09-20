@@ -70,7 +70,7 @@ class Spool(Base):
     # Whether cost_per_kg was entered including VAT (gross) or excluding it
     # (net). Display converts via the vat_rate_percent setting; the stored
     # number itself is never rewritten.
-    cost_vat_included: Mapped[bool] = mapped_column(Boolean, default=True)
+    cost_vat_included: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
 
     storage_location: Mapped[str | None] = mapped_column(String(255))  # User-editable storage location
     location_id: Mapped[int | None] = mapped_column(ForeignKey("locations.id"), index=True)
