@@ -3,19 +3,22 @@
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from backend.app.core.auth import RequirePermissionIfAuthEnabled
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
-from backend.app.models.maintenance import MaintenanceHistory, MaintenanceType, PrinterMaintenance
+from backend.app.models.maintenance import MaintenanceHistory, MaintenanceRun, MaintenanceType, PrinterMaintenance
 from backend.app.models.printer import Printer
 from backend.app.models.user import User
 from backend.app.schemas.maintenance import (
+    CurrentRun,
     MaintenanceHistoryResponse,
+    MaintenanceRunResponse,
     MaintenanceStatus,
     MaintenanceTypeCreate,
     MaintenanceTypeResponse,
@@ -25,7 +28,12 @@ from backend.app.schemas.maintenance import (
     PrinterMaintenanceResponse,
     PrinterMaintenanceUpdate,
 )
+from backend.app.services import maintenance_actions
+from backend.app.services.maintenance_actions import get_printer_total_hours
 from backend.app.services.notification_service import notification_service
+from backend.app.services.printer_manager import printer_manager
+from backend.app.utils.local_time import utcnow_naive
+from backend.app.utils.print_jobs import is_calibration_job
 from backend.app.utils.printer_models import get_rod_type
 
 logger = logging.getLogger(__name__)
@@ -94,6 +102,14 @@ DEFAULT_MAINTENANCE_TYPES = [
         "default_interval_hours": 500.0,
         "icon": "Cable",
     },
+    # Performed by the printer itself when Bambuddy asks (#3127)
+    {
+        "name": "Printer Calibration",
+        "description": "Bed leveling, vibration compensation and motor noise cancellation",
+        "default_interval_hours": 100.0,
+        "icon": "Target",
+        "action": maintenance_actions.ACTION_CALIBRATION,
+    },
 ]
 
 # System types that only apply to printers with a specific rod/rail type.
@@ -122,28 +138,6 @@ def _should_apply_to_printer(type_name: str, printer_model: str | None) -> bool:
     return rod_type == rod_requirement
 
 
-async def get_printer_total_hours(db: AsyncSession, printer_id: int) -> float:
-    """Calculate total active hours for a printer from runtime counter plus offset.
-
-    Uses the runtime_seconds counter which tracks actual machine active time
-    (RUNNING state only — paused time is excluded since maintenance intervals
-    measure mechanical wear, not wall-clock active time, see #1521).
-    """
-    # Get printer runtime and offset
-    result = await db.execute(
-        select(Printer.runtime_seconds, Printer.print_hours_offset).where(Printer.id == printer_id)
-    )
-    row = result.one_or_none()
-    if not row:
-        return 0.0
-
-    runtime_seconds = row[0] or 0
-    offset = row[1] or 0.0
-
-    runtime_hours = runtime_seconds / 3600.0
-    return runtime_hours + offset
-
-
 async def ensure_default_types(db: AsyncSession) -> None:
     """Ensure default maintenance types exist, remove stale/duplicate ones."""
     result = await db.execute(
@@ -157,11 +151,16 @@ async def ensure_default_types(db: AsyncSession) -> None:
     # and deduplicate: if concurrent requests created the same type twice,
     # keep only the first (lowest id) and delete the rest.
     seen_names: set[str] = set()
+    actions_by_name = {t["name"]: t.get("action") for t in DEFAULT_MAINTENANCE_TYPES}
     for t in existing:
         if t.name not in default_names or t.name in seen_names:
             await db.delete(t)
         else:
             seen_names.add(t.name)
+            # The action is what makes the type executable; it is not user
+            # editable, so keep it in step with the definition.
+            if t.action != actions_by_name.get(t.name):
+                t.action = actions_by_name.get(t.name)
 
     # Create any missing default types
     for type_def in DEFAULT_MAINTENANCE_TYPES:
@@ -172,6 +171,7 @@ async def ensure_default_types(db: AsyncSession) -> None:
                 default_interval_hours=type_def["default_interval_hours"],
                 icon=type_def["icon"],
                 is_system=True,
+                action=type_def.get("action"),
             )
             db.add(new_type)
 
@@ -311,6 +311,15 @@ async def _get_printer_maintenance_internal(
     )
     existing_items = {item.maintenance_type_id: item for item in result.scalars().all()}
 
+    # Newest run per item, one query for the printer (#3127): the active one
+    # drives the card's status line, a finished one is its "last result".
+    result = await db.execute(
+        select(MaintenanceRun).where(MaintenanceRun.printer_id == printer_id).order_by(MaintenanceRun.id.desc())
+    )
+    latest_runs: dict[int, MaintenanceRun] = {}
+    for run in result.scalars().all():
+        latest_runs.setdefault(run.printer_maintenance_id, run)
+
     maintenance_items = []
     due_count = 0
     warning_count = 0
@@ -357,46 +366,35 @@ async def _get_printer_maintenance_internal(
             last_performed_at = None
             item_id = item.id
 
-        # Calculate status based on interval type
-        if interval_type == "days":
-            # Time-based: calculate days since last performed
-            if last_performed_at:
-                # DB stores naive datetimes; treat as UTC for comparison
-                if last_performed_at.tzinfo is None:
-                    last_performed_at = last_performed_at.replace(tzinfo=timezone.utc)
-                days_since = (now - last_performed_at).total_seconds() / 86400.0
-            else:
-                # Never performed - consider it due
-                days_since = interval + 1
-
-            days_until = interval - days_since
-            is_due = days_until <= 0
-            is_warning = days_until <= (interval * 0.1) and not is_due
-
-            # For compatibility, also set hours values (but they won't be primary)
-            hours_since = total_hours - last_performed_hours
-            hours_until = 0  # Not applicable for time-based
-        else:
-            # Print-hours based (default)
-            hours_since = total_hours - last_performed_hours
-            hours_until = interval - hours_since
-            is_due = hours_until <= 0
-            is_warning = hours_until <= (interval * 0.1) and not is_due
-
-            # Calculate days for reference
-            if last_performed_at:
-                if last_performed_at.tzinfo is None:
-                    last_performed_at = last_performed_at.replace(tzinfo=timezone.utc)
-                days_since = (now - last_performed_at).total_seconds() / 86400.0
-            else:
-                days_since = None
-            days_until = None
+        due = maintenance_actions.compute_due_state(
+            interval, interval_type, total_hours, last_performed_hours, last_performed_at, now
+        )
+        if last_performed_at is not None and last_performed_at.tzinfo is None:
+            last_performed_at = last_performed_at.replace(tzinfo=timezone.utc)
 
         if enabled:
-            if is_due:
+            if due.is_due:
                 due_count += 1
-            elif is_warning:
+            elif due.is_warning:
                 warning_count += 1
+
+        latest_run = latest_runs.get(item_id)
+        current_run = (
+            CurrentRun(
+                id=latest_run.id,
+                status=latest_run.status,
+                source=latest_run.source,
+                waiting_reason=latest_run.waiting_reason,
+                started_at=latest_run.started_at,
+            )
+            if latest_run is not None and latest_run.status in maintenance_actions.RUN_ACTIVE_STATUSES
+            else None
+        )
+        last_run = (
+            MaintenanceRunResponse.model_validate(latest_run)
+            if latest_run is not None and current_run is None
+            else None
+        )
 
         maintenance_items.append(
             MaintenanceStatus(
@@ -412,13 +410,28 @@ async def _get_printer_maintenance_internal(
                 interval_hours=interval,
                 interval_type=interval_type,
                 current_hours=total_hours,
-                hours_since_maintenance=hours_since,
-                hours_until_due=hours_until,
-                days_since_maintenance=days_since if interval_type == "days" else None,
-                days_until_due=days_until if interval_type == "days" else None,
-                is_due=is_due,
-                is_warning=is_warning,
+                hours_since_maintenance=due.hours_since,
+                hours_until_due=due.hours_until,
+                days_since_maintenance=due.days_since,
+                days_until_due=due.days_until,
+                is_due=due.is_due,
+                is_warning=due.is_warning,
                 last_performed_at=last_performed_at,
+                action=maint_type.action,
+                action_options=(
+                    maintenance_actions.normalize_calibration_options(item.action_options)
+                    if maint_type.action
+                    else None
+                ),
+                action_available_options=(
+                    maintenance_actions.available_calibration_options(printer.model) if maint_type.action else None
+                ),
+                trigger_mode=item.trigger_mode or "manual",
+                schedule_days=item.schedule_days,
+                schedule_time=item.schedule_time,
+                schedule_next_at=item.schedule_next_at,
+                current_run=current_run,
+                last_run=last_run,
             )
         )
 
@@ -476,7 +489,7 @@ async def update_printer_maintenance(
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.MAINTENANCE_UPDATE),
 ):
-    """Update a printer maintenance item (e.g., custom interval, enabled)."""
+    """Update a printer maintenance item (e.g., custom interval, enabled, action settings)."""
     result = await db.execute(
         select(PrinterMaintenance)
         .where(PrinterMaintenance.id == item_id)
@@ -487,8 +500,20 @@ async def update_printer_maintenance(
         raise HTTPException(status_code=404, detail="Maintenance item not found")
 
     update_data = data.model_dump(exclude_unset=True)
+    action_keys = {"action_options", "trigger_mode", "schedule_days", "schedule_time"}
+    if action_keys & update_data.keys() and not item.maintenance_type.action:
+        raise HTTPException(status_code=400, detail="This maintenance type has no automatic action")
     for key, value in update_data.items():
         setattr(item, key, value)
+
+    if item.maintenance_type.action:
+        # Cross-field rules against the merged state, so a PATCH that only
+        # flips the trigger is judged with the days and time already stored.
+        if item.trigger_mode == "schedule" and (not item.schedule_days or not item.schedule_time):
+            raise HTTPException(status_code=400, detail="A schedule needs at least one weekday and a time")
+        if item.trigger_mode != "manual" and not maintenance_actions.selected_calibration_flags(item.action_options):
+            raise HTTPException(status_code=400, detail="Select at least one calibration option")
+        maintenance_actions.refresh_schedule(item)
 
     await db.commit()
     await db.refresh(item)
@@ -596,20 +621,8 @@ async def perform_maintenance(
     result = await db.execute(select(Printer).where(Printer.id == item.printer_id))
     printer = result.scalar_one()
 
-    # Get current hours
-    current_hours = await get_printer_total_hours(db, item.printer_id)
-
-    # Create history entry
-    history = MaintenanceHistory(
-        printer_maintenance_id=item.id,
-        hours_at_maintenance=current_hours,
-        notes=data.notes,
-    )
-    db.add(history)
-
-    # Update item
-    item.last_performed_at = datetime.now(timezone.utc)
-    item.last_performed_hours = current_hours
+    history = await maintenance_actions.record_performed(db, item, data.notes)
+    current_hours = history.hours_at_maintenance
 
     await db.commit()
 
@@ -651,7 +664,116 @@ async def perform_maintenance(
         is_due=False,
         is_warning=False,
         last_performed_at=item.last_performed_at,
+        action=item.maintenance_type.action,
+        trigger_mode=item.trigger_mode or "manual",
     )
+
+
+# ============== Maintenance Runs (#3127) ==============
+
+
+@router.post("/items/{item_id}/run", response_model=MaintenanceRunResponse)
+async def run_maintenance_item(
+    item_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.MAINTENANCE_UPDATE),
+):
+    """Queue the item's action now; the scheduler starts it once the printer is idle."""
+    result = await db.execute(
+        select(PrinterMaintenance)
+        .where(PrinterMaintenance.id == item_id)
+        .options(selectinload(PrinterMaintenance.maintenance_type))
+    )
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail="Maintenance item not found")
+    if not item.maintenance_type.action:
+        raise HTTPException(status_code=400, detail="This maintenance type has no automatic action")
+    if not maintenance_actions.selected_calibration_flags(item.action_options):
+        raise HTTPException(status_code=400, detail="Select at least one calibration option")
+    if await maintenance_actions.get_active_run(db, item.id) is not None:
+        raise HTTPException(status_code=409, detail="A run is already pending or running for this item")
+
+    try:
+        run = await maintenance_actions.create_run(db, item, "manual")
+        await db.commit()
+    except IntegrityError:
+        # Two "Run now" clicks racing past the read above: the partial unique
+        # index on active runs lets exactly one through.
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="A run is already pending or running for this item")
+    await db.refresh(run)
+    return run
+
+
+@router.get("/items/{item_id}/runs", response_model=list[MaintenanceRunResponse])
+async def list_maintenance_runs(
+    item_id: int,
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.MAINTENANCE_READ),
+):
+    """Newest runs of an item first."""
+    result = await db.execute(
+        select(MaintenanceRun)
+        .where(MaintenanceRun.printer_maintenance_id == item_id)
+        .order_by(MaintenanceRun.id.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+def _printer_is_running_calibration(printer_id: int) -> bool:
+    """Is the printer, right now, on the calibration a run dispatched?
+
+    Cancelling a run must only ever stop that job. A row can say "running"
+    long after the calibration ended (missed completion, refused command),
+    and by then the printer may be hours into somebody's print.
+    """
+    state = printer_manager.get_status(printer_id)
+    if not state or state.state not in ("RUNNING", "PAUSE", "PREPARE"):
+        return False
+    return is_calibration_job(state.gcode_file or state.current_print, state.subtask_name)
+
+
+@router.delete("/runs/{run_id}")
+async def cancel_maintenance_run(
+    run_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.MAINTENANCE_UPDATE),
+):
+    """Cancel a pending run, or stop a running calibration on the printer."""
+    result = await db.execute(
+        select(MaintenanceRun)
+        .where(MaintenanceRun.id == run_id)
+        .options(selectinload(MaintenanceRun.printer_maintenance))
+    )
+    run = result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Maintenance run not found")
+    if run.status not in maintenance_actions.RUN_ACTIVE_STATUSES:
+        raise HTTPException(status_code=400, detail="Only pending or running runs can be cancelled")
+
+    if run.status == "running" and _printer_is_running_calibration(run.printer_id):
+        # Best effort; the row is closed even if the publish fails, and the
+        # printer's own FAILED report then finds nothing left to close.
+        printer_manager.stop_print(run.printer_id)
+    elif run.status == "running":
+        # The row outlived the calibration -- a completion missed across a
+        # restart, or a command the firmware never acted on. Whatever the
+        # printer is doing now is not ours to stop.
+        logger.info(
+            "Maintenance run %d cancelled without a stop: printer %d is not running the calibration",
+            run.id,
+            run.printer_id,
+        )
+
+    run.status = "cancelled"
+    run.waiting_reason = None
+    run.completed_at = utcnow_naive()
+    maintenance_actions.refresh_schedule(run.printer_maintenance)
+    await db.commit()
+    return {"status": "cancelled", "id": run.id}
 
 
 @router.get("/items/{item_id}/history", response_model=list[MaintenanceHistoryResponse])

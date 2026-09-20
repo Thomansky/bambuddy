@@ -86,7 +86,7 @@ from backend.app.core.config import APP_VERSION, settings as app_settings
 from backend.app.core.database import async_session, engine, init_db
 from backend.app.core.tasks import spawn_background_task
 from backend.app.core.websocket import ws_manager
-from backend.app.services import print_dispatch_context
+from backend.app.services import maintenance_actions, print_dispatch_context
 from backend.app.services.archive import ArchiveService, peek_plate_index_in_3mf, swap_plate_suffix
 from backend.app.services.archive_purge import archive_purge_service
 from backend.app.services.bambu_ftp import (
@@ -708,6 +708,25 @@ _EXPECTED_PRINT_CLEANUP_INTERVAL: int = 15 * 60  # 15 minutes
 _expected_prints_cleanup_task: asyncio.Task | None = None
 
 _ACTIVE_PRINT_STATES: set[str] = {"RUNNING", "PRINTING", "PAUSE"}
+
+
+def _is_firmware_system_job(state) -> bool:
+    """True when the firmware itself marks the current job as its own.
+
+    Two signals, both set by the printer and not by whoever sent the file:
+    the gcode lives on the read-only system partition (``/usr/etc/print/...``
+    for the levelling run, H2S capture) or the push carries
+    ``print_type: system``. Deliberately narrower than
+    ``is_internal_printer_job``, which also matches by name -- fine for the
+    archive and usage paths, where a false positive costs nothing, but the
+    kill switch must not be talked out of a stop by a 3MF that happens to be
+    named ``auto_cali_for_user_param`` (or the pressure-advance line, which
+    does spend filament).
+    """
+    if (state.gcode_file or "").startswith("/usr/"):
+        return True
+    raw = state.raw_data if isinstance(state.raw_data, dict) else {}
+    return raw.get("print_type") == "system"
 
 
 def _build_status_print_keys(printer_id: int, state: PrinterState) -> list[tuple[int, str]]:
@@ -1601,6 +1620,14 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
         pass
     elif _is_bambuddy_authorized_print_in_memory(printer_id, state):
         # Normal Bambuddy-started prints stay entirely on the in-memory path.
+        _unauthorized_print_kill_sent.discard(printer_id)
+    elif _is_firmware_system_job(state):
+        # The printer's own calibration run is nobody's print: it has no
+        # archive, no queue row and no owner to authorise it, but it spends
+        # no filament and no budget either, so the kill switch has nothing to
+        # protect. Stopping it would also cancel the run a maintenance
+        # schedule just started (#3127). Only the firmware's own markers
+        # count here, not the job name: a user's 3MF can be called anything.
         _unauthorized_print_kill_sent.discard(printer_id)
     else:
         kill_switch_enabled = False
@@ -3429,6 +3456,23 @@ async def on_print_start(printer_id: int, data: dict):
 
     await ws_manager.send_print_start(printer_id, data)
 
+    # The printer's own jobs -- a calibration run, the pressure-advance line --
+    # stop here (#3081, #3127). Everything above is per-printer bookkeeping
+    # that any job starting must reset; everything below describes a user's
+    # print. The usage tracker in particular must not capture a session for a
+    # calibration: on completion it would book the AMS deltas of a job that
+    # consumed nothing (#3081, 1 kg per spool on an aborted run). The relay,
+    # the smart plug, plate detection and the start notification are equally
+    # about a print that is not happening. is_internal_printer_job documents
+    # what counts and why both fields are tested.
+    if is_internal_printer_job(data.get("filename", ""), data.get("subtask_name", "")):
+        logger.info(
+            "[CALLBACK] Skipping archive — internal printer job detected: filename=%s, subtask=%s",
+            data.get("filename", ""),
+            data.get("subtask_name", ""),
+        )
+        return
+
     # Notify when the print-start AMS mapping references tray slots without spool assignments.
     await notify_missing_spool_assignments_on_print_start(printer_id, data, logger)
 
@@ -3656,23 +3700,6 @@ async def on_print_start(printer_id: int, data: dict):
                 subtask_id = None
 
         logger.info("[CALLBACK] Print start detected - filename: %s, subtask: %s", filename, subtask_name)
-
-        # Skip the printer's own jobs — a calibration run is not a user's print.
-        # See is_internal_printer_job for what counts and why both fields are
-        # tested; the pressure-advance line reports as a subtask name with no
-        # /usr/ path, which the old prefix-only test here missed entirely.
-        #
-        # No notification either. The event describes the printer calibrating
-        # itself, so "Print started" is as wrong as the archive was, and the
-        # matching completion is suppressed in on_print_complete for the same
-        # reason.
-        if is_internal_printer_job(filename, subtask_name):
-            logger.info(
-                "[CALLBACK] Skipping archive — internal printer job detected: filename=%s, subtask=%s",
-                filename,
-                subtask_name,
-            )
-            return
 
         if not filename and not subtask_name:
             # Send notification without archive data (no filename)
@@ -5950,6 +5977,13 @@ async def on_finish_photo_moment(printer_id: int, data: dict):
         timelapse_was_active,
     )
 
+    # A calibration run ends with the same FINISH edge as a print, but there
+    # is nothing on the plate to photograph and no archive to attach it to;
+    # raising the plate for the shot would only move the machine for nothing.
+    if is_internal_printer_job(data.get("filename", ""), data.get("subtask_name", "")):
+        logger.info("[FINISH-PHOTO-MOMENT] internal printer job on printer %s — no finish photo", printer_id)
+        return
+
     # If a timelapse is actively recording, skip the pre-capture — the
     # post-completion path will extract the last frame from the recorded
     # video, which still provides the best framing (toolhead parked,
@@ -6281,6 +6315,51 @@ async def on_print_complete(printer_id: int, data: dict):
     # task so the later notification path can await it and avoid a duplicate;
     # if that immediate attempt failed, the regular completion path retries.
     kill_switch_notification_task = _kill_switch_notification_tasks.pop(printer_id, None)
+
+    # The printer's own jobs end here (#3081, #3127). A calibration leaves no
+    # part on the plate, so the plate-clear gate must not be raised for it;
+    # it consumed no filament, so the usage tracker must not book AMS deltas
+    # against it (#3081 booked 1 kg per spool on an aborted run); it has no
+    # archive, no queue item and no owner to notify (#2634 saw the queue
+    # mislabel one as the waiting print). The only thing to do is tell the
+    # maintenance executor, which closes the run that asked for it -- and
+    # clear the user-stopped flag, which a Stop pressed during the calibration
+    # would otherwise carry into the next real print. is_internal_printer_job
+    # documents what counts and why both fields are tested.
+    if is_internal_printer_job(data.get("filename", ""), data.get("subtask_name", "")):
+        _user_stopped_printers.discard(printer_id)
+        logger.info(
+            "[CALLBACK] Internal printer job finished, not a print: filename=%s, subtask=%s, status=%s",
+            data.get("filename", ""),
+            data.get("subtask_name", ""),
+            data.get("status"),
+        )
+        raw_data = data.get("raw_data") or {}
+        print_error = raw_data.get("print_error") if isinstance(raw_data, dict) else None
+        print_error = int(print_error) if isinstance(print_error, (int, float)) and print_error else None
+        final_status = data.get("status", "completed")
+        if final_status == "failed" and print_error is None:
+            # The cancel code arrives seconds after the FAILED edge (H2S
+            # capture); judged now, every screen cancel would read as a
+            # failure. The executor waits for the echo before closing the run.
+            spawn_background_task(
+                maintenance_actions.on_internal_job_failed(
+                    printer_id, data.get("filename", ""), data.get("subtask_name", ""), time.monotonic()
+                ),
+                name=f"maintenance-run-failed-{printer_id}",
+            )
+            return
+        try:
+            await maintenance_actions.on_internal_job_finished(
+                printer_id,
+                data.get("filename", ""),
+                data.get("subtask_name", ""),
+                final_status,
+                print_error,
+            )
+        except Exception as e:
+            logger.warning("Maintenance run completion handling failed for printer %s: %s", printer_id, e)
+        return
 
     # Last chance before the bytes go: if this print's archive is still an empty
     # fallback and something downloaded the 3MF while it ran, fill the archive in
@@ -6832,23 +6911,6 @@ async def on_print_complete(printer_id: int, data: dict):
     log_timing("Filament usage tracking")
 
     if not archive_id:
-        # The printer's own calibration run has no archive by design, so this
-        # arrives here every time one finishes. Returning before the no-archive
-        # notification is not just noise control: that path attributes an
-        # unmatched completion to any queue item this printer finished in the
-        # last five minutes, which for a calibration that runs alongside a real
-        # print means emailing its owner that their print is done, twice and
-        # early. Everything above this point has already run — the plate-clear
-        # gate, the queue reconciliation, the SD-card cleanup — so only the
-        # notification is skipped.
-        if is_internal_printer_job(filename, subtask_name):
-            logger.info(
-                "[CALLBACK] Internal printer job completed, no notification: filename=%s, subtask=%s",
-                filename,
-                subtask_name,
-            )
-            return
-
         logger.warning("Could not find archive for print complete: filename=%s, subtask=%s", filename, subtask_name)
 
         # Still send print-complete/failed/stopped notifications even without an archive.

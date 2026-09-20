@@ -4972,6 +4972,62 @@ async def run_migrations(conn):
     await _safe_execute(conn, "ALTER TABLE library_files ADD COLUMN external_url VARCHAR(500)")
     await _safe_execute(conn, "ALTER TABLE library_files ADD COLUMN photos JSON")
 
+    # Migration: actionable maintenance — scheduled printer calibration (#3127).
+    # JSON and VARCHAR are spelled identically on SQLite and Postgres. The
+    # maintenance_runs table is new; create_all() builds it on the paths that
+    # run today, and the statement below covers a database that reaches these
+    # migrations without it, like the other new tables in this file.
+    await _safe_execute(
+        conn,
+        """
+        CREATE TABLE IF NOT EXISTS maintenance_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            printer_maintenance_id INTEGER NOT NULL REFERENCES printer_maintenance(id) ON DELETE CASCADE,
+            printer_id INTEGER NOT NULL REFERENCES printers(id) ON DELETE CASCADE,
+            status VARCHAR(20),
+            source VARCHAR(16),
+            options JSON,
+            start_after DATETIME,
+            waiting_reason TEXT,
+            error_message TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            started_at DATETIME,
+            completed_at DATETIME
+        )
+        """
+        if is_sqlite()
+        else """
+        CREATE TABLE IF NOT EXISTS maintenance_runs (
+            id SERIAL PRIMARY KEY,
+            printer_maintenance_id INTEGER NOT NULL REFERENCES printer_maintenance(id) ON DELETE CASCADE,
+            printer_id INTEGER NOT NULL REFERENCES printers(id) ON DELETE CASCADE,
+            status VARCHAR(20),
+            source VARCHAR(16),
+            options JSON,
+            start_after TIMESTAMP,
+            waiting_reason TEXT,
+            error_message TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            started_at TIMESTAMP,
+            completed_at TIMESTAMP
+        )
+        """,
+    )
+    # One active run per item (#3127); partial, so finished runs pile up
+    # freely. create_all() adds it on fresh installs only.
+    await _safe_execute(
+        conn,
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_maintenance_runs_active "
+        "ON maintenance_runs (printer_maintenance_id) WHERE status IN ('pending', 'running')",
+    )
+    await _safe_execute(conn, "ALTER TABLE maintenance_types ADD COLUMN action VARCHAR(32)")
+    await _safe_execute(conn, "ALTER TABLE printer_maintenance ADD COLUMN action_options JSON")
+    await _safe_execute(conn, "ALTER TABLE printer_maintenance ADD COLUMN trigger_mode VARCHAR(16) DEFAULT 'manual'")
+    await _safe_execute(conn, "ALTER TABLE printer_maintenance ADD COLUMN schedule_days JSON")
+    await _safe_execute(conn, "ALTER TABLE printer_maintenance ADD COLUMN schedule_time VARCHAR(5)")
+    await _safe_execute(conn, "ALTER TABLE printer_maintenance ADD COLUMN schedule_next_at TIMESTAMP")
+    await _safe_execute(conn, "ALTER TABLE printer_maintenance ADD COLUMN last_auto_run_at TIMESTAMP")
+
     # Migration: storage location sensor alerts (#2824), own column rather than
     # reusing on_ha_sensor_alert. That column can be scoped to one printer
     # (printer_id), and a location alert has no printer to scope by — sharing

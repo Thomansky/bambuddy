@@ -129,6 +129,180 @@ async def test_unauthorized_active_print_triggers_stop(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_the_printers_own_calibration_is_never_stopped(monkeypatch):
+    """A calibration run (#3127) has no dispatch marker of any kind, so the
+    authorisation lookup would call it foreign. It spends nothing the kill
+    switch guards, and stopping it would cancel the maintenance run that
+    started it."""
+    stop_calls: list[int] = []
+
+    async def fake_status(*args, **kwargs):
+        return None
+
+    async def kill_switch_enabled(_db):
+        return True
+
+    authorization = AsyncMock(return_value=False)
+
+    monkeypatch.setattr(main_module.printer_manager, "get_current_print_user", lambda printer_id: None)
+    monkeypatch.setattr(
+        main_module.printer_manager, "stop_print", lambda printer_id: stop_calls.append(printer_id) or True
+    )
+    monkeypatch.setattr(main_module.printer_manager, "get_printer", lambda printer_id: None)
+    monkeypatch.setattr(main_module.printer_manager, "get_model", lambda printer_id: None)
+    monkeypatch.setattr(main_module, "printer_state_to_dict", lambda *args, **kwargs: {})
+    monkeypatch.setattr(main_module.mqtt_relay, "on_printer_status", fake_status)
+    monkeypatch.setattr(main_module.ws_manager, "send_printer_status", fake_status)
+    monkeypatch.setattr(main_module.ws_manager, "broadcast", AsyncMock())
+    monkeypatch.setattr(main_module, "_is_bambuddy_authorized_print", authorization)
+    monkeypatch.setattr("backend.app.services.finance_budget.is_printer_kill_switch_enabled", kill_switch_enabled)
+
+    state = SimpleNamespace(
+        connected=True,
+        state="RUNNING",
+        progress=0,
+        remaining_time=0,
+        layer_num=0,
+        temperatures={},
+        nozzles=[],
+        raw_data={},
+        stg_cur=0,
+        fila_switch=None,
+        ams_switch_inlet={},
+        extruder_slots={},
+        cooling_fan_speed=None,
+        big_fan1_speed=None,
+        big_fan2_speed=None,
+        chamber_light=False,
+        active_extruder=0,
+        tray_now=255,
+        door_open=False,
+        ams_filament_backup=False,
+        current_print=None,
+        subtask_name="auto_cali_for_user_param.gcode",
+        subtask_id="cali-task-1",
+        gcode_file="/usr/etc/print/H2S/auto_cali_for_user_param.gcode",
+    )
+
+    await main_module.on_printer_status_change(7, state)
+
+    assert stop_calls == []
+    authorization.assert_not_awaited()
+    assert 7 not in main_module._unauthorized_print_kill_sent
+
+
+def _kill_switch_state(**overrides):
+    fields = {
+        "connected": True,
+        "state": "RUNNING",
+        "progress": 0,
+        "remaining_time": 0,
+        "layer_num": 0,
+        "temperatures": {},
+        "nozzles": [],
+        "raw_data": {},
+        "stg_cur": 0,
+        "fila_switch": None,
+        "ams_switch_inlet": {},
+        "extruder_slots": {},
+        "cooling_fan_speed": None,
+        "big_fan1_speed": None,
+        "big_fan2_speed": None,
+        "chamber_light": False,
+        "active_extruder": 0,
+        "tray_now": 255,
+        "door_open": False,
+        "ams_filament_backup": False,
+        "current_print": None,
+        "subtask_name": "foreign_job",
+        "subtask_id": "external-task-1",
+        "gcode_file": "foreign_job.gcode",
+    }
+    fields.update(overrides)
+    return SimpleNamespace(**fields)
+
+
+def _patch_kill_switch_plumbing(monkeypatch, stop_calls, authorization):
+    async def fake_status(*args, **kwargs):
+        return None
+
+    async def kill_switch_enabled(_db):
+        return True
+
+    monkeypatch.setattr(main_module.printer_manager, "get_current_print_user", lambda printer_id: None)
+    monkeypatch.setattr(
+        main_module.printer_manager, "stop_print", lambda printer_id: stop_calls.append(printer_id) or True
+    )
+    monkeypatch.setattr(main_module.printer_manager, "get_printer", lambda printer_id: None)
+    monkeypatch.setattr(main_module.printer_manager, "get_model", lambda printer_id: None)
+    monkeypatch.setattr(main_module, "printer_state_to_dict", lambda *args, **kwargs: {})
+    monkeypatch.setattr(main_module.mqtt_relay, "on_printer_status", fake_status)
+    monkeypatch.setattr(main_module.ws_manager, "send_printer_status", fake_status)
+    monkeypatch.setattr(main_module.ws_manager, "broadcast", AsyncMock())
+    monkeypatch.setattr(main_module, "_send_kill_switch_provider_notification", AsyncMock(return_value=True))
+    monkeypatch.setattr(main_module, "_is_bambuddy_authorized_print", authorization)
+    monkeypatch.setattr("backend.app.services.finance_budget.is_printer_kill_switch_enabled", kill_switch_enabled)
+
+
+@pytest.mark.asyncio
+async def test_a_print_merely_named_like_the_calibration_is_still_reconciled(monkeypatch):
+    """The exemption keys on the firmware's own markers, not the job name: a
+    user's 3MF renamed auto_cali_for_user_param printed from an SD path is a
+    print like any other and the kill switch must look at it."""
+    stop_calls: list[int] = []
+    authorization = AsyncMock(return_value=False)
+    _patch_kill_switch_plumbing(monkeypatch, stop_calls, authorization)
+    main_module._unauthorized_print_kill_sent.discard(8)
+
+    state = _kill_switch_state(
+        subtask_name="auto_cali_for_user_param",
+        gcode_file="/data/Metadata/plate_1.gcode",
+        subtask_id="external-task-2",
+    )
+    await main_module.on_printer_status_change(8, state)
+
+    authorization.assert_awaited_once()
+    assert stop_calls == [8]
+    main_module._unauthorized_print_kill_sent.discard(8)
+    main_module._kill_switch_notification_tasks.pop(8, None)
+
+
+@pytest.mark.asyncio
+async def test_the_pressure_advance_line_is_not_exempt(monkeypatch):
+    """It is internal, but it spends filament and reports no /usr/ path, so
+    the name alone must not wave it past the kill switch."""
+    stop_calls: list[int] = []
+    authorization = AsyncMock(return_value=False)
+    _patch_kill_switch_plumbing(monkeypatch, stop_calls, authorization)
+    main_module._unauthorized_print_kill_sent.discard(9)
+
+    state = _kill_switch_state(subtask_name="pa_line_calib_mode", gcode_file="pa_line_calib_mode.gcode")
+    await main_module.on_printer_status_change(9, state)
+
+    authorization.assert_awaited_once()
+    assert stop_calls == [9]
+    main_module._unauthorized_print_kill_sent.discard(9)
+    main_module._kill_switch_notification_tasks.pop(9, None)
+
+
+@pytest.mark.asyncio
+async def test_print_type_system_is_exempt_without_a_path(monkeypatch):
+    stop_calls: list[int] = []
+    authorization = AsyncMock(return_value=False)
+    _patch_kill_switch_plumbing(monkeypatch, stop_calls, authorization)
+
+    state = _kill_switch_state(
+        subtask_name="auto_cali_for_user_param.gcode",
+        gcode_file="auto_cali_for_user_param.gcode",
+        raw_data={"print_type": "system"},
+    )
+    await main_module.on_printer_status_change(10, state)
+
+    authorization.assert_not_awaited()
+    assert stop_calls == []
+
+
+@pytest.mark.asyncio
 async def test_failed_immediate_notification_allows_completion_retry():
     task = main_module.spawn_background_task(_return_false(), name="test-kill-switch-notification-failure")
 

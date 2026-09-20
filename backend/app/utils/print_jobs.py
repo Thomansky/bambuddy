@@ -24,7 +24,9 @@ print-complete callbacks can share one answer.
 # ``auto_cali_for_user`` is the bed-levelling / vibration run, normally reported
 # with a ``/usr/etc/print/`` path that the rule below catches on its own; it is
 # listed anyway because the path is not guaranteed and a name-only report of it
-# would otherwise slip through.
+# would otherwise slip through. Current firmware reports the same run as
+# ``auto_cali_for_user_param.gcode`` in both fields (H2S capture, #3127), so
+# that spelling is listed alongside the older one.
 #
 # ``auto_pa_line_calib_mode`` is the pressure-advance (K profile) line. This one
 # is reported as a *subtask name* with no ``/usr/`` path at all, which is why
@@ -40,6 +42,7 @@ print-complete callbacks can share one answer.
 INTERNAL_JOB_NAMES = frozenset(
     {
         "auto_cali_for_user",
+        "auto_cali_for_user_param",
         "auto_pa_line_calib_mode",
         "pa_line_calib_mode",
         "pa_pattern_calib_mode",
@@ -49,6 +52,10 @@ INTERNAL_JOB_NAMES = frozenset(
 # Longest first: ``.gcode.3mf`` has to be stripped whole, or ``.3mf`` would
 # match first and leave a trailing ``.gcode`` behind.
 _PRINT_SUFFIXES = (".gcode.3mf", ".gcode", ".3mf")
+
+# The subset of INTERNAL_JOB_NAMES that is the calibration a maintenance run
+# (#3127) waits for; the pressure-advance jobs are deliberately not in it.
+CALIBRATION_JOB_NAMES = frozenset({"auto_cali_for_user", "auto_cali_for_user_param"})
 
 
 def _normalize_job_name(value: str) -> str:
@@ -80,3 +87,18 @@ def is_internal_printer_job(filename: str | None, subtask_name: str | None = Non
         # prefix is safe to treat as internal without naming each file.
         return True
     return any(_normalize_job_name(value) in INTERNAL_JOB_NAMES for value in (filename, subtask_name) if value)
+
+
+def is_calibration_job(filename: str | None, subtask_name: str | None = None) -> bool:
+    """True for the bed-levelling / vibration / motor-noise calibration run.
+
+    Narrower than :func:`is_internal_printer_job`: the pressure-advance line
+    is internal too, but it is not what a maintenance calibration run (#3127)
+    is waiting for, and closing that run on the wrong job would mark the
+    printer calibrated when only a K-profile line was drawn. The same goes for
+    the other system jobs under ``/usr/`` -- the H2's motion-precision
+    calibration, say -- so the path prefix is deliberately not enough here:
+    only the levelling run's own name counts, and the firmware reports it in
+    both fields.
+    """
+    return any(_normalize_job_name(value) in CALIBRATION_JOB_NAMES for value in (filename, subtask_name) if value)

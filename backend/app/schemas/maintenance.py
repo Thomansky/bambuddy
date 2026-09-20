@@ -2,7 +2,10 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from backend.app.schemas.print_queue import UTCDatetime
+from backend.app.services.maintenance_actions import CALIBRATION_FLAGS, TRIGGER_MODES, parse_schedule_time
 
 
 # Maintenance Type schemas
@@ -32,6 +35,8 @@ class MaintenanceTypeUpdate(BaseModel):
 class MaintenanceTypeResponse(MaintenanceTypeBase):
     id: int
     is_system: bool
+    # "calibration" when Bambuddy can perform the task itself (#3127)
+    action: str | None = None
     created_at: datetime
 
     class Config:
@@ -50,10 +55,63 @@ class PrinterMaintenanceCreate(PrinterMaintenanceBase):
     pass
 
 
+def _validate_schedule_days(days: list[int] | None) -> list[int] | None:
+    if days is None:
+        return None
+    if any(d < 0 or d > 6 for d in days):
+        raise ValueError("schedule_days must contain weekdays 0 (Monday) to 6 (Sunday)")
+    if len(set(days)) != len(days):
+        raise ValueError("schedule_days must not repeat a weekday")
+    return sorted(days)
+
+
+def _validate_schedule_time(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if parse_schedule_time(value) is None:
+        raise ValueError("schedule_time must be HH:MM")
+    hour, minute = parse_schedule_time(value)
+    return f"{hour:02d}:{minute:02d}"
+
+
 class PrinterMaintenanceUpdate(BaseModel):
     custom_interval_hours: float | None = None
     custom_interval_type: str | None = Field(default=None, pattern="^(hours|days)$")
     enabled: bool | None = None
+    # Automatic action settings (#3127); only meaningful on items whose type
+    # carries an action. Cross-field rules (schedule needs days and time, a
+    # non-manual trigger needs at least one flag) are checked in the route,
+    # where the stored values fill in whatever the PATCH leaves out.
+    action_options: dict[str, bool] | None = None
+    trigger_mode: str | None = Field(default=None, pattern=f"^({'|'.join(TRIGGER_MODES)})$")
+    schedule_days: list[int] | None = None
+    schedule_time: str | None = None
+
+    @field_validator("action_options")
+    @classmethod
+    def _known_flags_only(cls, value: dict[str, bool] | None) -> dict[str, bool] | None:
+        if value is None:
+            return None
+        unknown = sorted(set(value) - set(CALIBRATION_FLAGS))
+        if unknown:
+            raise ValueError(f"Unknown calibration option(s): {', '.join(unknown)}")
+        return {flag: bool(value.get(flag, False)) for flag in CALIBRATION_FLAGS}
+
+    @field_validator("schedule_days")
+    @classmethod
+    def _weekdays(cls, value: list[int] | None) -> list[int] | None:
+        return _validate_schedule_days(value)
+
+    @field_validator("schedule_time")
+    @classmethod
+    def _hh_mm(cls, value: str | None) -> str | None:
+        return _validate_schedule_time(value)
+
+    @model_validator(mode="after")
+    def _schedule_fields_together(self) -> "PrinterMaintenanceUpdate":
+        if self.trigger_mode == "schedule" and (self.schedule_days == [] or self.schedule_time == ""):
+            raise ValueError("A schedule needs at least one weekday and a time")
+        return self
 
 
 class PrinterMaintenanceResponse(BaseModel):
@@ -65,11 +123,48 @@ class PrinterMaintenanceResponse(BaseModel):
     enabled: bool
     last_performed_at: datetime | None
     last_performed_hours: float
+    action_options: dict[str, bool] | None = None
+    trigger_mode: str = "manual"
+    schedule_days: list[int] | None = None
+    schedule_time: str | None = None
+    # UTCDatetime: naive UTC in the DB, sent with the Z suffix like the queue
+    # and scheduled-drying routes so the client parses them as UTC.
+    schedule_next_at: UTCDatetime = None
+    last_auto_run_at: UTCDatetime = None
     created_at: datetime
     updated_at: datetime
 
     class Config:
         from_attributes = True
+
+
+# Maintenance run schemas (#3127)
+class MaintenanceRunResponse(BaseModel):
+    id: int
+    printer_maintenance_id: int
+    printer_id: int
+    status: str  # pending / running / completed / failed / cancelled
+    source: str  # manual / due / schedule
+    options: dict[str, bool] | None
+    start_after: UTCDatetime
+    waiting_reason: str | None
+    error_message: str | None
+    created_at: UTCDatetime
+    started_at: UTCDatetime
+    completed_at: UTCDatetime
+
+    class Config:
+        from_attributes = True
+
+
+class CurrentRun(BaseModel):
+    """The pending or running run of an item, as the card shows it."""
+
+    id: int
+    status: str
+    source: str
+    waiting_reason: str | None
+    started_at: UTCDatetime
 
 
 # Maintenance History schemas
@@ -118,6 +213,17 @@ class MaintenanceStatus(BaseModel):
     is_due: bool  # hours_until_due <= 0 OR days_until_due <= 0
     is_warning: bool  # within 10% of interval
     last_performed_at: datetime | None
+    # Automatic action (#3127); action is None for reminder-only types and the
+    # rest is then not meaningful
+    action: str | None = None
+    action_options: dict[str, bool] | None = None
+    action_available_options: list[str] | None = None  # flags this printer model can run
+    trigger_mode: str = "manual"
+    schedule_days: list[int] | None = None
+    schedule_time: str | None = None
+    schedule_next_at: UTCDatetime = None
+    current_run: CurrentRun | None = None
+    last_run: MaintenanceRunResponse | None = None
 
 
 class PrinterMaintenanceOverview(BaseModel):
