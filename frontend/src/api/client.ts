@@ -2859,6 +2859,8 @@ export interface PrintQueueBulkUpdate {
   timelapse?: boolean;
   use_ams?: boolean;
   nozzle_offset_cali?: CalibrationMode;
+  // Ask for a post-print outcome verdict when this job completes (#1898)
+  confirm_outcome?: boolean;
   preheat_override?: 'inherit' | 'on' | 'off';
   preheat_chamber_target_override?: number | null;
   // Auto-print G-code injection

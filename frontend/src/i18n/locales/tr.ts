@@ -1502,6 +1502,8 @@ export default {
       requiresPrevious: 'Önceki başarı gerekli',
       autoPowerOff: 'Otomatik kapanma',
       gcodeInjection: 'G-kod',
+      confirmOutcome: 'Sonuç sorgusu',
+      confirmOutcomeTitle: 'Tamamlandığında baskının nasıl çıktığını sorar',
     },
     // Boş durum
     empty: {
@@ -1543,6 +1545,7 @@ export default {
       layerInspection: 'İlk katman denetimi',
       timelapse: 'Zaman atlamalı video',
       useAms: "AMS Kullan",
+      confirmOutcome: 'Sonucu sor',
       nozzleOffsetCali: 'Nozül ofset kalibrasyonu',
       applyChanges: 'Değişiklikleri Uygula',
       selectAll: 'Tümünü Seç',
@@ -5280,6 +5283,8 @@ export default {
     insufficientBudget: 'Yetersiz bütçe',
     unlimitedNoBudget: 'Sınırsız – bütçe limiti belirlenmemiş.',
     noPrintableCostCenters: 'Yazdırma için kullanılabilir etkin bir masraf merkezi yok. Bir yöneticiden yazdırma erişimi vermesini isteyin.',
+    askForOutcome: 'Sonucu sor',
+    askForOutcomeTitle: 'Tamamlandığında baskının nasıl çıktığını sor',
   },
 
   // Yedekleme

@@ -1502,6 +1502,8 @@ export default {
       requiresPrevious: '需要前一个成功',
       autoPowerOff: '自动关机',
       gcodeInjection: 'G-code',
+      confirmOutcome: '结果确认',
+      confirmOutcomeTitle: '打印完成后询问打印效果如何',
     },
     // Empty state
     empty: {
@@ -1543,6 +1545,7 @@ export default {
       layerInspection: '首层检查',
       timelapse: '延时摄影',
       useAms: '使用 AMS',
+      confirmOutcome: '询问打印结果',
       nozzleOffsetCali: '喷嘴偏移校准',
       applyChanges: '应用更改',
       selectAll: '全选',
@@ -5291,6 +5294,8 @@ export default {
     insufficientBudget: '预算不足',
     unlimitedNoBudget: '无限制 – 未设置预算上限。',
     noPrintableCostCenters: '没有可用于打印的有效成本中心。请联系管理员授予你打印权限。',
+    askForOutcome: '询问打印结果',
+    askForOutcomeTitle: '打印完成后询问打印效果如何',
   },
 
   // Backup

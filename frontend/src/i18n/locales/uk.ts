@@ -1517,6 +1517,8 @@ export default {
       requiresPrevious: "Потрібне успішне завершення попереднього завдання",
       autoPowerOff: "Автоматичне вимкнення",
       gcodeInjection: "G-код",
+      confirmOutcome: 'Запит результату',
+      confirmOutcomeTitle: 'Після завершення запитає, як вийшов друк',
     },
     // Empty state
     empty: {
@@ -1558,6 +1560,7 @@ export default {
       layerInspection: "Перевірка першого шару",
       timelapse: "Таймлапс",
       useAms: "Використовувати AMS",
+      confirmOutcome: 'Запитати про результат',
       nozzleOffsetCali: "Калібрування зсуву сопла",
       applyChanges: "Застосувати зміни",
       selectAll: "Вибрати усі",
@@ -5346,6 +5349,8 @@ export default {
     insufficientBudget: "Недостатньо бюджету",
     unlimitedNoBudget: "Без обмежень — ліміт бюджету не встановлено.",
     noPrintableCostCenters: "Немає активного центру витрат, доступного для друку. Попросіть адміністратора надати вам доступ до друку.",
+    askForOutcome: 'Запитати про результат',
+    askForOutcomeTitle: 'Після завершення запитати, як вийшов друк',
   },
 
   // Backup

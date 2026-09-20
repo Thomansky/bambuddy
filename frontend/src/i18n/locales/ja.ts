@@ -1501,6 +1501,8 @@ export default {
       requiresPrevious: '前の成功が必要',
       autoPowerOff: '自動電源オフ',
       gcodeInjection: 'G-code',
+      confirmOutcome: '結果確認',
+      confirmOutcomeTitle: '完了後に印刷の仕上がりを確認します',
     },
     // Empty state
     empty: {
@@ -1542,6 +1544,7 @@ export default {
       layerInspection: '第一層検査',
       timelapse: 'タイムラプス',
       useAms: 'AMS使用',
+      confirmOutcome: '結果を確認する',
       nozzleOffsetCali: 'ノズルオフセットキャリブレーション',
       applyChanges: '変更を適用',
       selectAll: 'すべて選択',
@@ -5306,6 +5309,8 @@ export default {
     insufficientBudget: '予算が不足しています',
     unlimitedNoBudget: '無制限 – 予算上限は設定されていません。',
     noPrintableCostCenters: '印刷に利用できる有効なコストセンターがありません。管理者に印刷アクセスの付与を依頼してください。',
+    askForOutcome: '結果を確認する',
+    askForOutcomeTitle: '完了後に印刷の仕上がりを尋ねます',
   },
 
   // Backup

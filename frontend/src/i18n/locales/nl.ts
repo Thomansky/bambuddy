@@ -1518,6 +1518,8 @@ export default {
       requiresPrevious: 'Vereist dat vorige taak slaagt',
       autoPowerOff: 'Automatisch uitschakelen',
       gcodeInjection: 'G-code',
+      confirmOutcome: 'Resultaatvraag',
+      confirmOutcomeTitle: 'Vraagt na afloop hoe de print is geworden',
     },
     // Empty state
     empty: {
@@ -1559,6 +1561,7 @@ export default {
       layerInspection: 'Inspectie eerste laag',
       timelapse: 'Timelapse',
       useAms: 'AMS gebruiken',
+      confirmOutcome: 'Vragen naar resultaat',
       nozzleOffsetCali: 'Nozzle-offsetkalibratie',
       applyChanges: 'Wijzigingen toepassen',
       selectAll: 'Alles selecteren',
@@ -5353,6 +5356,8 @@ export default {
     insufficientBudget: 'Onvoldoende budget',
     unlimitedNoBudget: 'Onbeperkt – er is geen budgetlimiet ingesteld.',
     noPrintableCostCenters: 'Er is geen actieve kostenplaats beschikbaar voor afdrukken. Vraag een beheerder om je afdruktoegang te geven.',
+    askForOutcome: 'Vragen naar resultaat',
+    askForOutcomeTitle: 'Na afloop vragen hoe de print is geworden',
   },
 
   // Backup

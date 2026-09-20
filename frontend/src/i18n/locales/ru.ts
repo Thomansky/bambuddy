@@ -1443,6 +1443,8 @@ export default {
       requiresPrevious: "Требуется успешное предыдущее задание",
       autoPowerOff: "Автоотключение питания",
       gcodeInjection: "G-code",
+      confirmOutcome: 'Запрос результата',
+      confirmOutcomeTitle: 'После завершения спросит, как получилась печать',
     },
     empty: {
       title: "Нет запланированных заданий",
@@ -1480,6 +1482,7 @@ export default {
       layerInspection: "Проверка первого слоя",
       timelapse: "Таймлапс",
       useAms: "Использовать AMS",
+      confirmOutcome: 'Спросить о результате',
       nozzleOffsetCali: "Калибровка смещения сопел",
       applyChanges: "Применить изменения",
       selectAll: "Выбрать все",
@@ -5062,6 +5065,8 @@ export default {
     insufficientBudget: "Недостаточно бюджета",
     unlimitedNoBudget: "Без ограничений — лимит бюджета не задан.",
     noPrintableCostCenters: "Нет активного центра затрат, доступного для печати. Попросите администратора предоставить вам доступ к печати.",
+    askForOutcome: 'Спросить о результате',
+    askForOutcomeTitle: 'После завершения спросить, как получилась печать',
   },
   backup: {
     includesEncryptionKey: "Локальные резервные копии включают файл ключа шифрования MFA (DATA_DIR/.mfa_encryption_key), поэтому ZIP-архив является самодостаточным. Считайте этот ZIP конфиденциальным: любой, у кого есть файл, сможет расшифровать сохранённые в нём секреты клиента OIDC и TOTP.",

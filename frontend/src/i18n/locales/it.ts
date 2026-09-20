@@ -1502,6 +1502,8 @@ export default {
       requiresPrevious: 'Richiede successo precedente',
       autoPowerOff: 'Spegnimento automatico',
       gcodeInjection: 'G-code',
+      confirmOutcome: 'Richiesta esito',
+      confirmOutcomeTitle: 'Chiede com’è venuta la stampa una volta completata',
     },
     // Empty state
     empty: {
@@ -1543,6 +1545,7 @@ export default {
       layerInspection: 'Controllo primo layer',
       timelapse: 'Timelapse',
       useAms: 'Usa AMS',
+      confirmOutcome: 'Chiedi l’esito',
       nozzleOffsetCali: 'Calibrazione offset ugelli',
       applyChanges: 'Applica modifiche',
       selectAll: 'Seleziona tutto',
@@ -5293,6 +5296,8 @@ export default {
     insufficientBudget: 'Budget insufficiente',
     unlimitedNoBudget: 'Illimitato – non è impostato alcun limite di budget.',
     noPrintableCostCenters: 'Non è disponibile alcun centro di costo attivo per la stampa. Chiedi a un amministratore di concederti l’accesso alla stampa.',
+    askForOutcome: 'Chiedi l’esito',
+    askForOutcomeTitle: 'Chiedi com’è venuta la stampa una volta completata',
   },
 
   // Backup

@@ -1,5 +1,5 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertCircle, AlertTriangle, Loader2, Pencil, Printer, X } from 'lucide-react';
+import { AlertCircle, AlertTriangle, Loader2, Pencil, Printer, ThumbsUp, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { CostCenterSummary, PrintQueueItemCreate, PrintQueueItemUpdate, SlotMaterial } from '../../api/client';
@@ -1867,6 +1867,24 @@ export function PrintModal({
               printerCount={selectedPrinters.length}
               hasGcodeSnippets={!!settings?.gcode_snippets}
             />
+
+            {/* Outcome prompt (#1898) sits outside the collapsed Print Options
+                panel so it is discoverable; it edits the same printOptions
+                field as the row inside the panel. */}
+            <button
+              type="button"
+              aria-pressed={printOptions.confirm_outcome}
+              title={t('printModal.askForOutcomeTitle')}
+              onClick={() => setPrintOptions((prev) => ({ ...prev, confirm_outcome: !prev.confirm_outcome }))}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-sm transition-colors ${
+                printOptions.confirm_outcome
+                  ? 'bg-bambu-green/20 border-bambu-green text-bambu-green'
+                  : 'bg-bambu-dark border-bambu-dark-tertiary text-bambu-gray hover:text-white'
+              }`}
+            >
+              <ThumbsUp className="w-4 h-4" />
+              {t('printModal.askForOutcome')}
+            </button>
 
             {/* Error message */}
             {updateQueueMutation.isError && (
