@@ -5,11 +5,14 @@ import { Button } from './Button';
 import { ConfirmModal } from './ConfirmModal';
 
 interface PhotoGalleryModalProps {
-  archiveId: number;
+  // Archive photos resolve through `archiveId`; any other owner (a library
+  // file, #3077) passes `getPhotoUrl` instead and leaves `archiveId` out.
+  archiveId?: number;
   archiveName: string;
   photos: string[];
   onClose: () => void;
   onDelete?: (filename: string) => void;
+  getPhotoUrl?: (filename: string) => string;
 }
 
 export function PhotoGalleryModal({
@@ -18,6 +21,7 @@ export function PhotoGalleryModal({
   photos,
   onClose,
   onDelete,
+  getPhotoUrl,
 }: PhotoGalleryModalProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -45,8 +49,11 @@ export function PhotoGalleryModal({
     return null;
   }
 
+  const resolvePhotoUrl = (filename: string) =>
+    getPhotoUrl ? getPhotoUrl(filename) : api.getArchivePhotoUrl(archiveId ?? 0, filename);
+
   const currentPhoto = photos[currentIndex];
-  const photoUrl = api.getArchivePhotoUrl(archiveId, currentPhoto);
+  const photoUrl = resolvePhotoUrl(currentPhoto);
 
   const handleDownload = () => {
     const link = document.createElement('a');
@@ -142,7 +149,7 @@ export function PhotoGalleryModal({
                 }`}
               >
                 <img
-                  src={api.getArchivePhotoUrl(archiveId, photo)}
+                  src={resolvePhotoUrl(photo)}
                   alt={`Thumbnail ${index + 1}`}
                   className="w-full h-full object-cover"
                 />
