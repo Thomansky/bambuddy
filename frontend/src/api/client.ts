@@ -3842,7 +3842,56 @@ export interface MaintenanceType {
   icon: string | null;
   wiki_url: string | null;  // Documentation link
   is_system: boolean;
+  action: MaintenanceAction | null;  // "calibration" when Bambuddy performs the task itself (#3127)
   created_at: string;
+}
+
+// Actionable maintenance (#3127)
+export type MaintenanceAction = 'calibration';
+export type MaintenanceTriggerMode = 'manual' | 'when_due' | 'schedule';
+export type CalibrationOption =
+  | 'micro_lidar'
+  | 'bed_leveling'
+  | 'vibration'
+  | 'motor_noise'
+  | 'nozzle_offset'
+  | 'high_temp_heatbed'
+  | 'nozzle_clumping';
+export type CalibrationOptions = Partial<Record<CalibrationOption, boolean>>;
+export type MaintenanceRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type MaintenanceRunSource = 'manual' | 'due' | 'schedule';
+
+export interface MaintenanceRun {
+  id: number;
+  printer_maintenance_id: number;
+  printer_id: number;
+  status: MaintenanceRunStatus;
+  source: MaintenanceRunSource;
+  options: CalibrationOptions | null;
+  start_after: string | null;
+  waiting_reason: string | null;
+  error_message: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface MaintenanceCurrentRun {
+  id: number;
+  status: MaintenanceRunStatus;
+  source: MaintenanceRunSource;
+  waiting_reason: string | null;
+  started_at: string | null;
+}
+
+export interface MaintenanceItemUpdate {
+  custom_interval_hours?: number | null;
+  custom_interval_type?: 'hours' | 'days' | null;
+  enabled?: boolean;
+  action_options?: CalibrationOptions;
+  trigger_mode?: MaintenanceTriggerMode;
+  schedule_days?: number[];  // 0 = Monday
+  schedule_time?: string;  // HH:MM, local zone of the server
 }
 
 export interface MaintenanceTypeCreate {
@@ -3874,6 +3923,16 @@ export interface MaintenanceStatus {
   is_due: boolean;
   is_warning: boolean;
   last_performed_at: string | null;
+  // Actionable maintenance (#3127); null action = reminder only
+  action: MaintenanceAction | null;
+  action_options: CalibrationOptions | null;
+  action_available_options: CalibrationOption[] | null;
+  trigger_mode: MaintenanceTriggerMode;
+  schedule_days: number[] | null;
+  schedule_time: string | null;
+  schedule_next_at: string | null;
+  current_run: MaintenanceCurrentRun | null;
+  last_run: MaintenanceRun | null;
 }
 
 export interface PrinterMaintenanceOverview {
@@ -6811,11 +6870,17 @@ export const api = {
   getMaintenanceOverview: () => request<PrinterMaintenanceOverview[]>('/maintenance/overview'),
   getPrinterMaintenance: (printerId: number) =>
     request<PrinterMaintenanceOverview>(`/maintenance/printers/${printerId}`),
-  updateMaintenanceItem: (itemId: number, data: { custom_interval_hours?: number | null; custom_interval_type?: 'hours' | 'days' | null; enabled?: boolean }) =>
+  updateMaintenanceItem: (itemId: number, data: MaintenanceItemUpdate) =>
     request<MaintenanceStatus>(`/maintenance/items/${itemId}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
     }),
+  runMaintenanceItem: (itemId: number) =>
+    request<MaintenanceRun>(`/maintenance/items/${itemId}/run`, { method: 'POST' }),
+  getMaintenanceRuns: (itemId: number, limit = 20) =>
+    request<MaintenanceRun[]>(`/maintenance/items/${itemId}/runs?limit=${limit}`),
+  cancelMaintenanceRun: (runId: number) =>
+    request<{ status: string; id: number }>(`/maintenance/runs/${runId}`, { method: 'DELETE' }),
   performMaintenance: (itemId: number, notes?: string) =>
     request<MaintenanceStatus>(`/maintenance/items/${itemId}/perform`, {
       method: 'POST',
