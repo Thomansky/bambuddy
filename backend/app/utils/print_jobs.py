@@ -39,6 +39,11 @@ print-complete callbacks can share one answer.
 # above and both produced the same no-3MF archive. They are listed as two
 # literals rather than matched by a shared ``pa_`` stem for the reason the whole
 # set is exact: a stem rule would also swallow a user's own ``pa_bracket.3mf``.
+#
+# ``calibrate_motion_precision`` is the H2 series' vision encoder calibration,
+# reported as ``/usr/etc/print/<dir>/calibrate_motion_precision.gcode`` in both
+# fields (H2S capture, #3127); listed for the same name-only reason as the
+# levelling run.
 INTERNAL_JOB_NAMES = frozenset(
     {
         "auto_cali_for_user",
@@ -46,6 +51,7 @@ INTERNAL_JOB_NAMES = frozenset(
         "auto_pa_line_calib_mode",
         "pa_line_calib_mode",
         "pa_pattern_calib_mode",
+        "calibrate_motion_precision",
     }
 )
 
@@ -53,9 +59,14 @@ INTERNAL_JOB_NAMES = frozenset(
 # match first and leave a trailing ``.gcode`` behind.
 _PRINT_SUFFIXES = (".gcode.3mf", ".gcode", ".3mf")
 
-# The subset of INTERNAL_JOB_NAMES that is the calibration a maintenance run
-# (#3127) waits for; the pressure-advance jobs are deliberately not in it.
-CALIBRATION_JOB_NAMES = frozenset({"auto_cali_for_user", "auto_cali_for_user_param"})
+# The job each actionable maintenance type (#3127) waits for, by its
+# ``MaintenanceType.action``: the bed-levelling / vibration / motor-noise run
+# for ``calibration``, the vision encoder run for ``motion_precision``. Subsets
+# of INTERNAL_JOB_NAMES; the pressure-advance jobs belong to no action.
+ACTION_JOB_NAMES: dict[str, frozenset[str]] = {
+    "calibration": frozenset({"auto_cali_for_user", "auto_cali_for_user_param"}),
+    "motion_precision": frozenset({"calibrate_motion_precision"}),
+}
 
 
 def _normalize_job_name(value: str) -> str:
@@ -89,16 +100,32 @@ def is_internal_printer_job(filename: str | None, subtask_name: str | None = Non
     return any(_normalize_job_name(value) in INTERNAL_JOB_NAMES for value in (filename, subtask_name) if value)
 
 
-def is_calibration_job(filename: str | None, subtask_name: str | None = None) -> bool:
-    """True for the bed-levelling / vibration / motor-noise calibration run.
+def job_names_for_action(action: str | None) -> frozenset[str]:
+    """The reported job names a maintenance action's run waits for."""
+    return ACTION_JOB_NAMES.get(action or "", frozenset())
+
+
+def matches_action(action: str | None, filename: str | None, subtask_name: str | None = None) -> bool:
+    """True when this print event is the job ``action`` waits for.
 
     Narrower than :func:`is_internal_printer_job`: the pressure-advance line
-    is internal too, but it is not what a maintenance calibration run (#3127)
-    is waiting for, and closing that run on the wrong job would mark the
-    printer calibrated when only a K-profile line was drawn. The same goes for
-    the other system jobs under ``/usr/`` -- the H2's motion-precision
-    calibration, say -- so the path prefix is deliberately not enough here:
-    only the levelling run's own name counts, and the firmware reports it in
-    both fields.
+    is internal too, but it is not what a maintenance run (#3127) is waiting
+    for, and closing that run on the wrong job would mark the printer
+    calibrated when only a K-profile line was drawn. The same goes for the
+    other system jobs under ``/usr/`` -- the vision encoder run must not close
+    a bed-levelling run and vice versa -- so the path prefix is deliberately
+    not enough here: only the action's own job names count, and the firmware
+    reports them in both fields.
     """
-    return any(_normalize_job_name(value) in CALIBRATION_JOB_NAMES for value in (filename, subtask_name) if value)
+    names = job_names_for_action(action)
+    if not names:
+        return False
+    return any(_normalize_job_name(value) in names for value in (filename, subtask_name) if value)
+
+
+def action_for_job(filename: str | None, subtask_name: str | None = None) -> str | None:
+    """The maintenance action this print event belongs to, or None."""
+    for action in ACTION_JOB_NAMES:
+        if matches_action(action, filename, subtask_name):
+            return action
+    return None

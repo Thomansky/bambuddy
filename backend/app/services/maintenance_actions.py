@@ -1,9 +1,10 @@
 """Actionable maintenance: calibration runs Bambuddy performs itself (#3127).
 
-A maintenance type can carry an ``action``; so far the only one is
-``calibration``, which the printer performs on its own once told to (bed
-levelling, vibration compensation, motor noise, and the model-specific extras).
-Each printer item of such a type has an option set and a trigger mode:
+A maintenance type can carry an ``action`` the printer performs on its own
+once told to: ``calibration`` (bed levelling, vibration compensation, motor
+noise, and the model-specific extras, chosen per item) and
+``motion_precision`` (the H2 series' vision encoder calibration, which has no
+options). Each printer item of such a type has a trigger mode:
 
 * ``manual`` -- only the "Run now" button queues a run;
 * ``when_due`` -- the item falling due queues one;
@@ -37,12 +38,13 @@ from backend.app.core.database import async_session
 from backend.app.models.maintenance import MaintenanceHistory, MaintenanceRun, MaintenanceType, PrinterMaintenance
 from backend.app.models.printer import Printer
 from backend.app.utils.local_time import local_zone, utcnow_naive
-from backend.app.utils.print_jobs import is_calibration_job
-from backend.app.utils.printer_models import is_dual_nozzle_model
+from backend.app.utils.print_jobs import action_for_job
+from backend.app.utils.printer_models import has_vision_encoder, is_dual_nozzle_model
 
 logger = logging.getLogger(__name__)
 
 ACTION_CALIBRATION = "calibration"
+ACTION_MOTION_PRECISION = "motion_precision"
 
 # Keyword names of BambuMQTTClient.start_calibration, in bit order.
 CALIBRATION_FLAGS: tuple[str, ...] = (
@@ -88,6 +90,25 @@ DISPATCH_BUSY_WINDOW = timedelta(seconds=120)
 
 AUTO_RUN_NOTES = "Automatic calibration"
 
+# The vision encoder calibration is started as a system gcode file. The
+# directory under /usr/etc/print/ is model-specific and the printer reports
+# it with every internal job it runs (``PrinterState.internal_gcode_dir``);
+# this map is the fallback for a printer that has never reported one. Only
+# the H2S entry is verified on hardware (H2S capture, #3127).
+MOTION_PRECISION_GCODE_NAME = "calibrate_motion_precision.gcode"
+INTERNAL_GCODE_DIR_BY_MODEL: dict[str, str] = {
+    "H2S": "O1S",
+    "O1S": "O1S",
+    "H2D": "O1D",
+    "O1D": "O1D",
+    "H2DPRO": "O1D",
+    "O1E": "O1D",
+    "O2D": "O1D",
+    "H2C": "O1C",
+    "O1C": "O1C",
+    "O1C2": "O1C",
+}
+
 
 # ============== Options ==============
 
@@ -103,6 +124,26 @@ def selected_calibration_flags(options: dict | None) -> list[str]:
     return [flag for flag, on in normalize_calibration_options(options).items() if on]
 
 
+def has_options(action: str | None) -> bool:
+    """Does this action carry a per-item option set?"""
+    return action == ACTION_CALIBRATION
+
+
+def run_options(action: str | None, options: dict | None) -> dict[str, bool] | None:
+    """The option set a run of ``action`` is dispatched with.
+
+    Raises ValueError when the action has options and none is selected --
+    the firmware would refuse the command, so the run must not be queued.
+    Actions without options get None.
+    """
+    if not has_options(action):
+        return None
+    normalized = normalize_calibration_options(options)
+    if not any(normalized.values()):
+        raise ValueError("No calibration option selected")
+    return normalized
+
+
 def available_calibration_options(printer_model: str | None) -> list[str]:
     """Flags the card should offer for this model.
 
@@ -115,6 +156,29 @@ def available_calibration_options(printer_model: str | None) -> list[str]:
     if not is_dual_nozzle_model(printer_model):
         flags.remove("nozzle_offset")
     return flags
+
+
+def motion_precision_gcode_path(printer_model: str | None, learned_dir: str | None) -> str | None:
+    """Path of the vision encoder calibration for this printer, or None.
+
+    The directory the printer last reported for one of its own jobs wins;
+    otherwise the model map, with a warning because that entry may be a guess.
+    None means the model has no vision encoder and the run must be refused.
+    """
+    if not has_vision_encoder(printer_model):
+        return None
+    if learned_dir:
+        return f"/usr/etc/print/{learned_dir}/{MOTION_PRECISION_GCODE_NAME}"
+    normalized = (printer_model or "").strip().upper().replace(" ", "").replace("-", "")
+    fallback = INTERNAL_GCODE_DIR_BY_MODEL.get(normalized)
+    if fallback is None:
+        return None
+    logger.warning(
+        "Printer model %s has not reported its internal gcode directory yet; assuming /usr/etc/print/%s/",
+        printer_model,
+        fallback,
+    )
+    return f"/usr/etc/print/{fallback}/{MOTION_PRECISION_GCODE_NAME}"
 
 
 # ============== Schedule ==============
@@ -272,12 +336,11 @@ async def create_run(
 ) -> MaintenanceRun:
     """Queue a run for ``item``. Flushed, not committed; the caller commits.
 
-    Raises ValueError when the item's option set selects nothing -- the
-    firmware would refuse the command, so the run must not be queued.
+    Raises ValueError when the item's action has options and none is
+    selected -- the firmware would refuse the command, so the run must not
+    be queued. ``item.maintenance_type`` must be loaded.
     """
-    options = normalize_calibration_options(item.action_options)
-    if not any(options.values()):
-        raise ValueError("No calibration option selected")
+    options = run_options(item.maintenance_type.action, item.action_options)
     run = MaintenanceRun(
         printer_maintenance_id=item.id,
         printer_id=item.printer_id,
@@ -459,21 +522,27 @@ async def on_internal_job_finished(
     final_status: str | None,
     print_error: int | None = None,
 ) -> bool:
-    """Close the running maintenance run the printer's calibration belonged to.
+    """Close the running maintenance run the printer's job belonged to.
 
-    Called from ``on_print_complete`` for every internal printer job. Returns
-    True when a run was closed; False when the job was not a calibration or
-    nothing was waiting for one, which is also every calibration started by
+    Called from ``on_print_complete`` for every internal printer job. Only a
+    run whose action matches the finished job is closed -- a bed-levelling
+    run is not over because the vision encoder calibration finished. Returns
+    True when a run was closed; False when the job belongs to no action or
+    nothing was waiting for it, which is also every calibration started by
     hand from the screen.
     """
-    if not is_calibration_job(filename, subtask_name):
+    action = action_for_job(filename, subtask_name)
+    if action is None:
         return False
 
     async with async_session() as db:
         result = await db.execute(
             select(MaintenanceRun)
+            .join(MaintenanceRun.printer_maintenance)
+            .join(PrinterMaintenance.maintenance_type)
             .where(MaintenanceRun.printer_id == printer_id)
             .where(MaintenanceRun.status == "running")
+            .where(MaintenanceType.action == action)
             .options(
                 selectinload(MaintenanceRun.printer_maintenance).selectinload(PrinterMaintenance.maintenance_type),
                 selectinload(MaintenanceRun.printer),
@@ -546,7 +615,7 @@ async def on_internal_job_failed(
     ``on_print_complete``; a Cancel pressed in the UI meanwhile closes the row
     first and this then finds nothing to do.
     """
-    if not is_calibration_job(filename, subtask_name):
+    if action_for_job(filename, subtask_name) is None:
         return False
     await asyncio.sleep(CANCEL_ECHO_GRACE_SECONDS)
     cancelled = cancel_echo_seen(printer_id, failed_at)

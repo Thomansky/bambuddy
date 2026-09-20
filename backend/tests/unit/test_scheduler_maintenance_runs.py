@@ -30,10 +30,12 @@ def _mock_state(state="IDLE", connected=True):
     return mock
 
 
-async def _make_item(db_session, printer_factory, *, action="calibration", **kwargs):
-    printer = await printer_factory(model=kwargs.pop("model", "X1C"))
+async def _make_item(db_session, printer_factory, *, action="calibration", printer_id=None, **kwargs):
+    if printer_id is None:
+        printer = await printer_factory(model=kwargs.pop("model", "X1C"))
+        printer_id = printer.id
     maint_type = MaintenanceType(
-        name="Printer Calibration",
+        name="Printer Calibration" if action == "calibration" else "Vision Encoder Calibration",
         description="",
         default_interval_hours=100.0,
         interval_type="hours",
@@ -42,7 +44,7 @@ async def _make_item(db_session, printer_factory, *, action="calibration", **kwa
     )
     db_session.add(maint_type)
     await db_session.flush()
-    defaults = {"printer_id": printer.id, "maintenance_type_id": maint_type.id, "enabled": True}
+    defaults = {"printer_id": printer_id, "maintenance_type_id": maint_type.id, "enabled": True}
     defaults.update(kwargs)
     item = PrinterMaintenance(**defaults)
     db_session.add(item)
@@ -52,12 +54,17 @@ async def _make_item(db_session, printer_factory, *, action="calibration", **kwa
 
 
 async def _make_run(db_session, item, **kwargs):
+    await db_session.refresh(item, ["maintenance_type"])
     defaults = {
         "printer_maintenance_id": item.id,
         "printer_id": item.printer_id,
         "status": "pending",
         "source": "manual",
-        "options": maintenance_actions.normalize_calibration_options(item.action_options),
+        "options": (
+            maintenance_actions.normalize_calibration_options(item.action_options)
+            if item.maintenance_type.action == "calibration"
+            else None
+        ),
     }
     defaults.update(kwargs)
     run = MaintenanceRun(**defaults)
@@ -735,3 +742,199 @@ async def test_a_manual_calibration_with_nothing_waiting_is_ignored(db_session, 
 
 async def _coro(value):
     return value
+
+
+# ============== Vision encoder (motion precision) runs ==============
+
+
+_MOTION_GCODE = "/usr/etc/print/O1S/calibrate_motion_precision.gcode"
+_LEVELLING_GCODE = "/usr/etc/print/O1S/auto_cali_for_user_param.gcode"
+
+
+@pytest.mark.asyncio
+async def test_motion_precision_dispatch_uses_the_learned_directory(scheduler, db_session, printer_factory):
+    item = await _make_item(db_session, printer_factory, action="motion_precision", model="H2S")
+    run = await _make_run(db_session, item)
+    with (
+        patch("backend.app.services.print_scheduler.printer_manager") as mock_pm,
+        patch.object(scheduler, "_is_printer_idle", return_value=True),
+    ):
+        state = _mock_state()
+        state.internal_gcode_dir = "O1E"
+        mock_pm.get_status.return_value = state
+        mock_pm.start_internal_gcode_file.return_value = True
+        await scheduler._check_maintenance_runs(db_session, True)
+    mock_pm.start_internal_gcode_file.assert_called_once_with(
+        item.printer_id, "/usr/etc/print/O1E/calibrate_motion_precision.gcode"
+    )
+    mock_pm.start_calibration.assert_not_called()
+    await db_session.refresh(run)
+    assert run.status == "running"
+    assert run.started_at is not None
+    assert run.options is None
+
+
+@pytest.mark.asyncio
+async def test_motion_precision_dispatch_falls_back_to_the_model_map(scheduler, db_session, printer_factory):
+    item = await _make_item(db_session, printer_factory, action="motion_precision", model="H2D")
+    run = await _make_run(db_session, item)
+    with (
+        patch("backend.app.services.print_scheduler.printer_manager") as mock_pm,
+        patch.object(scheduler, "_is_printer_idle", return_value=True),
+    ):
+        state = _mock_state()
+        state.internal_gcode_dir = None
+        mock_pm.get_status.return_value = state
+        mock_pm.start_internal_gcode_file.return_value = True
+        await scheduler._check_maintenance_runs(db_session, True)
+    mock_pm.start_internal_gcode_file.assert_called_once_with(item.printer_id, _MOTION_GCODE.replace("O1S", "O1D"))
+    await db_session.refresh(run)
+    assert run.status == "running"
+
+
+@pytest.mark.asyncio
+async def test_motion_precision_is_refused_on_a_printer_without_a_vision_encoder(
+    scheduler, db_session, printer_factory
+):
+    item = await _make_item(db_session, printer_factory, action="motion_precision", model="X1C")
+    run = await _make_run(db_session, item)
+    with (
+        patch("backend.app.services.print_scheduler.printer_manager") as mock_pm,
+        patch.object(scheduler, "_is_printer_idle", return_value=True),
+    ):
+        mock_pm.get_status.return_value = _mock_state()
+        await scheduler._check_maintenance_runs(db_session, True)
+    mock_pm.start_internal_gcode_file.assert_not_called()
+    mock_pm.start_calibration.assert_not_called()
+    await db_session.refresh(run)
+    assert run.status == "failed"
+    assert run.completed_at is not None
+    assert "H2-series" in run.error_message
+    assert "X1C" in run.error_message
+
+
+@pytest.mark.asyncio
+async def test_motion_precision_publish_failure_keeps_pending_as_offline(scheduler, db_session, printer_factory):
+    item = await _make_item(db_session, printer_factory, action="motion_precision", model="H2S")
+    run = await _make_run(db_session, item)
+    with (
+        patch("backend.app.services.print_scheduler.printer_manager") as mock_pm,
+        patch.object(scheduler, "_is_printer_idle", return_value=True),
+    ):
+        mock_pm.get_status.return_value = _mock_state()
+        mock_pm.start_internal_gcode_file.return_value = False
+        await scheduler._check_maintenance_runs(db_session, True)
+    await db_session.refresh(run)
+    assert run.status == "pending"
+    assert run.waiting_reason == "printer_offline"
+
+
+def test_the_gcode_file_command_reaches_the_wire():
+    """The command as captured on the H2S: print.command gcode_file, param = path."""
+    import json
+
+    from backend.app.services.bambu_mqtt import BambuMQTTClient
+
+    client = BambuMQTTClient.__new__(BambuMQTTClient)
+    client._client = MagicMock()
+    client.state = MagicMock(connected=True)
+    client._sequence_id = 0
+    client.serial_number = "TEST"
+
+    assert client.start_internal_gcode_file(_MOTION_GCODE)
+    payload = json.loads(client._client.publish.call_args.args[1])
+    assert payload["print"]["command"] == "gcode_file"
+    assert payload["print"]["param"] == _MOTION_GCODE
+    assert payload["print"]["sequence_id"] == "1"
+
+
+def test_only_system_paths_can_be_started_this_way():
+    from backend.app.services.bambu_mqtt import BambuMQTTClient
+
+    client = BambuMQTTClient.__new__(BambuMQTTClient)
+    client._client = MagicMock()
+    client.state = MagicMock(connected=True)
+    client._sequence_id = 0
+    client.serial_number = "TEST"
+
+    assert not client.start_internal_gcode_file("/data/Metadata/plate_1.gcode")
+    assert not client.start_internal_gcode_file("usr/etc/print/O1S/calibrate_motion_precision.gcode")
+    client._client.publish.assert_not_called()
+
+
+def test_the_internal_gcode_directory_is_learned_from_push_status():
+    from backend.app.services.bambu_mqtt import BambuMQTTClient, _internal_gcode_dir
+
+    assert _internal_gcode_dir(_LEVELLING_GCODE) == "O1S"
+    assert _internal_gcode_dir("/usr/etc/print/O1D/calibrate_motion_precision.gcode") == "O1D"
+    assert _internal_gcode_dir("/data/Metadata/plate_1.gcode") is None
+    assert _internal_gcode_dir("/usr/etc/print/x.gcode") is None
+    assert _internal_gcode_dir("/usr/etc/print/O1S/sub/x.gcode") is None
+    assert _internal_gcode_dir(None) is None
+
+    client = BambuMQTTClient(ip_address="192.168.1.100", serial_number="TEST123", access_code="12345678")
+    assert client.state.internal_gcode_dir is None
+    client._update_state({"gcode_file": "/data/Metadata/plate_1.gcode"})
+    assert client.state.internal_gcode_dir is None
+    client._update_state({"gcode_file": _LEVELLING_GCODE})
+    assert client.state.internal_gcode_dir == "O1S"
+    # A user's print afterwards does not forget it
+    client._update_state({"gcode_file": "Benchy.gcode.3mf"})
+    assert client.state.internal_gcode_dir == "O1S"
+
+
+@pytest.mark.asyncio
+async def test_completion_closes_only_the_run_of_the_matching_action(db_session, printer_factory, completion_session):
+    """Two running runs on one printer -- one per action, which cannot happen
+    on real hardware but pins the matching: the vision encoder job closes the
+    motion_precision run and leaves the calibration run alone."""
+    levelling = await _make_item(db_session, printer_factory, model="H2S")
+    motion = await _make_item(db_session, printer_factory, action="motion_precision", printer_id=levelling.printer_id)
+    levelling_run = await _make_run(db_session, levelling, status="running", started_at=_utcnow_naive())
+    motion_run = await _make_run(
+        db_session, motion, status="running", started_at=_utcnow_naive() + timedelta(seconds=5)
+    )
+
+    with patch("backend.app.services.mqtt_relay.mqtt_relay") as relay:
+        relay.on_maintenance_reset = MagicMock(return_value=_coro(None))
+        assert await maintenance_actions.on_internal_job_finished(
+            levelling.printer_id, _MOTION_GCODE, "calibrate_motion_precision.gcode", "completed", None
+        )
+    await db_session.refresh(levelling_run)
+    await db_session.refresh(motion_run)
+    await db_session.refresh(motion)
+    await db_session.refresh(levelling)
+    assert motion_run.status == "completed"
+    assert levelling_run.status == "running"
+    assert motion.last_performed_at is not None
+    assert levelling.last_performed_at is None
+
+    with patch("backend.app.services.mqtt_relay.mqtt_relay") as relay:
+        relay.on_maintenance_reset = MagicMock(return_value=_coro(None))
+        assert await maintenance_actions.on_internal_job_finished(
+            levelling.printer_id, _LEVELLING_GCODE, "auto_cali_for_user_param.gcode", "completed", None
+        )
+    await db_session.refresh(levelling_run)
+    assert levelling_run.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_the_vision_encoder_job_does_not_close_a_calibration_run(db_session, printer_factory, completion_session):
+    item = await _make_item(db_session, printer_factory, model="H2S")
+    run = await _make_run(db_session, item, status="running", started_at=_utcnow_naive())
+    assert not await maintenance_actions.on_internal_job_finished(
+        item.printer_id, _MOTION_GCODE, "calibrate_motion_precision.gcode", "completed", None
+    )
+    await db_session.refresh(run)
+    assert run.status == "running"
+
+
+@pytest.mark.asyncio
+async def test_a_screen_cancel_of_the_vision_encoder_run_is_cancelled(db_session, printer_factory, completion_session):
+    item = await _make_item(db_session, printer_factory, action="motion_precision", model="H2S")
+    run = await _make_run(db_session, item, status="running", started_at=_utcnow_naive())
+    assert await maintenance_actions.on_internal_job_finished(
+        item.printer_id, _MOTION_GCODE, "calibrate_motion_precision.gcode", "failed", 50348044
+    )
+    await db_session.refresh(run)
+    assert run.status == "cancelled"
