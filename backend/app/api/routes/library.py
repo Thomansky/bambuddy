@@ -76,6 +76,7 @@ from backend.app.services.design_settings import (
     overrides_from_config,
 )
 from backend.app.services.filament_requirements import annotate_rack_groups
+from backend.app.services.pdf_thumbnail import generate_pdf_thumbnail
 from backend.app.services.plate_thumbnail import inject_plate_thumbnails_if_missing
 from backend.app.services.process_overrides import apply_process_overrides
 from backend.app.services.slice_output_check import (
@@ -809,21 +810,36 @@ def create_image_thumbnail(file_path: Path, thumbnails_dir: Path, max_size: int 
 # Supported image extensions for thumbnails
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"}
 
-# File types whose thumbnails are rendered client-side and uploaded back
-# (#2976). The server has no renderer for these formats — STEP would need
-# OpenCascade, PDF a rasteriser — so the browser posts its first preview
-# render to POST /files/{id}/preview-thumbnail instead. Kept to exactly
-# these types so the endpoint can never overwrite a server-generated
-# STL/3MF/G-code/image thumbnail.
+# File types whose thumbnails may be rendered client-side and uploaded back
+# (#2976). The server has no renderer for STEP (OpenCascade) or spreadsheets,
+# so the browser posts its first preview render to
+# POST /files/{id}/preview-thumbnail instead. PDF is rendered server-side on
+# upload (pypdfium2) and stays in this set only as the fallback for installs
+# where that renderer is unavailable. Kept to exactly these types so the
+# endpoint can never overwrite a server-generated STL/3MF/G-code/image
+# thumbnail.
 CLIENT_THUMBNAIL_TYPES = {"step", "stp", "pdf", "csv", "xlsx", "ods"}
+
+# File types the server renders thumbnails for itself, on upload and through
+# the batch / per-file "Generate thumbnails" actions.
+SERVER_THUMBNAIL_TYPES = ("stl", "pdf")
 
 # Upper bound for an uploaded client-rendered thumbnail. The FE sends a
 # 256px PNG (a few tens of KB); anything near this limit is not a thumbnail.
 MAX_CLIENT_THUMBNAIL_BYTES = 2 * 1024 * 1024
 
 
+def _generate_server_thumbnail(file_type: str, file_path: Path, thumbnails_dir: Path) -> str | None:
+    """Render a thumbnail for one of ``SERVER_THUMBNAIL_TYPES``; None for anything else."""
+    if file_type == "stl":
+        return generate_stl_thumbnail(file_path, thumbnails_dir)
+    if file_type == "pdf":
+        return generate_pdf_thumbnail(file_path, thumbnails_dir)
+    return None
+
+
 async def _backfill_external_stl_thumbnails(folder_ids: list[int]) -> None:
-    """Generate STL thumbnails for an external folder tree in the background.
+    """Generate STL and PDF thumbnails for an external folder tree in the background.
 
     Spawned via ``asyncio.create_task`` from ``scan_external_folder`` so the
     HTTP request can return as soon as the filesystem walk + folder/file rows
@@ -845,37 +861,38 @@ async def _backfill_external_stl_thumbnails(folder_ids: list[int]) -> None:
         result = await db.execute(
             LibraryFile.active().where(
                 LibraryFile.folder_id.in_(folder_ids),
-                LibraryFile.file_type == "stl",
+                LibraryFile.file_type.in_(SERVER_THUMBNAIL_TYPES),
                 LibraryFile.thumbnail_path.is_(None),
             )
         )
-        stl_files = result.scalars().all()
-        if not stl_files:
+        pending_files = result.scalars().all()
+        if not pending_files:
             return
         logger.info(
-            "Backfilling STL thumbnails: %d file(s) across %d folder(s)",
-            len(stl_files),
+            "Backfilling STL/PDF thumbnails: %d file(s) across %d folder(s)",
+            len(pending_files),
             len(folder_ids),
         )
-        for stl_file in stl_files:
-            abs_path = to_absolute_path(stl_file.file_path)
+        for pending_file in pending_files:
+            abs_path = to_absolute_path(pending_file.file_path)
             if not abs_path or not abs_path.exists():
                 continue
-            # Pre-skip files too small to contain even a single triangle.
+            # Pre-skip STLs too small to contain even a single triangle.
             # Bulk-uploaded ZIPs of stub STLs would otherwise trigger one
             # trimesh.load() call + one debug log line per stub.
-            try:
-                if abs_path.stat().st_size < MIN_USABLE_STL_BYTES:
+            if pending_file.file_type == "stl":
+                try:
+                    if abs_path.stat().st_size < MIN_USABLE_STL_BYTES:
+                        continue
+                except OSError:
                     continue
-            except OSError:
-                continue
             try:
-                thumb_path = generate_stl_thumbnail(abs_path, thumbnails_dir)
-            except Exception as exc:  # noqa: BLE001 — never let one bad STL kill the rest
-                logger.debug("STL thumbnail backfill skipped %s: %s", abs_path, exc)
+                thumb_path = _generate_server_thumbnail(pending_file.file_type, abs_path, thumbnails_dir)
+            except Exception as exc:  # noqa: BLE001 — never let one bad file kill the rest
+                logger.debug("Thumbnail backfill skipped %s: %s", abs_path, exc)
                 continue
             if thumb_path:
-                stl_file.thumbnail_path = to_relative_path(Path(thumb_path))
+                pending_file.thumbnail_path = to_relative_path(Path(thumb_path))
                 await db.commit()
 
 
@@ -1973,8 +1990,8 @@ async def scan_external_folder(
                 except Exception as e:
                     logger.debug("Failed to extract metadata from external 3mf %s: %s", filepath, e)
 
-            # STL thumbnails are deferred to a background task spawned after
-            # the scan's db.commit() — see _backfill_external_stl_thumbnails.
+            # STL and PDF thumbnails are deferred to a background task spawned
+            # after the scan's db.commit() — see _backfill_external_stl_thumbnails.
             # Doing them inline would block the HTTP request for minutes on a
             # large NAS mount (#1299).
 
@@ -2393,6 +2410,12 @@ async def upload_file(
                 except OSError:
                     pass
 
+        elif ext == ".pdf":
+            # First page as the grid thumbnail (#2976). Not behind the STL
+            # toggle: a pdfium render is milliseconds, not the seconds a
+            # mesh render costs, and the helper degrades to no thumbnail.
+            thumbnail_path = generate_pdf_thumbnail(file_path, thumbnails_dir)
+
         # Create database entry (managed files store relative paths for portability;
         # external files store the absolute mount path — same shape as scan produces)
         library_file = LibraryFile(
@@ -2662,6 +2685,9 @@ async def extract_zip_file(
                         if generate_stl_thumbnails and len(file_content) >= MIN_USABLE_STL_BYTES:
                             thumbnail_path = generate_stl_thumbnail(file_path, thumbnails_dir)
 
+                    elif ext == ".pdf":
+                        thumbnail_path = generate_pdf_thumbnail(file_path, thumbnails_dir)
+
                     # Create database entry (store relative paths for portability)
                     library_file = LibraryFile(
                         folder_id=target_folder_id,
@@ -2716,7 +2742,7 @@ async def extract_zip_file(
             pass  # Best-effort temp file cleanup; ignore if already removed
 
 
-# ============ STL Thumbnail Batch Generation ============
+# ============ STL / PDF Thumbnail Batch Generation ============
 
 
 @router.post("/generate-stl-thumbnails", response_model=BatchThumbnailResponse)
@@ -2725,27 +2751,30 @@ async def batch_generate_stl_thumbnails(
     db: AsyncSession = Depends(get_db),
     _: User | None = Depends(require_permission_if_auth_enabled(Permission.LIBRARY_UPDATE_ALL)),
 ):
-    """Generate thumbnails for STL files in batch.
+    """Generate thumbnails for STL and PDF files in batch.
+
+    The route keeps its STL-era name for API compatibility; since #2976 it
+    covers every type the server can render itself (``SERVER_THUMBNAIL_TYPES``).
 
     Note: Requires library:update_all permission since this is a batch operation
     that may affect files owned by different users.
 
     Can generate thumbnails for:
     - Specific file IDs (file_ids)
-    - All STL files in a folder (folder_id)
-    - All STL files missing thumbnails (all_missing=True)
+    - All STL/PDF files in a folder (folder_id)
+    - All STL/PDF files missing thumbnails (all_missing=True)
     """
     thumbnails_dir = get_library_thumbnails_dir()
     results: list[BatchThumbnailResult] = []
 
     # Build query based on request
-    query = LibraryFile.active().where(LibraryFile.file_type == "stl")
+    query = LibraryFile.active().where(LibraryFile.file_type.in_(SERVER_THUMBNAIL_TYPES))
 
     if request.file_ids:
         # Specific files
         query = query.where(LibraryFile.id.in_(request.file_ids))
     elif request.folder_id is not None:
-        # All STL files in a specific folder
+        # All STL/PDF files in a specific folder
         query = query.where(LibraryFile.folder_id == request.folder_id)
         if not request.all_missing:
             # If not specifically asking for missing thumbnails, get all
@@ -2753,7 +2782,7 @@ async def batch_generate_stl_thumbnails(
         else:
             query = query.where(LibraryFile.thumbnail_path.is_(None))
     elif request.all_missing:
-        # All STL files without thumbnails
+        # All STL/PDF files without thumbnails
         query = query.where(LibraryFile.thumbnail_path.is_(None))
     else:
         # No criteria specified - return empty
@@ -2786,7 +2815,7 @@ async def batch_generate_stl_thumbnails(
             continue
 
         try:
-            thumbnail_path = generate_stl_thumbnail(file_path, thumbnails_dir)
+            thumbnail_path = _generate_server_thumbnail(stl_file.file_type, file_path, thumbnails_dir)
 
             if thumbnail_path:
                 # Update database with relative path
@@ -5360,9 +5389,10 @@ async def upload_preview_thumbnail(
 
     STEP, PDF and spreadsheet previews are rendered in the browser; the FE
     posts its first render here so the grid gets a thumbnail without the
-    server needing OpenCascade or a PDF rasteriser. Only file types in
-    ``CLIENT_THUMBNAIL_TYPES`` are accepted, and only while the file has no
-    thumbnail yet — a stored thumbnail is never replaced by this route.
+    server needing OpenCascade. Only file types in ``CLIENT_THUMBNAIL_TYPES``
+    are accepted, and only while the file has no thumbnail yet — a stored
+    thumbnail is never replaced by this route, which is also what keeps the
+    server-rendered PDF thumbnail from upload authoritative.
     """
     user, can_modify_all = auth_result
 
