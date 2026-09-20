@@ -1600,6 +1600,13 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
     elif _is_bambuddy_authorized_print_in_memory(printer_id, state):
         # Normal Bambuddy-started prints stay entirely on the in-memory path.
         _unauthorized_print_kill_sent.discard(printer_id)
+    elif is_internal_printer_job(state.gcode_file or state.current_print, state.subtask_name):
+        # The printer's own calibration run is nobody's print: it has no
+        # archive, no queue row and no owner to authorise it, but it spends
+        # no filament and no budget either, so the kill switch has nothing to
+        # protect. Stopping it would also cancel the run a maintenance
+        # schedule just started (#3127).
+        _unauthorized_print_kill_sent.discard(printer_id)
     else:
         kill_switch_enabled = False
         authorization: bool | None = None
