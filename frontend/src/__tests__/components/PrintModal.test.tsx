@@ -8,7 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type React from 'react';
-import { screen, waitFor, fireEvent, render as rtlRender } from '@testing-library/react';
+import { screen, waitFor, fireEvent, within, render as rtlRender } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
@@ -1583,6 +1583,90 @@ describe('PrintModal', () => {
       });
       // Either omitted entirely or explicitly undefined — both interpret as "keep file"
       expect(capturedBody?.cleanup_library_after_dispatch).toBeUndefined();
+    });
+  });
+
+  describe('ask-for-outcome pill (#1898 follow-up)', () => {
+    // The pill outside the collapsed Print Options panel and the row inside it
+    // edit the same printOptions.confirm_outcome, so flipping either must be
+    // reflected by the other and land in the submitted payload.
+    const pill = () => screen.getByRole('button', { name: 'Ask for outcome' });
+    const panelRow = () => screen.getByText('Ask for Outcome').closest('div')!.parentElement!;
+
+    it('starts off and toggles on a click', async () => {
+      const user = userEvent.setup();
+      render(
+        <PrintModal mode="create" archiveId={1} archiveName="Benchy" initialSelectedPrinterIds={[1]} onClose={mockOnClose} />
+      );
+
+      expect(pill()).toHaveAttribute('aria-pressed', 'false');
+      await user.click(pill());
+      expect(pill()).toHaveAttribute('aria-pressed', 'true');
+    });
+
+    it('shares its state with the row inside Print Options', async () => {
+      const user = userEvent.setup();
+      render(
+        <PrintModal mode="create" archiveId={1} archiveName="Benchy" initialSelectedPrinterIds={[1]} onClose={mockOnClose} />
+      );
+
+      await user.click(pill());
+      // The panel opens expanded when a printer is preselected; expand otherwise.
+      if (!screen.queryByText('Ask for Outcome')) await user.click(screen.getByText('Print Options'));
+      const row = panelRow();
+      expect(within(row).getByRole('button', { name: 'On' })).toHaveClass('bg-bambu-green');
+
+      await user.click(within(row).getByRole('button', { name: 'Off' }));
+      expect(pill()).toHaveAttribute('aria-pressed', 'false');
+    });
+
+    it('submits confirm_outcome=true with the queue item when turned on', async () => {
+      let capturedBody: Record<string, unknown> | null = null;
+      server.use(
+        http.post('/api/v1/queue/', async ({ request }) => {
+          capturedBody = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json({ id: 1, status: 'pending' });
+        }),
+      );
+
+      const user = userEvent.setup();
+      render(
+        <PrintModal mode="create" archiveId={1} archiveName="Benchy" initialSelectedPrinterIds={[1]} onClose={mockOnClose} />
+      );
+
+      await user.click(pill());
+      await user.click(document.querySelector('button[type="submit"]') as HTMLElement);
+
+      await waitFor(() => expect(capturedBody).not.toBeNull());
+      expect(capturedBody!.confirm_outcome).toBe(true);
+    });
+
+    it('reflects the queue item value in edit mode and saves the change', async () => {
+      let capturedBody: Record<string, unknown> | null = null;
+      server.use(
+        http.patch('/api/v1/queue/:id', async ({ request }) => {
+          capturedBody = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json({ id: 1, status: 'pending' });
+        }),
+      );
+
+      const user = userEvent.setup();
+      render(
+        <PrintModal
+          mode="edit-queue-item"
+          archiveId={1}
+          archiveName="Test Print"
+          queueItem={createMockQueueItem({ confirm_outcome: true })}
+          onClose={mockOnClose}
+        />
+      );
+
+      expect(pill()).toHaveAttribute('aria-pressed', 'true');
+      await user.click(pill());
+      await user.click(screen.getByRole('button', { name: /save/i }));
+
+      await waitFor(() => expect(capturedBody).not.toBeNull());
+      expect(capturedBody!.confirm_outcome).toBe(false);
     });
   });
 });
