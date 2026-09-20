@@ -703,6 +703,11 @@ def _spool_cost_per_gram(spool: dict | None) -> float | None:
     rather than silently recording that this print cost nothing. Mirrors the
     ``cost_per_kg > 0`` guard the built-in inventory writer applies to its own
     per-spool rate.
+
+    Spoolman carries no VAT flag on a price, so the figure is taken as already
+    being in the VAT working basis (``price_vat_basis``) -- like the default
+    rate it falls back to -- and is not converted the way a built-in spool's
+    ``cost_per_kg`` is.
     """
     if not isinstance(spool, dict):
         return None

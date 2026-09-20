@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.models.spool import Spool
 from backend.app.models.spool_assignment import SpoolAssignment
 from backend.app.models.spool_usage_history import SpoolUsageHistory
+from backend.app.services.vat import DISABLED, VatContext, spool_cost_per_kg
 
 logger = logging.getLogger(__name__)
 
@@ -701,6 +702,9 @@ async def on_print_complete(
     # Fetch default filament cost from settings for fallback
     default_cost_str = await get_setting(db, "default_filament_cost")
     default_filament_cost = float(default_cost_str) if default_cost_str else 0.0
+    # Spool prices are normalised to the VAT working basis before they become
+    # costs, so one archive never mixes gross and net spools.
+    vat_ctx = await VatContext.load(db)
 
     # Fall back to ams_mapping captured at print start (needed when auto-archive is off
     # and the caller can't retrieve the mapping from _print_ams_mappings without archive_id)
@@ -761,6 +765,7 @@ async def on_print_complete(
             last_progress=data.get("last_progress", 0.0),
             last_layer_num=data.get("last_layer_num", 0),
             default_filament_cost=default_filament_cost,
+            vat_ctx=vat_ctx,
             spool_assignments=session.spool_assignments if session else None,
             print_started_at=session.started_at if session else None,
             threemf_path=threemf_path,
@@ -925,7 +930,7 @@ async def on_print_complete(
 
                 # Calculate cost for this usage
                 cost = None
-                cost_per_kg = spool.cost_per_kg if spool.cost_per_kg is not None else default_filament_cost
+                cost_per_kg = spool_cost_per_kg(spool, vat_ctx, default_filament_cost)
                 if cost_per_kg > 0:
                     cost = round((weight_grams / 1000.0) * cost_per_kg, 2)
 
@@ -1339,6 +1344,7 @@ async def _track_from_3mf(
     last_progress: float = 0.0,
     last_layer_num: int = 0,
     default_filament_cost: float = 0.0,
+    vat_ctx: VatContext = DISABLED,
     spool_assignments: dict[tuple[int, int], int] | None = None,
     print_started_at: datetime | None = None,
     threemf_path=None,
@@ -1724,7 +1730,7 @@ async def _track_from_3mf(
                 percent = round(segment_grams / (spool.label_weight or 1000) * 100)
 
                 cost = None
-                cost_per_kg = spool.cost_per_kg if spool.cost_per_kg is not None else default_filament_cost
+                cost_per_kg = spool_cost_per_kg(spool, vat_ctx, default_filament_cost)
                 if cost_per_kg > 0:
                     cost = round((segment_grams / 1000.0) * cost_per_kg, 2)
 
@@ -1878,7 +1884,7 @@ async def _track_from_3mf(
 
         # Calculate cost for this usage
         cost = None
-        cost_per_kg = spool.cost_per_kg if spool.cost_per_kg is not None else default_filament_cost
+        cost_per_kg = spool_cost_per_kg(spool, vat_ctx, default_filament_cost)
         if cost_per_kg > 0:
             cost = round((weight_grams / 1000.0) * cost_per_kg, 2)
 
