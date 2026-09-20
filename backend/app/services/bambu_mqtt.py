@@ -178,6 +178,39 @@ def a2l_lite_wire_ids(ams_id: int, tray_id: int) -> tuple[int, int, int] | None:
     )
 
 
+def tray_bit_position(ams_id: int, tray_id: int) -> int | None:
+    """Bit index of one slot in firmware's per-tray bitmasks.
+
+    ``tray_exist_bits``, ``tray_read_done_bits``, ``tray_reading_bits`` and
+    ``tray_is_bbl_bits`` all share one layout: regular AMS units (and the A2L
+    Lite normalised to id 6) at ``ams_id * 4 + tray_id``, AMS-HT dry boxes as
+    ONE consecutive bit at ``16 + (ams_id - 128)``. The single decoder for
+    all of them -- ``apply_tray_exist_bits`` and the unread-slot detection
+    both read through here, so the two views cannot drift apart. ``None`` for
+    a unit id with no known layout, which callers must not guess at.
+    """
+    ams_id = normalize_am_unit_id(ams_id)
+    if 128 <= ams_id <= 135:
+        return 16 + (ams_id - 128)
+    if 0 <= ams_id <= 15:
+        return ams_id * 4 + tray_id
+    return None
+
+
+def parse_tray_bits(value: str | int | None) -> int | None:
+    """Decode one of firmware's hex tray bitmasks; ``None`` when absent or unparseable."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        return int(str(value), 16)
+    except (ValueError, TypeError):
+        return None
+
+
 def apply_tray_exist_bits(
     units: list,
     tray_exist_bits_str: str | int | None,
@@ -238,12 +271,8 @@ def apply_tray_exist_bits(
     """
     if not tray_exist_bits_str:
         return 0
-    try:
-        if isinstance(tray_exist_bits_str, int):
-            tray_exist_bits = tray_exist_bits_str
-        else:
-            tray_exist_bits = int(tray_exist_bits_str, 16)
-    except (ValueError, TypeError):
+    tray_exist_bits = parse_tray_bits(tray_exist_bits_str)
+    if tray_exist_bits is None:
         return 0
     if tray_exist_bits == 0 and not power_on_flag:
         return 0
@@ -266,16 +295,11 @@ def apply_tray_exist_bits(
         # The A2L AMS-Lite reaches this helper under either id: `_handle_ams_data`
         # normalises 16 -> 6 before calling, but the VP bridge parses the raw
         # printer payload itself (`mqtt_bridge._on_printer_raw`) and still holds
-        # the physical 16. Both mean bit base 24, so fold them together here
-        # rather than relying on every caller to normalise first — reading 16 as
-        # 16*4 = bit 64 finds nothing set and wipes every A2L slot (#2697).
+        # the physical 16. Both mean bit base 24, so tray_bit_position folds them
+        # together rather than relying on every caller to normalise first —
+        # reading 16 as 16*4 = bit 64 finds nothing set and wipes every A2L
+        # slot (#2697). A unit outside the known layouts is skipped, not guessed.
         ams_id = normalize_am_unit_id(ams_id)
-        # AMS-HT (n3s, id 128-135): single tray, presence bit at 16+(ams_id-128).
-        # Regular AMS (and the A2L-Lite normalised to id 6): ams_id*4 + tray_id.
-        # Anything outside those ranges has no known bit layout — don't guess it.
-        is_ht = 128 <= ams_id <= 135
-        if not is_ht and not (0 <= ams_id <= 15):
-            continue
         for tray in ams_unit.get("tray", []):
             if not isinstance(tray, dict):
                 continue
@@ -288,7 +312,9 @@ def apply_tray_exist_bits(
                 continue
             if not isinstance(tray_id, int):
                 continue
-            global_bit = (16 + (ams_id - 128)) if is_ht else (ams_id * 4 + tray_id)
+            global_bit = tray_bit_position(ams_id, tray_id)
+            if global_bit is None:
+                break
             slot_exists = (tray_exist_bits >> global_bit) & 1
             if annotate_exists:
                 tray["exists"] = bool(slot_exists)
@@ -927,6 +953,15 @@ class PrinterState:
     # Surfaced during a runout PAUSE so the UI can name the expected slot (#2587).
     tray_tar: int = 255
     tray_pre: int = 255
+    # Firmware's per-slot bitmasks from print.ams, kept as the hex strings the
+    # wire carries (decode through tray_bit_position / parse_tray_bits). A slot
+    # whose exist bit is set and whose read_done bit is clear holds a spool the
+    # AMS has not identified yet -- the case for a spool inserted mid-print,
+    # which the AMS never reads on its own afterwards. None until a push
+    # carries them; older firmware may never send them.
+    tray_exist_bits: str | None = None
+    tray_read_done_bits: str | None = None
+    tray_reading_bits: str | None = None
     # Last valid tray_now (0-253) — survives unload (255) for usage tracking after print completes
     last_loaded_tray: int = -1
     # Pending load target - used to track what tray we're loading for H2D disambiguation
@@ -3039,6 +3074,13 @@ class BambuMQTTClient:
                             _tk,
                             _val,
                         )
+
+            for _bits_key in ("tray_exist_bits", "tray_read_done_bits", "tray_reading_bits"):
+                if _bits_key in ams_data:
+                    _bits = ams_data[_bits_key]
+                    if isinstance(_bits, int) and not isinstance(_bits, bool):
+                        _bits = format(_bits, "x")
+                    setattr(self.state, _bits_key, str(_bits) if _bits is not None else None)
 
             # Parse tray_now from AMS dict - this is the currently loaded tray global ID
             # Note: tray_tar is also available but on H2D it's just slot number (0-3), not global ID
