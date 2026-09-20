@@ -5,7 +5,7 @@ printer manager mocked, ``_check_maintenance_runs`` driven directly.
 """
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy import select
@@ -763,6 +763,7 @@ async def test_motion_precision_dispatch_uses_the_learned_directory(scheduler, d
         state.internal_gcode_dir = "O1E"
         mock_pm.get_status.return_value = state
         mock_pm.start_internal_gcode_file.return_value = True
+        mock_pm.await_internal_gcode_ack = AsyncMock(return_value=(True, ""))
         await scheduler._check_maintenance_runs(db_session, True)
     mock_pm.start_internal_gcode_file.assert_called_once_with(
         item.printer_id, "/usr/etc/print/O1E/calibrate_motion_precision.gcode"
@@ -786,6 +787,7 @@ async def test_motion_precision_dispatch_falls_back_to_the_model_map(scheduler, 
         state.internal_gcode_dir = None
         mock_pm.get_status.return_value = state
         mock_pm.start_internal_gcode_file.return_value = True
+        mock_pm.await_internal_gcode_ack = AsyncMock(return_value=(True, ""))
         await scheduler._check_maintenance_runs(db_session, True)
     mock_pm.start_internal_gcode_file.assert_called_once_with(item.printer_id, _MOTION_GCODE.replace("O1S", "O1D"))
     await db_session.refresh(run)
@@ -829,6 +831,114 @@ async def test_motion_precision_publish_failure_keeps_pending_as_offline(schedul
     assert run.waiting_reason == "printer_offline"
 
 
+@pytest.mark.asyncio
+async def test_a_refused_gcode_file_fails_the_run_at_once(scheduler, db_session, printer_factory):
+    """The printer's reply is the only immediate sign that the directory was
+    guessed wrong; the run must not sit "running" until the stale sweep."""
+    item = await _make_item(db_session, printer_factory, action="motion_precision", model="H2D")
+    run = await _make_run(db_session, item)
+    with (
+        patch("backend.app.services.print_scheduler.printer_manager") as mock_pm,
+        patch.object(scheduler, "_is_printer_idle", return_value=True),
+    ):
+        state = _mock_state()
+        state.internal_gcode_dir = None
+        mock_pm.get_status.return_value = state
+        mock_pm.start_internal_gcode_file.return_value = True
+        mock_pm.await_internal_gcode_ack = AsyncMock(return_value=(False, "err_code 1, file not found"))
+        await scheduler._check_maintenance_runs(db_session, True)
+    mock_pm.await_internal_gcode_ack.assert_awaited_once_with(item.printer_id, _MOTION_GCODE.replace("O1S", "O1D"))
+    await db_session.refresh(run)
+    assert run.status == "failed"
+    assert run.completed_at is not None
+    assert run.waiting_reason is None
+    assert "/usr/etc/print/O1D/calibrate_motion_precision.gcode" in run.error_message
+    assert "err_code 1, file not found" in run.error_message
+    assert scheduler._calibrating_printer_ids == set()
+
+
+@pytest.mark.asyncio
+async def test_silence_after_the_gcode_file_command_leaves_the_run_running(scheduler, db_session, printer_factory):
+    item = await _make_item(db_session, printer_factory, action="motion_precision", model="H2S")
+    run = await _make_run(db_session, item)
+    with (
+        patch("backend.app.services.print_scheduler.printer_manager") as mock_pm,
+        patch.object(scheduler, "_is_printer_idle", return_value=True),
+    ):
+        mock_pm.get_status.return_value = _mock_state()
+        mock_pm.start_internal_gcode_file.return_value = True
+        mock_pm.await_internal_gcode_ack = AsyncMock(return_value=(True, "no acknowledgement from printer"))
+        await scheduler._check_maintenance_runs(db_session, True)
+    await db_session.refresh(run)
+    assert run.status == "running"
+    assert scheduler._calibrating_printer_ids == {item.printer_id}
+
+
+def _wire_client():
+    from backend.app.services.bambu_mqtt import BambuMQTTClient
+
+    client = BambuMQTTClient(ip_address="192.168.1.100", serial_number="TEST", access_code="12345678")
+    client.state.connected = True
+    client._client = MagicMock()
+    return client
+
+
+def _gcode_file_reply(path, err_code=0, result="SUCCESS", reason="SUCCESS"):
+    # Shape of the H2S reply in the capture: the path comes back as param.
+    return {
+        "print": {
+            "command": "gcode_file",
+            "err_code": err_code,
+            "is_from_mqtt": True,
+            "param": path,
+            "reason": reason,
+            "result": result,
+            "sequence_id": "2",
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_the_success_reply_acknowledges_the_file():
+    client = _wire_client()
+    assert client.start_internal_gcode_file(_MOTION_GCODE)
+    assert _MOTION_GCODE in client._pending_gcode_file_acks
+    client._process_message(_gcode_file_reply(_MOTION_GCODE))
+    ok, detail = await client.await_internal_gcode_ack(_MOTION_GCODE, timeout=2.0)
+    assert ok is True
+    assert _MOTION_GCODE not in client._pending_gcode_file_acks
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_reply_is_reported_with_its_code():
+    client = _wire_client()
+    wrong = "/usr/etc/print/O1D/calibrate_motion_precision.gcode"
+    assert client.start_internal_gcode_file(wrong)
+    client._process_message(_gcode_file_reply(wrong, err_code=1, result="FAIL", reason="file not found"))
+    ok, detail = await client.await_internal_gcode_ack(wrong, timeout=2.0)
+    assert ok is False
+    assert detail == "err_code 1, file not found"
+
+
+@pytest.mark.asyncio
+async def test_a_reply_for_another_file_does_not_resolve_this_one():
+    client = _wire_client()
+    assert client.start_internal_gcode_file(_MOTION_GCODE)
+    client._process_message(_gcode_file_reply(_LEVELLING_GCODE, err_code=1, result="FAIL", reason="file not found"))
+    ok, detail = await client.await_internal_gcode_ack(_MOTION_GCODE, timeout=0.3)
+    assert ok is True
+    assert "no acknowledgement" in detail
+    assert _MOTION_GCODE not in client._pending_gcode_file_acks
+
+
+@pytest.mark.asyncio
+async def test_no_client_means_no_verdict():
+    from backend.app.services.printer_manager import PrinterManager
+
+    manager = PrinterManager()
+    assert await manager.await_internal_gcode_ack(999, _MOTION_GCODE) == (True, "no acknowledgement from printer")
+
+
 def test_the_gcode_file_command_reaches_the_wire():
     """The command as captured on the H2S: print.command gcode_file, param = path."""
     import json
@@ -840,6 +950,7 @@ def test_the_gcode_file_command_reaches_the_wire():
     client.state = MagicMock(connected=True)
     client._sequence_id = 0
     client.serial_number = "TEST"
+    client._pending_gcode_file_acks = {}
 
     assert client.start_internal_gcode_file(_MOTION_GCODE)
     payload = json.loads(client._client.publish.call_args.args[1])
