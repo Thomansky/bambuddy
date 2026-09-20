@@ -1676,6 +1676,7 @@ export default {
     resetLayout: '重置布局',
     recalculateCosts: '重新计算成本',
     recalculateCostsHint: '使用当前耗材价格重新计算所有归档成本',
+    recalculateCostsVatHint: '打印时记录的线轴成本保留记录时的计价基准；仅重新应用目录价格和默认价格。',
     exportStats: '导出统计',
     exportAsCsv: '导出为 CSV',
     exportAsExcel: '导出为 Excel',

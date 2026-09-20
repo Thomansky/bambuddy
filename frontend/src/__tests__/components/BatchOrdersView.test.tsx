@@ -237,6 +237,23 @@ describe('BatchOrdersView (#342)', () => {
     expect(screen.getAllByText('queue.batchOrders.costSoFar')).toHaveLength(1);
   });
 
+  it('labels both halves of the cost line with the VAT working basis', async () => {
+    // "Cost so far" and "Remaining" come from the same normalised spool
+    // prices, so a label on one and none on the other would read as two bases.
+    server.use(
+      http.get('/api/v1/settings/ui-flags', () =>
+        HttpResponse.json({ currency: 'EUR', vat_enabled: true, price_vat_basis: 'gross' }),
+      ),
+      http.get('/api/v1/queue/batches', () =>
+        HttpResponse.json([batch({ id: 1, name: 'Priced', actual_cost: 6, estimated_remaining_cost: 3, completed_count: 2 })]),
+      ),
+    );
+    render(<BatchOrdersView hasPermission={allow} t={passthroughT} />);
+
+    await waitFor(() => expect(screen.getByText('Priced')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('incl. VAT')).toHaveLength(2));
+  });
+
   it('explains a plate that cannot be queued instead of offering a button that fails', async () => {
     // #2960: the plate's last queue item was deleted, so there is nothing left
     // to clone its configuration from. The card used to offer "Queue remaining"

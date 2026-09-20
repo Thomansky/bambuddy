@@ -667,8 +667,8 @@ describe('StatsPage', () => {
   describe('VAT working basis', () => {
     it('suffixes every money tile with the working basis once VAT is enabled', async () => {
       server.use(
-        http.get('/api/v1/settings/', () =>
-          HttpResponse.json({ ...mockSettings, vat_enabled: true, vat_rate_percent: 19, price_vat_basis: 'gross' })
+        http.get('/api/v1/settings/ui-flags', () =>
+          HttpResponse.json({ currency: 'USD', vat_enabled: true, price_vat_basis: 'gross' })
         )
       );
 
@@ -686,8 +686,8 @@ describe('StatsPage', () => {
 
     it('says excl. VAT when the working basis is net', async () => {
       server.use(
-        http.get('/api/v1/settings/', () =>
-          HttpResponse.json({ ...mockSettings, vat_enabled: true, vat_rate_percent: 19, price_vat_basis: 'net' })
+        http.get('/api/v1/settings/ui-flags', () =>
+          HttpResponse.json({ currency: 'USD', vat_enabled: true, price_vat_basis: 'net' })
         )
       );
 

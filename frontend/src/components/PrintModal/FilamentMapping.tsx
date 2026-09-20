@@ -592,7 +592,7 @@ export function FilamentMapping({
               <span className="ml-2">
                 {t('printModal.totalCostForQuantity', 'total: {{cost}}', {
                   cost: `${currencySymbol}${budgetCheckCost.toFixed(2)}`,
-                })}
+                })}<VatBadge />
               </span>
             )}
           </div>

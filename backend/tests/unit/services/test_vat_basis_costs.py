@@ -256,3 +256,21 @@ class TestQueueEstimateNormalisation:
     @pytest.mark.asyncio
     async def test_disabled(self, monkeypatch, library_file):
         assert await self._estimate(monkeypatch, library_file, DISABLED) == 4.38
+
+
+class TestSpoolmanPricesAreTheWorkingBasis:
+    """Spoolman carries no VAT flag on a price, so its figure is taken as
+    already being in the working basis, like the default rate it falls back
+    to. A future per-price flag would have to come through here."""
+
+    def test_the_spoolman_rate_is_never_converted(self):
+        from backend.app.services import spoolman_tracking
+
+        spool = {"id": 1, "price": 20.0, "filament": {"price": 25.0, "weight": 1000}}
+        with (
+            patch("backend.app.services.vat.normalise_cost_per_kg") as normalise,
+            patch("backend.app.services.vat.convert") as convert_,
+        ):
+            assert spoolman_tracking._spool_cost_per_gram(spool) == pytest.approx(0.02)
+        normalise.assert_not_called()
+        convert_.assert_not_called()

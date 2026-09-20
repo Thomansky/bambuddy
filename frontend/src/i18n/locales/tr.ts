@@ -1677,6 +1677,7 @@ export default {
     resetLayout: 'Düzeni Sıfırla',
     recalculateCosts: 'Maliyetleri Yeniden Hesapla',
     recalculateCostsHint: 'Mevcut filament fiyatlarını kullanarak tüm arşiv maliyetlerini yeniden hesapla',
+    recalculateCostsVatHint: 'Baskı sırasında kaydedilen makara maliyetleri kaydedildikleri temeli korur; yalnızca katalog ve varsayılan fiyatlar yeniden uygulanır.',
     exportStats: 'İstatistikleri Dışa Aktar',
     exportAsCsv: 'CSV Olarak Dışa Aktar',
     exportAsExcel: 'Excel Olarak Dışa Aktar',

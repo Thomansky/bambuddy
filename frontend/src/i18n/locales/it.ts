@@ -1676,6 +1676,7 @@ export default {
     resetLayout: 'Reimposta layout',
     recalculateCosts: 'Ricalcola costi',
     recalculateCostsHint: 'Ricalcola tutti i costi archivi usando i prezzi filamento correnti',
+    recalculateCostsVatHint: 'I costi bobina registrati al momento della stampa mantengono la base in cui sono stati registrati; vengono riapplicati solo i prezzi di catalogo e predefiniti.',
     exportStats: 'Esporta statistiche',
     exportAsCsv: 'Esporta come CSV',
     exportAsExcel: 'Esporta come Excel',

@@ -5718,6 +5718,8 @@ export const api = {
       user_notifications_enabled?: boolean;
       currency?: string;
       check_updates?: boolean;
+      vat_enabled?: boolean;
+      price_vat_basis?: 'gross' | 'net';
     }>('/settings/ui-flags'),
   updateSettings: (data: AppSettingsUpdate) =>
     request<AppSettings>('/settings/', {

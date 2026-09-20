@@ -7,6 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { formatDateOnly } from '../utils/date';
 import { getCurrencySymbol, SUPPORTED_CURRENCIES } from '../utils/currency';
 import { vatSuffix } from '../utils/vat';
+import { VatBadge } from '../components/VatBadge';
 import { checkPasswordComplexity } from '../utils/password';
 import { fleetAudience, sponsorHref } from '../utils/fleetAudience';
 import { PRESET_CATEGORIES, parsePresetTriple } from '../utils/temperatureFanPresets';
@@ -3795,7 +3796,7 @@ export function SettingsPage() {
                       </div>
                       {(localSettings?.energy_cost_per_kwh ?? 0) > 0 && (
                         <div className="text-xs text-bambu-gray mt-1">
-                          ~{(plugEnergySummary.totalToday * (localSettings?.energy_cost_per_kwh ?? 0)).toFixed(2)} {getCurrencySymbol(localSettings?.currency || 'USD')}
+                          ~{(plugEnergySummary.totalToday * (localSettings?.energy_cost_per_kwh ?? 0)).toFixed(2)} {getCurrencySymbol(localSettings?.currency || 'USD')}<VatBadge />
                         </div>
                       )}
                     </div>
@@ -3812,7 +3813,7 @@ export function SettingsPage() {
                       </div>
                       {(localSettings?.energy_cost_per_kwh ?? 0) > 0 && (
                         <div className="text-xs text-bambu-gray mt-1">
-                          ~{(plugEnergySummary.totalYesterday * (localSettings?.energy_cost_per_kwh ?? 0)).toFixed(2)} {getCurrencySymbol(localSettings?.currency || 'USD')}
+                          ~{(plugEnergySummary.totalYesterday * (localSettings?.energy_cost_per_kwh ?? 0)).toFixed(2)} {getCurrencySymbol(localSettings?.currency || 'USD')}<VatBadge />
                         </div>
                       )}
                     </div>
@@ -3829,7 +3830,7 @@ export function SettingsPage() {
                       </div>
                       {(localSettings?.energy_cost_per_kwh ?? 0) > 0 && (
                         <div className="text-xs text-bambu-gray mt-1">
-                          ~{(plugEnergySummary.totalLifetime * (localSettings?.energy_cost_per_kwh ?? 0)).toFixed(2)} {getCurrencySymbol(localSettings?.currency || 'USD')}
+                          ~{(plugEnergySummary.totalLifetime * (localSettings?.energy_cost_per_kwh ?? 0)).toFixed(2)} {getCurrencySymbol(localSettings?.currency || 'USD')}<VatBadge />
                         </div>
                       )}
                     </div>

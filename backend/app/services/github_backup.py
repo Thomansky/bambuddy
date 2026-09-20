@@ -778,6 +778,7 @@ class GitHubBackupService:
                 "nozzle_temp_max": s.nozzle_temp_max,
                 "note": s.note,
                 "cost_per_kg": s.cost_per_kg,
+                "cost_vat_included": s.cost_vat_included,
                 "tag_uid": s.tag_uid,
                 "tray_uuid": s.tray_uuid,
                 "data_origin": s.data_origin,

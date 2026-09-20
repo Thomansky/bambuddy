@@ -1675,6 +1675,7 @@ export default {
     resetLayout: 'レイアウトをリセット',
     recalculateCosts: 'コストを再計算',
     recalculateCostsHint: '現在のフィラメント価格ですべてのアーカイブコストを再計算',
+    recalculateCostsVatHint: '印刷時に記録されたスプールコストは記録時の基準を保持します。再適用されるのはカタログ価格と既定価格のみです。',
     exportStats: '統計をエクスポート',
     exportAsCsv: 'CSVでエクスポート',
     exportAsExcel: 'Excelでエクスポート',

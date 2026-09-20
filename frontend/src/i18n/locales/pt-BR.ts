@@ -1676,6 +1676,7 @@ export default {
     resetLayout: 'Redefinir Layout',
     recalculateCosts: 'Recalcular Custos',
     recalculateCostsHint: 'Recalcular todos os custos do arquivo usando os preços atuais do filamento',
+    recalculateCostsVatHint: 'Os custos de carretel registrados na impressão mantêm a base em que foram registrados; apenas os preços do catálogo e padrão são reaplicados.',
     exportStats: 'Exportar Estatísticas',
     exportAsCsv: 'Exportar como CSV',
     exportAsExcel: 'Exportar como Excel',

@@ -138,7 +138,7 @@ class TestTheBoundaryItDraws:
 @pytest.mark.integration
 class TestWhatItExposes:
     @pytest.mark.asyncio
-    async def test_the_field_set_is_exactly_these_four(self, async_client: AsyncClient):
+    async def test_the_field_set_is_exactly_these_six(self, async_client: AsyncClient):
         """Pinned like the /ui-preferences set: anything added here is readable
         by every signed-in user, so adding one should require editing this."""
         resp = await async_client.get(FLAGS_URL)
@@ -147,7 +147,24 @@ class TestWhatItExposes:
             "user_notifications_enabled",
             "currency",
             "check_updates",
+            "vat_enabled",
+            "price_vat_basis",
         }
+
+    @pytest.mark.asyncio
+    async def test_the_vat_basis_carries_the_configured_values(self, async_client: AsyncClient, db_session):
+        """The "incl./excl. VAT" label after every calculated amount reads these
+        two, for the same non-admin readers the endpoint exists for: a real
+        bool for the gate and the configured basis, not the defaults."""
+        admin = await _setup_admin(async_client, "flagadmin5")
+        op = await _create_operator(async_client, admin, username="flagop5", permissions=["cost_centers:read_own"])
+        db_session.add(Settings(key="vat_enabled", value="true"))
+        db_session.add(Settings(key="price_vat_basis", value="net"))
+        await db_session.commit()
+
+        body = (await async_client.get(FLAGS_URL, headers={"Authorization": f"Bearer {op}"})).json()
+        assert body["vat_enabled"] is True
+        assert body["price_vat_basis"] == "net"
 
     @pytest.mark.asyncio
     async def test_no_credential_ever_appears(self, async_client: AsyncClient, db_session):

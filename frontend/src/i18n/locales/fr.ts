@@ -1676,6 +1676,7 @@ export default {
     resetLayout: 'Réinitialiser la mise en page',
     recalculateCosts: 'Recalculer les coûts',
     recalculateCostsHint: 'Recalcule les coûts avec les prix actuels des filaments',
+    recalculateCostsVatHint: "Les coûts de bobine enregistrés à l'impression conservent la base dans laquelle ils ont été enregistrés ; seuls les prix du catalogue et par défaut sont réappliqués.",
     exportStats: 'Exporter les stats',
     exportAsCsv: 'Exporter en CSV',
     exportAsExcel: 'Exporter en Excel',

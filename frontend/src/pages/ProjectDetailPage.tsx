@@ -804,7 +804,7 @@ export function ProjectDetailPage() {
                   <div>
                     <p className="text-xs text-bambu-gray uppercase">{t('projectDetail.cost.budget')}</p>
                     <p className="text-sm text-bambu-gray">
-                      {t('projectDetail.cost.total')}: <span className="text-white font-semibold">{currency}{project.budget.toFixed(2)}</span>
+                      {t('projectDetail.cost.total')}: <span className="text-white font-semibold">{currency}{project.budget.toFixed(2)}<VatBadge /></span>
                     </p>
                     <p className={`text-sm ${remaining >= 0 ? 'text-bambu-green' : 'text-red-700 dark:text-red-400'}`}>
                       {t('projectDetail.cost.remaining')}: <span className="font-semibold">{currency}{remaining.toFixed(2)}<VatBadge /></span>
@@ -1354,7 +1354,7 @@ export function ProjectDetailPage() {
                             </p>
                             {item.unit_price !== null && (
                               <span className="text-xs text-bambu-green whitespace-nowrap">
-                                {currency}{(item.unit_price * item.quantity_needed).toFixed(2)}
+                                {currency}{(item.unit_price * item.quantity_needed).toFixed(2)}<VatBadge />
                               </span>
                             )}
                           </div>

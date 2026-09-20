@@ -628,8 +628,9 @@ describe('ArchivesPage', () => {
     it('suffixes the card cost and energy figures with the working basis', async () => {
       server.use(
         http.get('/api/v1/archives/', () => HttpResponse.json(pricedArchives)),
-        http.get('/api/v1/settings/', () =>
-          HttpResponse.json({ currency: 'EUR', vat_enabled: true, vat_rate_percent: 19, price_vat_basis: 'net' })
+        http.get('/api/v1/settings/', () => HttpResponse.json({ currency: 'EUR' })),
+        http.get('/api/v1/settings/ui-flags', () =>
+          HttpResponse.json({ currency: 'EUR', vat_enabled: true, price_vat_basis: 'net' })
         )
       );
 
@@ -647,7 +648,8 @@ describe('ArchivesPage', () => {
     it('shows plain amounts while the VAT distinction is off', async () => {
       server.use(
         http.get('/api/v1/archives/', () => HttpResponse.json(pricedArchives)),
-        http.get('/api/v1/settings/', () => HttpResponse.json({ currency: 'EUR', vat_enabled: false }))
+        http.get('/api/v1/settings/', () => HttpResponse.json({ currency: 'EUR' })),
+        http.get('/api/v1/settings/ui-flags', () => HttpResponse.json({ currency: 'EUR', vat_enabled: false }))
       );
 
       render(<ArchivesPage />);

@@ -1608,6 +1608,7 @@ export default {
     resetLayout: '레이아웃 초기화',
     recalculateCosts: '비용 재계산',
     recalculateCostsHint: '현재 필라멘트 가격으로 모든 아카이브 비용 재계산',
+    recalculateCostsVatHint: '인쇄 시 기록된 스풀 비용은 기록 당시의 기준을 유지하며, 카탈로그 가격과 기본 가격만 다시 적용됩니다.',
     exportStats: '통계 내보내기',
     exportAsCsv: 'CSV로 내보내기',
     exportAsExcel: 'Excel로 내보내기',

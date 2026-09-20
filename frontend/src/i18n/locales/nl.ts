@@ -1693,6 +1693,7 @@ export default {
     resetLayout: 'Indeling resetten',
     recalculateCosts: 'Kosten opnieuw berekenen',
     recalculateCostsHint: 'Alle archiefkosten opnieuw berekenen met de huidige filamentprijzen',
+    recalculateCostsVatHint: 'Bij het printen vastgelegde spoelkosten behouden de basis waarin ze zijn vastgelegd; alleen catalogus- en standaardprijzen worden opnieuw toegepast.',
     exportStats: 'Statistieken exporteren',
     exportAsCsv: 'Exporteren als CSV',
     exportAsExcel: 'Exporteren als Excel',

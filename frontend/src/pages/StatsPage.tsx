@@ -1057,6 +1057,11 @@ export function StatsPage() {
     queryFn: api.getSettings,
   });
 
+  const { data: uiFlags } = useQuery({
+    queryKey: ['ui-flags'],
+    queryFn: api.getUiFlags,
+  });
+
   // Slim listing (#1894): the filter only needs id + username, and gating it
   // on the admin-level users:read left the dropdown empty for exactly the
   // operators who were granted stats:filter_by_user.
@@ -1229,7 +1234,13 @@ export function StatsPage() {
             variant="secondary"
             onClick={handleRecalculateCosts}
             disabled={isRecalculating || !hasPermission('archives:update_all')}
-            title={!hasPermission('archives:update_all') ? t('stats.noPermissionRecalculate') : t('stats.recalculateCostsHint')}
+            title={
+              !hasPermission('archives:update_all')
+                ? t('stats.noPermissionRecalculate')
+                : uiFlags?.vat_enabled
+                  ? `${t('stats.recalculateCostsHint')} ${t('stats.recalculateCostsVatHint')}`
+                  : t('stats.recalculateCostsHint')
+            }
           >
             {isRecalculating ? (
               <Loader2 className="w-4 h-4 animate-spin" />

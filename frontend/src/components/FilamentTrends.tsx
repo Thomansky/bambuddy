@@ -13,6 +13,7 @@ import {
   Cell,
 } from 'recharts';
 import type { ArchiveSlim } from '../api/client';
+import { VatBadge } from './VatBadge';
 import { MetricToggle, type Metric } from './MetricToggle';
 import { parseUTCDate } from '../utils/date';
 import { formatWeight } from '../utils/weight';
@@ -262,7 +263,7 @@ export function FilamentTrends({ archives, currency = '$', dateFrom, dateTo }: F
         <div className="bg-bambu-dark rounded-lg p-4">
           <div className="flex items-center justify-between gap-2">
             <p className="text-sm text-bambu-gray leading-none">{t('stats.periodCost')}</p>
-            <p className="text-2xl font-bold text-white leading-none">{currency}{totalCost.toFixed(2)}</p>
+            <p className="text-2xl font-bold text-white leading-none">{currency}{totalCost.toFixed(2)}<VatBadge /></p>
           </div>
           <p className="text-xs text-bambu-gray">{totalPrints} {t('common.prints')}</p>
         </div>
@@ -276,7 +277,7 @@ export function FilamentTrends({ archives, currency = '$', dateFrom, dateTo }: F
             </p>
           </div>
           <p className="text-xs text-bambu-gray">
-            {currency}{totalPrints > 0 ? (totalCost / totalPrints).toFixed(2) : '0.00'} avg
+            {currency}{totalPrints > 0 ? (totalCost / totalPrints).toFixed(2) : '0.00'}<VatBadge /> avg
           </p>
         </div>
       </div>
@@ -337,7 +338,7 @@ export function FilamentTrends({ archives, currency = '$', dateFrom, dateTo }: F
           <div className="flex items-center justify-between mb-4">
             <h4 className="text-sm font-medium text-bambu-gray">{t('stats.energyOverTime')}</h4>
             <span className="text-xs text-bambu-gray">
-              {totalEnergy.toFixed(3)} kWh · {currency}{totalEnergyCost.toFixed(2)}
+              {totalEnergy.toFixed(3)} kWh · {currency}{totalEnergyCost.toFixed(2)}<VatBadge />
             </span>
           </div>
           <ResponsiveContainer width="100%" height={250}>

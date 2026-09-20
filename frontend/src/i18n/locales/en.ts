@@ -1694,6 +1694,7 @@ export default {
     resetLayout: 'Reset Layout',
     recalculateCosts: 'Recalculate Costs',
     recalculateCostsHint: 'Recalculate all archive costs using current filament prices',
+    recalculateCostsVatHint: 'Spool costs recorded at print time keep the basis they were recorded in; only catalogue and default prices are re-applied.',
     exportStats: 'Export Stats',
     exportAsCsv: 'Export as CSV',
     exportAsExcel: 'Export as Excel',

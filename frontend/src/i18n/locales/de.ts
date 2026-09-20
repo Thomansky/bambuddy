@@ -1676,6 +1676,7 @@ export default {
     resetLayout: 'Layout zurücksetzen',
     recalculateCosts: 'Kosten neu berechnen',
     recalculateCostsHint: 'Alle Archivkosten mit aktuellen Filamentpreisen neu berechnen',
+    recalculateCostsVatHint: 'Beim Druck erfasste Spulenkosten behalten die Basis, in der sie erfasst wurden; nur Katalog- und Standardpreise werden neu angewendet.',
     exportStats: 'Statistiken exportieren',
     exportAsCsv: 'Als CSV exportieren',
     exportAsExcel: 'Als Excel exportieren',

@@ -266,7 +266,7 @@ function BatchOrderCard({
               <span>
                 {t('queue.batchOrders.costRemaining', {
                   amount: `${currency} ${batch.estimated_remaining_cost.toFixed(2)}`,
-                })}
+                })}<VatBadge />
               </span>
             )}
           </span>
