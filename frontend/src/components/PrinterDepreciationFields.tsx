@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next';
+import { VatBadge } from './VatBadge';
 
 // Printer wear rate input (#694), shared by the Add and Edit printer dialogs.
 // One number per printing hour in the configured currency; the backend caps
@@ -20,7 +21,7 @@ export function PrinterDepreciationFields({
   return (
     <div>
       <label htmlFor={`${idPrefix}_wear_cost_per_hour`} className="block text-sm text-bambu-gray mb-1">
-        {t('printers.modal.wearCostPerHour')}
+        {t('printers.modal.wearCostPerHour')}<VatBadge />
       </label>
       <div className="relative">
         <input
