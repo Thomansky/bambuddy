@@ -1,11 +1,22 @@
 """Maintenance tracking schemas."""
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from backend.app.schemas.print_queue import UTCDatetime
-from backend.app.services.maintenance_actions import CALIBRATION_FLAGS, TRIGGER_MODES, parse_schedule_time
+from backend.app.services.maintenance_actions import (
+    BED_TEMP_BELOW_KEY,
+    CALIBRATION_FLAGS,
+    TRIGGER_MODES,
+    normalize_bed_temp_below,
+    parse_schedule_time,
+)
+
+# Calibration flags (bool) plus the bed_temp_below start condition (float,
+# degrees C), as stored on the item and reported by the overview (#3127).
+ActionOptions = dict[str, bool | float]
 
 
 # Maintenance Type schemas
@@ -82,20 +93,26 @@ class PrinterMaintenanceUpdate(BaseModel):
     # carries an action. Cross-field rules (schedule needs days and time, a
     # non-manual trigger needs at least one flag) are checked in the route,
     # where the stored values fill in whatever the PATCH leaves out.
-    action_options: dict[str, bool] | None = None
+    # action_options is the whole new set: the flags the client sends (the
+    # route fills the rest in as off) plus bed_temp_below, where null or a
+    # missing key clears the condition.
+    action_options: dict[str, Any] | None = None
     trigger_mode: str | None = Field(default=None, pattern=f"^({'|'.join(TRIGGER_MODES)})$")
     schedule_days: list[int] | None = None
     schedule_time: str | None = None
 
     @field_validator("action_options")
     @classmethod
-    def _known_flags_only(cls, value: dict[str, bool] | None) -> dict[str, bool] | None:
+    def _known_options_only(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
         if value is None:
             return None
-        unknown = sorted(set(value) - set(CALIBRATION_FLAGS))
+        unknown = sorted(set(value) - set(CALIBRATION_FLAGS) - {BED_TEMP_BELOW_KEY})
         if unknown:
             raise ValueError(f"Unknown calibration option(s): {', '.join(unknown)}")
-        return {flag: bool(value.get(flag, False)) for flag in CALIBRATION_FLAGS}
+        checked: dict[str, Any] = {flag: bool(value[flag]) for flag in CALIBRATION_FLAGS if flag in value}
+        if BED_TEMP_BELOW_KEY in value:
+            checked[BED_TEMP_BELOW_KEY] = normalize_bed_temp_below(value[BED_TEMP_BELOW_KEY])
+        return checked
 
     @field_validator("schedule_days")
     @classmethod
@@ -123,7 +140,7 @@ class PrinterMaintenanceResponse(BaseModel):
     enabled: bool
     last_performed_at: datetime | None
     last_performed_hours: float
-    action_options: dict[str, bool] | None = None
+    action_options: ActionOptions | None = None
     trigger_mode: str = "manual"
     schedule_days: list[int] | None = None
     schedule_time: str | None = None
@@ -148,6 +165,9 @@ class MaintenanceRunResponse(BaseModel):
     options: dict[str, bool] | None
     start_after: UTCDatetime
     waiting_reason: str | None
+    # Figures behind the reason, e.g. {"bed_temp": 34.2, "threshold": 30.0}
+    # for bed_too_warm; None for the reasons that have none
+    waiting_detail: dict[str, Any] | None = None
     error_message: str | None
     created_at: UTCDatetime
     started_at: UTCDatetime
@@ -164,6 +184,7 @@ class CurrentRun(BaseModel):
     status: str
     source: str
     waiting_reason: str | None
+    waiting_detail: dict[str, Any] | None = None
     started_at: UTCDatetime
 
 
@@ -216,7 +237,7 @@ class MaintenanceStatus(BaseModel):
     # Automatic action (#3127); action is None for reminder-only types and the
     # rest is then not meaningful
     action: str | None = None
-    action_options: dict[str, bool] | None = None
+    action_options: ActionOptions | None = None
     action_available_options: list[str] | None = None  # flags this printer model can run
     trigger_mode: str = "manual"
     schedule_days: list[int] | None = None

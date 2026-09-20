@@ -29,7 +29,7 @@ from backend.app.schemas.maintenance import (
     PrinterMaintenanceUpdate,
 )
 from backend.app.services import maintenance_actions
-from backend.app.services.maintenance_actions import get_printer_total_hours
+from backend.app.services.maintenance_actions import CALIBRATION_FLAGS, get_printer_total_hours
 from backend.app.services.notification_service import notification_service
 from backend.app.services.printer_manager import printer_manager
 from backend.app.utils.local_time import utcnow_naive
@@ -402,6 +402,7 @@ async def _get_printer_maintenance_internal(
                 status=latest_run.status,
                 source=latest_run.source,
                 waiting_reason=latest_run.waiting_reason,
+                waiting_detail=latest_run.waiting_detail,
                 started_at=latest_run.started_at,
             )
             if latest_run is not None and latest_run.status in maintenance_actions.RUN_ACTIVE_STATUSES
@@ -435,11 +436,7 @@ async def _get_printer_maintenance_internal(
                 is_warning=due.is_warning,
                 last_performed_at=last_performed_at,
                 action=maint_type.action,
-                action_options=(
-                    maintenance_actions.normalize_calibration_options(item.action_options)
-                    if maintenance_actions.has_options(maint_type.action)
-                    else None
-                ),
+                action_options=maintenance_actions.response_action_options(maint_type.action, item.action_options),
                 action_available_options=(
                     maintenance_actions.available_calibration_options(printer.model)
                     if maintenance_actions.has_options(maint_type.action)
@@ -523,8 +520,11 @@ async def update_printer_maintenance(
     action_keys = {"action_options", "trigger_mode", "schedule_days", "schedule_time"}
     if action_keys & update_data.keys() and not action:
         raise HTTPException(status_code=400, detail="This maintenance type has no automatic action")
-    if "action_options" in update_data and not maintenance_actions.has_options(action):
-        raise HTTPException(status_code=400, detail="This maintenance action has no options")
+    if "action_options" in update_data:
+        options = update_data.pop("action_options")
+        if not maintenance_actions.has_options(action) and any(flag in options for flag in CALIBRATION_FLAGS):
+            raise HTTPException(status_code=400, detail="This maintenance action has no options")
+        item.action_options = maintenance_actions.stored_action_options(action, options)
     for key, value in update_data.items():
         setattr(item, key, value)
 
@@ -800,7 +800,7 @@ async def cancel_maintenance_run(
         )
 
     run.status = "cancelled"
-    run.waiting_reason = None
+    maintenance_actions.set_waiting(run, None)
     run.completed_at = utcnow_naive()
     maintenance_actions.refresh_schedule(run.printer_maintenance)
     await db.commit()

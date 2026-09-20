@@ -90,6 +90,16 @@ DISPATCH_BUSY_WINDOW = timedelta(seconds=120)
 
 AUTO_RUN_NOTES = "Automatic calibration"
 
+# Start condition (#3127): a run only starts once the bed is below this many
+# degrees C. Both actions carry it, stored in ``action_options`` next to the
+# calibration flags; absent = no condition. It is read from the item on
+# every pass rather than frozen onto the run like the flags, so raising the
+# threshold releases a run that is already waiting.
+BED_TEMP_BELOW_KEY = "bed_temp_below"
+BED_TEMP_BELOW_MAX = 120.0
+WAIT_BED_TOO_WARM = "bed_too_warm"
+WAIT_BED_TEMP_UNKNOWN = "bed_temp_unknown"
+
 # The vision encoder calibration is started as a system gcode file. The
 # directory under /usr/etc/print/ is model-specific and the printer reports
 # it with every internal job it runs (``PrinterState.internal_gcode_dir``);
@@ -127,6 +137,91 @@ def selected_calibration_flags(options: dict | None) -> list[str]:
 def has_options(action: str | None) -> bool:
     """Does this action carry a per-item option set?"""
     return action == ACTION_CALIBRATION
+
+
+def normalize_bed_temp_below(value: object) -> float | None:
+    """The validated threshold, or None for absent/null. Raises ValueError."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{BED_TEMP_BELOW_KEY} must be a number")
+    threshold = float(value)
+    if not (0 < threshold <= BED_TEMP_BELOW_MAX):
+        raise ValueError(f"{BED_TEMP_BELOW_KEY} must be above 0 and at most {BED_TEMP_BELOW_MAX:.0f}")
+    if round(threshold, 1) != threshold:
+        raise ValueError(f"{BED_TEMP_BELOW_KEY} allows one decimal at most")
+    return threshold
+
+
+def bed_temp_below(options: dict | None) -> float | None:
+    """The stored start condition; anything unusable reads as no condition."""
+    if not isinstance(options, dict):
+        return None
+    try:
+        return normalize_bed_temp_below(options.get(BED_TEMP_BELOW_KEY))
+    except ValueError:
+        return None
+
+
+def stored_action_options(action: str | None, options: dict) -> dict:
+    """What a PATCH stores for ``action`` from a validated option payload.
+
+    The calibration flags are filled in for the action that has them; the
+    start condition is kept when set and dropped when null or absent.
+    """
+    stored: dict = normalize_calibration_options(options) if has_options(action) else {}
+    threshold = normalize_bed_temp_below(options.get(BED_TEMP_BELOW_KEY))
+    if threshold is not None:
+        stored[BED_TEMP_BELOW_KEY] = threshold
+    return stored
+
+
+def response_action_options(action: str | None, options: dict | None) -> dict | None:
+    """The option set the overview reports: flags plus the start condition.
+
+    None for an action without options and without a condition, so a card
+    that has nothing to show gets nothing.
+    """
+    out: dict = normalize_calibration_options(options) if has_options(action) else {}
+    threshold = bed_temp_below(options)
+    if threshold is not None:
+        out[BED_TEMP_BELOW_KEY] = threshold
+    return out or None
+
+
+def current_bed_temperature(state: object) -> float | None:
+    """The bed temperature the printer last reported, or None when it has not.
+
+    Same source as the bed-cooled notification: ``PrinterState.temperatures
+    ["bed"]``, fed by ``bed_temper`` in every push_status.
+    """
+    temps = getattr(state, "temperatures", None)
+    if not isinstance(temps, dict):
+        return None
+    value = temps.get("bed")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def bed_condition_wait(threshold: float | None, bed_temp: float | None) -> tuple[str, dict | None] | None:
+    """Why the bed condition holds a run back, as (reason, detail), or None.
+
+    "Below" is strict: a bed at exactly the threshold is not below it.
+    """
+    if threshold is None:
+        return None
+    if bed_temp is None:
+        return WAIT_BED_TEMP_UNKNOWN, None
+    if bed_temp >= threshold:
+        return WAIT_BED_TOO_WARM, {"bed_temp": round(bed_temp, 1), "threshold": threshold}
+    return None
+
+
+def set_waiting(run: MaintenanceRun, reason: str | None, detail: dict | None = None) -> None:
+    """Record why ``run`` is still pending; reason and detail move together."""
+    run.waiting_reason = reason
+    run.waiting_detail = detail if reason is not None else None
 
 
 def run_options(action: str | None, options: dict | None) -> dict[str, bool] | None:
@@ -558,7 +653,7 @@ async def on_internal_job_finished(
         outcome = resolve_run_outcome(final_status, print_error)
         run.status = outcome
         run.completed_at = now
-        run.waiting_reason = None
+        set_waiting(run, None)
         item = run.printer_maintenance
 
         if outcome == "completed":
