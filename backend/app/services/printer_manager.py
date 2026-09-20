@@ -16,6 +16,7 @@ from backend.app.services.bambu_mqtt import (
     get_stage_name,
 )
 from backend.app.utils.kprofile_lookup import build_slot_k_resolver
+from backend.app.utils.print_jobs import is_internal_printer_job
 
 logger = logging.getLogger(__name__)
 
@@ -998,6 +999,12 @@ class PrinterManager:
             return self._clients[printer_id].start_internal_gcode_file(path)
         return False
 
+    async def await_internal_gcode_ack(self, printer_id: int, path: str, timeout: float = 5.0) -> tuple[bool, str]:
+        """The printer's verdict on a start_internal_gcode_file; see BambuMQTTClient.await_internal_gcode_ack."""
+        if printer_id in self._clients:
+            return await self._clients[printer_id].await_internal_gcode_ack(path, timeout)
+        return (True, "no acknowledgement from printer")
+
     async def wait_for_cooldown(
         self,
         printer_id: int,
@@ -1700,8 +1707,15 @@ def printer_state_to_dict(
         "awaiting_plate_clear": printer_manager.is_awaiting_plate_clear(printer_id) if printer_id else False,
     }
     # Add cover URL if there's an active print and printer_id is provided
-    # Include PAUSE state so skip objects modal can show cover
-    if printer_id and state.state in ("RUNNING", "PAUSE") and state.gcode_file:
+    # Include PAUSE state so skip objects modal can show cover. The printer's
+    # own jobs (calibration, #3127) have no 3MF and so no cover -- same gate
+    # as get_printer_status, or the first WebSocket push would undo it.
+    if (
+        printer_id
+        and state.state in ("RUNNING", "PAUSE")
+        and state.gcode_file
+        and not is_internal_printer_job(state.gcode_file, state.subtask_name)
+    ):
         result["cover_url"] = f"/api/v1/printers/{printer_id}/cover"
     else:
         result["cover_url"] = None

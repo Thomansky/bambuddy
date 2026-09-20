@@ -15,6 +15,8 @@ from fastapi import HTTPException
 
 import backend.app.api.routes.printers as printers_mod
 from backend.app.api.routes.printers import get_printer_cover
+from backend.app.services.bambu_mqtt import PrinterState
+from backend.app.services.printer_manager import printer_state_to_dict
 
 pytestmark = pytest.mark.unit
 
@@ -91,8 +93,6 @@ async def test_a_users_print_still_downloads():
 
 
 async def _status_cover_url(async_client, printer_id: int, gcode_file: str | None, subtask_name: str | None):
-    from backend.app.services.bambu_mqtt import PrinterState
-
     state = PrinterState()
     state.connected = True
     state.state = "RUNNING"
@@ -132,3 +132,34 @@ async def test_status_keeps_the_cover_url_for_a_users_print(async_client, printe
         await _status_cover_url(async_client, printer.id, "/data/Metadata/plate_1.gcode", "Benchy")
         == f"/api/v1/printers/{printer.id}/cover"
     )
+
+
+def _ws_cover_url(gcode_file: str | None, subtask_name: str | None, state_name: str = "RUNNING"):
+    state = PrinterState()
+    state.connected = True
+    state.state = state_name
+    state.gcode_file = gcode_file
+    state.subtask_name = subtask_name
+    state.current_print = subtask_name
+    with patch("backend.app.services.printer_manager.printer_manager") as mock_pm:
+        mock_pm.is_awaiting_plate_clear = MagicMock(return_value=False)
+        return printer_state_to_dict(state, printer_id=7, model="H2S")["cover_url"]
+
+
+@pytest.mark.parametrize(
+    ("gcode_file", "subtask_name"),
+    [
+        ("/usr/etc/print/O1S/calibrate_motion_precision.gcode", "calibrate_motion_precision.gcode"),
+        ("/usr/etc/print/O1S/auto_cali_for_user_param.gcode", "auto_cali_for_user_param.gcode"),
+        ("", "auto_pa_line_calib_mode"),
+    ],
+)
+def test_websocket_status_hands_out_no_cover_url_for_an_internal_job(gcode_file, subtask_name):
+    """The WebSocket merge overwrites the REST status in the dashboard's query
+    cache, so the two producers must agree or the first push re-adds the URL."""
+    assert _ws_cover_url(gcode_file, subtask_name) is None
+
+
+def test_websocket_status_keeps_the_cover_url_for_a_users_print():
+    assert _ws_cover_url("/data/Metadata/plate_1.gcode", "Benchy") == "/api/v1/printers/7/cover"
+    assert _ws_cover_url("/data/Metadata/plate_1.gcode", "Benchy", "PAUSE") == "/api/v1/printers/7/cover"
