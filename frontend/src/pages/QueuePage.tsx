@@ -78,6 +78,7 @@ import { QueueStatsBar } from '../components/QueueStatsBar';
 import { CompactHistoryRow } from '../components/CompactHistoryRow';
 import { QueueTimelineView } from '../components/QueueTimelineView';
 import { compareQueueOrder, compareQueueOrderAcrossLanes } from '../utils/queueOrder';
+import { formatWaitingReason } from '../utils/waitingReason';
 import { BatchOrdersView } from '../components/BatchOrdersView';
 
 function formatWeight(g: number, useKg = false): string {
@@ -399,6 +400,8 @@ function SortableQueueItem({
   etaNow?: number;
   t: (key: string, options?: Record<string, unknown>) => string;
 }) {
+  // The UI language, for the weekday in a translated maintenance hold (#3127)
+  const { i18n } = useTranslation();
   // Fetch printer status every 30 seconds while printing to monitor progress
   const { data: status } = useQuery({
     queryKey: ['printerStatus', item.printer_id],
@@ -763,11 +766,12 @@ function SortableQueueItem({
             );
           })()}
 
-          {/* Waiting reason for model-based assignments */}
+          {/* Why the scheduler is holding the item; the maintenance holds are the
+              only ones written in the UI language (#3127) */}
           {item.waiting_reason && item.status === 'pending' && (
             <p className="text-[10px] sm:text-xs text-purple-700 dark:text-purple-400 mt-1.5 sm:mt-2 flex items-start gap-1">
               <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />
-              <span>{item.waiting_reason}</span>
+              <span>{formatWaitingReason(item.waiting_reason, t, i18n.language)}</span>
             </p>
           )}
 

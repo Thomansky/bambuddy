@@ -1554,6 +1554,21 @@ export default {
       unknown: '알 수 없음',
       printAnyway: '그냥 인쇄'
     },
+    maintenanceHold: {
+      run: '유지보수 실행 대기 중: {{item}} ({{state}})',
+      schedule: '{{when}} 유지보수 예약 — 이 작업은 예약 시간과 겹칩니다 (예상 {{duration}})',
+      scheduleUnknown: '{{when}} 유지보수 예약 — 이 작업은 예약 시간과 겹칩니다 (소요 시간 알 수 없음)',
+      state: {
+        queued: '대기열에 있음',
+        running: '실행 중',
+        printerOffline: '프린터 오프라인',
+        printerBusy: '프린터 사용 중',
+        plateClear: '플레이트가 아직 해제되지 않음',
+        alreadyDrying: 'AMS 건조 진행 중',
+        bedTooWarm: '베드가 아직 따뜻함, {{temp}} °C',
+        bedTempUnknown: '베드 온도 알 수 없음',
+      },
+    },
     slicerAmsMapping: {
       rowBadge: '이 프린터용으로 저장된 AMS 슬롯',
       rowTooltip: '이 아카이브에는 슬라이서가 선택한 정확한 AMS 슬롯이 이 항목의 대상 프린터용으로 저장되어 있습니다. 해당 프린터에서 재인쇄하면 유형과 색상으로 다시 맞추는 대신 그 트레이를 재사용할 수 있습니다.',
@@ -1791,6 +1806,7 @@ export default {
       triggerGateIdle: '(프린터가 유휴 상태가 되면)',
       scheduleDays: '요일',
       scheduleTime: '가장 이른 시간',
+      reserveBeforeSchedule: '예약 시간에 겹치는 작업은 시작하지 않음',
       runNow: '지금 실행',
       cancelRun: '실행 취소',
       runQueued: '대기 중 – 프린터가 유휴 상태가 되면 시작됩니다',
@@ -1802,6 +1818,7 @@ export default {
       waitingAlreadyDrying: '대기 중: AMS 건조 진행 중',
       waitingBedTooWarm: '대기 중: 베드가 아직 따뜻함 ({{temp}} °C)',
       waitingBedTempUnknown: '대기 중: 베드 온도 알 수 없음',
+      waitingAfterOtherRun: '대기 중: {{item}} 이후',
       waitingOther: '대기 중: {{reason}}',
       lastRunCompleted: '마지막 실행 완료 {{time}}',
       lastRunFailed: '마지막 실행 실패 {{time}}: {{error}}',

@@ -162,6 +162,7 @@ const WAITING_REASON_KEYS: Record<string, string> = {
   already_drying: 'maintenance.calibration.waitingAlreadyDrying',
   bed_too_warm: 'maintenance.calibration.waitingBedTooWarm',
   bed_temp_unknown: 'maintenance.calibration.waitingBedTempUnknown',
+  after_other_run: 'maintenance.calibration.waitingAfterOtherRun',
 };
 
 // Start condition "only when the bed is below N °C" (#3127): the value the
@@ -285,7 +286,11 @@ function CalibrationActionPanel({
       const key = run.waiting_reason ? WAITING_REASON_KEYS[run.waiting_reason] : null;
       if (key) {
         const temp = run.waiting_detail?.bed_temp;
-        const text = t(key, { temp: temp != null ? Math.round(temp * 10) / 10 : '?' });
+        const text = t(key, {
+          temp: temp != null ? Math.round(temp * 10) / 10 : '?',
+          // The run ahead on the same printer, under its translated name
+          item: maintenanceTypeLabel(run.waiting_detail?.item ?? '', t),
+        });
         return { text, tone: 'text-amber-700 dark:text-amber-400' };
       }
       if (run.waiting_reason) {
@@ -416,6 +421,22 @@ function CalibrationActionPanel({
           </>
         )}
       </div>
+
+      {/* Keep the print queue clear of the slot: no job that would still be
+          running at the scheduled time (only the automatic dispatch; ▶ and
+          "Print now" are not held) */}
+      {item.trigger_mode === 'schedule' && (
+        <label className="flex items-center gap-1.5 text-xs text-bambu-gray-light cursor-pointer">
+          <input
+            type="checkbox"
+            checked={item.reserve_before_schedule}
+            onChange={() => onUpdate(item.id, { reserve_before_schedule: !item.reserve_before_schedule })}
+            disabled={!canUpdate || !item.enabled}
+            className="accent-bambu-green"
+          />
+          {t('maintenance.calibration.reserveBeforeSchedule')}
+        </label>
+      )}
 
       {/* Status line + buttons */}
       <div className="flex flex-wrap items-center justify-between gap-2">
