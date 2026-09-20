@@ -1314,6 +1314,9 @@ export default {
       rowBadge: 'Emplacements AMS enregistrés pour cette imprimante',
       rowTooltip: 'Cette archive conserve les emplacements AMS exacts choisis par le slicer, enregistrés pour l\'imprimante de cet élément. Une réimpression dessus peut réutiliser ces bobines au lieu de refaire la correspondance par type et couleur.',
     },
+    rfidReread: {
+      reading: 'Lecture des bobines AMS…',
+    },
     title: 'File d\'attente',
     subtitle: 'Gérez vos travaux d\'impression',
     // Print modal
@@ -2286,6 +2289,9 @@ export default {
     concurrentUploadsDescription: "Nombre d'imprimantes auxquelles la file d'attente peut envoyer des fichiers en même temps. Les imprimantes reçoivent les fichiers lentement (une grosse impression peut prendre plusieurs minutes) et chacune attend son tour : sur un parc important, augmenter cette valeur évite que la dernière imprimante d'un lot doive attendre la fin de tous les transferts précédents. Réduisez-la si votre réseau ou votre hôte Bambuddy supporte mal les transferts parallèles.",
     concurrentUploadsLabel: 'Imprimantes servies simultanément',
     concurrentUploadsHelp: "1 n'envoie qu'à une imprimante à la fois (l'ancien comportement). Valeur par défaut : 4.",
+    rfidRereadTitle: 'Bobines AMS non identifiées',
+    rfidRereadLabel: 'Relire les bobines AMS non identifiées avant de lancer un travail',
+    rfidRereadDescription: "Les bobines insérées pendant que l'imprimante était occupée ne sont pas identifiées par l'AMS. Avec cette option, la file demande à l'AMS de lire chaque emplacement occupé mais non identifié avant que le travail ne soit affecté et lancé — une fois par travail, et le travail démarre quel que soit le résultat.",
     staggeredStart: 'Démarrage échelonné',
     staggeredStartDescription: 'Taille de groupe et intervalle par défaut lors de l\'échelonnement des démarrages de lots multi-imprimantes. Modifiable par lot dans la fenêtre d\'impression.',
     preheatTitle: 'Préchauffage & Heat Soak',

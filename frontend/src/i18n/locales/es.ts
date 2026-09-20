@@ -1314,6 +1314,9 @@ export default {
       rowBadge: 'Ranuras AMS guardadas para esta impresora',
       rowTooltip: 'Este archivo conserva las ranuras AMS exactas que eligió el slicer, guardadas para la impresora de este elemento. Una reimpresión en ella puede reutilizar esas bobinas en lugar de volver a emparejar por tipo y color.',
     },
+    rfidReread: {
+      reading: 'Leyendo bobinas del AMS…',
+    },
     title: 'Cola de impresión',
     subtitle: 'Programe y gestione sus trabajos de impresión',
     // Print modal
@@ -2333,6 +2336,9 @@ export default {
     concurrentUploadsDescription: 'Cuántas impresoras pueden recibir archivos de la cola al mismo tiempo. Las impresoras reciben los archivos lentamente (una impresión grande puede tardar varios minutos) y cada una espera su turno, así que en una granja grande subir este valor evita que la última impresora de un lote tenga que esperar a que terminen todas las transferencias anteriores. Bájalo si tu red o el host de Bambuddy tienen problemas con transferencias en paralelo.',
     concurrentUploadsLabel: 'Impresoras atendidas a la vez',
     concurrentUploadsHelp: '1 envía a una impresora cada vez (el comportamiento anterior). El valor predeterminado es 4.',
+    rfidRereadTitle: 'Bobinas AMS sin identificar',
+    rfidRereadLabel: 'Volver a leer las bobinas AMS sin identificar antes de iniciar un trabajo',
+    rfidRereadDescription: 'Las bobinas insertadas mientras la impresora estaba ocupada no son identificadas por el AMS. Con esta opción, la cola pide al AMS que lea cada ranura ocupada pero sin identificar antes de asignar e iniciar el trabajo: una vez por trabajo, y el trabajo se inicia sea cual sea el resultado.',
     staggeredStart: 'Inicio escalonado',
     staggeredStartDescription: 'Tamaño de grupo e intervalo predeterminados al escalonar los inicios de lotes en varias impresoras. Se pueden anular por lote en la ventana de impresión.',
     preheatTitle: 'Precalentamiento y Heat Soak',

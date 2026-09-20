@@ -1450,6 +1450,11 @@ export interface AppSettings {
   require_plate_clear: boolean;
   // Shortest job first scheduling
   queue_shortest_first: boolean;
+  // Ask the AMS to read every occupied slot it has not identified before a
+  // queued job is mapped and started. Once per item; the job starts whatever
+  // the outcome. A spool inserted mid-print is what this is for: the AMS
+  // sees it but never reads its tag on its own afterwards.
+  queue_rfid_reread_before_start: boolean;
   // How many printers the queue may upload to at once (#2555). 1 restores the
   // old strictly-serial behaviour, where every printer waited out every other
   // printer's transfer.

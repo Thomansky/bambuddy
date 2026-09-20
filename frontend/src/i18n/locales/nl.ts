@@ -1326,6 +1326,9 @@ export default {
       rowBadge: 'AMS-sleuven opgeslagen voor deze printer',
       rowTooltip: 'Dit archief bevat de exacte AMS-sleuven die de slicer heeft gekozen, opgeslagen voor de printer waarop dit item is gericht. Bij opnieuw afdrukken op deze printer kunnen die trays worden hergebruikt in plaats van opnieuw op type en kleur te matchen.',
     },
+    rfidReread: {
+      reading: 'AMS-spoelen worden gelezen…',
+    },
     // Print modal
     editQueueItem: 'Wachtrij-item bewerken',
     selectAllPlates: 'Alle {{count}} platen selecteren',
@@ -2350,6 +2353,9 @@ export default {
     concurrentUploadsDescription: 'Hoeveel printers de wachtrij tegelijk bestanden mag sturen. Printers ontvangen bestanden langzaam (een grote afdruk kan enkele minuten duren) en elke printer wacht op zijn beurt — bij een groter printerpark voorkomt een hogere waarde dat de laatste printer in een batch op alle eerdere overdrachten moet wachten. Verlaag dit als je netwerk of Bambuddy-host moeite heeft met parallelle overdrachten.',
     concurrentUploadsLabel: 'Printers tegelijk uploaden',
     concurrentUploadsHelp: '1 verstuurt naar één printer tegelijk (het oude gedrag). Standaard is 4.',
+    rfidRereadTitle: 'Niet-geïdentificeerde AMS-spoelen',
+    rfidRereadLabel: 'Niet-geïdentificeerde AMS-spoelen opnieuw lezen voordat een taak start',
+    rfidRereadDescription: 'Spoelen die zijn geplaatst terwijl de printer bezig was, worden niet door de AMS geïdentificeerd. Met deze optie vraagt de wachtrij de AMS om elk bezet maar niet-geïdentificeerd slot te lezen voordat de taak wordt toegewezen en gestart — één keer per taak, en de taak start ongeacht het resultaat.',
     staggeredStart: 'Gespreide start',
     staggeredStartDescription: 'Standaard groepsgrootte en interval bij gespreid starten van batches over meerdere printers. Kan per batch in het afdrukvenster worden overschreven.',
     preheatTitle: 'Voorverwarmen en warmtestabilisatie',

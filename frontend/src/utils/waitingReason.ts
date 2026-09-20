@@ -13,11 +13,19 @@
  * grep apart.
  */
 
+/**
+ * The one reason that is a token rather than a sentence: the item's printer
+ * is reading its unidentified AMS slots before dispatch
+ * (`queue_rfid_reread_before_start`). The queue row translates it; the
+ * scheduler's `RFID_REREAD_HOLD` is the other half.
+ */
+export const RFID_REREAD_WAITING_REASON = 'rfid_reread';
+
 /** Does this reason mean "waiting its turn", rather than "waiting for you"? */
 export function isBusyOnlyWaitingReason(reason: string | null | undefined): boolean {
   if (!reason) return false;
   return reason
     .split(' | ')
     .map(part => part.trim())
-    .every(part => part.startsWith('Busy:'));
+    .every(part => part.startsWith('Busy:') || part === RFID_REREAD_WAITING_REASON);
 }

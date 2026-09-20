@@ -1314,6 +1314,9 @@ export default {
       rowBadge: 'Slots AMS salvos para esta impressora',
       rowTooltip: 'Este arquivo mantém os slots AMS exatos escolhidos pelo fatiador, salvos para a impressora deste item. Uma reimpressão nela pode reutilizar esses carretéis em vez de casar novamente por tipo e cor.',
     },
+    rfidReread: {
+      reading: 'Lendo carretéis do AMS…',
+    },
     title: 'Fila de Impressão',
     subtitle: 'Agende e gerencie seus trabalhos de impressão',
     // Print modal
@@ -2286,6 +2289,9 @@ export default {
     concurrentUploadsDescription: 'Quantas impressoras a fila pode abastecer com arquivos ao mesmo tempo. As impressoras recebem os arquivos lentamente (uma impressão grande pode levar vários minutos) e cada uma espera sua vez — portanto, em um parque maior, aumentar este valor evita que a última impressora de um lote tenha de esperar todas as transferências anteriores. Reduza-o se a sua rede ou o host do Bambuddy tiver dificuldade com transferências paralelas.',
     concurrentUploadsLabel: 'Impressoras abastecidas de uma vez',
     concurrentUploadsHelp: '1 envia para uma impressora por vez (o comportamento anterior). O padrão é 4.',
+    rfidRereadTitle: 'Carretéis AMS não identificados',
+    rfidRereadLabel: 'Reler carretéis AMS não identificados antes de iniciar um trabalho',
+    rfidRereadDescription: 'Carretéis inseridos enquanto a impressora estava ocupada não são identificados pelo AMS. Com esta opção, a fila pede ao AMS que leia cada slot ocupado mas não identificado antes de o trabalho ser mapeado e iniciado — uma vez por trabalho, e o trabalho inicia independentemente do resultado.',
     staggeredStart: 'Início escalonado',
     staggeredStartDescription: 'Tamanho de grupo e intervalo padrão ao escalonar inícios de lotes multi-impressora. Pode ser sobrescrito por lote no modal de impressão.',
     preheatTitle: 'Pré-aquecimento & Heat Soak',

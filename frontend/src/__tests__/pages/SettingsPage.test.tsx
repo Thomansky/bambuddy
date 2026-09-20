@@ -967,6 +967,61 @@ describe('SettingsPage', () => {
         expect(screen.getByText(/overridden per print in the print dialog/)).toBeInTheDocument();
       });
     });
+
+    describe('pre-dispatch RFID re-read (queue_rfid_reread_before_start)', () => {
+      const label = 'Re-read unidentified AMS spools before starting a job';
+
+      async function openWorkflow() {
+        const user = userEvent.setup();
+        render(<SettingsPage />);
+        await user.click(await screen.findByText('Workflow'));
+        return user;
+      }
+
+      it('is off when the backend has never stored the setting', async () => {
+        // A missing row must read as off: the option asks the AMS to move
+        // filament before every job, which nobody opted into.
+        await openWorkflow();
+
+        const row = (await screen.findByText(label)).closest('div')!.parentElement!;
+        expect(within(row).getByRole('checkbox')).not.toBeChecked();
+      });
+
+      it('reflects a stored on value', async () => {
+        server.use(
+          http.get('/api/v1/settings/', () =>
+            HttpResponse.json({ ...mockSettings, queue_rfid_reread_before_start: true })
+          )
+        );
+        await openWorkflow();
+
+        const row = (await screen.findByText(label)).closest('div')!.parentElement!;
+        expect(within(row).getByRole('checkbox')).toBeChecked();
+      });
+
+      it('sends the new value on save and keeps it after the round trip', async () => {
+        let saved: Record<string, unknown> | null = null;
+        server.use(
+          http.put('/api/v1/settings/', async ({ request }) => {
+            saved = (await request.json()) as Record<string, unknown>;
+            return HttpResponse.json({ ...mockSettings, ...saved });
+          })
+        );
+        const user = await openWorkflow();
+
+        const labelEl = await screen.findByText(label);
+        // Same 100 ms post-load auto-save suppression as the other toggles.
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        const row = labelEl.closest('div')!.parentElement!;
+        await user.click(within(row).getByRole('checkbox'));
+
+        await waitFor(() => {
+          expect(saved).not.toBeNull();
+        }, { timeout: 3000 });
+        expect(saved!.queue_rfid_reread_before_start).toBe(true);
+        expect(within(row).getByRole('checkbox')).toBeChecked();
+      });
+    });
   });
 
   describe('API Keys tab', () => {

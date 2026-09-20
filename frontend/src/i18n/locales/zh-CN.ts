@@ -1314,6 +1314,9 @@ export default {
       rowBadge: '已为此打印机保存 AMS 槽位',
       rowTooltip: '此存档保留了切片软件选择的确切 AMS 槽位，并为该项目的目标打印机保存。在该打印机上重新打印时，可复用这些料盘，而不必再按类型和颜色重新匹配。',
     },
+    rfidReread: {
+      reading: '正在读取 AMS 料卷…',
+    },
     title: '打印队列',
     subtitle: '排程和管理您的打印任务',
     // Print modal
@@ -2331,6 +2334,9 @@ export default {
     concurrentUploadsDescription: '队列可以同时向多少台打印机发送文件。打印机接收文件很慢（大型打印可能需要几分钟），并且每台都要排队等候——因此在打印机较多时，调高该值可以避免批次中最后一台打印机等完前面所有传输。如果网络或 Bambuddy 主机难以承受并行传输，请调低该值。',
     concurrentUploadsLabel: '同时上传的打印机数量',
     concurrentUploadsHelp: '设为 1 时一次只向一台打印机发送（旧行为）。默认值为 4。',
+    rfidRereadTitle: '未识别的 AMS 料卷',
+    rfidRereadLabel: '开始任务前重新读取未识别的 AMS 料卷',
+    rfidRereadDescription: '打印机忙碌时插入的料卷不会被 AMS 识别。开启后，队列会在任务映射并启动之前，要求 AMS 读取每个已占用但未识别的槽位——每个任务仅执行一次，且无论结果如何任务都会启动。',
     staggeredStart: '错峰启动',
     staggeredStartDescription: '错峰启动多台打印机批次时的默认组大小和间隔。可在打印对话框中按批次覆盖。',
     preheatTitle: '预热与热保温',

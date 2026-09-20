@@ -1314,6 +1314,9 @@ export default {
       rowBadge: 'AMS-Steckplätze für diesen Drucker gespeichert',
       rowTooltip: 'Dieses Archiv enthält die genauen AMS-Steckplätze, die der Slicer ausgewählt hat, gespeichert für den Drucker dieses Eintrags. Ein erneuter Druck darauf kann diese Fächer wiederverwenden, statt erneut nach Typ und Farbe zuzuordnen.',
     },
+    rfidReread: {
+      reading: 'AMS-Spulen werden eingelesen…',
+    },
     title: 'Druckwarteschlange',
     subtitle: 'Planen und verwalten Sie Ihre Druckaufträge',
     // Print modal
@@ -2330,6 +2333,9 @@ export default {
     concurrentUploadsDescription: 'Wie viele Drucker die Warteschlange gleichzeitig mit Dateien versorgen darf. Drucker nehmen Dateien nur langsam entgegen (ein großer Druck kann mehrere Minuten dauern), und jeder wartet, bis er an der Reihe ist — bei größeren Farmen verhindert ein höherer Wert also, dass der letzte Drucker eines Stapels erst alle anderen Übertragungen abwarten muss. Verringern Sie ihn, wenn Ihr Netzwerk oder der Bambuddy-Host mit parallelen Übertragungen Probleme hat.',
     concurrentUploadsLabel: 'Gleichzeitig belieferte Drucker',
     concurrentUploadsHelp: '1 beliefert immer nur einen Drucker (das bisherige Verhalten). Standard ist 4.',
+    rfidRereadTitle: 'Nicht identifizierte AMS-Spulen',
+    rfidRereadLabel: 'Nicht identifizierte AMS-Spulen vor dem Start eines Auftrags erneut einlesen',
+    rfidRereadDescription: 'Spulen, die eingesetzt wurden, während der Drucker beschäftigt war, werden vom AMS nicht identifiziert. Mit dieser Option lässt die Warteschlange das AMS jeden belegten, aber nicht identifizierten Slot einlesen, bevor der Auftrag zugeordnet und gestartet wird – einmal pro Auftrag, und der Auftrag startet unabhängig vom Ergebnis.',
     staggeredStart: 'Versetzter Start',
     staggeredStartDescription: 'Standard-Gruppengröße und -Intervall beim Staffeln von Mehrdrucker-Batchstarts. Pro Batch im Druck-Dialog überschreibbar.',
     preheatTitle: 'Vorheizen & Heat Soak',

@@ -1316,6 +1316,9 @@ export default {
       rowBadge: 'Bu yazıcı için kaydedilen AMS yuvaları',
       rowTooltip: 'Bu arşiv, dilimleyicinin seçtiği tam AMS yuvalarını bu öğenin hedeflediği yazıcı için saklar. O yazıcıda yeniden yazdırma, tür ve renge göre yeniden eşleştirmek yerine bu makaraları yeniden kullanabilir.',
     },
+    rfidReread: {
+      reading: 'AMS makaraları okunuyor…',
+    },
     // Baskı modali
     editQueueItem: 'Kuyruk Öğesini Düzenle',
     selectAllPlates: 'Tüm {{count}} Plakayı Seç',
@@ -2334,6 +2337,9 @@ export default {
     concurrentUploadsDescription: 'Kuyruğun aynı anda kaç yazıcıya dosya gönderebileceği. Yazıcılar dosyaları yavaş alır (büyük bir baskı birkaç dakika sürebilir) ve her biri sırasını bekler; bu nedenle büyük bir filoda bu değeri artırmak, bir gruptaki son yazıcının kendisinden önceki tüm aktarımları beklemesini önler. Ağınız veya Bambuddy sunucunuz paralel aktarımlarda zorlanıyorsa değeri düşürün.',
     concurrentUploadsLabel: 'Aynı anda dosya gönderilen yazıcı sayısı',
     concurrentUploadsHelp: "1, aynı anda tek yazıcıya gönderir (eski davranış). Varsayılan 4'tür.",
+    rfidRereadTitle: 'Tanımlanmamış AMS Makaraları',
+    rfidRereadLabel: 'Bir iş başlamadan önce tanımlanmamış AMS makaralarını yeniden oku',
+    rfidRereadDescription: "Yazıcı meşgulken takılan makaralar AMS tarafından tanımlanmaz. Bu seçenek açıkken kuyruk, iş eşlenip başlatılmadan önce AMS'den dolu ancak tanımlanmamış her yuvayı okumasını ister — iş başına bir kez ve iş sonuçtan bağımsız olarak başlar.",
     staggeredStart: 'Kademeli Başlatma',
     staggeredStartDescription: 'Çoklu yazıcı toplu başlatmaları kademelendirilirken varsayılan grup boyutu ve aralığı. Baskı modalinde yığın başına geçersiz kılınabilir.',
     preheatTitle: 'Ön Isıtma & Heat Soak',

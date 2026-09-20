@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { isBusyOnlyWaitingReason } from '../../utils/waitingReason';
+import { RFID_REREAD_WAITING_REASON, isBusyOnlyWaitingReason } from '../../utils/waitingReason';
 
 describe('isBusyOnlyWaitingReason', () => {
   it('treats nothing as not-busy rather than busy', () => {
@@ -39,6 +39,15 @@ describe('isBusyOnlyWaitingReason', () => {
     'Every file for this job has been deleted — add a file back or remove the item',
   ])('reads %s as waiting for the user', reason => {
     expect(isBusyOnlyWaitingReason(reason)).toBe(false);
+  });
+
+  it('reads the pre-dispatch RFID read as waiting its turn', () => {
+    // The scheduler holds the item for one pass while the printer reads its
+    // unidentified AMS slots, then dispatches it by itself. Nobody has to do
+    // anything, so it belongs on the forecast like a Busy: hold does.
+    expect(RFID_REREAD_WAITING_REASON).toBe('rfid_reread');
+    expect(isBusyOnlyWaitingReason('rfid_reread')).toBe(true);
+    expect(isBusyOnlyWaitingReason('Busy: X1C-01 | rfid_reread')).toBe(true);
   });
 
   it('needs every clause to be busy, not just the first', () => {
