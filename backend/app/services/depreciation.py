@@ -38,11 +38,13 @@ def run_depreciation_cost(
     """Wear cost of one run: measured hours × hourly rate.
 
     None when the printer has no rate or the run has no measured duration.
-    A stored ``0`` duration (reconciled completion, #2592) yields ``0.0``,
-    consistent with the zero print time it already banks.
+    A reconciled completion stores duration ``0`` because its real end time
+    is unknown (#2592); that is "unknown", not "free", so it yields None too —
+    a ``0.0`` would claim zero wear on the archive card and, being the
+    first-run snapshot, could never be corrected by a later real run.
     """
     rate = hourly_depreciation_rate(purchase_price, expected_lifetime_hours)
-    if rate is None or duration_seconds is None:
+    if rate is None or not duration_seconds:
         return None
     return round(duration_seconds / 3600 * rate, _COST_DECIMALS)
 

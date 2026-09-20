@@ -72,10 +72,12 @@ class TestRateMath:
         assert run_depreciation_cost(None, 1200.0, 6000.0) is None
         assert run_depreciation_cost(9000, None, None) is None
 
-    def test_reconciled_zero_duration_costs_nothing(self):
-        # A reconciled completion stores duration 0 (#2592); wear follows suit
-        # rather than banking the disconnect gap.
-        assert run_depreciation_cost(run_duration_seconds(None, None, reconciled=True), 1200.0, 6000.0) == 0.0
+    def test_reconciled_zero_duration_is_unknown_not_free(self):
+        # A reconciled completion stores duration 0 because the real end time
+        # is unknown (#2592). Unknown wear must stay None: a 0.0 would render
+        # as "$0.00" on the card and, as the first-run snapshot, stick forever.
+        assert run_depreciation_cost(run_duration_seconds(None, None, reconciled=True), 1200.0, 6000.0) is None
+        assert run_depreciation_cost(0, 1200.0, 6000.0) is None
 
 
 class TestPrinterFields:
@@ -125,6 +127,23 @@ class TestPrinterFields:
         response = await async_client.patch(f"/api/v1/printers/{printer.id}", json={"purchase_price": -1})
 
         assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    @pytest.mark.parametrize("field", ["purchase_price", "expected_lifetime_hours"])
+    @pytest.mark.parametrize("value", ["inf", "Infinity", "nan"])
+    async def test_non_finite_values_rejected(
+        self, async_client: AsyncClient, printer_factory, db_session, field: str, value: str
+    ):
+        # Lax float parsing accepts "inf" unless told otherwise; an infinite
+        # rate would be snapshotted onto every later run.
+        printer = await printer_factory()
+
+        response = await async_client.patch(f"/api/v1/printers/{printer.id}", json={field: value})
+
+        assert response.status_code == 422
+        await db_session.refresh(printer)
+        assert getattr(printer, field) is None
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -207,12 +226,151 @@ class TestCompletionSnapshot:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    async def test_reconciled_run_leaves_archive_slot_open_for_a_real_run(
+        self, archive_factory, printer_factory, db_session
+    ):
+        printer = await printer_factory(purchase_price=1200.0, expected_lifetime_hours=6000.0)
+        archive = await archive_factory(printer.id, with_run=False)
+
+        reconciled = await snapshot_run_depreciation(
+            db_session, archive, printer.id, run_duration_seconds(None, None, reconciled=True)
+        )
+        assert reconciled is None
+        assert archive.depreciation_cost is None
+
+        # The reprint that follows is the archive's first priced run.
+        real = await _complete_run(db_session, archive, printer.id, hours=1.0)
+        assert real.depreciation_cost == pytest.approx(0.2)
+        await db_session.refresh(archive)
+        assert archive.depreciation_cost == pytest.approx(0.2)
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_missing_printer_leaves_none(self, archive_factory, printer_factory, db_session):
         printer = await printer_factory(purchase_price=1200.0, expected_lifetime_hours=6000.0)
         archive = await archive_factory(printer.id, with_run=False)
 
         assert await snapshot_run_depreciation(db_session, archive, None, 3600) is None
         assert await snapshot_run_depreciation(db_session, archive, printer.id + 1000, 3600) is None
+        assert archive.depreciation_cost is None
+
+
+class TestCompletionHook:
+    """Drive the real ``on_print_complete`` against the test database.
+
+    The service tests above pin the math; this pins the block in main.py that
+    wires it in — snapshot BEFORE write_log_entry, the ``_reconciled`` flag
+    forwarded, and the value reaching the log entry.
+    """
+
+    @staticmethod
+    def _mock_stack(stack, test_engine):
+        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+        from backend.app.services.bambu_ftp import DeleteResult
+
+        maker = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+        stack.enter_context(patch("backend.app.main.async_session", maker))
+        stack.enter_context(patch("backend.app.core.database.async_session", maker))
+        # SD-card cleanup (#374) would otherwise FTP to the factory printer's IP.
+        stack.enter_context(
+            patch("backend.app.services.bambu_ftp.delete_file_async", AsyncMock(return_value=DeleteResult.NOT_FOUND))
+        )
+        stack.enter_context(patch("backend.app.main.notification_service")).on_print_complete = AsyncMock()
+        stack.enter_context(patch("backend.app.main.smart_plug_manager")).on_print_complete = AsyncMock()
+        mock_ws = stack.enter_context(patch("backend.app.main.ws_manager"))
+        mock_ws.send_print_complete = AsyncMock()
+        mock_ws.send_archive_updated = AsyncMock()
+        mock_ws.broadcast = AsyncMock()
+        # The energy / photo / maintenance follow-ups would otherwise hit the
+        # test engine after the fixture tears it down.
+        stack.enter_context(
+            patch("backend.app.main.spawn_background_task", side_effect=lambda coro, **_kw: coro.close())
+        )
+        mock_relay = stack.enter_context(patch("backend.app.main.mqtt_relay"))
+        mock_relay.on_print_complete = AsyncMock()
+        mock_relay.on_queue_job_completed = AsyncMock()
+        mock_pm = stack.enter_context(patch("backend.app.main.printer_manager"))
+        mock_pm.get_printer.return_value = None
+        mock_pm.get_current_print_user.return_value = None
+        mock_pm.get_client.return_value = None
+
+    async def _run_hook(self, stack, test_engine, printer_id: int, archive, payload: dict):
+        from backend.app import main as main_module
+
+        self._mock_stack(stack, test_engine)
+        main_module._active_prints[(printer_id, archive.filename)] = archive.id
+        try:
+            await main_module.on_print_complete(printer_id, payload)
+        finally:
+            main_module._active_prints.pop((printer_id, archive.filename), None)
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_on_print_complete_prices_the_run_and_snapshots_the_archive(
+        self, test_engine, archive_factory, printer_factory, db_session
+    ):
+        from contextlib import ExitStack
+
+        printer = await printer_factory(purchase_price=1200.0, expected_lifetime_hours=6000.0)
+        started = datetime.now(timezone.utc) - timedelta(hours=2, minutes=30)
+        archive = await archive_factory(printer.id, with_run=False, status="printing", started_at=started)
+
+        with ExitStack() as stack:
+            await self._run_hook(
+                stack,
+                test_engine,
+                printer.id,
+                archive,
+                {"status": "completed", "filename": archive.filename, "subtask_name": "Test Print"},
+            )
+
+        archive_id = archive.id
+        db_session.expire_all()
+        entry = (
+            await db_session.execute(select(PrintLogEntry).where(PrintLogEntry.archive_id == archive_id))
+        ).scalar_one()
+        assert entry.duration_seconds is not None and entry.duration_seconds >= 9000
+        expected = round(entry.duration_seconds / 3600 * 0.2, 3)
+        assert entry.depreciation_cost == pytest.approx(expected)
+        await db_session.refresh(archive)
+        assert archive.status == "completed"
+        assert archive.depreciation_cost == pytest.approx(expected)
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_on_print_complete_reconciled_run_stores_unknown(
+        self, test_engine, archive_factory, printer_factory, db_session
+    ):
+        from contextlib import ExitStack
+
+        printer = await printer_factory(purchase_price=1200.0, expected_lifetime_hours=6000.0)
+        started = datetime.now(timezone.utc) - timedelta(hours=8)
+        archive = await archive_factory(printer.id, with_run=False, status="printing", started_at=started)
+
+        with ExitStack() as stack:
+            await self._run_hook(
+                stack,
+                test_engine,
+                printer.id,
+                archive,
+                {
+                    "status": "completed",
+                    "filename": archive.filename,
+                    "subtask_name": "Test Print",
+                    "_reconciled": True,
+                },
+            )
+
+        archive_id = archive.id
+        db_session.expire_all()
+        entry = (
+            await db_session.execute(select(PrintLogEntry).where(PrintLogEntry.archive_id == archive_id))
+        ).scalar_one()
+        assert entry.duration_seconds == 0
+        assert entry.depreciation_cost is None
+        await db_session.refresh(archive)
+        assert archive.failure_reason == "noStatusUpdate"
         assert archive.depreciation_cost is None
 
 
