@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Loader2 } from 'lucide-react';
 import { api } from '../api/client';
 import { parseUTCDate } from '../utils/date';
+import { VatBadge } from './VatBadge';
 
 interface PrintLogTableProps {
   archiveId: number;
@@ -55,7 +56,7 @@ export function PrintLogTable({ archiveId }: PrintLogTableProps) {
             <th className="text-left py-1.5 pr-2 font-medium">{t('archives.runLog.col.status')}</th>
             <th className="text-right py-1.5 pr-2 font-medium">{t('archives.runLog.col.duration')}</th>
             <th className="text-right py-1.5 pr-2 font-medium">{t('archives.runLog.col.filament')}</th>
-            <th className="text-right py-1.5 font-medium">{t('archives.runLog.col.cost')}</th>
+            <th className="text-right py-1.5 font-medium">{t('archives.runLog.col.cost')}<VatBadge /></th>
           </tr>
         </thead>
         <tbody>

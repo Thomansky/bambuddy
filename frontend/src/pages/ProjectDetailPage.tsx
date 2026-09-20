@@ -47,6 +47,7 @@ import { PrintModal } from '../components/PrintModal';
 // Project edit modal (reused from ProjectsPage)
 import { ProjectModal } from './ProjectsPage';
 import { getCurrencySymbol } from '../utils/currency';
+import { VatBadge } from '../components/VatBadge';
 import { isSlicedLibraryFile } from '../utils/libraryFiles';
 
 function formatFilament(grams: number): string {
@@ -719,7 +720,7 @@ export function ProjectDetailPage() {
                   <div>
                     <p className="text-xs text-bambu-gray uppercase">{t('projectDetail.cost.totalCost')}</p>
                     <p className="text-lg font-semibold text-bambu-green">
-                      {currency}{rollupCost.toFixed(2)}
+                      {currency}{rollupCost.toFixed(2)}<VatBadge />
                     </p>
                   </div>
                 );
@@ -765,7 +766,7 @@ export function ProjectDetailPage() {
               <div>
                 <p className="text-xs text-bambu-gray uppercase">{t('projectDetail.cost.filamentCost')}</p>
                 <p className="text-lg font-semibold text-white">
-                  {currency}{stats.estimated_cost.toFixed(2)}
+                  {currency}{stats.estimated_cost.toFixed(2)}<VatBadge />
                 </p>
               </div>
               {stats.total_energy_kwh > 0 && (
@@ -775,7 +776,7 @@ export function ProjectDetailPage() {
                     {stats.total_energy_kwh.toFixed(3)} kWh
                     {stats.total_energy_cost > 0 && (
                       <span className="text-sm text-bambu-gray ml-1">
-                        ({currency}{stats.total_energy_cost.toFixed(2)})
+                        ({currency}{stats.total_energy_cost.toFixed(2)}<VatBadge />)
                       </span>
                     )}
                   </p>
@@ -788,7 +789,7 @@ export function ProjectDetailPage() {
                   <div>
                     <p className="text-xs text-bambu-gray uppercase">{t('projectDetail.cost.totalCost')}</p>
                     <p className="text-lg font-semibold text-bambu-green">
-                      {currency}{totalCost.toFixed(2)}
+                      {currency}{totalCost.toFixed(2)}<VatBadge />
                     </p>
                     {stats.bom_cost > 0 && (
                       <p className="text-xs text-bambu-gray/70">{t('projectDetail.cost.includesBom')}</p>
@@ -803,10 +804,10 @@ export function ProjectDetailPage() {
                   <div>
                     <p className="text-xs text-bambu-gray uppercase">{t('projectDetail.cost.budget')}</p>
                     <p className="text-sm text-bambu-gray">
-                      {t('projectDetail.cost.total')}: <span className="text-white font-semibold">{currency}{project.budget.toFixed(2)}</span>
+                      {t('projectDetail.cost.total')}: <span className="text-white font-semibold">{currency}{project.budget.toFixed(2)}<VatBadge /></span>
                     </p>
                     <p className={`text-sm ${remaining >= 0 ? 'text-bambu-green' : 'text-red-700 dark:text-red-400'}`}>
-                      {t('projectDetail.cost.remaining')}: <span className="font-semibold">{currency}{remaining.toFixed(2)}</span>
+                      {t('projectDetail.cost.remaining')}: <span className="font-semibold">{currency}{remaining.toFixed(2)}<VatBadge /></span>
                     </p>
                   </div>
                 );
@@ -865,7 +866,7 @@ export function ProjectDetailPage() {
                       <span className="hidden md:inline">{formatFilament(child.total_filament_grams)}</span>
                     )}
                     {child.total_cost > 0 && (
-                      <span className="hidden md:inline">{currency}{child.total_cost.toFixed(2)}</span>
+                      <span className="hidden md:inline">{currency}{child.total_cost.toFixed(2)}<VatBadge /></span>
                     )}
                     {child.progress_percent !== null && (
                       <span>{child.progress_percent.toFixed(0)}%</span>
@@ -1353,7 +1354,7 @@ export function ProjectDetailPage() {
                             </p>
                             {item.unit_price !== null && (
                               <span className="text-xs text-bambu-green whitespace-nowrap">
-                                {currency}{(item.unit_price * item.quantity_needed).toFixed(2)}
+                                {currency}{(item.unit_price * item.quantity_needed).toFixed(2)}<VatBadge />
                               </span>
                             )}
                           </div>
@@ -1421,7 +1422,7 @@ export function ProjectDetailPage() {
                 <div className="pt-2 mt-2 border-t border-bambu-dark-tertiary flex justify-between text-sm">
                   <span className="text-bambu-gray">{t('projectDetail.bom.totalCost')}</span>
                   <span className="text-white font-medium">
-                    {currency}{stats.bom_cost.toFixed(2)}
+                    {currency}{stats.bom_cost.toFixed(2)}<VatBadge />
                   </span>
                 </div>
               )}

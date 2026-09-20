@@ -35,6 +35,8 @@ export default {
   // Common
   common: {
     plusNMore: '另 {{count}} 個',
+    vatIncl: '含稅',
+    vatExcl: '未含稅',
     save: '儲存',
     saving: '儲存中...',
     cancel: '取消',
@@ -1711,6 +1713,7 @@ export default {
     resetLayout: '重設佈局',
     recalculateCosts: '重新計算成本',
     recalculateCostsHint: '使用目前耗材價格重新計算所有歸檔成本',
+    recalculateCostsVatHint: '列印時記錄的線軸成本保留記錄時的計價基準；僅重新套用目錄價格和預設價格。',
     exportStats: '匯出統計',
     exportAsCsv: '匯出為 CSV',
     exportAsExcel: '匯出為 Excel',
@@ -2816,6 +2819,8 @@ export default {
     priceBasisGross: '含稅（內含增值稅）',
     priceBasisNet: '未稅（不含增值稅）',
     priceBasisHelp: '您作業時使用的價格基準：新料盤會預先選用此基準，彙總數值也會以此基準顯示，因此發票上的金額可以直接輸入，無需換算。',
+    priceBasisScopeHelp: '其他所有價格（預設耗材成本、電費、耗材目錄及物料清單價格）均視為已以此基準輸入；僅料盤價格會依各自的含稅／未含稅標記換算。啟用前記錄的成本維持不變。',
+    vatWorkingBasisHint: '以作業基準（{{basis}}）輸入。',
     electricityCost: '每千瓦時電費',
     energyDisplayMode: '能源顯示模式',
     energyModePrintDescription: '儀表板顯示列印期間使用的能源總和',

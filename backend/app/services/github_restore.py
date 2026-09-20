@@ -1307,6 +1307,10 @@ class GitHubRestoreService:
                 "nozzle_temp_max": entry.get("nozzle_temp_max"),
                 "note": entry.get("note"),
                 "cost_per_kg": entry.get("cost_per_kg"),
+                # Backups written before the flag existed carry no key; those
+                # spools were entered as gross, which is what the model
+                # defaults to. Dropping it here would re-price a net spool.
+                "cost_vat_included": bool(entry.get("cost_vat_included", True)),
                 "tag_uid": entry.get("tag_uid"),
                 "tray_uuid": entry.get("tray_uuid"),
                 "data_origin": entry.get("data_origin"),

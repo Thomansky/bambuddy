@@ -35,6 +35,9 @@ export default {
   // Common
   common: {
     plusNMore: '+{{count}} more',
+    // Working-basis suffix after every calculated amount (vat_enabled only).
+    vatIncl: 'incl. VAT',
+    vatExcl: 'excl. VAT',
     save: 'Save',
     saving: 'Saving...',
     cancel: 'Cancel',
@@ -1729,6 +1732,7 @@ export default {
     resetLayout: 'Reset Layout',
     recalculateCosts: 'Recalculate Costs',
     recalculateCostsHint: 'Recalculate all archive costs using current filament prices',
+    recalculateCostsVatHint: 'Spool costs recorded at print time keep the basis they were recorded in; only catalogue and default prices are re-applied.',
     exportStats: 'Export Stats',
     exportAsCsv: 'Export as CSV',
     exportAsExcel: 'Export as Excel',
@@ -2843,6 +2847,8 @@ export default {
     priceBasisGross: 'Gross (incl. VAT)',
     priceBasisNet: 'Net (excl. VAT)',
     priceBasisHelp: 'The basis you work in: new spools start with it pre-selected and aggregated values are shown in it — so invoice numbers can be typed in as-is.',
+    priceBasisScopeHelp: 'Every other price — default filament cost, electricity, filament catalogue and BOM prices — is taken as already being in this basis; only spool prices are converted using their own incl./excl. flag. Costs recorded before the switch was turned on are kept as they are.',
+    vatWorkingBasisHint: 'Entered in the working basis ({{basis}}).',
     electricityCost: 'Electricity cost per kWh',
     energyDisplayMode: 'Energy display mode',
     energyModePrintDescription: 'Dashboard shows sum of energy used during prints',

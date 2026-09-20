@@ -35,6 +35,8 @@ export default {
   // Common
   common: {
     plusNMore: '+{{count}} más',
+    vatIncl: 'IVA incl.',
+    vatExcl: 'sin IVA',
     save: 'Guardar',
     saving: 'Guardando...',
     cancel: 'Cancelar',
@@ -1712,6 +1714,7 @@ export default {
     resetLayout: 'Restablecer disposición',
     recalculateCosts: 'Recalcular costes',
     recalculateCostsHint: 'Recalcular todos los costes de archivo usando los precios actuales del filamento',
+    recalculateCostsVatHint: 'Los costes de bobina registrados al imprimir conservan la base en la que se registraron; solo se vuelven a aplicar los precios del catálogo y por defecto.',
     exportStats: 'Exportar estadísticas',
     exportAsCsv: 'Exportar como CSV',
     exportAsExcel: 'Exportar como Excel',
@@ -2825,6 +2828,8 @@ export default {
     priceBasisGross: 'Bruto (IVA incl.)',
     priceBasisNet: 'Neto (IVA excl.)',
     priceBasisHelp: 'La base con la que trabajas: las bobinas nuevas se crean con ella preseleccionada y los valores agregados se muestran en ella, de modo que los importes de las facturas se pueden introducir tal cual.',
+    priceBasisScopeHelp: 'Todos los demás precios — coste de filamento predeterminado, electricidad, catálogo de filamentos y precios de la lista de materiales — se consideran ya expresados en esta base; solo los precios de las bobinas se convierten según su propia marca incl./excl. Los costes registrados antes de activar esta opción se mantienen tal cual.',
+    vatWorkingBasisHint: 'Se introduce en la base de trabajo ({{basis}}).',
     electricityCost: 'Coste de la electricidad por kWh',
     energyDisplayMode: 'Modo de visualización de la energía',
     energyModePrintDescription: 'El panel muestra la suma de la energía usada durante las impresiones',

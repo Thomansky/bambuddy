@@ -71,6 +71,7 @@ import { RunWithPipelineModal } from '../components/RunWithPipelineModal';
 import { openInSlicer, resolveDesktopSlicer, type SlicerType } from '../utils/slicer';
 import { formatDateTime, formatDateOnly, parseUTCDate, type TimeFormat, formatDuration } from '../utils/date';
 import { getCurrencySymbol } from '../utils/currency';
+import { VatBadge } from '../components/VatBadge';
 import { getBedTypeInfo } from '../utils/bedType';
 import { invalidateArchiveAndProjectViews } from '../utils/projectQueries';
 import { assignableProjects } from '../utils/projectTree';
@@ -207,6 +208,8 @@ type LogSortState = { column: string; direction: 'asc' | 'desc' };
  *  comes back as a 400, so a header is only made clickable if it is listed
  *  in both. */
 const SORTABLE_LOG_COLUMNS = new Set(Object.keys(LOG_COLUMN_LABEL_KEYS));
+// Columns holding an amount of money: their header carries the VAT basis.
+const LOG_MONEY_COLUMNS = new Set(['cost', 'energy_cost']);
 
 const DEFAULT_LOG_SORT: LogSortState = { column: 'date', direction: 'desc' };
 
@@ -1293,13 +1296,13 @@ function ArchiveCard({
               {archive.cost != null && (
                 <div className="flex items-center gap-1.5">
                   <Coins className="w-3 h-3" />
-                  {currency}{archive.cost.toFixed(2)}
+                  {currency}{archive.cost.toFixed(2)}<VatBadge />
                 </div>
               )}
                 {archive.energy_cost != null && (
                   <div className="flex items-center gap-1.5" title={`${t('stats.energyUsed')}: ${archive.energy_kwh?.toFixed(3) || 'N/A'} kWh`}>
                     <Zap className="w-3 h-3" />
-                    {currency}{archive.energy_cost.toFixed(2)}
+                    {currency}{archive.energy_cost.toFixed(2)}<VatBadge />
                   </div>
                 )}
                 {archive.depreciation_cost != null && (
@@ -4561,7 +4564,7 @@ export function ArchivesPage() {
                                   }`}
                                   title={t('archives.log.sortBy', { column: label })}
                                 >
-                                  {label}
+                                  {label}{LOG_MONEY_COLUMNS.has(colId) && <VatBadge />}
                                   {isActive ? (
                                     logSort.direction === 'asc' ? (
                                       <ChevronUp className="w-3.5 h-3.5" />
@@ -4576,7 +4579,7 @@ export function ArchivesPage() {
                                   )}
                                 </button>
                               ) : (
-                                label
+                                <>{label}{LOG_MONEY_COLUMNS.has(colId) && <VatBadge />}</>
                               )}
                             </th>
                           );

@@ -6,6 +6,8 @@ import { api } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDateOnly } from '../utils/date';
 import { getCurrencySymbol, SUPPORTED_CURRENCIES } from '../utils/currency';
+import { vatSuffix } from '../utils/vat';
+import { VatBadge } from '../components/VatBadge';
 import { checkPasswordComplexity } from '../utils/password';
 import { fleetAudience, sponsorHref } from '../utils/fleetAudience';
 import { PRESET_CATEGORIES, parsePresetTriple } from '../utils/temperatureFanPresets';
@@ -2421,6 +2423,9 @@ export function SettingsPage() {
                     className="w-full pr-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                   />
                 </div>
+                {localSettings.vat_enabled && (
+                  <p className="text-xs text-bambu-gray mt-1">{t('settings.vatWorkingBasisHint', { basis: vatSuffix(localSettings, t) })}</p>
+                )}
               </div>
               {/* VAT distinction is opt-in (business workflows): off means no
                   selector, suffix or conversion anywhere — the app behaves
@@ -2466,6 +2471,7 @@ export function SettingsPage() {
                       <option value="net">{t('settings.priceBasisNet')}</option>
                     </select>
                     <p className="text-xs text-bambu-gray mt-1">{t('settings.priceBasisHelp')}</p>
+                    <p className="text-xs text-bambu-gray mt-1">{t('settings.priceBasisScopeHelp')}</p>
                   </div>
                 </>
               )}
@@ -2489,6 +2495,9 @@ export function SettingsPage() {
                     className="w-full pr-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                   />
                 </div>
+                {localSettings.vat_enabled && (
+                  <p className="text-xs text-bambu-gray mt-1">{t('settings.vatWorkingBasisHint', { basis: vatSuffix(localSettings, t) })}</p>
+                )}
               </div>
               <div>
                 <label className="block text-sm text-bambu-gray mb-1">
@@ -3791,7 +3800,7 @@ export function SettingsPage() {
                       </div>
                       {(localSettings?.energy_cost_per_kwh ?? 0) > 0 && (
                         <div className="text-xs text-bambu-gray mt-1">
-                          ~{(plugEnergySummary.totalToday * (localSettings?.energy_cost_per_kwh ?? 0)).toFixed(2)} {getCurrencySymbol(localSettings?.currency || 'USD')}
+                          ~{(plugEnergySummary.totalToday * (localSettings?.energy_cost_per_kwh ?? 0)).toFixed(2)} {getCurrencySymbol(localSettings?.currency || 'USD')}<VatBadge />
                         </div>
                       )}
                     </div>
@@ -3808,7 +3817,7 @@ export function SettingsPage() {
                       </div>
                       {(localSettings?.energy_cost_per_kwh ?? 0) > 0 && (
                         <div className="text-xs text-bambu-gray mt-1">
-                          ~{(plugEnergySummary.totalYesterday * (localSettings?.energy_cost_per_kwh ?? 0)).toFixed(2)} {getCurrencySymbol(localSettings?.currency || 'USD')}
+                          ~{(plugEnergySummary.totalYesterday * (localSettings?.energy_cost_per_kwh ?? 0)).toFixed(2)} {getCurrencySymbol(localSettings?.currency || 'USD')}<VatBadge />
                         </div>
                       )}
                     </div>
@@ -3825,7 +3834,7 @@ export function SettingsPage() {
                       </div>
                       {(localSettings?.energy_cost_per_kwh ?? 0) > 0 && (
                         <div className="text-xs text-bambu-gray mt-1">
-                          ~{(plugEnergySummary.totalLifetime * (localSettings?.energy_cost_per_kwh ?? 0)).toFixed(2)} {getCurrencySymbol(localSettings?.currency || 'USD')}
+                          ~{(plugEnergySummary.totalLifetime * (localSettings?.energy_cost_per_kwh ?? 0)).toFixed(2)} {getCurrencySymbol(localSettings?.currency || 'USD')}<VatBadge />
                         </div>
                       )}
                     </div>

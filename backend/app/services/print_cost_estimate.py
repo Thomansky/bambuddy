@@ -13,6 +13,7 @@ from backend.app.models.archive import PrintArchive
 from backend.app.models.library import LibraryFile
 from backend.app.models.spool_assignment import SpoolAssignment
 from backend.app.services.inventory_mode import spoolman_owns_assignments
+from backend.app.services.vat import VatContext, normalise_cost_per_kg
 from backend.app.utils import threemf_tools
 from backend.app.utils.safe_path import safe_join_under
 
@@ -152,7 +153,15 @@ async def estimate_queue_source_cost(
             .scalars()
             .all()
         )
-        cost_by_tray = {_global_tray_id(a): a.spool.cost_per_kg for a in assignments}
+        # Spool prices are normalised to the VAT working basis so the estimate
+        # never mixes gross and net spools (or a net spool with the gross default).
+        vat_ctx = await VatContext.load(db)
+        cost_by_tray = {
+            _global_tray_id(a): normalise_cost_per_kg(
+                a.spool.cost_per_kg, getattr(a.spool, "cost_vat_included", True), vat_ctx
+            )
+            for a in assignments
+        }
 
     total = 0.0
     for filament in usage:

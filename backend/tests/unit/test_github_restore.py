@@ -917,6 +917,35 @@ class TestRestoreSpools:
         assert tally.restored == 1
 
     @pytest.mark.asyncio
+    async def test_the_vat_flag_survives_a_backup_and_restore_round_trip(self, db_session):
+        """A spool priced net that came back gross would be re-priced by the
+        VAT rate on its next print, silently. The flag rides along with
+        cost_per_kg, and a backup written before it existed restores as gross,
+        the model default those spools were entered under."""
+        from backend.app.services.github_backup import GitHubBackupService
+
+        db_session.add(Spool(material="PLA", tag_uid="NET00001", cost_per_kg=20.0, cost_vat_included=False))
+        await db_session.commit()
+
+        files: dict = {}
+        await GitHubBackupService()._collect_spools(db_session, files)
+        entry = files[SPOOLS_PATH]["spools"][0]
+        assert entry["cost_vat_included"] is False
+
+        await db_session.execute(Spool.__table__.delete())
+        await db_session.commit()
+
+        legacy = self._spool_entry(tag_uid="OLD00001", cost_per_kg=20.0)
+        legacy.pop("cost_vat_included", None)
+        await _service()._restore_spools(db_session, {"spools": [entry, legacy]}, None, False, _CategoryTally(), {})
+        await db_session.commit()
+
+        rows = {s.tag_uid: s for s in (await db_session.execute(select(Spool))).scalars().all()}
+        assert rows["NET00001"].cost_vat_included is False
+        assert rows["NET00001"].cost_per_kg == 20.0
+        assert rows["OLD00001"].cost_vat_included is True
+
+    @pytest.mark.asyncio
     async def test_insert_preserves_created_at_so_repeat_restore_is_idempotent(self, db_session):
         """Second restore of the same backup must match, not duplicate."""
         service = _service()

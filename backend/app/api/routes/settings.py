@@ -525,6 +525,11 @@ _UI_FLAG_FIELDS: tuple[str, ...] = (
     # update check ran even where it had been switched off.
     "currency",
     "check_updates",
+    # Every calculated amount carries its VAT working basis ("incl." / "excl.")
+    # once the distinction is on. Deployment facts like currency, not
+    # credentials -- and the label has to reach the same non-admin readers.
+    "vat_enabled",
+    "price_vat_basis",
 )
 
 

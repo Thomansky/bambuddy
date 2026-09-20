@@ -43,6 +43,7 @@ import { MaterialNumberStats } from '../components/MaterialNumberStats';
 import { SupplierStats } from '../components/SupplierStats';
 import { Dashboard, type DashboardWidget } from '../components/Dashboard';
 import { getCurrencySymbol } from '../utils/currency';
+import { VatBadge } from '../components/VatBadge';
 import { formatWeight } from '../utils/weight';
 import { parseUTCDate, formatDuration } from '../utils/date';
 import { MetricToggle, type Metric } from '../components/MetricToggle';
@@ -148,7 +149,7 @@ function QuickStatsWidget({
     { icon: Package, color: 'text-bambu-green', label: t('stats.totalPrints'), value: `${stats?.total_prints || 0}` },
     { icon: Clock, color: 'text-blue-600 dark:text-blue-400', label: t('stats.printTime'), value: `${stats?.total_print_time_hours?.toFixed(1) ?? '0'}h` },
     { icon: Package, color: 'text-orange-600 dark:text-orange-400', label: t('stats.filamentUsed'), value: formatWeight(stats?.total_filament_grams || 0) },
-    { icon: DollarSign, color: 'text-green-600 dark:text-green-400', label: t('stats.filamentCost'), value: `${currency} ${stats?.total_cost?.toFixed(2) ?? '0.00'}` },
+    { icon: DollarSign, color: 'text-green-600 dark:text-green-400', label: t('stats.filamentCost'), value: `${currency} ${stats?.total_cost?.toFixed(2) ?? '0.00'}`, money: true },
     {
       icon: Zap,
       color: 'text-yellow-600 dark:text-yellow-400',
@@ -162,6 +163,7 @@ function QuickStatsWidget({
       color: 'text-yellow-500',
       label: t('stats.energyCost'),
       value: `${currency} ${stats?.total_energy_cost?.toFixed(2) ?? '0.00'}`,
+      money: true,
       warning: warmingUp,
       tooltip: warmingUpTooltip,
     },
@@ -192,7 +194,7 @@ function QuickStatsWidget({
               {item.label}
               {item.warning && <AlertTriangle className="w-3 h-3 text-yellow-600 dark:text-yellow-400" aria-label={item.tooltip} />}
             </p>
-            <p className="text-xl font-bold text-white">{item.value}</p>
+            <p className="text-xl font-bold text-white">{item.value}{item.money && <VatBadge />}</p>
           </div>
         </div>
       ))}
@@ -873,6 +875,7 @@ function RecordsWidget({ archives, currency }: { archives: ArchiveSlim[]; curren
       label: string;
       value: string;
       detail: string | null;
+      money?: boolean;
     }> = [];
 
     if (archives.length === 0) return result;
@@ -920,6 +923,7 @@ function RecordsWidget({ archives, currency }: { archives: ArchiveSlim[]; curren
         icon: DollarSign, iconColor: 'text-green-600 dark:text-green-400', label: t('stats.mostExpensivePrint'),
         value: `${currency}${costliest.value.toFixed(2)}`,
         detail: costliest.archive.print_name || null,
+        money: true,
       });
     }
 
@@ -984,7 +988,7 @@ function RecordsWidget({ archives, currency }: { archives: ArchiveSlim[]; curren
           <div className="flex-1 min-w-0">
             <p className="text-xs text-bambu-gray">{record.label}</p>
             <div className="flex items-baseline gap-2">
-              <span className="text-sm font-bold text-white">{record.value}</span>
+              <span className="text-sm font-bold text-white">{record.value}{record.money && <VatBadge />}</span>
               {record.detail && (
                 <span className="text-xs text-bambu-gray truncate">{record.detail}</span>
               )}
@@ -1081,6 +1085,11 @@ export function StatsPage() {
   const { data: settings } = useQuery({
     queryKey: ['settings'],
     queryFn: api.getSettings,
+  });
+
+  const { data: uiFlags } = useQuery({
+    queryKey: ['ui-flags'],
+    queryFn: api.getUiFlags,
   });
 
   // Slim listing (#1894): the filter only needs id + username, and gating it
@@ -1267,7 +1276,13 @@ export function StatsPage() {
             variant="secondary"
             onClick={handleRecalculateCosts}
             disabled={isRecalculating || !hasPermission('archives:update_all')}
-            title={!hasPermission('archives:update_all') ? t('stats.noPermissionRecalculate') : t('stats.recalculateCostsHint')}
+            title={
+              !hasPermission('archives:update_all')
+                ? t('stats.noPermissionRecalculate')
+                : uiFlags?.vat_enabled
+                  ? `${t('stats.recalculateCostsHint')} ${t('stats.recalculateCostsVatHint')}`
+                  : t('stats.recalculateCostsHint')
+            }
           >
             {isRecalculating ? (
               <Loader2 className="w-4 h-4 animate-spin" />

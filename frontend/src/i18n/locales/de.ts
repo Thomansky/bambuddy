@@ -35,6 +35,8 @@ export default {
   // Common
   common: {
     plusNMore: '+{{count}} weitere',
+    vatIncl: 'inkl. MwSt.',
+    vatExcl: 'exkl. MwSt.',
     save: 'Speichern',
     saving: 'Speichern...',
     cancel: 'Abbrechen',
@@ -1712,6 +1714,7 @@ export default {
     resetLayout: 'Layout zurücksetzen',
     recalculateCosts: 'Kosten neu berechnen',
     recalculateCostsHint: 'Alle Archivkosten mit aktuellen Filamentpreisen neu berechnen',
+    recalculateCostsVatHint: 'Beim Druck erfasste Spulenkosten behalten die Basis, in der sie erfasst wurden; nur Katalog- und Standardpreise werden neu angewendet.',
     exportStats: 'Statistiken exportieren',
     exportAsCsv: 'Als CSV exportieren',
     exportAsExcel: 'Als Excel exportieren',
@@ -2823,6 +2826,8 @@ export default {
     priceBasisGross: 'Brutto (inkl. MwSt.)',
     priceBasisNet: 'Netto (exkl. MwSt.)',
     priceBasisHelp: 'Die Basis, mit der Sie arbeiten: Neue Spulen sind damit vorausgewählt und aggregierte Werte werden darin angezeigt — Rechnungsbeträge können so direkt ohne Umrechnung eingegeben werden.',
+    priceBasisScopeHelp: 'Alle anderen Preise — Standard-Filamentkosten, Strom, Filamentkatalog und Stücklistenpreise — gelten bereits als in dieser Basis angegeben; nur Spulenpreise werden anhand ihrer eigenen inkl./exkl.-Kennzeichnung umgerechnet. Vor dem Einschalten erfasste Kosten bleiben unverändert.',
+    vatWorkingBasisHint: 'Eingabe in der Arbeitsbasis ({{basis}}).',
     electricityCost: 'Stromkosten pro kWh',
     energyDisplayMode: 'Energieanzeige-Modus',
     energyModePrintDescription: 'Dashboard zeigt Summe der während Drucken verbrauchten Energie',

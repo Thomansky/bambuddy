@@ -35,6 +35,8 @@ export default {
   // Common
   common: {
     plusNMore: '+{{count}} autres',
+    vatIncl: 'TTC',
+    vatExcl: 'HT',
     save: 'Enregistrer',
     saving: 'Enregistrement...',
     cancel: 'Annuler',
@@ -1711,6 +1713,7 @@ export default {
     resetLayout: 'Réinitialiser la mise en page',
     recalculateCosts: 'Recalculer les coûts',
     recalculateCostsHint: 'Recalcule les coûts avec les prix actuels des filaments',
+    recalculateCostsVatHint: "Les coûts de bobine enregistrés à l'impression conservent la base dans laquelle ils ont été enregistrés ; seuls les prix du catalogue et par défaut sont réappliqués.",
     exportStats: 'Exporter les stats',
     exportAsCsv: 'Exporter en CSV',
     exportAsExcel: 'Exporter en Excel',
@@ -2772,6 +2775,8 @@ export default {
     priceBasisGross: 'TTC (TVA incluse)',
     priceBasisNet: 'HT (hors TVA)',
     priceBasisHelp: 'La base dans laquelle vous travaillez : elle est présélectionnée pour les nouvelles bobines et les valeurs agrégées y sont affichées — les montants des factures peuvent ainsi être saisis tels quels.',
+    priceBasisScopeHelp: 'Tous les autres prix — coût de filament par défaut, électricité, catalogue de filaments et prix de nomenclature — sont considérés comme déjà exprimés dans cette base ; seuls les prix des bobines sont convertis selon leur propre indicateur TTC/HT. Les coûts enregistrés avant l’activation sont conservés tels quels.',
+    vatWorkingBasisHint: 'Saisi dans la base de travail ({{basis}}).',
     electricityCost: 'Coût électricité par kWh',
     energyDisplayMode: 'Mode d\'affichage énergie',
     energyModePrintDescription: 'Le tableau de bord affiche la somme de l\'énergie utilisée pendant les impressions',

@@ -8,6 +8,7 @@ vi.mock('../../api/client', () => ({
   api: {
     getArchiveRuns: vi.fn(),
     getSettings: vi.fn().mockResolvedValue({}),
+    getUiFlags: vi.fn().mockResolvedValue({}),
     getAuthStatus: vi.fn().mockResolvedValue({ auth_enabled: false }),
   },
 }));
@@ -87,6 +88,14 @@ describe('PrintLogModal', () => {
     await waitFor(() => {
       expect(screen.getByText(/100\.0 g/)).toBeInTheDocument();
       expect(screen.getByText(/10\.0 g/)).toBeInTheDocument();
+    });
+  });
+
+  it('labels the Cost column with the VAT working basis once VAT is on', async () => {
+    vi.mocked(api.getUiFlags).mockResolvedValue({ vat_enabled: true, price_vat_basis: 'net' });
+    render(<PrintLogModal archiveId={42} archiveName="Benchy" onClose={vi.fn()} />);
+    await waitFor(() => {
+      expect(screen.getByText('excl. VAT')).toBeInTheDocument();
     });
   });
 

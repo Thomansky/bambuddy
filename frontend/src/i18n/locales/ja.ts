@@ -35,6 +35,8 @@ export default {
   // Common
   common: {
     plusNMore: '他{{count}}件',
+    vatIncl: '税込',
+    vatExcl: '税抜',
     save: '保存',
     saving: '保存中...',
     cancel: 'キャンセル',
@@ -1711,6 +1713,7 @@ export default {
     resetLayout: 'レイアウトをリセット',
     recalculateCosts: 'コストを再計算',
     recalculateCostsHint: '現在のフィラメント価格ですべてのアーカイブコストを再計算',
+    recalculateCostsVatHint: '印刷時に記録されたスプールコストは記録時の基準を保持します。再適用されるのはカタログ価格と既定価格のみです。',
     exportStats: '統計をエクスポート',
     exportAsCsv: 'CSVでエクスポート',
     exportAsExcel: 'Excelでエクスポート',
@@ -2821,6 +2824,8 @@ export default {
     priceBasisGross: '税込価格（消費税込み）',
     priceBasisNet: '税抜価格（消費税抜き）',
     priceBasisHelp: '普段使用する価格基準です。新しいスプールにはこの基準があらかじめ選択され、集計値もこの基準で表示されるため、請求書の金額をそのまま入力できます。',
+    priceBasisScopeHelp: 'その他の価格（既定のフィラメント費用、電気料金、フィラメントカタログ、部品表の価格）はすべてこの基準で入力済みとみなされます。変換されるのはスプール価格のみで、各スプールの税込／税抜設定に従います。有効化前に記録された費用はそのまま保持されます。',
+    vatWorkingBasisHint: '作業基準（{{basis}}）で入力します。',
     electricityCost: '電気料金（kWh単価）',
     energyDisplayMode: 'エネルギー表示モード',
     energyModePrintDescription: 'ダッシュボードに印刷中の消費エネルギーの合計を表示',

@@ -266,6 +266,18 @@ export const handlers = [
     });
   }),
 
+  // What the app shell and the VAT badge read without settings:read (#3023).
+  http.get('/api/v1/settings/ui-flags', () => {
+    return HttpResponse.json({
+      billing_enabled: false,
+      user_notifications_enabled: true,
+      currency: 'USD',
+      check_updates: true,
+      vat_enabled: false,
+      price_vat_basis: 'gross',
+    });
+  }),
+
   http.patch('/api/v1/settings/', async ({ request }) => {
     const body = (await request.json()) as Record<string, unknown>;
     return HttpResponse.json(body);

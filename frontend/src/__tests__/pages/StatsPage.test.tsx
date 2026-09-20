@@ -663,4 +663,50 @@ describe('StatsPage', () => {
       expect(screen.queryByText('Name At The Time')).not.toBeInTheDocument();
     });
   });
+
+  describe('VAT working basis', () => {
+    it('suffixes every money tile with the working basis once VAT is enabled', async () => {
+      server.use(
+        http.get('/api/v1/settings/ui-flags', () =>
+          HttpResponse.json({ currency: 'USD', vat_enabled: true, price_vat_basis: 'gross' })
+        )
+      );
+
+      render(<StatsPage />);
+
+      await waitFor(() => {
+        expect(screen.getByText('$ 125.50')).toBeInTheDocument();
+      });
+      // Filament Cost, Energy Cost and the costliest print all carry it.
+      await waitFor(() => {
+        expect(screen.getAllByText('incl. VAT').length).toBeGreaterThanOrEqual(3);
+      });
+      expect(screen.queryByText('excl. VAT')).not.toBeInTheDocument();
+    });
+
+    it('says excl. VAT when the working basis is net', async () => {
+      server.use(
+        http.get('/api/v1/settings/ui-flags', () =>
+          HttpResponse.json({ currency: 'USD', vat_enabled: true, price_vat_basis: 'net' })
+        )
+      );
+
+      render(<StatsPage />);
+
+      await waitFor(() => {
+        expect(screen.getAllByText('excl. VAT').length).toBeGreaterThanOrEqual(3);
+      });
+      expect(screen.queryByText('incl. VAT')).not.toBeInTheDocument();
+    });
+
+    it('shows plain amounts while the VAT distinction is off', async () => {
+      render(<StatsPage />);
+
+      await waitFor(() => {
+        expect(screen.getByText('$ 125.50')).toBeInTheDocument();
+        expect(screen.getByText('$ 12.50')).toBeInTheDocument();
+      });
+      expect(screen.queryByText(/VAT/)).not.toBeInTheDocument();
+    });
+  });
 });

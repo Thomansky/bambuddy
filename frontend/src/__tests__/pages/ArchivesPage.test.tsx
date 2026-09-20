@@ -618,4 +618,46 @@ describe('ArchivesPage', () => {
       });
     });
   });
+
+  describe('VAT working basis', () => {
+    const pricedArchives = [
+      { ...mockArchives[0], cost: 1.23, energy_cost: 0.45, energy_kwh: 1.5 },
+      { ...mockArchives[1], cost: null, energy_cost: null },
+    ];
+
+    it('suffixes the card cost and energy figures with the working basis', async () => {
+      server.use(
+        http.get('/api/v1/archives/', () => HttpResponse.json(pricedArchives)),
+        http.get('/api/v1/settings/', () => HttpResponse.json({ currency: 'EUR' })),
+        http.get('/api/v1/settings/ui-flags', () =>
+          HttpResponse.json({ currency: 'EUR', vat_enabled: true, price_vat_basis: 'net' })
+        )
+      );
+
+      render(<ArchivesPage />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/€1\.23/)).toBeInTheDocument();
+      });
+      await waitFor(() => {
+        // Cost and energy cost on the priced card; the unpriced card adds none.
+        expect(screen.getAllByText('excl. VAT')).toHaveLength(2);
+      });
+    });
+
+    it('shows plain amounts while the VAT distinction is off', async () => {
+      server.use(
+        http.get('/api/v1/archives/', () => HttpResponse.json(pricedArchives)),
+        http.get('/api/v1/settings/', () => HttpResponse.json({ currency: 'EUR' })),
+        http.get('/api/v1/settings/ui-flags', () => HttpResponse.json({ currency: 'EUR', vat_enabled: false }))
+      );
+
+      render(<ArchivesPage />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/€1\.23/)).toBeInTheDocument();
+      });
+      expect(screen.queryByText(/VAT/)).not.toBeInTheDocument();
+    });
+  });
 });

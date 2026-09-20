@@ -35,6 +35,8 @@ export default {
   // Common
   common: {
     plusNMore: '另 {{count}} 个',
+    vatIncl: '含税',
+    vatExcl: '不含税',
     save: '保存',
     saving: '保存中...',
     cancel: '取消',
@@ -1711,6 +1713,7 @@ export default {
     resetLayout: '重置布局',
     recalculateCosts: '重新计算成本',
     recalculateCostsHint: '使用当前耗材价格重新计算所有归档成本',
+    recalculateCostsVatHint: '打印时记录的线轴成本保留记录时的计价基准；仅重新应用目录价格和默认价格。',
     exportStats: '导出统计',
     exportAsCsv: '导出为 CSV',
     exportAsExcel: '导出为 Excel',
@@ -2816,6 +2819,8 @@ export default {
     priceBasisGross: '含税价（含增值税）',
     priceBasisNet: '不含税价（不含增值税）',
     priceBasisHelp: '您所使用的价格基准：新线轴会预先选择该基准，汇总数值也会以该基准显示——因此发票金额可以直接按原样输入。',
+    priceBasisScopeHelp: '其他所有价格（默认耗材成本、电费、耗材目录及物料清单价格）均视为已按此基准输入；仅线轴价格会按其各自的含税/不含税标记进行换算。启用前记录的成本保持不变。',
+    vatWorkingBasisHint: '按工作基准（{{basis}}）输入。',
     electricityCost: '每千瓦时电费',
     energyDisplayMode: '能源显示模式',
     energyModePrintDescription: '仪表板显示打印期间使用的能源总和',
