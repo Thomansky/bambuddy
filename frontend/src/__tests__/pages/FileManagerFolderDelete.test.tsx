@@ -14,6 +14,10 @@ import { server } from '../mocks/server';
 import { FileManagerPage } from '../../pages/FileManagerPage';
 import { setAuthToken } from '../../api/client';
 
+// Folder names now also appear as tiles in the content pane (#3019), so
+// folder-row lookups are scoped to the tree in the sidebar.
+const folderTree = () => within(screen.getByTestId('folder-sidebar'));
+
 const mockFolders = [
   {
     id: 1,
@@ -74,7 +78,7 @@ async function openFolderMenu(user: ReturnType<typeof userEvent.setup>, folderNa
   // Walk up to the row itself rather than assuming the name is its direct
   // child — the name sits in a wrapper that also holds the optional
   // last-activity line (#2680).
-  const row = screen.getByText(folderName).closest('div.group')!;
+  const row = folderTree().getByText(folderName).closest('div.group')!;
   const buttons = within(row).getAllByRole('button');
   // The kebab (MoreVertical) menu toggle is the last button in the row
   await user.click(buttons[buttons.length - 1]);
@@ -108,7 +112,7 @@ describe('FileManager folder deletion gating (#1781)', () => {
   it('enables delete on an empty folder for a delete_own user', async () => {
     mockAuthUser(['library:read_own', 'library:delete_own']);
     render(<FileManagerPage />);
-    await waitFor(() => expect(screen.getByText('EmptyOne')).toBeInTheDocument());
+    await waitFor(() => expect(folderTree().getByText('EmptyOne')).toBeInTheDocument());
 
     const user = userEvent.setup();
     const row = await openFolderMenu(user, 'EmptyOne');
@@ -119,7 +123,7 @@ describe('FileManager folder deletion gating (#1781)', () => {
   it('disables delete on a non-empty folder for a delete_own user, with empty-only tooltip', async () => {
     mockAuthUser(['library:read_own', 'library:delete_own']);
     render(<FileManagerPage />);
-    await waitFor(() => expect(screen.getByText('HasFiles')).toBeInTheDocument());
+    await waitFor(() => expect(folderTree().getByText('HasFiles')).toBeInTheDocument());
 
     const user = userEvent.setup();
     const row = await openFolderMenu(user, 'HasFiles');
@@ -131,7 +135,7 @@ describe('FileManager folder deletion gating (#1781)', () => {
   it('disables delete on a linked folder for a delete_own user, with no-permission tooltip', async () => {
     mockAuthUser(['library:read_own', 'library:delete_own']);
     render(<FileManagerPage />);
-    await waitFor(() => expect(screen.getByText('LinkedEmpty')).toBeInTheDocument());
+    await waitFor(() => expect(folderTree().getByText('LinkedEmpty')).toBeInTheDocument());
 
     const user = userEvent.setup();
     const row = await openFolderMenu(user, 'LinkedEmpty');
@@ -143,7 +147,7 @@ describe('FileManager folder deletion gating (#1781)', () => {
   it('disables delete entirely for a user without any delete permission', async () => {
     mockAuthUser(['library:read_own']);
     render(<FileManagerPage />);
-    await waitFor(() => expect(screen.getByText('EmptyOne')).toBeInTheDocument());
+    await waitFor(() => expect(folderTree().getByText('EmptyOne')).toBeInTheDocument());
 
     const user = userEvent.setup();
     const row = await openFolderMenu(user, 'EmptyOne');
@@ -155,7 +159,7 @@ describe('FileManager folder deletion gating (#1781)', () => {
   it('keeps delete enabled on non-empty folders for a delete_all user', async () => {
     mockAuthUser(['library:read_all', 'library:delete_all']);
     render(<FileManagerPage />);
-    await waitFor(() => expect(screen.getByText('HasFiles')).toBeInTheDocument());
+    await waitFor(() => expect(folderTree().getByText('HasFiles')).toBeInTheDocument());
 
     const user = userEvent.setup();
     const row = await openFolderMenu(user, 'HasFiles');

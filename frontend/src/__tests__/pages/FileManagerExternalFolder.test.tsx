@@ -3,12 +3,16 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { render } from '../utils';
 import { FileManagerPage } from '../../pages/FileManagerPage';
 import { http, HttpResponse } from 'msw';
 import { server } from '../mocks/server';
+
+// Folder names now also appear as tiles in the content pane (#3019), so
+// folder-row lookups are scoped to the tree in the sidebar.
+const folderTree = () => within(screen.getByTestId('folder-sidebar'));
 
 // Mock data with external folder
 const mockFoldersWithExternal = [
@@ -152,7 +156,7 @@ describe('FileManagerPage - External Folders', () => {
       render(<FileManagerPage />);
 
       await waitFor(() => {
-        expect(screen.getByText('NAS Prints')).toBeInTheDocument();
+        expect(folderTree().getByText('NAS Prints')).toBeInTheDocument();
         expect(screen.getByText('USB Drive')).toBeInTheDocument();
       });
     });
@@ -161,8 +165,8 @@ describe('FileManagerPage - External Folders', () => {
       render(<FileManagerPage />);
 
       await waitFor(() => {
-        expect(screen.getByText('Regular Folder')).toBeInTheDocument();
-        expect(screen.getByText('NAS Prints')).toBeInTheDocument();
+        expect(folderTree().getByText('Regular Folder')).toBeInTheDocument();
+        expect(folderTree().getByText('NAS Prints')).toBeInTheDocument();
       });
     });
 
@@ -253,7 +257,7 @@ describe('FileManagerPage - External Folders', () => {
       render(<FileManagerPage />);
 
       await waitFor(() => {
-        expect(screen.getByText('NAS Prints')).toBeInTheDocument();
+        expect(folderTree().getByText('NAS Prints')).toBeInTheDocument();
       });
 
       // Click on NAS Prints folder - there are multiple elements, get the one in the sidebar
@@ -271,7 +275,7 @@ describe('FileManagerPage - External Folders', () => {
       render(<FileManagerPage />);
 
       await waitFor(() => {
-        expect(screen.getByText('NAS Prints')).toBeInTheDocument();
+        expect(folderTree().getByText('NAS Prints')).toBeInTheDocument();
       });
 
       const folderElements = screen.getAllByText('NAS Prints');
@@ -287,7 +291,7 @@ describe('FileManagerPage - External Folders', () => {
       render(<FileManagerPage />);
 
       await waitFor(() => {
-        expect(screen.getByText('Regular Folder')).toBeInTheDocument();
+        expect(folderTree().getByText('Regular Folder')).toBeInTheDocument();
       });
 
       const folderElements = screen.getAllByText('Regular Folder');
