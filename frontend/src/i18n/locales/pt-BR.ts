@@ -1864,6 +1864,7 @@ export default {
       bedTempBelow: 'Somente quando a mesa estiver abaixo de',
       bedTempBelowValue: 'Limite de temperatura da mesa (°C)',
       bedTempUnit: '°C',
+      bedTempBelowSuffix: '',
       trigger: 'Gatilho',
       triggerManual: 'Manual',
       triggerWhenDue: 'Quando vencer',

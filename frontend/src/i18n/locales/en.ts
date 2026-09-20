@@ -1882,6 +1882,7 @@ export default {
       bedTempBelow: 'Only when the bed is below',
       bedTempBelowValue: 'Bed temperature threshold (°C)',
       bedTempUnit: '°C',
+      bedTempBelowSuffix: '',
       trigger: 'Trigger',
       triggerManual: 'Manual',
       triggerWhenDue: 'When due',

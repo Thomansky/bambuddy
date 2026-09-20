@@ -11,6 +11,7 @@ import { MaintenancePage } from '../../pages/MaintenancePage';
 import { http, HttpResponse } from 'msw';
 import { server } from '../mocks/server';
 import type { MaintenanceStatus } from '../../api/client';
+import i18n from '../../i18n';
 
 const baseItem: MaintenanceStatus = {
   id: 7,
@@ -271,6 +272,24 @@ describe('MaintenancePage calibration card', () => {
     expect(patches[0]).toEqual({
       action_options: { bed_leveling: true, vibration: true, motor_noise: true, bed_temp_below: 30 },
     });
+  });
+
+  it('a language whose sentence continues after the value renders the suffix (German)', async () => {
+    server.use(
+      http.get('/api/v1/maintenance/overview', () =>
+        HttpResponse.json(overviewWith({ action_options: { bed_leveling: true, vibration: true, motor_noise: true, bed_temp_below: 30 } }))
+      )
+    );
+    const panel = await expandPrinter();
+    expect(within(panel).queryByText('ist')).toBeNull();
+    await i18n.changeLanguage('de');
+    try {
+      await waitFor(() => expect(within(panel).getByLabelText('Nur wenn das Druckbett unter')).toBeChecked());
+      expect(within(panel).getByText('°C')).toBeInTheDocument();
+      expect(within(panel).getByText('ist')).toBeInTheDocument();
+    } finally {
+      await i18n.changeLanguage('en');
+    }
   });
 
   it('the threshold input round-trips and unticking drops the key while keeping the flags', async () => {

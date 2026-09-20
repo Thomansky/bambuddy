@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError, field_validator, model_validator
 
 from backend.app.schemas.print_queue import UTCDatetime
 from backend.app.services.maintenance_actions import (
@@ -17,6 +17,17 @@ from backend.app.services.maintenance_actions import (
 # Calibration flags (bool) plus the bed_temp_below start condition (float,
 # degrees C), as stored on the item and reported by the overview (#3127).
 ActionOptions = dict[str, bool | float]
+
+# Flags go through pydantic's own bool parsing so "false"/0 still read as
+# off and "abc"/null are rejected, as they were with dict[str, bool].
+_FLAG_BOOL = TypeAdapter(bool)
+
+
+def _parse_flag(flag: str, value: Any) -> bool:
+    try:
+        return _FLAG_BOOL.validate_python(value)
+    except ValidationError:
+        raise ValueError(f"{flag} must be a boolean") from None
 
 
 # Maintenance Type schemas
@@ -109,7 +120,7 @@ class PrinterMaintenanceUpdate(BaseModel):
         unknown = sorted(set(value) - set(CALIBRATION_FLAGS) - {BED_TEMP_BELOW_KEY})
         if unknown:
             raise ValueError(f"Unknown calibration option(s): {', '.join(unknown)}")
-        checked: dict[str, Any] = {flag: bool(value[flag]) for flag in CALIBRATION_FLAGS if flag in value}
+        checked: dict[str, Any] = {flag: _parse_flag(flag, value[flag]) for flag in CALIBRATION_FLAGS if flag in value}
         if BED_TEMP_BELOW_KEY in value:
             checked[BED_TEMP_BELOW_KEY] = normalize_bed_temp_below(value[BED_TEMP_BELOW_KEY])
         return checked

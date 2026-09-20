@@ -1866,6 +1866,7 @@ export default {
       bedTempBelow: 'Yalnızca tabla şu sıcaklığın altındayken',
       bedTempBelowValue: 'Tabla sıcaklığı eşiği (°C)',
       bedTempUnit: '°C',
+      bedTempBelowSuffix: '',
       trigger: 'Tetikleyici',
       triggerManual: 'Manuel',
       triggerWhenDue: 'Süresi dolunca',

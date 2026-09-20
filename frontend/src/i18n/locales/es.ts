@@ -1865,6 +1865,7 @@ export default {
       bedTempBelow: 'Solo cuando la cama esté por debajo de',
       bedTempBelowValue: 'Umbral de temperatura de la cama (°C)',
       bedTempUnit: '°C',
+      bedTempBelowSuffix: '',
       trigger: 'Disparador',
       triggerManual: 'Manual',
       triggerWhenDue: 'Al vencer',

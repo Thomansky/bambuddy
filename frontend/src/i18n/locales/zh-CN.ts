@@ -1864,6 +1864,7 @@ export default {
       bedTempBelow: '仅当热床温度低于',
       bedTempBelowValue: '热床温度阈值 (°C)',
       bedTempUnit: '°C',
+      bedTempBelowSuffix: '',
       trigger: '触发方式',
       triggerManual: '手动',
       triggerWhenDue: '到期时',
