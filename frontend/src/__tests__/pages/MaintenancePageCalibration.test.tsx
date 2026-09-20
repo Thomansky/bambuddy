@@ -42,6 +42,7 @@ const baseItem: MaintenanceStatus = {
   schedule_days: null,
   schedule_time: null,
   schedule_next_at: null,
+  reserve_before_schedule: true,
   current_run: null,
   last_run: null,
 };
@@ -181,6 +182,103 @@ describe('MaintenancePage calibration card', () => {
     fireEvent.click(chips[0]);
     await waitFor(() => expect(patches).toHaveLength(1));
     expect(patches[0]).toEqual({ schedule_days: [0, 5, 6] });
+  });
+
+  it('a scheduled item offers the keep-clear checkbox, which round-trips the flag', async () => {
+    server.use(
+      http.get('/api/v1/maintenance/overview', () =>
+        HttpResponse.json(
+          overviewWith({
+            trigger_mode: 'schedule',
+            schedule_days: [6],
+            schedule_time: '12:00',
+            schedule_next_at: '2026-09-27T10:00:00Z',
+            reserve_before_schedule: true,
+          })
+        )
+      )
+    );
+    const panel = await expandPrinter();
+    const box = within(panel).getByLabelText("Don't start jobs that would run into the scheduled time");
+    expect(box).toBeChecked();
+    fireEvent.click(box);
+    await waitFor(() => expect(patches).toHaveLength(1));
+    expect(patches[0]).toEqual({ reserve_before_schedule: false });
+  });
+
+  it('the keep-clear checkbox reflects a flag that is off, and is absent without a schedule', async () => {
+    server.use(
+      http.get('/api/v1/maintenance/overview', () =>
+        HttpResponse.json(
+          overviewWith(
+            {
+              trigger_mode: 'schedule',
+              schedule_days: [6],
+              schedule_time: '12:00',
+              schedule_next_at: '2026-09-27T10:00:00Z',
+              reserve_before_schedule: false,
+            },
+            [{ ...motionItem, trigger_mode: 'when_due', reserve_before_schedule: true }]
+          )
+        )
+      )
+    );
+    const panel = await expandPrinter();
+    expect(within(panel).getByLabelText("Don't start jobs that would run into the scheduled time")).not.toBeChecked();
+    // The vision encoder item is on "when due": nothing to keep clear of
+    const motionPanel = screen.getByTestId('calibration-panel-9');
+    expect(within(motionPanel).queryByLabelText("Don't start jobs that would run into the scheduled time")).toBeNull();
+  });
+
+  it('a run behind another one on the same printer says whose turn it is', async () => {
+    server.use(
+      http.get('/api/v1/maintenance/overview', () =>
+        HttpResponse.json(
+          overviewWith(
+            {
+              current_run: { id: 46, status: 'running', source: 'schedule', waiting_reason: null, waiting_detail: null, started_at: '2026-09-27T10:00:00Z' },
+            },
+            [
+              {
+                ...motionItem,
+                current_run: { id: 47, status: 'pending', source: 'schedule', waiting_reason: 'after_other_run', waiting_detail: { item: 'Printer Calibration' }, started_at: null },
+              },
+            ]
+          )
+        )
+      )
+    );
+    await expandPrinter();
+    const motionPanel = screen.getByTestId('calibration-panel-9');
+    expect(within(motionPanel).getByText('Waiting: after Printer Calibration')).toBeInTheDocument();
+  });
+
+  it('names the run ahead under its translated name (German)', async () => {
+    server.use(
+      http.get('/api/v1/maintenance/overview', () =>
+        HttpResponse.json(
+          overviewWith(
+            {},
+            [
+              {
+                ...motionItem,
+                current_run: { id: 47, status: 'pending', source: 'schedule', waiting_reason: 'after_other_run', waiting_detail: { item: 'Printer Calibration' }, started_at: null },
+              },
+            ]
+          )
+        )
+      )
+    );
+    await expandPrinter();
+    const motionPanel = screen.getByTestId('calibration-panel-9');
+    await i18n.changeLanguage('de');
+    try {
+      await waitFor(() =>
+        expect(within(motionPanel).getByText('Wartet: nach Druckerkalibrierung')).toBeInTheDocument()
+      );
+    } finally {
+      await i18n.changeLanguage('en');
+    }
   });
 
   it('Run now calls the run endpoint', async () => {

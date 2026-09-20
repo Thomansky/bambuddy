@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { isBusyOnlyWaitingReason } from '../../utils/waitingReason';
+import { formatWaitingReason, isBusyOnlyWaitingReason } from '../../utils/waitingReason';
 
 describe('isBusyOnlyWaitingReason', () => {
   it('treats nothing as not-busy rather than busy', () => {
@@ -46,5 +46,78 @@ describe('isBusyOnlyWaitingReason', () => {
     // reader must not assume that -- one clause needing the user makes the
     // whole reason need the user.
     expect(isBusyOnlyWaitingReason('Busy: X1C-01 | Offline: X1C-02')).toBe(false);
+  });
+
+  it.each([
+    'Maintenance run pending: Printer Calibration (queued)',
+    'Scheduled maintenance at Sunday 12:00 — this job would run into it (estimated 3h 20m)',
+    'Busy: H2S-01 | Maintenance run pending: Vision Encoder Calibration (bed still warm, 45 °C)',
+  ])('reads the maintenance hold %s as waiting its turn (#3127)', reason => {
+    // Both resolve by themselves: the run closes, the slot passes. The
+    // scheduler files them with the busy-only reasons and so does the UI.
+    expect(isBusyOnlyWaitingReason(reason)).toBe(true);
+  });
+});
+
+describe('formatWaitingReason', () => {
+  // A German-speaking t: the keys the two holds use, and the type names.
+  const de: Record<string, string> = {
+    'queue.maintenanceHold.run': 'Wartungslauf steht an: {{item}} ({{state}})',
+    'queue.maintenanceHold.schedule': 'Wartungstermin {{when}} — Auftrag würde hineinlaufen (geschätzt {{duration}})',
+    'queue.maintenanceHold.scheduleUnknown': 'Wartungstermin {{when}} — Auftrag würde hineinlaufen (Dauer unbekannt)',
+    'queue.maintenanceHold.state.queued': 'eingereiht',
+    'queue.maintenanceHold.state.running': 'läuft',
+    'queue.maintenanceHold.state.printerBusy': 'Drucker beschäftigt',
+    'queue.maintenanceHold.state.bedTooWarm': 'Druckbett noch warm, {{temp}} °C',
+    'maintenance.types.printerCalibration': 'Druckerkalibrierung',
+    'maintenance.types.visionEncoderCalibration': 'Vision-Encoder-Kalibrierung',
+  };
+  const t = (key: string, options?: Record<string, unknown>) => {
+    let text = de[key] ?? (options?.defaultValue as string | undefined) ?? key;
+    for (const [name, value] of Object.entries(options ?? {})) {
+      text = text.replace(`{{${name}}}`, String(value));
+    }
+    return text;
+  };
+
+  it('translates a pending-run hold, the item name and the state included', () => {
+    expect(formatWaitingReason('Maintenance run pending: Printer Calibration (queued)', t, 'de')).toBe(
+      'Wartungslauf steht an: Druckerkalibrierung (eingereiht)',
+    );
+    expect(
+      formatWaitingReason('Maintenance run pending: Vision Encoder Calibration (bed still warm, 45 °C)', t, 'de'),
+    ).toBe('Wartungslauf steht an: Vision-Encoder-Kalibrierung (Druckbett noch warm, 45 °C)');
+  });
+
+  it('translates a schedule hold with the weekday in the UI language', () => {
+    expect(
+      formatWaitingReason(
+        'Scheduled maintenance at Sunday 12:00 — this job would run into it (estimated 3h 20m)',
+        t,
+        'de',
+      ),
+    ).toBe('Wartungstermin Sonntag 12:00 — Auftrag würde hineinlaufen (geschätzt 3h 20m)');
+    expect(
+      formatWaitingReason(
+        'Scheduled maintenance at Saturday 06:00 — this job would run into it (duration unknown)',
+        t,
+        'de',
+      ),
+    ).toBe('Wartungstermin Samstag 06:00 — Auftrag würde hineinlaufen (Dauer unbekannt)');
+  });
+
+  it('translates each hold inside a joined reason and leaves the rest alone', () => {
+    expect(
+      formatWaitingReason('Busy: H2S-01 | Maintenance run pending: Printer Calibration (running)', t, 'de'),
+    ).toBe('Busy: H2S-01 | Wartungslauf steht an: Druckerkalibrierung (läuft)');
+    expect(formatWaitingReason('Waiting for plate confirmation: X1C-01', t, 'de')).toBe(
+      'Waiting for plate confirmation: X1C-01',
+    );
+  });
+
+  it('keeps a state or a type name it does not know as the backend wrote it', () => {
+    expect(formatWaitingReason('Maintenance run pending: My Cal (some new reason)', t, 'de')).toBe(
+      'Wartungslauf steht an: My Cal (some new reason)',
+    );
   });
 });
