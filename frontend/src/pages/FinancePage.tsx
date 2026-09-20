@@ -9,6 +9,7 @@ import { ConfirmModal } from '../components/ConfirmModal';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { getCurrencySymbol } from '../utils/currency';
+import { VatBadge } from '../components/VatBadge';
 import { parseUTCDate } from '../utils/date';
 
 type PartialPrintStatus = 'aborted' | 'failed' | 'cancelled';
@@ -1194,7 +1195,7 @@ export function FinancePage() {
                         <th className={tableHeadCellClass}>{t('finance.costCenter', 'Cost center')}</th>
                         <th className={tableHeadCellClass}>{t('finance.transactionType', 'Type')}</th>
                         <th className={tableHeadCellClass}>{t('common.description', 'Description')}</th>
-                        <th className={tableHeadCellClass}>{t('finance.amount', 'Amount')}</th>
+                        <th className={tableHeadCellClass}>{t('finance.amount', 'Amount')}<VatBadge /></th>
                         <th className={tableHeadCellClass}>{t('finance.balanceAfter', 'Balance after')}</th>
                         {showCostCenterAccountColumn && <th className={tableHeadCellClass}>{t('common.actions', 'Actions')}</th>}
                     </tr>

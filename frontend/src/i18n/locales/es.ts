@@ -35,6 +35,8 @@ export default {
   // Common
   common: {
     plusNMore: '+{{count}} más',
+    vatIncl: 'IVA incl.',
+    vatExcl: 'sin IVA',
     save: 'Guardar',
     saving: 'Guardando...',
     cancel: 'Cancelar',
@@ -2719,6 +2721,8 @@ export default {
     priceBasisGross: 'Bruto (IVA incl.)',
     priceBasisNet: 'Neto (IVA excl.)',
     priceBasisHelp: 'La base con la que trabajas: las bobinas nuevas se crean con ella preseleccionada y los valores agregados se muestran en ella, de modo que los importes de las facturas se pueden introducir tal cual.',
+    priceBasisScopeHelp: 'Todos los demás precios — coste de filamento predeterminado, electricidad, catálogo de filamentos y precios de la lista de materiales — se consideran ya expresados en esta base; solo los precios de las bobinas se convierten según su propia marca incl./excl. Los costes registrados antes de activar esta opción se mantienen tal cual.',
+    vatWorkingBasisHint: 'Se introduce en la base de trabajo ({{basis}}).',
     electricityCost: 'Coste de la electricidad por kWh',
     energyDisplayMode: 'Modo de visualización de la energía',
     energyModePrintDescription: 'El panel muestra la suma de la energía usada durante las impresiones',

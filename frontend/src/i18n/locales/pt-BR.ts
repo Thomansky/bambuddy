@@ -35,6 +35,8 @@ export default {
   // Common
   common: {
     plusNMore: '+{{count}} outros',
+    vatIncl: 'com impostos',
+    vatExcl: 'sem impostos',
     save: 'Salvar',
     saving: 'Salvando...',
     cancel: 'Cancelar',
@@ -2668,6 +2670,8 @@ export default {
     priceBasisGross: 'Bruto (com IVA)',
     priceBasisNet: 'Líquido (sem IVA)',
     priceBasisHelp: 'A base com a qual você trabalha: novas bobinas já vêm com ela pré-selecionada e os valores agregados são exibidos nessa base — assim, os valores das notas fiscais podem ser digitados como estão.',
+    priceBasisScopeHelp: 'Todos os outros preços — custo padrão do filamento, energia, catálogo de filamentos e preços da lista de materiais — são considerados já nesta base; apenas os preços das bobinas são convertidos conforme a própria marcação com/sem impostos. Custos registrados antes de ativar a opção são mantidos como estão.',
+    vatWorkingBasisHint: 'Informado na base de trabalho ({{basis}}).',
     electricityCost: 'Custo da eletricidade por kWh',
     energyDisplayMode: 'Modo de exibição de energia',
     energyModePrintDescription: 'O painel mostra a soma da energia usada durante as impressões',

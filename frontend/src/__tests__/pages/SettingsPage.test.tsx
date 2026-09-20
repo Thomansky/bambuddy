@@ -201,6 +201,28 @@ describe('SettingsPage', () => {
       }, { timeout: 3000 });
       expect(saved!.vat_enabled).toBe(true);
     });
+
+    it('tells the user which basis the other price inputs are entered in', async () => {
+      server.use(
+        http.get('/api/v1/settings/', () =>
+          HttpResponse.json({ ...mockSettings, vat_enabled: true, vat_rate_percent: 19, price_vat_basis: 'net' })
+        )
+      );
+      render(<SettingsPage />);
+
+      await screen.findByText('Default filament cost (per kg)');
+      // Default filament cost and electricity price share the working basis.
+      await waitFor(() => {
+        expect(screen.getAllByText('Entered in the working basis (excl. VAT).')).toHaveLength(2);
+      });
+    });
+
+    it('shows no basis hint while the VAT distinction is off', async () => {
+      render(<SettingsPage />);
+
+      await screen.findByText('Default filament cost (per kg)');
+      expect(screen.queryByText(/Entered in the working basis/)).not.toBeInTheDocument();
+    });
   });
 
   describe('general settings', () => {

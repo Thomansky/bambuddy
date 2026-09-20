@@ -9,6 +9,7 @@ import { ConfirmModal } from './ConfirmModal';
 import { useToast } from '../contexts/ToastContext';
 import { formatDuration, parseUTCDate } from '../utils/date';
 import { getCurrencySymbol } from '../utils/currency';
+import { VatBadge } from './VatBadge';
 
 type StatusFilter = 'active' | 'completed' | 'cancelled' | 'all';
 
@@ -259,7 +260,7 @@ function BatchOrderCard({
             <span>
               {t('queue.batchOrders.costSoFar', {
                 amount: `${currency} ${batch.actual_cost.toFixed(2)}`,
-              })}
+              })}<VatBadge />
             </span>
             {batch.estimated_remaining_cost != null && batch.estimated_remaining_cost > 0 && (
               <span>
@@ -335,7 +336,7 @@ function PlateRow({
         </span>
       )}
       {plate.actual_cost != null && (
-        <span className="text-bambu-gray tabular-nums">{`${currency} ${plate.actual_cost.toFixed(2)}`}</span>
+        <span className="text-bambu-gray tabular-nums">{`${currency} ${plate.actual_cost.toFixed(2)}`}<VatBadge /></span>
       )}
       {plate.remaining > 0 && batchStatus !== 'cancelled' && (
         <span className="ml-auto flex items-center gap-2">

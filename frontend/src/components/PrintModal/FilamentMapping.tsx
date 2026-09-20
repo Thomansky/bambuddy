@@ -8,6 +8,7 @@ import { useFilamentMapping } from '../../hooks/useFilamentMapping';
 import { getGlobalTrayId, effectivePreferLowest, FTS_INLET_SIDE } from '../../utils/amsHelpers';
 import { disambiguateColorNames, getColorName } from '../../utils/colors';
 import { useFilamentLabels } from './useFilamentLabels';
+import { VatBadge } from '../VatBadge';
 import { autoAssignRackPositions, rackOptionsForGroup } from '../../utils/nozzleRack';
 import type { FilamentMappingProps, RackGroupInfo } from './types';
 
@@ -586,6 +587,7 @@ export function FilamentMapping({
             <span className="text-white">
               {totalCost > 0 || hasAnyCost ? `${currencySymbol}${totalCost.toFixed(2)}` : 'N/A'}
             </span>
+            {(totalCost > 0 || hasAnyCost) && <VatBadge />}
             {quantity > 1 && totalCost > 0 && (
               <span className="ml-2">
                 {t('printModal.totalCostForQuantity', 'total: {{cost}}', {

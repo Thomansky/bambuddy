@@ -33,6 +33,7 @@ import { ConfirmModal } from '../components/ConfirmModal';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { getCurrencySymbol } from '../utils/currency';
+import { VatBadge } from '../components/VatBadge';
 import { eligibleParents } from '../utils/projectTree';
 
 const PROJECT_COLORS = [
@@ -400,7 +401,7 @@ export function ProjectModal({ project, onClose, onSave, isLoading, currencySymb
 
           <div>
             <label className="block text-sm font-medium text-white mb-1">
-              {t('projectDetail.cost.budget')}
+              {t('projectDetail.cost.budget')}<VatBadge />
             </label>
             <div className="relative">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-bambu-gray pointer-events-none">

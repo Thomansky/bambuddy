@@ -35,6 +35,8 @@ export default {
   // Common
   common: {
     plusNMore: '+{{count}} meer',
+    vatIncl: 'incl. btw',
+    vatExcl: 'excl. btw',
     save: 'Opslaan',
     saving: 'Opslaan...',
     cancel: 'Annuleren',
@@ -2737,6 +2739,8 @@ export default {
     priceBasisGross: 'Bruto (incl. btw)',
     priceBasisNet: 'Netto (excl. btw)',
     priceBasisHelp: 'De basis waarin je werkt: nieuwe spoelen starten met deze voorselectie en samengevoegde waarden worden erin weergegeven — zo kun je factuurbedragen direct overnemen.',
+    priceBasisScopeHelp: 'Alle andere prijzen — standaard filamentkosten, elektriciteit, filamentcatalogus en stuklijstprijzen — gelden als al in deze basis ingevoerd; alleen spoelprijzen worden omgerekend op basis van hun eigen incl./excl.-markering. Kosten die vóór het inschakelen zijn vastgelegd, blijven ongewijzigd.',
+    vatWorkingBasisHint: 'Ingevoerd in de werkbasis ({{basis}}).',
     electricityCost: 'Elektriciteitskosten per kWh',
     energyDisplayMode: 'Weergavemodus energie',
     energyModePrintDescription: 'Dashboard toont de som van energie die tijdens afdrukken is gebruikt',

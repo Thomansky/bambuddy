@@ -32,6 +32,8 @@ export default {
   },
   common: {
     plusNMore: '외 {{count}}개',
+    vatIncl: '부가세 포함',
+    vatExcl: '부가세 별도',
     save: '저장',
     saving: '저장 중...',
     cancel: '취소',
@@ -2582,6 +2584,8 @@ export default {
     priceBasisGross: '부가세 포함 (총액)',
     priceBasisNet: '부가세 별도 (순액)',
     priceBasisHelp: '작업에 사용하는 가격 기준입니다. 새 스풀에는 이 기준이 미리 선택되고 집계 값도 이 기준으로 표시되므로, 청구서 금액을 그대로 입력할 수 있습니다.',
+    priceBasisScopeHelp: '다른 모든 가격(기본 필라멘트 비용, 전기 요금, 필라멘트 카탈로그 및 BOM 가격)은 이미 이 기준으로 입력된 것으로 간주합니다. 스풀 가격만 각 스풀의 포함/별도 표시에 따라 변환됩니다. 활성화 전에 기록된 비용은 그대로 유지됩니다.',
+    vatWorkingBasisHint: '작업 기준({{basis}})으로 입력합니다.',
     electricityCost: 'kWh당 전기 비용',
     energyDisplayMode: '에너지 표시 모드',
     energyModePrintDescription: '대시보드가 인쇄 중 사용된 에너지 합계를 표시',

@@ -35,6 +35,8 @@ export default {
   // Ortak
   common: {
     plusNMore: '+{{count}} tane daha',
+    vatIncl: 'KDV dahil',
+    vatExcl: 'KDV hariç',
     save: 'Kaydet',
     saving: 'Kaydediliyor...',
     cancel: 'İptal',
@@ -2720,6 +2722,8 @@ export default {
     priceBasisGross: 'Brüt (KDV dahil)',
     priceBasisNet: 'Net (KDV hariç)',
     priceBasisHelp: 'Çalıştığınız fiyat esası: yeni makaralar bu esasla önceden seçili gelir ve toplam değerler bu esasla gösterilir — böylece fatura tutarları dönüştürmeden olduğu gibi girilebilir.',
+    priceBasisScopeHelp: 'Diğer tüm fiyatlar — varsayılan filament maliyeti, elektrik, filament kataloğu ve malzeme listesi fiyatları — zaten bu esasta girilmiş sayılır; yalnızca makara fiyatları kendi dahil/hariç işaretine göre dönüştürülür. Bu ayar açılmadan önce kaydedilen maliyetler olduğu gibi kalır.',
+    vatWorkingBasisHint: 'Çalışma esasında girilir ({{basis}}).',
     electricityCost: 'kWh başına elektrik maliyeti',
     energyDisplayMode: 'Enerji görüntüleme modu',
     energyModePrintDescription: 'Gösterge paneli, baskılar sırasında kullanılan enerji toplamını gösterir',
