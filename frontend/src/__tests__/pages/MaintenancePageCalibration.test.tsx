@@ -1,7 +1,8 @@
 /**
  * The Printer Calibration card on the Maintenance page (#3127): option
  * checkboxes, trigger and schedule controls, run status and the Run now /
- * Cancel buttons wired to the runs API.
+ * Cancel buttons wired to the runs API. Also the per-item notification bell
+ * every card carries and the gate hint on the automatic trigger options.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -23,6 +24,7 @@ const baseItem: MaintenanceStatus = {
   maintenance_type_icon: 'Target',
   maintenance_type_wiki_url: null,
   enabled: true,
+  notifications_enabled: true,
   interval_hours: 100,
   interval_type: 'hours',
   current_hours: 40,
@@ -71,7 +73,7 @@ const motionItem: MaintenanceStatus = {
   action_available_options: null,
 };
 
-function overviewWith(item: Partial<MaintenanceStatus>, extra: MaintenanceStatus[] = []) {
+function overviewWith(item: Partial<MaintenanceStatus>, extra: MaintenanceStatus[] = [], requirePlateClear = false) {
   return [
     {
       printer_id: 1,
@@ -81,6 +83,7 @@ function overviewWith(item: Partial<MaintenanceStatus>, extra: MaintenanceStatus
       due_count: 0,
       warning_count: 0,
       maintenance_items: [{ ...baseItem, ...item }, reminderItem, ...extra],
+      require_plate_clear: requirePlateClear,
     },
   ];
 }
@@ -360,6 +363,109 @@ describe('MaintenancePage calibration card', () => {
     expect(within(panel).getByText('Waiting: bed still warm (34.2 °C)')).toBeInTheDocument();
     const motionPanel = await screen.findByTestId('calibration-panel-9');
     expect(within(motionPanel).getByText('Waiting: bed temperature unknown')).toBeInTheDocument();
+  });
+
+  it('names the idle gate on the automatic triggers while plate-clear confirmation is off', async () => {
+    const panel = await expandPrinter();
+    const select = within(panel).getByRole('combobox', { name: 'Trigger' });
+    expect(within(select).getByRole('option', { name: 'When due (once the printer is idle)' })).toHaveValue('when_due');
+    expect(within(select).getByRole('option', { name: 'On a schedule (once the printer is idle)' })).toHaveValue('schedule');
+    expect(within(select).getByRole('option', { name: 'Manual' })).toHaveValue('manual');
+  });
+
+  it('names the plate-clear gate on the automatic triggers while the setting is on', async () => {
+    server.use(http.get('/api/v1/maintenance/overview', () => HttpResponse.json(overviewWith({}, [], true))));
+    const panel = await expandPrinter();
+    const select = within(panel).getByRole('combobox', { name: 'Trigger' });
+    expect(
+      within(select).getByRole('option', { name: 'When due (only once the plate has been released)' })
+    ).toHaveValue('when_due');
+    expect(
+      within(select).getByRole('option', { name: 'On a schedule (only once the plate has been released)' })
+    ).toHaveValue('schedule');
+    // The plain label is still what the German status line and others use
+    expect(within(select).queryByRole('option', { name: 'When due' })).toBeNull();
+  });
+
+  it('every card carries the bell, and a reminder-only item can be muted from it', async () => {
+    let muted = false;
+    let answer!: () => void;
+    const answered = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    server.use(
+      http.get('/api/v1/maintenance/overview', () =>
+        HttpResponse.json([
+          { ...overviewWith({})[0], maintenance_items: [baseItem, { ...reminderItem, notifications_enabled: !muted }] },
+        ])
+      ),
+      http.patch('/api/v1/maintenance/items/8', async ({ request }) => {
+        patches.push(await request.json());
+        muted = true;
+        await answered;
+        return HttpResponse.json({ ...reminderItem, notifications_enabled: false });
+      })
+    );
+    await expandPrinter();
+    // Two cards, two bells, both on
+    const bells = screen.getAllByRole('button', { name: 'Notifications on' });
+    expect(bells).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: 'Notifications off' })).toBeNull();
+    expect(bells[0]).toHaveAttribute('aria-pressed', 'true');
+
+    // The reminder-only card (Clean Build Plate) has one too
+    const reminderCard = screen.getByText('Clean Build Plate').closest('div.rounded-xl')!;
+    const bell = within(reminderCard).getByRole('button', { name: 'Notifications on' });
+    expect(bell).toHaveAttribute('title', 'Notifications on');
+    fireEvent.click(bell);
+
+    // Optimistic: the bell has flipped while the PATCH is still unanswered
+    await waitFor(() =>
+      expect(within(reminderCard).getByRole('button', { name: 'Notifications off' })).toHaveAttribute('aria-pressed', 'false')
+    );
+    // ...and only that item's bell
+    const calibrationCard = screen.getByTestId('calibration-panel-7').closest('div.rounded-xl')!;
+    expect(within(calibrationCard).getByRole('button', { name: 'Notifications on' })).toBeInTheDocument();
+
+    answer();
+    await waitFor(() => expect(patches).toEqual([{ notifications_enabled: false }]));
+    // Still muted once the server has answered and the overview was re-read
+    await waitFor(() => expect(muted).toBe(true));
+    expect(within(reminderCard).getByRole('button', { name: 'Notifications off' })).toBeInTheDocument();
+  });
+
+  it('a muted item renders the slashed bell and un-mutes with one click', async () => {
+    server.use(http.get('/api/v1/maintenance/overview', () => HttpResponse.json(overviewWith({ notifications_enabled: false }))));
+    const panel = await expandPrinter();
+    const card = panel.closest('div.rounded-xl')!;
+    const bell = within(card).getByRole('button', { name: 'Notifications off' });
+    expect(bell).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(bell);
+    await waitFor(() => expect(patches).toHaveLength(1));
+    expect(patches[0]).toEqual({ notifications_enabled: true });
+  });
+
+  it('a failed PATCH puts the bell back', async () => {
+    let answer!: () => void;
+    const answered = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    server.use(
+      http.patch('/api/v1/maintenance/items/8', async () => {
+        await answered;
+        return HttpResponse.json({ detail: 'nope' }, { status: 500 });
+      })
+    );
+    await expandPrinter();
+    const reminderCard = screen.getByText('Clean Build Plate').closest('div.rounded-xl')!;
+    fireEvent.click(within(reminderCard).getByRole('button', { name: 'Notifications on' }));
+    await waitFor(() =>
+      expect(within(reminderCard).getByRole('button', { name: 'Notifications off' })).toBeInTheDocument()
+    );
+    answer();
+    await waitFor(() =>
+      expect(within(reminderCard).getByRole('button', { name: 'Notifications on' })).toBeInTheDocument()
+    );
   });
 
   it('badges every actionable type on the settings tab', async () => {

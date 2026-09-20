@@ -1763,6 +1763,8 @@ export default {
     noPermissionAssignPrinter: "У вас нет разрешения назначать принтеры",
     noPermissionEditIntervals: "У вас нет разрешения изменять интервалы",
     configureSettings: "Настроить виды обслуживания и интервалы",
+    notificationsOn: "Уведомления включены",
+    notificationsOff: "Уведомления выключены",
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
@@ -1782,6 +1784,8 @@ export default {
       triggerManual: "Вручную",
       triggerWhenDue: "По наступлении срока",
       triggerSchedule: "По расписанию",
+      triggerGatePlateClear: "(только после освобождения стола)",
+      triggerGateIdle: "(как только принтер освободится)",
       scheduleDays: "Дни недели",
       scheduleTime: "Не раньше",
       runNow: "Запустить сейчас",
@@ -5909,6 +5913,8 @@ export default {
     lowFilamentLabel: "Заканчивается филамент",
     maintenanceDue: "Требуется обслуживание",
     maintenanceDueDescription: "Уведомить, когда принтеру потребуется обслуживание",
+    maintenanceRun: "Запуск обслуживания завершён",
+    maintenanceRunDescription: "Уведомлять, когда запущенная Bambuddy калибровка завершена, не удалась или отменена",
     amsHumidityHigh: "Высокая влажность в AMS",
     amsHumidityHighDescription: "Влажность в обычной AMS превысила заданный порог",
     amsTemperatureHigh: "Высокая температура в AMS",
@@ -6062,6 +6068,7 @@ export default {
       printer_error: "Ошибка принтера",
       filament_low: "Заканчивается филамент",
       maintenance_due: "Требуется обслуживание",
+      maintenance_run: "Запуск обслуживания завершён",
       test: "Тест",
     },
     userEmail: {

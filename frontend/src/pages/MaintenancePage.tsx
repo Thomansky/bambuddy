@@ -38,6 +38,8 @@ import {
   ExternalLink,
   Play,
   X,
+  Bell,
+  BellOff,
 } from 'lucide-react';
 import { api } from '../api/client';
 import type {
@@ -192,6 +194,7 @@ function CalibrationActionPanel({
   onUpdate,
   onRun,
   onCancelRun,
+  requirePlateClear,
   hasPermission,
   language,
   t,
@@ -200,11 +203,17 @@ function CalibrationActionPanel({
   onUpdate: (id: number, data: MaintenanceItemUpdate) => void;
   onRun: (id: number) => void;
   onCancelRun: (runId: number) => void;
+  requirePlateClear: boolean;
   hasPermission: (permission: Permission) => boolean;
   language: string;
   t: TFunction;
 }) {
   const canUpdate = hasPermission('maintenance:update');
+  // Both automatic triggers wait behind the scheduler's idle check, whose
+  // gate is the require_plate_clear setting: say so on the option itself.
+  const triggerGate = t(
+    requirePlateClear ? 'maintenance.calibration.triggerGatePlateClear' : 'maintenance.calibration.triggerGateIdle'
+  );
   const options = item.action_options ?? {};
   const available = new Set<CalibrationOption>(item.action_available_options ?? CALIBRATION_OPTION_ORDER);
   const run = item.current_run;
@@ -372,8 +381,8 @@ function CalibrationActionPanel({
           aria-label={t('maintenance.calibration.trigger')}
         >
           <option value="manual">{t('maintenance.calibration.triggerManual')}</option>
-          <option value="when_due">{t('maintenance.calibration.triggerWhenDue')}</option>
-          <option value="schedule">{t('maintenance.calibration.triggerSchedule')}</option>
+          <option value="when_due">{`${t('maintenance.calibration.triggerWhenDue')} ${triggerGate}`}</option>
+          <option value="schedule">{`${t('maintenance.calibration.triggerSchedule')} ${triggerGate}`}</option>
         </select>
         {item.trigger_mode === 'schedule' && (
           <>
@@ -454,9 +463,11 @@ function MaintenanceCard({
   item,
   onPerform,
   onToggle,
+  onToggleNotifications,
   onUpdate,
   onRun,
   onCancelRun,
+  requirePlateClear,
   hasPermission,
   language,
   t,
@@ -464,14 +475,18 @@ function MaintenanceCard({
   item: MaintenanceStatus;
   onPerform: (id: number) => void;
   onToggle: (id: number, enabled: boolean) => void;
+  onToggleNotifications: (id: number, enabled: boolean) => void;
   onUpdate: (id: number, data: MaintenanceItemUpdate) => void;
   onRun: (id: number) => void;
   onCancelRun: (runId: number) => void;
+  requirePlateClear: boolean;
   hasPermission: (permission: Permission) => boolean;
   language: string;
   t: TFunction;
 }) {
   const Icon = getIcon(item.maintenance_type_icon);
+  const canUpdate = hasPermission('maintenance:update');
+  const notificationsLabel = t(item.notifications_enabled ? 'maintenance.notificationsOn' : 'maintenance.notificationsOff');
   const intervalType = item.interval_type || 'hours';
 
   // Calculate progress based on interval type
@@ -568,6 +583,22 @@ function MaintenanceCard({
                 </a>
               ) : null;
             })()}
+            {/* Per-item mute (#3127): due reminders and run results */}
+            <button
+              type="button"
+              onClick={() => onToggleNotifications(item.id, !item.notifications_enabled)}
+              disabled={!canUpdate}
+              aria-label={notificationsLabel}
+              aria-pressed={item.notifications_enabled}
+              title={canUpdate ? notificationsLabel : t('maintenance.noPermissionUpdate')}
+              className={`shrink-0 transition-colors disabled:cursor-not-allowed ${
+                item.notifications_enabled
+                  ? 'text-bambu-gray hover:text-bambu-green'
+                  : 'text-bambu-gray/50 hover:text-bambu-gray'
+              }`}
+            >
+              {item.notifications_enabled ? <Bell className="w-3.5 h-3.5" /> : <BellOff className="w-3.5 h-3.5" />}
+            </button>
           </div>
 
           {/* Progress bar */}
@@ -617,6 +648,7 @@ function MaintenanceCard({
           onUpdate={onUpdate}
           onRun={onRun}
           onCancelRun={onCancelRun}
+          requirePlateClear={requirePlateClear}
           hasPermission={hasPermission}
           language={language}
           t={t}
@@ -631,6 +663,7 @@ function PrinterSection({
   overview,
   onPerform,
   onToggle,
+  onToggleNotifications,
   onUpdate,
   onRun,
   onCancelRun,
@@ -642,6 +675,7 @@ function PrinterSection({
   overview: PrinterMaintenanceOverview;
   onPerform: (id: number) => void;
   onToggle: (id: number, enabled: boolean) => void;
+  onToggleNotifications: (id: number, enabled: boolean) => void;
   onUpdate: (id: number, data: MaintenanceItemUpdate) => void;
   onRun: (id: number) => void;
   onCancelRun: (runId: number) => void;
@@ -792,9 +826,11 @@ function PrinterSection({
                 item={item}
                 onPerform={onPerform}
                 onToggle={onToggle}
+                onToggleNotifications={onToggleNotifications}
                 onUpdate={onUpdate}
                 onRun={onRun}
                 onCancelRun={onCancelRun}
+                requirePlateClear={overview.require_plate_clear}
                 hasPermission={hasPermission}
                 language={language}
                 t={t}
@@ -1488,6 +1524,32 @@ export function MaintenancePage() {
     },
   });
 
+  // The bell flips at once and is rolled back if the PATCH fails.
+  const notificationsMutation = useMutation({
+    mutationFn: ({ id, enabled }: { id: number; enabled: boolean }) =>
+      api.updateMaintenanceItem(id, { notifications_enabled: enabled }),
+    onMutate: async ({ id, enabled }) => {
+      await queryClient.cancelQueries({ queryKey: ['maintenanceOverview'] });
+      const previous = queryClient.getQueryData<PrinterMaintenanceOverview[]>(['maintenanceOverview']);
+      queryClient.setQueryData<PrinterMaintenanceOverview[]>(['maintenanceOverview'], (old) =>
+        old?.map((printer) => ({
+          ...printer,
+          maintenance_items: printer.maintenance_items.map((i) =>
+            i.id === id ? { ...i, notifications_enabled: enabled } : i
+          ),
+        }))
+      );
+      return { previous };
+    },
+    onError: (error: Error, _variables, context) => {
+      if (context?.previous) queryClient.setQueryData(['maintenanceOverview'], context.previous);
+      showToast(error.message, 'error');
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['maintenanceOverview'] });
+    },
+  });
+
   const runMutation = useMutation({
     mutationFn: api.runMaintenanceItem,
     onSuccess: () => {
@@ -1598,6 +1660,10 @@ export function MaintenancePage() {
     updateMutation.mutate({ id, data: { enabled } });
   };
 
+  const handleToggleNotifications = (id: number, enabled: boolean) => {
+    notificationsMutation.mutate({ id, enabled });
+  };
+
   const handleUpdate = (id: number, data: MaintenanceItemUpdate) => {
     updateMutation.mutate({ id, data });
   };
@@ -1679,6 +1745,7 @@ export function MaintenancePage() {
                 overview={printerOverview}
                 onPerform={handlePerform}
                 onToggle={handleToggle}
+                onToggleNotifications={handleToggleNotifications}
                 onUpdate={handleUpdate}
                 onRun={(id) => runMutation.mutate(id)}
                 onCancelRun={(runId) => cancelRunMutation.mutate(runId)}

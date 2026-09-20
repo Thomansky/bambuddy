@@ -42,6 +42,7 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
   const [onAiFailureDetection, setOnAiFailureDetection] = useState(provider?.on_ai_failure_detection ?? false);
   const [onFilamentLow, setOnFilamentLow] = useState(provider?.on_filament_low ?? false);
   const [onMaintenanceDue, setOnMaintenanceDue] = useState(provider?.on_maintenance_due ?? false);
+  const [onMaintenanceRun, setOnMaintenanceRun] = useState(provider?.on_maintenance_run ?? false);
   const [onStockReorderAlert, setOnStockReorderAlert] = useState(provider?.on_stock_reorder_alert ?? false);
   const [onStockBreakAlert, setOnStockBreakAlert] = useState(provider?.on_stock_break_alert ?? false);
   const [onPlateClearRequired, setOnPlateClearRequired] = useState(provider?.on_plate_clear_required ?? false);
@@ -202,6 +203,7 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
       on_ai_failure_detection: onAiFailureDetection,
       on_filament_low: onFilamentLow,
       on_maintenance_due: onMaintenanceDue,
+      on_maintenance_run: onMaintenanceRun,
       on_stock_reorder_alert: onStockReorderAlert,
       on_stock_break_alert: onStockBreakAlert,
       on_plate_clear_required: onPlateClearRequired,
@@ -680,6 +682,13 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
                   <span className="text-sm text-white">{t('notifications.maintenance')}</span>
                   <Toggle checked={onMaintenanceDue} onChange={setOnMaintenanceDue} />
                 </div>
+                <div className="flex items-center justify-between col-span-2">
+                  <div>
+                    <span className="text-sm text-white">{t('notifications.maintenanceRun')}</span>
+                    <span className="text-xs text-bambu-gray ml-1">{t('notifications.maintenanceRunDescription')}</span>
+                  </div>
+                  <Toggle checked={onMaintenanceRun} onChange={setOnMaintenanceRun} />
+                </div>
               </div>
             </div>
 
@@ -723,6 +732,7 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
               if (onAiFailureDetection) enabledEvents.push({ key: 'on_ai_failure_detection', label: t('notifications.aiFailureDetection') });
               if (onFilamentLow) enabledEvents.push({ key: 'on_filament_low', label: t('notifications.lowFilament') });
               if (onMaintenanceDue) enabledEvents.push({ key: 'on_maintenance_due', label: t('notifications.maintenance') });
+              if (onMaintenanceRun) enabledEvents.push({ key: 'on_maintenance_run', label: t('notifications.maintenanceRun') });
               if (onStockReorderAlert) enabledEvents.push({ key: 'on_stock_reorder_alert', label: t('notifications.stockReorderAlert') });
               if (onStockBreakAlert) enabledEvents.push({ key: 'on_stock_break_alert', label: t('notifications.stockBreakAlert') });
 

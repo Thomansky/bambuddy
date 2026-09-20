@@ -1852,6 +1852,8 @@ export default {
     noPermissionEditIntervals: 'Aralıkları düzenleme izniniz yok',
     // Yapılandırma bağlantısı
     configureSettings: 'Bakım türlerini ve aralıklarını yapılandır',
+    notificationsOn: 'Bildirimler açık',
+    notificationsOff: 'Bildirimler kapalı',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
@@ -1871,6 +1873,8 @@ export default {
       triggerManual: 'Manuel',
       triggerWhenDue: 'Süresi dolunca',
       triggerSchedule: 'Zamanlamaya göre',
+      triggerGatePlateClear: '(yalnızca plaka boşaltıldıktan sonra)',
+      triggerGateIdle: '(yazıcı boşta kalır kalmaz)',
       scheduleDays: 'Haftanın günleri',
       scheduleTime: 'En erken saat',
       runNow: 'Şimdi çalıştır',
@@ -6159,6 +6163,8 @@ export default {
     lowFilamentLabel: 'Az Filament',
     maintenanceDue: 'Bakım Zamanı',
     maintenanceDueDescription: 'Bakım gerektiğinde bildir',
+    maintenanceRun: 'Bakım Çalıştırması Tamamlandı',
+    maintenanceRunDescription: 'Bambuddy tarafından başlatılan bir kalibrasyon tamamlandığında, başarısız olduğunda veya iptal edildiğinde bildir',
     amsHumidityHigh: 'AMS Nemi Yüksek',
     amsHumidityHighDescription: 'Normal AMS nemi eşiği aşıyor',
     amsTemperatureHigh: 'AMS Sıcaklığı Yüksek',
@@ -6312,6 +6318,7 @@ export default {
       printer_error: 'Yazıcı Hatası',
       filament_low: 'Az Filament',
       maintenance_due: 'Bakım Zamanı',
+      maintenance_run: 'Bakım Çalıştırması Tamamlandı',
       test: 'Test',
     },
     userEmail: {

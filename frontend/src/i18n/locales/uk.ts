@@ -1867,6 +1867,8 @@ export default {
     noPermissionEditIntervals: "Ви не маєте дозволу редагувати інтервали",
     // Configure link
     configureSettings: "Налаштувати типи та інтервали технічного обслуговування",
+    notificationsOn: "Сповіщення увімкнено",
+    notificationsOff: "Сповіщення вимкнено",
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
@@ -1886,6 +1888,8 @@ export default {
       triggerManual: "Вручну",
       triggerWhenDue: "Коли настане термін",
       triggerSchedule: "За розкладом",
+      triggerGatePlateClear: "(лише після звільнення столу)",
+      triggerGateIdle: "(щойно принтер звільниться)",
       scheduleDays: "Дні тижня",
       scheduleTime: "Не раніше",
       runNow: "Запустити зараз",
@@ -6246,6 +6250,8 @@ export default {
     lowFilamentLabel: "Закінчується філамент",
     maintenanceDue: "Настав час технічного обслуговування",
     maintenanceDueDescription: "Повідомити, коли потрібне обслуговування",
+    maintenanceRun: "Запуск обслуговування завершено",
+    maintenanceRunDescription: "Сповіщати, коли запущене Bambuddy калібрування завершено, не вдалося або скасовано",
     amsHumidityHigh: "AMS Висока вологість",
     amsHumidityHighDescription: "Звичайна AMS вологість перевищує порогове значення",
     amsTemperatureHigh: "AMS Висока температура",
@@ -6410,6 +6416,7 @@ export default {
       printer_error: "Помилка принтера",
       filament_low: "Закінчується філамент",
       maintenance_due: "Технічне обслуговування",
+      maintenance_run: "Запуск обслуговування завершено",
       test: "Тест",
     },
     // User email notification preferences

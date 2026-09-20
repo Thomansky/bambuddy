@@ -1868,6 +1868,8 @@ export default {
     noPermissionEditIntervals: 'Je hebt geen toestemming om intervallen te bewerken',
     // Configure link
     configureSettings: 'Onderhoudstypen en intervallen configureren',
+    notificationsOn: 'Meldingen aan',
+    notificationsOff: 'Meldingen uit',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
@@ -1887,6 +1889,8 @@ export default {
       triggerManual: 'Handmatig',
       triggerWhenDue: 'Wanneer verschuldigd',
       triggerSchedule: 'Volgens schema',
+      triggerGatePlateClear: '(pas nadat de plaat is vrijgegeven)',
+      triggerGateIdle: '(zodra de printer vrij is)',
       scheduleDays: 'Weekdagen',
       scheduleTime: 'Vroegste tijd',
       runNow: 'Nu uitvoeren',
@@ -6254,6 +6258,8 @@ export default {
     lowFilamentLabel: 'Weinig filament',
     maintenanceDue: 'Onderhoud nodig',
     maintenanceDueDescription: 'Melden wanneer onderhoud nodig is',
+    maintenanceRun: 'Onderhoudsrun voltooid',
+    maintenanceRunDescription: 'Melden wanneer een door Bambuddy gestarte kalibratie is voltooid, mislukt of geannuleerd',
     amsHumidityHigh: 'AMS-luchtvochtigheid hoog',
     amsHumidityHighDescription: 'Luchtvochtigheid van normale AMS overschrijdt drempel',
     amsTemperatureHigh: 'AMS-temperatuur hoog',
@@ -6418,6 +6424,7 @@ export default {
       printer_error: 'Printerfout',
       filament_low: 'Weinig filament',
       maintenance_due: 'Onderhoud nodig',
+      maintenance_run: 'Onderhoudsrun voltooid',
       test: 'Testen',
     },
     // User email notification preferences
