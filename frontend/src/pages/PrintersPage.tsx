@@ -171,11 +171,7 @@ import type { HeaterSensorKind } from '../api/client';
 import { FilamentHoverCard, EmptySlotHoverCard } from '../components/FilamentHoverCard';
 import { LinkSpoolModal } from '../components/LinkSpoolModal';
 import { PrinterDepreciationFields } from '../components/PrinterDepreciationFields';
-import {
-  depreciationFieldFromApi,
-  depreciationFieldToApi,
-  type DepreciationFormValues,
-} from '../utils/depreciation';
+import { depreciationFieldFromApi, depreciationFieldToApi } from '../utils/depreciation';
 import { getCurrencySymbol } from '../utils/currency';
 import { AssignSpoolModal } from '../components/AssignSpoolModal';
 import { ConfigureAmsSlotModal } from '../components/ConfigureAmsSlotModal';
@@ -7677,10 +7673,7 @@ export function AddPrinterModal({
     location: '',
     auto_archive: true,
   });
-  const [depreciation, setDepreciation] = useState<DepreciationFormValues>({
-    purchase_price: '',
-    expected_lifetime_hours: '',
-  });
+  const [wearCostPerHour, setWearCostPerHour] = useState('');
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.getSettings });
   const currencySymbol = getCurrencySymbol(settings?.currency || 'USD');
 
@@ -7734,8 +7727,7 @@ export function AddPrinterModal({
 
   const withDepreciation = (data: PrinterCreate): PrinterCreate => ({
     ...data,
-    purchase_price: depreciationFieldToApi(depreciation.purchase_price),
-    expected_lifetime_hours: depreciationFieldToApi(depreciation.expected_lifetime_hours),
+    wear_cost_per_hour: depreciationFieldToApi(wearCostPerHour),
   });
 
   const handleAddSubmit = async (e: React.FormEvent) => {
@@ -8120,8 +8112,8 @@ export function AddPrinterModal({
             </div>
             <PrinterDepreciationFields
               idPrefix="add"
-              values={depreciation}
-              onChange={setDepreciation}
+              value={wearCostPerHour}
+              onChange={setWearCostPerHour}
               currencySymbol={currencySymbol}
             />
             <button
@@ -8482,10 +8474,7 @@ function EditPrinterModal({
     auto_archive: printer.auto_archive,
     is_active: printer.is_active,
   });
-  const [depreciation, setDepreciation] = useState<DepreciationFormValues>({
-    purchase_price: depreciationFieldFromApi(printer.purchase_price),
-    expected_lifetime_hours: depreciationFieldFromApi(printer.expected_lifetime_hours),
-  });
+  const [wearCostPerHour, setWearCostPerHour] = useState(depreciationFieldFromApi(printer.wear_cost_per_hour));
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.getSettings });
   const currencySymbol = getCurrencySymbol(settings?.currency || 'USD');
 
@@ -8521,8 +8510,7 @@ function EditPrinterModal({
       location: form.location || undefined,
       auto_archive: form.auto_archive,
       is_active: form.is_active,
-      purchase_price: depreciationFieldToApi(depreciation.purchase_price),
-      expected_lifetime_hours: depreciationFieldToApi(depreciation.expected_lifetime_hours),
+      wear_cost_per_hour: depreciationFieldToApi(wearCostPerHour),
     };
     // Only include access_code if it was changed
     if (form.access_code) {
@@ -8665,8 +8653,8 @@ function EditPrinterModal({
             </div>
             <PrinterDepreciationFields
               idPrefix="edit"
-              values={depreciation}
-              onChange={setDepreciation}
+              value={wearCostPerHour}
+              onChange={setWearCostPerHour}
               currencySymbol={currencySymbol}
             />
             {/* Maintenance Mode toggle (#1476) — checkbox is the inverse of

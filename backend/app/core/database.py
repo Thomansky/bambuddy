@@ -4955,14 +4955,13 @@ async def run_migrations(conn):
         conn, "ALTER TABLE notification_providers ADD COLUMN on_ams_drying_suspended BOOLEAN DEFAULT TRUE"
     )
 
-    # Migration: optional printer depreciation (#694). The two printer inputs
-    # give an hourly wear rate; each completed run snapshots duration × rate onto
-    # its PrintLogEntry, and the archive keeps the first run's value only
+    # Migration: optional printer depreciation (#694). The printer carries a
+    # wear cost per printing hour; each completed run snapshots duration × rate
+    # onto its PrintLogEntry, and the archive keeps the first run's value only
     # (#1378). FLOAT matches what the SQLAlchemy Float columns create on a
     # fresh install: REAL affinity on SQLite, double precision on Postgres
     # (REAL there would be float4 and round 1299.99 to 1299.98999...).
-    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN purchase_price FLOAT")
-    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN expected_lifetime_hours FLOAT")
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN wear_cost_per_hour FLOAT")
     await _safe_execute(conn, "ALTER TABLE print_log_entries ADD COLUMN depreciation_cost FLOAT")
     await _safe_execute(conn, "ALTER TABLE print_archives ADD COLUMN depreciation_cost FLOAT")
 

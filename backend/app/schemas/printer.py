@@ -1,8 +1,24 @@
 from datetime import datetime
+from decimal import Decimal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from backend.app.utils.printer_models import supports_nozzle_flow_type
+
+# Wear cost per printing hour (#694): a currency amount, so at most 4 decimals
+# (0.1234); finer input is rejected (422), not rounded. Checked on the
+# shortest repr so 0.1 does not fail as 0.1000...0055. Applied on the input
+# shapes only (PrinterCreate / PrinterUpdate, together with ge=0 and
+# allow_inf_nan=False — "inf" parses as a float by default and would snapshot
+# an infinite rate onto every run). PrinterResponse serialises whatever the
+# row holds, or one out-of-range value would take down GET /printers/ as a whole.
+_WEAR_COST_MAX_DECIMALS = 4
+
+
+def _validate_wear_cost_per_hour(v: float | None) -> float | None:
+    if v is not None and -Decimal(str(v)).as_tuple().exponent > _WEAR_COST_MAX_DECIMALS:
+        raise ValueError(f"at most {_WEAR_COST_MAX_DECIMALS} decimal places")
+    return v
 
 
 class PrinterBase(BaseModel):
@@ -39,12 +55,10 @@ class PrinterBase(BaseModel):
     external_camera_enabled: bool = False
     external_camera_snapshot_url: str | None = None  # Optional single-frame override; #1177
     camera_rotation: int = 0  # 0, 90, 180, 270 degrees
-    # Depreciation inputs (#694): both optional, the hourly rate is derived only
-    # when both are > 0. Read at print completion — edits never recalculate
-    # past runs. "inf" parses as a float by default and would snapshot an
-    # infinite rate onto every run, hence allow_inf_nan=False.
-    purchase_price: float | None = Field(default=None, ge=0, allow_inf_nan=False)
-    expected_lifetime_hours: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    # Wear cost per printing hour (#694): optional, 0/None = off. Read at print
+    # completion — edits never recalculate past runs. Constrained on the input
+    # shapes (PrinterCreate / PrinterUpdate).
+    wear_cost_per_hour: float | None = None
 
 
 class PrinterCreate(PrinterBase):
@@ -52,6 +66,12 @@ class PrinterCreate(PrinterBase):
     # PrinterResponse. Direct exposure on PRINTERS_READ would let a Viewer
     # connect to the printer's MQTT and bypass Bambuddy's RBAC.
     access_code: str = Field(..., min_length=1, max_length=20)
+    wear_cost_per_hour: float | None = Field(default=None, ge=0, allow_inf_nan=False)  # #694
+
+    @field_validator("wear_cost_per_hour")
+    @classmethod
+    def _check_wear_cost_decimals(cls, v: float | None) -> float | None:
+        return _validate_wear_cost_per_hour(v)
 
 
 class PlateDetectionROI(BaseModel):
@@ -83,8 +103,12 @@ class PrinterUpdate(BaseModel):
     camera_rotation: int | None = None  # 0, 90, 180, 270 degrees
     plate_detection_enabled: bool | None = None
     plate_detection_roi: PlateDetectionROI | None = None
-    purchase_price: float | None = Field(default=None, ge=0, allow_inf_nan=False)  # #694
-    expected_lifetime_hours: float | None = Field(default=None, ge=0, allow_inf_nan=False)  # #694
+    wear_cost_per_hour: float | None = Field(default=None, ge=0, allow_inf_nan=False)  # #694
+
+    @field_validator("wear_cost_per_hour")
+    @classmethod
+    def _check_wear_cost_decimals(cls, v: float | None) -> float | None:
+        return _validate_wear_cost_per_hour(v)
 
 
 class PrinterResponse(PrinterBase):
@@ -130,8 +154,7 @@ class PrinterResponse(PrinterBase):
             "nozzle_count": printer.nozzle_count,
             "supports_nozzle_flow_type": supports_nozzle_flow_type(printer.model),
             "print_hours_offset": printer.print_hours_offset,
-            "purchase_price": printer.purchase_price,
-            "expected_lifetime_hours": printer.expected_lifetime_hours,
+            "wear_cost_per_hour": printer.wear_cost_per_hour,
             "plate_detection_enabled": printer.plate_detection_enabled,
             "created_at": printer.created_at,
             "updated_at": printer.updated_at,

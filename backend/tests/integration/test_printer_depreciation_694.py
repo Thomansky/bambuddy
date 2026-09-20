@@ -1,12 +1,12 @@
 """Optional printer depreciation per printing hour (#694).
 
 Contract under test:
-- a printer carries optional ``purchase_price`` / ``expected_lifetime_hours``
-  and returns them on every printer response shape;
+- a printer carries an optional ``wear_cost_per_hour`` and returns it on
+  every printer response shape;
 - at completion the run's measured duration × the printer's hourly rate is
   written onto the PrintLogEntry, and onto the archive for its FIRST run only
   (the #1378 convention cost / energy_cost already follow);
-- a printer without a price leaves every depreciation field None;
+- a printer without a rate leaves every depreciation field None;
 - the stats endpoint sums the per-run values;
 - POST /archives/recalculate-costs never touches depreciation.
 """
@@ -59,95 +59,120 @@ async def _complete_run(db_session, archive, printer_id: int, hours: float) -> P
 
 
 class TestRateMath:
-    def test_rate_requires_both_inputs_positive(self):
-        assert hourly_depreciation_rate(1200.0, 6000.0) == pytest.approx(0.2)
-        assert hourly_depreciation_rate(None, 6000.0) is None
-        assert hourly_depreciation_rate(1200.0, None) is None
-        assert hourly_depreciation_rate(0.0, 6000.0) is None
-        assert hourly_depreciation_rate(1200.0, 0.0) is None
+    def test_rate_is_the_stored_value_when_positive(self):
+        assert hourly_depreciation_rate(0.2) == pytest.approx(0.2)
+        assert hourly_depreciation_rate(None) is None
+        assert hourly_depreciation_rate(0.0) is None
+        assert hourly_depreciation_rate(-0.5) is None
 
     def test_run_cost_is_hours_times_rate(self):
         # 2h30m at 0.20/h
-        assert run_depreciation_cost(9000, 1200.0, 6000.0) == pytest.approx(0.5)
-        assert run_depreciation_cost(None, 1200.0, 6000.0) is None
-        assert run_depreciation_cost(9000, None, None) is None
+        assert run_depreciation_cost(9000, 0.2) == pytest.approx(0.5)
+        assert run_depreciation_cost(None, 0.2) is None
+        assert run_depreciation_cost(9000, None) is None
+        assert run_depreciation_cost(9000, 0.0) is None
 
     def test_reconciled_zero_duration_is_unknown_not_free(self):
         # A reconciled completion stores duration 0 because the real end time
         # is unknown (#2592). Unknown wear must stay None: a 0.0 would render
         # as "$0.00" on the card and, as the first-run snapshot, stick forever.
-        assert run_depreciation_cost(run_duration_seconds(None, None, reconciled=True), 1200.0, 6000.0) is None
-        assert run_depreciation_cost(0, 1200.0, 6000.0) is None
+        assert run_depreciation_cost(run_duration_seconds(None, None, reconciled=True), 0.2) is None
+        assert run_depreciation_cost(0, 0.2) is None
 
 
 class TestPrinterFields:
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_patch_round_trips_both_fields(self, async_client: AsyncClient, printer_factory, db_session):
+    async def test_patch_round_trips_the_rate(self, async_client: AsyncClient, printer_factory, db_session):
         printer = await printer_factory()
 
-        response = await async_client.patch(
-            f"/api/v1/printers/{printer.id}",
-            json={"purchase_price": 1200.0, "expected_lifetime_hours": 6000.0},
-        )
+        response = await async_client.patch(f"/api/v1/printers/{printer.id}", json={"wear_cost_per_hour": 0.5})
 
         assert response.status_code == 200
-        body = response.json()
-        assert body["purchase_price"] == 1200.0
-        assert body["expected_lifetime_hours"] == 6000.0
+        assert response.json()["wear_cost_per_hour"] == 0.5
 
         listed = await async_client.get("/api/v1/printers/")
         row = next(p for p in listed.json() if p["id"] == printer.id)
-        assert row["purchase_price"] == 1200.0
-        assert row["expected_lifetime_hours"] == 6000.0
+        assert row["wear_cost_per_hour"] == 0.5
 
         single = await async_client.get(f"/api/v1/printers/{printer.id}")
-        assert single.json()["purchase_price"] == 1200.0
-        assert single.json()["expected_lifetime_hours"] == 6000.0
+        assert single.json()["wear_cost_per_hour"] == 0.5
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_patch_can_clear_fields(self, async_client: AsyncClient, printer_factory, db_session):
-        printer = await printer_factory(purchase_price=1200.0, expected_lifetime_hours=6000.0)
+    @pytest.mark.parametrize("cleared", [None, 0])
+    async def test_patch_can_switch_the_rate_off(
+        self, async_client: AsyncClient, printer_factory, db_session, cleared: float | None
+    ):
+        printer = await printer_factory(wear_cost_per_hour=0.5)
 
-        response = await async_client.patch(
-            f"/api/v1/printers/{printer.id}",
-            json={"purchase_price": None, "expected_lifetime_hours": None},
-        )
+        response = await async_client.patch(f"/api/v1/printers/{printer.id}", json={"wear_cost_per_hour": cleared})
 
         assert response.status_code == 200
-        assert response.json()["purchase_price"] is None
-        assert response.json()["expected_lifetime_hours"] is None
+        assert response.json()["wear_cost_per_hour"] == cleared
+        await db_session.refresh(printer)
+        assert hourly_depreciation_rate(printer.wear_cost_per_hour) is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_four_decimals_accepted_five_rejected(self, async_client: AsyncClient, printer_factory, db_session):
+        printer = await printer_factory()
+
+        ok = await async_client.patch(f"/api/v1/printers/{printer.id}", json={"wear_cost_per_hour": 0.1234})
+        assert ok.status_code == 200
+        assert ok.json()["wear_cost_per_hour"] == 0.1234
+
+        too_fine = await async_client.patch(f"/api/v1/printers/{printer.id}", json={"wear_cost_per_hour": 0.12345})
+        assert too_fine.status_code == 422
+        await db_session.refresh(printer)
+        assert printer.wear_cost_per_hour == 0.1234
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_stored_value_outside_input_rules_still_lists(
+        self, async_client: AsyncClient, printer_factory, db_session
+    ):
+        # The decimal cap and ge=0 guard the input shapes only. A row that
+        # bypassed them (direct SQL edit, future import path) must not turn
+        # the whole printer list into a 500.
+        printer = await printer_factory(wear_cost_per_hour=0.12345)
+        await printer_factory(wear_cost_per_hour=0.5)
+
+        listed = await async_client.get("/api/v1/printers/")
+        assert listed.status_code == 200
+        row = next(p for p in listed.json() if p["id"] == printer.id)
+        assert row["wear_cost_per_hour"] == 0.12345
+
+        single = await async_client.get(f"/api/v1/printers/{printer.id}")
+        assert single.status_code == 200
+        assert single.json()["wear_cost_per_hour"] == 0.12345
 
     @pytest.mark.asyncio
     @pytest.mark.integration
     async def test_negative_values_rejected(self, async_client: AsyncClient, printer_factory, db_session):
         printer = await printer_factory()
 
-        response = await async_client.patch(f"/api/v1/printers/{printer.id}", json={"purchase_price": -1})
+        response = await async_client.patch(f"/api/v1/printers/{printer.id}", json={"wear_cost_per_hour": -1})
 
         assert response.status_code == 422
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    @pytest.mark.parametrize("field", ["purchase_price", "expected_lifetime_hours"])
     @pytest.mark.parametrize("value", ["inf", "Infinity", "nan"])
-    async def test_non_finite_values_rejected(
-        self, async_client: AsyncClient, printer_factory, db_session, field: str, value: str
-    ):
+    async def test_non_finite_values_rejected(self, async_client: AsyncClient, printer_factory, db_session, value: str):
         # Lax float parsing accepts "inf" unless told otherwise; an infinite
         # rate would be snapshotted onto every later run.
         printer = await printer_factory()
 
-        response = await async_client.patch(f"/api/v1/printers/{printer.id}", json={field: value})
+        response = await async_client.patch(f"/api/v1/printers/{printer.id}", json={"wear_cost_per_hour": value})
 
         assert response.status_code == 422
         await db_session.refresh(printer)
-        assert getattr(printer, field) is None
+        assert printer.wear_cost_per_hour is None
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_create_accepts_fields_and_defaults_to_none(self, async_client: AsyncClient, db_session):
+    async def test_create_accepts_rate_and_defaults_to_none(self, async_client: AsyncClient, db_session):
         base = {
             "serial_number": "00M09A694000001",
             "ip_address": "192.168.1.150",
@@ -155,21 +180,19 @@ class TestPrinterFields:
             "model": "X1C",
         }
 
-        with_price = await async_client.post(
+        with_rate = await async_client.post(
             "/api/v1/printers/",
-            json={**base, "name": "Priced", "purchase_price": 900, "expected_lifetime_hours": 4500},
+            json={**base, "name": "Priced", "wear_cost_per_hour": 0.35},
         )
-        assert with_price.status_code == 200
-        assert with_price.json()["purchase_price"] == 900.0
-        assert with_price.json()["expected_lifetime_hours"] == 4500.0
+        assert with_rate.status_code == 200
+        assert with_rate.json()["wear_cost_per_hour"] == 0.35
 
         without = await async_client.post(
             "/api/v1/printers/",
             json={**base, "name": "Unpriced", "serial_number": "00M09A694000002", "ip_address": "192.168.1.151"},
         )
         assert without.status_code == 200
-        assert without.json()["purchase_price"] is None
-        assert without.json()["expected_lifetime_hours"] is None
+        assert without.json()["wear_cost_per_hour"] is None
 
 
 class TestCompletionSnapshot:
@@ -178,7 +201,7 @@ class TestCompletionSnapshot:
     async def test_first_run_writes_entry_and_archive_second_run_entry_only(
         self, async_client: AsyncClient, archive_factory, printer_factory, db_session
     ):
-        printer = await printer_factory(purchase_price=1200.0, expected_lifetime_hours=6000.0)
+        printer = await printer_factory(wear_cost_per_hour=0.2)
         archive = await archive_factory(printer.id, with_run=False)
 
         first = await _complete_run(db_session, archive, printer.id, hours=2.5)
@@ -187,9 +210,9 @@ class TestCompletionSnapshot:
         await db_session.refresh(archive)
         assert archive.depreciation_cost == pytest.approx(0.5)
 
-        # Price goes up before the reprint — the new rate applies to the new
+        # Rate goes up before the reprint — the new rate applies to the new
         # run only, and the archive keeps its first-run figure.
-        printer.purchase_price = 2400.0
+        printer.wear_cost_per_hour = 0.4
         await db_session.commit()
 
         second = await _complete_run(db_session, archive, printer.id, hours=1.0)
@@ -208,7 +231,7 @@ class TestCompletionSnapshot:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_printer_without_price_leaves_everything_none(
+    async def test_printer_without_rate_leaves_everything_none(
         self, async_client: AsyncClient, archive_factory, printer_factory, db_session
     ):
         printer = await printer_factory()
@@ -229,7 +252,7 @@ class TestCompletionSnapshot:
     async def test_reconciled_run_leaves_archive_slot_open_for_a_real_run(
         self, archive_factory, printer_factory, db_session
     ):
-        printer = await printer_factory(purchase_price=1200.0, expected_lifetime_hours=6000.0)
+        printer = await printer_factory(wear_cost_per_hour=0.2)
         archive = await archive_factory(printer.id, with_run=False)
 
         reconciled = await snapshot_run_depreciation(
@@ -247,7 +270,7 @@ class TestCompletionSnapshot:
     @pytest.mark.asyncio
     @pytest.mark.integration
     async def test_missing_printer_leaves_none(self, archive_factory, printer_factory, db_session):
-        printer = await printer_factory(purchase_price=1200.0, expected_lifetime_hours=6000.0)
+        printer = await printer_factory(wear_cost_per_hour=0.2)
         archive = await archive_factory(printer.id, with_run=False)
 
         assert await snapshot_run_depreciation(db_session, archive, None, 3600) is None
@@ -312,7 +335,7 @@ class TestCompletionHook:
     ):
         from contextlib import ExitStack
 
-        printer = await printer_factory(purchase_price=1200.0, expected_lifetime_hours=6000.0)
+        printer = await printer_factory(wear_cost_per_hour=0.2)
         started = datetime.now(timezone.utc) - timedelta(hours=2, minutes=30)
         archive = await archive_factory(printer.id, with_run=False, status="printing", started_at=started)
 
@@ -344,7 +367,7 @@ class TestCompletionHook:
     ):
         from contextlib import ExitStack
 
-        printer = await printer_factory(purchase_price=1200.0, expected_lifetime_hours=6000.0)
+        printer = await printer_factory(wear_cost_per_hour=0.2)
         started = datetime.now(timezone.utc) - timedelta(hours=8)
         archive = await archive_factory(printer.id, with_run=False, status="printing", started_at=started)
 
@@ -380,7 +403,7 @@ class TestStatsAndRecalculate:
     async def test_stats_sum_depreciation_over_runs(
         self, async_client: AsyncClient, archive_factory, printer_factory, db_session
     ):
-        printer = await printer_factory(purchase_price=1200.0, expected_lifetime_hours=6000.0)
+        printer = await printer_factory(wear_cost_per_hour=0.2)
         archive = await archive_factory(printer.id, with_run=False)
         await _complete_run(db_session, archive, printer.id, hours=2.5)  # 0.5
         await _complete_run(db_session, archive, printer.id, hours=1.0)  # 0.2
@@ -399,11 +422,11 @@ class TestStatsAndRecalculate:
     async def test_recalculate_costs_leaves_depreciation_untouched(
         self, async_client: AsyncClient, archive_factory, printer_factory, db_session
     ):
-        printer = await printer_factory(purchase_price=1200.0, expected_lifetime_hours=6000.0)
+        printer = await printer_factory(wear_cost_per_hour=0.2)
         archive = await archive_factory(printer.id, with_run=False, filament_used_grams=100.0)
         entry_id = (await _complete_run(db_session, archive, printer.id, hours=2.5)).id
 
-        printer.purchase_price = 9999.0
+        printer.wear_cost_per_hour = 9.99
         await db_session.commit()
         response = await async_client.post("/api/v1/archives/recalculate-costs")
         assert response.status_code == 200
