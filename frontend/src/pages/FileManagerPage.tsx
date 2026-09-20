@@ -50,6 +50,10 @@ import {
   Mail,
   Columns,
   ChevronRight as ChevronRightIcon,
+  Info,
+  Globe,
+  StickyNote,
+  Camera,
 } from 'lucide-react';
 import { api } from '../api/client';
 import type {
@@ -73,6 +77,7 @@ import { BulkTagsPickerModal } from '../components/BulkTagsPickerModal';
 import { FileUploadModal } from '../components/FileUploadModal';
 import { FolderReadmePanel } from '../components/FolderReadmePanel';
 import { LibraryTagsModal } from '../components/LibraryTagsModal';
+import { LibraryFileDetailsModal } from '../components/LibraryFileDetailsModal';
 import { PurgeOldFilesModal } from '../components/PurgeOldFilesModal';
 import { useToast } from '../contexts/ToastContext';
 import { usePageFileDrop } from '../hooks/usePageFileDrop';
@@ -788,6 +793,7 @@ interface FileCardProps {
   onPreview3d?: (file: LibraryFileListItem) => void;
   onPreviewDocument?: (file: LibraryFileListItem) => void;
   onRename?: (file: LibraryFileListItem) => void;
+  onDetails?: (file: LibraryFileListItem) => void;
   onGenerateThumbnail?: (file: LibraryFileListItem) => void;
   onTagClick?: (tagId: number) => void;
   thumbnailVersion?: number;
@@ -798,7 +804,7 @@ interface FileCardProps {
   t: TFunction;
 }
 
-function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, onSlice, onOpenInSlicer, onRunPipeline, useSlicerApi, desktopSlicer, canSlice, onPreview3d, onPreviewDocument, onRename, onGenerateThumbnail, onTagClick, thumbnailVersion, hasPermission, canModify, authEnabled, showModified, t }: FileCardProps) {
+function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, onSlice, onOpenInSlicer, onRunPipeline, useSlicerApi, desktopSlicer, canSlice, onPreview3d, onPreviewDocument, onRename, onDetails, onGenerateThumbnail, onTagClick, thumbnailVersion, hasPermission, canModify, authEnabled, showModified, t }: FileCardProps) {
   // Viewport coordinates rather than a flag, because the menu is rendered by
   // `ContextMenu` at `position: fixed` and anchored to the button (#2846). The
   // card it belongs to is only ~270px tall for a bare STL, which is shorter
@@ -874,6 +880,22 @@ function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, o
       onClick: () => onRename(file),
       disabled: !canRename,
       title: !canRename ? t('fileManager.noPermissionRenameFile') : undefined,
+    });
+  }
+  if (onDetails) {
+    menuItems.push({
+      label: t('fileManager.details.title'),
+      icon: <Info className="w-4 h-4" />,
+      onClick: () => onDetails(file),
+      disabled: !canPreview3d,
+      title: !canPreview3d ? t('fileManager.noPermissionPreview') : undefined,
+    });
+  }
+  if (file.external_url) {
+    menuItems.push({
+      label: t('fileManager.details.openLink'),
+      icon: <Globe className="w-4 h-4" />,
+      onClick: () => window.open(file.external_url!, '_blank'),
     });
   }
   if (onGenerateThumbnail && file.file_type === 'stl') {
@@ -968,6 +990,47 @@ function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, o
         {file.print_count > 0 && (
           <div className="mt-1 text-xs text-bambu-green">
             {t('fileManager.printedCount', { count: file.print_count })}
+          </div>
+        )}
+        {/* Metadata indicators (#3077): link, notes, photos. The link opens in
+            a new tab like the archive card's globe; the others open Details. */}
+        {(file.external_url || file.has_notes || (file.photo_count ?? 0) > 0) && (
+          <div className="mt-1 flex items-center gap-2 text-xs text-bambu-gray" onClick={(e) => e.stopPropagation()}>
+            {file.external_url && (
+              <a
+                href={file.external_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="p-0.5 rounded hover:text-bambu-green"
+                title={t('fileManager.details.openLink')}
+                aria-label={t('fileManager.details.openLink')}
+              >
+                <Globe className="w-3.5 h-3.5" />
+              </a>
+            )}
+            {file.has_notes && (
+              <button
+                type="button"
+                onClick={() => onDetails?.(file)}
+                className="p-0.5 rounded hover:text-bambu-green"
+                title={t('fileManager.details.hasNotes')}
+                aria-label={t('fileManager.details.hasNotes')}
+              >
+                <StickyNote className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {(file.photo_count ?? 0) > 0 && (
+              <button
+                type="button"
+                onClick={() => onDetails?.(file)}
+                className="flex items-center gap-0.5 p-0.5 rounded hover:text-bambu-green"
+                title={t('fileManager.details.photoCount', { count: file.photo_count })}
+                aria-label={t('fileManager.details.photoCount', { count: file.photo_count })}
+              >
+                <Camera className="w-3.5 h-3.5" />
+                <span>{file.photo_count}</span>
+              </button>
+            )}
           </div>
         )}
         {authEnabled && file.created_by_username && (
@@ -1076,6 +1139,7 @@ export function FileManagerPage() {
   const [pdfPreviewFile, setPdfPreviewFile] = useState<LibraryFileListItem | null>(null);
   const [sheetPreviewFile, setSheetPreviewFile] = useState<LibraryFileListItem | null>(null);
   const [msgPreviewFile, setMsgPreviewFile] = useState<LibraryFileListItem | null>(null);
+  const [detailsFile, setDetailsFile] = useState<LibraryFileListItem | null>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'list' | 'columns'>(() => {
     return (localStorage.getItem('library-view-mode') as 'grid' | 'list' | 'columns') || 'grid';
   });
@@ -2876,6 +2940,7 @@ export function FileManagerPage() {
                       else setSheetPreviewFile(f);
                     }}
                     onRename={(f) => setRenameItem({ type: 'file', id: f.id, name: f.filename })}
+                    onDetails={setDetailsFile}
                     onGenerateThumbnail={(f) => singleThumbnailMutation.mutate(f.id)}
                     onTagClick={toggleTagFilter}
                     thumbnailVersion={thumbnailVersions[file.id]}
@@ -2990,7 +3055,34 @@ export function FileManagerPage() {
                         )}
                       </div>
                       <div className="min-w-0">
-                        <div className="text-sm text-white truncate">{file.print_name || file.filename}</div>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-sm text-white truncate">{file.print_name || file.filename}</span>
+                          {/* Metadata indicators (#3077), same set as the card. */}
+                          {file.external_url && (
+                            <a
+                              href={file.external_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="flex-shrink-0 text-bambu-gray hover:text-bambu-green"
+                              title={t('fileManager.details.openLink')}
+                              aria-label={t('fileManager.details.openLink')}
+                            >
+                              <Globe className="w-3.5 h-3.5" />
+                            </a>
+                          )}
+                          {file.has_notes && (
+                            <span className="flex-shrink-0 text-bambu-gray" title={t('fileManager.details.hasNotes')} aria-label={t('fileManager.details.hasNotes')}>
+                              <StickyNote className="w-3.5 h-3.5" />
+                            </span>
+                          )}
+                          {(file.photo_count ?? 0) > 0 && (
+                            <span className="flex-shrink-0 flex items-center gap-0.5 text-xs text-bambu-gray" title={t('fileManager.details.photoCount', { count: file.photo_count })}>
+                              <Camera className="w-3.5 h-3.5" />
+                              {file.photo_count}
+                            </span>
+                          )}
+                        </div>
                         {/* #2680: last-modified date under the name, toggled from
                             the toolbar. Real on-disk mtime when known, else created_at. */}
                         {showModified && (
@@ -3159,6 +3251,18 @@ export function FileManagerPage() {
                         disabled={!hasPermission('library:read')}
                       >
                         <Download className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => hasPermission('library:read') && setDetailsFile(file)}
+                        className={`p-1.5 rounded transition-colors ${
+                          hasPermission('library:read')
+                            ? 'hover:bg-bambu-dark text-bambu-gray hover:text-white'
+                            : 'text-bambu-gray/50 cursor-not-allowed'
+                        }`}
+                        title={hasPermission('library:read') ? t('fileManager.details.title') : t('fileManager.noPermissionPreview')}
+                        disabled={!hasPermission('library:read')}
+                      >
+                        <Info className="w-4 h-4" />
                       </button>
                       <button
                         onClick={() => canModify('library', 'update', file.created_by_id) && setRenameItem({ type: 'file', id: file.id, name: file.filename })}
@@ -3404,6 +3508,14 @@ export function FileManagerPage() {
             />
           )}
         </Suspense>
+      )}
+
+      {detailsFile && (
+        <LibraryFileDetailsModal
+          file={detailsFile}
+          canEdit={canModify('library', 'update', detailsFile.created_by_id)}
+          onClose={() => setDetailsFile(null)}
+        />
       )}
 
       {renameItem && (

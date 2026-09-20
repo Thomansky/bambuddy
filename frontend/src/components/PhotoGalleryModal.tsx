@@ -4,21 +4,22 @@ import { api } from '../api/client';
 import { Button } from './Button';
 import { ConfirmModal } from './ConfirmModal';
 
-interface PhotoGalleryModalProps {
-  archiveId: number;
+// Archive photos resolve through `archiveId`; any other owner (a library
+// file, #3077) passes `getPhotoUrl` instead. Exactly one of the two is
+// required so a caller cannot silently end up requesting archive 0.
+type PhotoSource =
+  | { archiveId: number; getPhotoUrl?: undefined }
+  | { archiveId?: undefined; getPhotoUrl: (filename: string) => string };
+
+type PhotoGalleryModalProps = PhotoSource & {
   archiveName: string;
   photos: string[];
   onClose: () => void;
   onDelete?: (filename: string) => void;
-}
+};
 
-export function PhotoGalleryModal({
-  archiveId,
-  archiveName,
-  photos,
-  onClose,
-  onDelete,
-}: PhotoGalleryModalProps) {
+export function PhotoGalleryModal(props: PhotoGalleryModalProps) {
+  const { archiveName, photos, onClose, onDelete } = props;
   const [currentIndex, setCurrentIndex] = useState(0);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
@@ -45,8 +46,11 @@ export function PhotoGalleryModal({
     return null;
   }
 
+  const resolvePhotoUrl = (filename: string) =>
+    props.getPhotoUrl ? props.getPhotoUrl(filename) : api.getArchivePhotoUrl(props.archiveId, filename);
+
   const currentPhoto = photos[currentIndex];
-  const photoUrl = api.getArchivePhotoUrl(archiveId, currentPhoto);
+  const photoUrl = resolvePhotoUrl(currentPhoto);
 
   const handleDownload = () => {
     const link = document.createElement('a');
@@ -142,7 +146,7 @@ export function PhotoGalleryModal({
                 }`}
               >
                 <img
-                  src={api.getArchivePhotoUrl(archiveId, photo)}
+                  src={resolvePhotoUrl(photo)}
                   alt={`Thumbnail ${index + 1}`}
                   className="w-full h-full object-cover"
                 />
