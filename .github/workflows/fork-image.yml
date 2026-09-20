@@ -1,0 +1,99 @@
+# Builds the fork's integration branch into ghcr.io/thomansky/bambuddy.
+# Lives only on the `production` branch of the fork; never part of a PR.
+name: Fork image
+
+on:
+  push:
+    branches: [production]
+  workflow_dispatch:
+
+env:
+  IMAGE: ghcr.io/thomansky/bambuddy
+
+jobs:
+  build:
+    if: github.repository == 'Thomansky/bambuddy'
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            arch: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,scope=${{ matrix.arch }},mode=max
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          echo "${{ steps.build.outputs.digest }}" > "/tmp/digests/${{ matrix.arch }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+
+  manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags
+        id: tags
+        run: |
+          app_version=$(sed -n 's/^APP_VERSION = "\(.*\)"/\1/p' backend/app/core/config.py)
+          echo "version=${app_version}-tf${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "sha=sha-$(git rev-parse --short=8 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Create multi-arch manifest
+        run: |
+          digests=$(for d in /tmp/digests/*; do printf '%s@%s ' "$IMAGE" "$(cat "$d")"; done)
+          docker buildx imagetools create \
+            -t "$IMAGE:latest" \
+            -t "$IMAGE:${{ steps.tags.outputs.version }}" \
+            -t "$IMAGE:${{ steps.tags.outputs.sha }}" \
+            $digests
+          docker buildx imagetools inspect "$IMAGE:latest"
