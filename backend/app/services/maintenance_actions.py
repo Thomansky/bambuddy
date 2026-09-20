@@ -607,11 +607,11 @@ async def _publish_reset(printer_id: int, printer_name: str, type_name: str) -> 
 async def notify_run_finished(db: AsyncSession, run: MaintenanceRun) -> bool:
     """Tell the notification providers that ``run`` closed, unless its item is muted.
 
-    Called after the closing commit from every path that ends a run without
-    the user's own click: the printer's completion event, the stale sweep and
-    a dispatch the printer refused. A Cancel pressed in Bambuddy sends nothing
-    -- the person who pressed it is the one who would be told. ``run`` must
-    carry its item (with type) and printer. Never raises: a provider being
+    Called after the closing commit from every path that ends a run -- the
+    printer's completion event, the stale sweep, a dispatch the printer
+    refused and a Cancel pressed in Bambuddy -- so a run that was queued
+    reports exactly once, whichever way it ended. ``run`` must carry its item
+    (with type) and printer. Never raises: a provider being
     down must not undo the run's bookkeeping, so the caller's commit comes
     first and a failure here is only logged. Returns True when the event was
     handed to the notification service.
