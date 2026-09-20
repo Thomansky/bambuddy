@@ -987,6 +987,12 @@ class PrinterManager:
             return self._clients[printer_id].stop_print()
         return False
 
+    def start_calibration(self, printer_id: int, **options: bool) -> bool:
+        """Start a printer calibration; see BambuMQTTClient.start_calibration for the flags."""
+        if printer_id in self._clients:
+            return self._clients[printer_id].start_calibration(**options)
+        return False
+
     async def wait_for_cooldown(
         self,
         printer_id: int,
