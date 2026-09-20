@@ -3442,19 +3442,9 @@ async def confirm_outcome_by_token(
     if not archive:
         raise HTTPException(404, "Confirmation link is invalid or was already used")
 
-    archive.user_verdict = verdict
-    archive.confirm_token = None
+    from backend.app.services.print_confirmation import apply_outcome_verdict
 
-    # Same mirror as the PATCH route (#1444): verdict-aware statistics read
-    # print_log_entries, so the latest run must carry the verdict too.
-    from backend.app.models.print_log import PrintLogEntry
-
-    latest_entry = await db.scalar(
-        select(PrintLogEntry).where(PrintLogEntry.archive_id == archive.id).order_by(PrintLogEntry.id.desc()).limit(1)
-    )
-    if latest_entry is not None:
-        latest_entry.user_verdict = verdict
-
+    await apply_outcome_verdict(db, archive, verdict)
     await db.commit()
 
     label = "Good part" if verdict == "good" else "Rejected"
