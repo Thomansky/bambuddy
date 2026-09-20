@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String, Text, func
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.core.database import Base
@@ -23,6 +23,10 @@ class MaintenanceType(Base):
     wiki_url: Mapped[str | None] = mapped_column(String(500))  # Documentation link
     is_system: Mapped[bool] = mapped_column(Boolean, default=False)  # Pre-defined vs custom
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)  # Hidden/removed type
+    # What Bambuddy can do itself for this type instead of only reminding
+    # (#3127). "calibration" is the only value so far; None = reminder only.
+    # System types only — custom types cannot carry an action.
+    action: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     # Relationships
@@ -50,6 +54,20 @@ class PrinterMaintenance(Base):
     last_performed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_performed_hours: Mapped[float] = mapped_column(Float, default=0.0)  # Hours at last reset
 
+    # Automatic action settings (#3127); only read when the type has an action.
+    # action_options: calibration flag -> bool (see maintenance_actions.CALIBRATION_FLAGS)
+    # trigger_mode: "manual" | "when_due" | "schedule"
+    # schedule_days: weekday ints, 0 = Monday; schedule_time: "HH:MM" in the
+    # local zone (same convention as the local backup schedule)
+    # schedule_next_at: next scheduled occurrence, naive UTC, kept current by
+    # the routes on save and by the scheduler after each run
+    action_options: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    trigger_mode: Mapped[str] = mapped_column(String(16), default="manual")
+    schedule_days: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    schedule_time: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    schedule_next_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_auto_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -57,6 +75,9 @@ class PrinterMaintenance(Base):
     printer: Mapped["Printer"] = relationship(back_populates="maintenance_items")
     maintenance_type: Mapped["MaintenanceType"] = relationship(back_populates="printer_maintenance")
     history: Mapped[list["MaintenanceHistory"]] = relationship(
+        back_populates="printer_maintenance", cascade="all, delete-orphan"
+    )
+    runs: Mapped[list["MaintenanceRun"]] = relationship(
         back_populates="printer_maintenance", cascade="all, delete-orphan"
     )
 
@@ -74,6 +95,44 @@ class MaintenanceHistory(Base):
 
     # Relationships
     printer_maintenance: Mapped["PrinterMaintenance"] = relationship(back_populates="history")
+
+
+class MaintenanceRun(Base):
+    """One execution of an actionable maintenance item (#3127).
+
+    Created pending (by hand, when the item falls due, or from its schedule),
+    dispatched by PrintScheduler._check_maintenance_runs() once the printer is
+    idle and — with require_plate_clear on — the plate has been released, and
+    closed by the printer's own completion event. At most one pending/running
+    run exists per item.
+    """
+
+    __tablename__ = "maintenance_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    printer_maintenance_id: Mapped[int] = mapped_column(ForeignKey("printer_maintenance.id", ondelete="CASCADE"))
+    printer_id: Mapped[int] = mapped_column(ForeignKey("printers.id", ondelete="CASCADE"))
+
+    # pending / running / completed / failed / cancelled
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    # manual / due / schedule
+    source: Mapped[str] = mapped_column(String(16), default="manual")
+    # Calibration flags frozen at creation, so a settings change does not
+    # alter a run that is already waiting.
+    options: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    # Earliest start instant, naive UTC (same convention as
+    # scheduled_dryings.start_after). None = as soon as the printer is idle.
+    start_after: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    waiting_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    printer_maintenance: Mapped["PrinterMaintenance"] = relationship(back_populates="runs")
+    printer: Mapped["Printer"] = relationship()
 
 
 # Import at end to avoid circular imports
