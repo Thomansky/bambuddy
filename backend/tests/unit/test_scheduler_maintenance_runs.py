@@ -1199,3 +1199,137 @@ async def test_a_screen_cancel_of_the_vision_encoder_run_is_cancelled(db_session
     )
     await db_session.refresh(run)
     assert run.status == "cancelled"
+
+
+# ============== Run-result notification (#3127) ==============
+
+
+_NOTIFY = "backend.app.services.notification_service.notification_service.on_maintenance_run"
+
+
+@pytest.mark.asyncio
+async def test_a_completed_run_is_reported_to_the_providers(db_session, printer_factory, completion_session):
+    item = await _make_item(db_session, printer_factory)
+    printer = await db_session.get(Printer, item.printer_id)
+    await _make_run(db_session, item, status="running", started_at=_utcnow_naive())
+    with (
+        patch("backend.app.services.mqtt_relay.mqtt_relay") as relay,
+        patch(_NOTIFY, new_callable=AsyncMock) as notify,
+    ):
+        relay.on_maintenance_reset = MagicMock(return_value=_coro(None))
+        assert await maintenance_actions.on_internal_job_finished(
+            item.printer_id, "/usr/etc/print/X1C/auto_cali_for_user_param.gcode", None, "completed", None
+        )
+    notify.assert_awaited_once()
+    args = notify.await_args.args
+    assert args[:5] == (item.printer_id, printer.name, "Printer Calibration", "completed", None)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_run_is_reported_with_its_error(db_session, printer_factory, completion_session):
+    item = await _make_item(db_session, printer_factory)
+    await _make_run(db_session, item, status="running", started_at=_utcnow_naive())
+    with patch(_NOTIFY, new_callable=AsyncMock) as notify:
+        await maintenance_actions.on_internal_job_finished(
+            item.printer_id, "/usr/etc/print/X1C/auto_cali_for_user_param.gcode", None, "failed", 83886081
+        )
+    args = notify.await_args.args
+    assert args[3] == "failed"
+    assert "83886081" in args[4]
+
+
+@pytest.mark.asyncio
+async def test_a_screen_cancel_is_reported_as_cancelled(db_session, printer_factory, completion_session):
+    item = await _make_item(db_session, printer_factory)
+    await _make_run(db_session, item, status="running", started_at=_utcnow_naive())
+    with patch(_NOTIFY, new_callable=AsyncMock) as notify:
+        await maintenance_actions.on_internal_job_finished(
+            item.printer_id, "/usr/etc/print/X1C/auto_cali_for_user_param.gcode", None, "failed", 50348044
+        )
+    assert notify.await_args.args[3] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_a_muted_item_reports_nothing(db_session, printer_factory, completion_session):
+    """The bell on the card: off means no run-result message, but the run still closes."""
+    item = await _make_item(db_session, printer_factory, notifications_enabled=False)
+    run = await _make_run(db_session, item, status="running", started_at=_utcnow_naive())
+    with (
+        patch("backend.app.services.mqtt_relay.mqtt_relay") as relay,
+        patch(_NOTIFY, new_callable=AsyncMock) as notify,
+    ):
+        relay.on_maintenance_reset = MagicMock(return_value=_coro(None))
+        assert await maintenance_actions.on_internal_job_finished(
+            item.printer_id, "/usr/etc/print/X1C/auto_cali_for_user_param.gcode", None, "completed", None
+        )
+    notify.assert_not_awaited()
+    await db_session.refresh(run)
+    await db_session.refresh(item)
+    assert run.status == "completed"
+    assert item.last_performed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_a_provider_failure_does_not_undo_the_run(db_session, printer_factory, completion_session):
+    item = await _make_item(db_session, printer_factory)
+    run = await _make_run(db_session, item, status="running", started_at=_utcnow_naive())
+    with patch(_NOTIFY, new_callable=AsyncMock, side_effect=RuntimeError("provider down")):
+        assert await maintenance_actions.on_internal_job_finished(
+            item.printer_id, "/usr/etc/print/X1C/auto_cali_for_user_param.gcode", None, "failed", 83886081
+        )
+    await db_session.refresh(run)
+    assert run.status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_the_stale_sweep_reports_the_run_it_closes(scheduler, db_session, printer_factory):
+    item = await _make_item(db_session, printer_factory)
+    run = await _make_run(db_session, item, status="running", started_at=_utcnow_naive() - timedelta(hours=3))
+    with (
+        patch("backend.app.services.print_scheduler.printer_manager") as mock_pm,
+        patch(_NOTIFY, new_callable=AsyncMock) as notify,
+    ):
+        mock_pm.get_status.return_value = _mock_state()
+        await scheduler._check_maintenance_runs(db_session, True)
+    notify.assert_awaited_once()
+    args = notify.await_args.args
+    assert args[3] == "failed"
+    assert "Lost track" in args[4]
+    await db_session.refresh(run)
+    assert run.status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_a_refused_dispatch_reports_the_failure(scheduler, db_session, printer_factory):
+    item = await _make_item(db_session, printer_factory, action="motion_precision", model="X1C")
+    await _make_run(db_session, item)
+    with (
+        patch("backend.app.services.print_scheduler.printer_manager") as mock_pm,
+        patch.object(scheduler, "_is_printer_idle", return_value=True),
+        patch(_NOTIFY, new_callable=AsyncMock) as notify,
+    ):
+        mock_pm.get_status.return_value = _mock_state()
+        await scheduler._check_maintenance_runs(db_session, True)
+    notify.assert_awaited_once()
+    args = notify.await_args.args
+    assert args[2] == "Vision Encoder Calibration"
+    assert args[3] == "failed"
+    assert "H2-series" in args[4]
+
+
+@pytest.mark.asyncio
+async def test_a_dispatched_or_waiting_run_reports_nothing(scheduler, db_session, printer_factory):
+    """Only a closing run is an event; a pass that starts or defers one is not."""
+    item = await _make_item(db_session, printer_factory)
+    await _make_run(db_session, item)
+    with (
+        patch("backend.app.services.print_scheduler.printer_manager") as mock_pm,
+        patch.object(scheduler, "_is_printer_idle", return_value=True),
+        patch(_NOTIFY, new_callable=AsyncMock) as notify,
+    ):
+        mock_pm.get_status.return_value = _mock_state()
+        mock_pm.start_calibration.return_value = True
+        await scheduler._check_maintenance_runs(db_session, True)
+        mock_pm.get_status.return_value = _mock_state(connected=False)
+        await scheduler._check_maintenance_runs(db_session, True)
+    notify.assert_not_awaited()

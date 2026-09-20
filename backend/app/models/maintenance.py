@@ -51,6 +51,9 @@ class PrinterMaintenance(Base):
 
     # Tracking
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Per-item mute (#3127): off drops the item from the due/warning reminder
+    # and from the run-result notification, without disabling the item.
+    notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1", nullable=False)
     last_performed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_performed_hours: Mapped[float] = mapped_column(Float, default=0.0)  # Hours at last reset
 

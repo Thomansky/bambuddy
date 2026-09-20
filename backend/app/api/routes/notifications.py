@@ -51,6 +51,7 @@ def _provider_to_dict(provider: NotificationProvider) -> dict:
         "on_ai_failure_detection": provider.on_ai_failure_detection,
         "on_filament_low": provider.on_filament_low,
         "on_maintenance_due": provider.on_maintenance_due,
+        "on_maintenance_run": provider.on_maintenance_run,
         # Home Assistant sensor alerts (#1148, #2824). Both directions of this
         # file are hand-maintained field maps, so a column missing here reads
         # back as the schema default (False) no matter what the row holds.
@@ -145,6 +146,7 @@ async def create_notification_provider(
         on_ai_failure_detection=provider_data.on_ai_failure_detection,
         on_filament_low=provider_data.on_filament_low,
         on_maintenance_due=provider_data.on_maintenance_due,
+        on_maintenance_run=provider_data.on_maintenance_run,
         # Home Assistant sensor alerts (#1148, #2824)
         on_ha_sensor_alert=provider_data.on_ha_sensor_alert,
         on_location_ha_sensor_alert=provider_data.on_location_ha_sensor_alert,

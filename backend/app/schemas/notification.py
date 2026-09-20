@@ -51,6 +51,9 @@ class NotificationProviderBase(BaseModel):
     )
     on_filament_low: bool = Field(default=False, description="Notify when filament is running low")
     on_maintenance_due: bool = Field(default=False, description="Notify when maintenance is due")
+    on_maintenance_run: bool = Field(
+        default=False, description="Notify when a maintenance run Bambuddy queued completed, failed or was cancelled"
+    )
 
     # Event triggers - AMS environmental alarms (regular AMS)
     on_ams_humidity_high: bool = Field(default=False, description="Notify when AMS humidity exceeds threshold")
@@ -168,6 +171,7 @@ class NotificationProviderUpdate(BaseModel):
     on_ai_failure_detection: bool | None = None
     on_filament_low: bool | None = None
     on_maintenance_due: bool | None = None
+    on_maintenance_run: bool | None = None
 
     # Event triggers - AMS environmental alarms (regular AMS)
     on_ams_humidity_high: bool | None = None

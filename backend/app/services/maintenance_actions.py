@@ -535,16 +535,24 @@ async def queue_triggered_runs(db: AsyncSession, now: datetime | None = None) ->
     return created
 
 
-async def fail_stale_running_runs(db: AsyncSession, now: datetime | None = None) -> int:
+async def fail_stale_running_runs(db: AsyncSession, now: datetime | None = None) -> list[MaintenanceRun]:
     """Close runs that have been "running" longer than any calibration takes.
 
     Covers the restart case: a run dispatched before Bambuddy went down whose
-    completion event was never seen. Flushed, not committed.
+    completion event was never seen. Flushed, not committed. The closed rows
+    come back with their item, type and printer loaded, ready for
+    :func:`notify_run_finished` once the caller has committed.
     """
     now = now or utcnow_naive()
     cutoff = now - STALE_RUNNING_AFTER
     result = await db.execute(
-        select(MaintenanceRun).where(MaintenanceRun.status == "running").where(MaintenanceRun.started_at < cutoff)
+        select(MaintenanceRun)
+        .where(MaintenanceRun.status == "running")
+        .where(MaintenanceRun.started_at < cutoff)
+        .options(
+            selectinload(MaintenanceRun.printer_maintenance).selectinload(PrinterMaintenance.maintenance_type),
+            selectinload(MaintenanceRun.printer),
+        )
     )
     rows = list(result.scalars().all())
     for run in rows:
@@ -554,7 +562,7 @@ async def fail_stale_running_runs(db: AsyncSession, now: datetime | None = None)
         logger.warning(
             "Maintenance run %d on printer %d never reported completion; marked failed", run.id, run.printer_id
         )
-    return len(rows)
+    return rows
 
 
 # ============== Completion ==============
@@ -594,6 +602,33 @@ async def _publish_reset(printer_id: int, printer_name: str, type_name: str) -> 
         )
     except Exception:
         pass  # Don't fail if MQTT fails
+
+
+async def notify_run_finished(db: AsyncSession, run: MaintenanceRun) -> bool:
+    """Tell the notification providers that ``run`` closed, unless its item is muted.
+
+    Called after the closing commit from every path that ends a run without
+    the user's own click: the printer's completion event, the stale sweep and
+    a dispatch the printer refused. A Cancel pressed in Bambuddy sends nothing
+    -- the person who pressed it is the one who would be told. ``run`` must
+    carry its item (with type) and printer. Never raises: a provider being
+    down must not undo the run's bookkeeping, so the caller's commit comes
+    first and a failure here is only logged. Returns True when the event was
+    handed to the notification service.
+    """
+    item = run.printer_maintenance
+    if not item.notifications_enabled:
+        return False
+    from backend.app.services.notification_service import notification_service
+
+    try:
+        await notification_service.on_maintenance_run(
+            run.printer_id, run.printer.name, item.maintenance_type.name, run.status, run.error_message, db
+        )
+    except Exception as e:
+        logger.warning("Failed to send the maintenance run notification for run %d: %s", run.id, e)
+        return False
+    return True
 
 
 def resolve_run_outcome(final_status: str | None, print_error: int | None) -> str:
@@ -676,6 +711,7 @@ async def on_internal_job_finished(
         )
         if outcome == "completed":
             await _publish_reset(printer_id, run.printer.name, item.maintenance_type.name)
+        await notify_run_finished(db, run)
         return True
 
 

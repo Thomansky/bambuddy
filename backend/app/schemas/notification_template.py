@@ -21,6 +21,7 @@ class EventType(StrEnum):
     PRINTER_ERROR = "printer_error"
     FILAMENT_LOW = "filament_low"
     MAINTENANCE_DUE = "maintenance_due"
+    MAINTENANCE_RUN = "maintenance_run"
     AMS_HUMIDITY_HIGH = "ams_humidity_high"
     AMS_TEMPERATURE_HIGH = "ams_temperature_high"
     AMS_DRYING_SUSPENDED = "ams_drying_suspended"
@@ -78,6 +79,7 @@ EVENT_VARIABLES: dict[str, list[str]] = {
     "printer_error": ["printer", "error_type", "error_detail", "timestamp", "app_name"],
     "filament_low": ["printer", "slot", "remaining_percent", "color", "timestamp", "app_name"],
     "maintenance_due": ["printer", "items", "timestamp", "app_name"],
+    "maintenance_run": ["printer", "item", "result", "error", "timestamp", "app_name"],
     "ams_humidity_high": ["printer", "ams_label", "humidity", "threshold", "timestamp", "app_name"],
     "ams_temperature_high": ["printer", "ams_label", "temperature", "threshold", "timestamp", "app_name"],
     "ams_drying_suspended": [
@@ -201,6 +203,14 @@ SAMPLE_DATA: dict[str, dict[str, str]] = {
     "maintenance_due": {
         "printer": "Bambu X1C",
         "items": "• Nozzle cleaning (OVERDUE)\n• Carbon rod lubrication (Soon)",
+        "timestamp": "2024-01-15 14:30",
+        "app_name": "Bambuddy",
+    },
+    "maintenance_run": {
+        "printer": "Bambu X1C",
+        "item": "Printer Calibration",
+        "result": "Failed",
+        "error": "Calibration failed (print_error 83886081)",
         "timestamp": "2024-01-15 14:30",
         "app_name": "Bambuddy",
     },
