@@ -1777,6 +1777,7 @@ export default {
       bedTempBelow: "Только когда стол холоднее",
       bedTempBelowValue: "Порог температуры стола (°C)",
       bedTempUnit: "°C",
+      bedTempBelowSuffix: "",
       trigger: "Триггер",
       triggerManual: "Вручную",
       triggerWhenDue: "По наступлении срока",

@@ -1882,6 +1882,7 @@ export default {
       bedTempBelow: 'Alleen als het bed koeler is dan',
       bedTempBelowValue: 'Drempelwaarde bedtemperatuur (°C)',
       bedTempUnit: '°C',
+      bedTempBelowSuffix: '',
       trigger: 'Trigger',
       triggerManual: 'Handmatig',
       triggerWhenDue: 'Wanneer verschuldigd',

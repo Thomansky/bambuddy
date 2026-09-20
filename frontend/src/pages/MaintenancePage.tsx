@@ -353,6 +353,10 @@ function CalibrationActionPanel({
               aria-label={t('maintenance.calibration.bedTempBelowValue')}
             />
             <span>{t('maintenance.calibration.bedTempUnit')}</span>
+            {/* Languages whose sentence continues after the value (German: "… °C ist") */}
+            {t('maintenance.calibration.bedTempBelowSuffix') && (
+              <span>{t('maintenance.calibration.bedTempBelowSuffix')}</span>
+            )}
           </>
         )}
       </div>

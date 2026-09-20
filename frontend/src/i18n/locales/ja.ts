@@ -1863,6 +1863,7 @@ export default {
       bedTempBelow: 'ベッド温度が次の値未満のときのみ',
       bedTempBelowValue: 'ベッド温度のしきい値 (°C)',
       bedTempUnit: '°C',
+      bedTempBelowSuffix: '',
       trigger: 'トリガー',
       triggerManual: '手動',
       triggerWhenDue: '期限到来時',

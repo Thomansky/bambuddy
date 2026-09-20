@@ -1864,6 +1864,7 @@ export default {
       bedTempBelow: 'Seulement quand le plateau est en dessous de',
       bedTempBelowValue: 'Seuil de température du plateau (°C)',
       bedTempUnit: '°C',
+      bedTempBelowSuffix: '',
       trigger: 'Déclencheur',
       triggerManual: 'Manuel',
       triggerWhenDue: 'À l\'échéance',

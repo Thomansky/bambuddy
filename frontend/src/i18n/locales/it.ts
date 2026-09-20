@@ -1864,6 +1864,7 @@ export default {
       bedTempBelow: 'Solo quando il piano è sotto',
       bedTempBelowValue: 'Soglia di temperatura del piano (°C)',
       bedTempUnit: '°C',
+      bedTempBelowSuffix: '',
       trigger: 'Attivazione',
       triggerManual: 'Manuale',
       triggerWhenDue: 'Alla scadenza',

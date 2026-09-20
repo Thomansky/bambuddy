@@ -1780,6 +1780,7 @@ export default {
       bedTempBelow: '베드 온도가 다음 값 미만일 때만',
       bedTempBelowValue: '베드 온도 임계값 (°C)',
       bedTempUnit: '°C',
+      bedTempBelowSuffix: '',
       trigger: '트리거',
       triggerManual: '수동',
       triggerWhenDue: '기한 도래 시',

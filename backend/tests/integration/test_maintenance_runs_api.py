@@ -244,6 +244,27 @@ class TestSettings:
         assert body["action_options"]["vibration"] is False
         assert body["schedule_next_at"] is None
 
+    @pytest.mark.parametrize(("value", "expected"), [("false", False), ("true", True), (0, False), (1, True)])
+    async def test_flags_take_string_and_numeric_booleans(self, async_client, printer_factory, value, expected):
+        printer = await printer_factory()
+        item = await _calibration_item(async_client, printer.id)
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}",
+            json={"action_options": {"bed_leveling": value, "vibration": True}},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["action_options"]["bed_leveling"] is expected
+
+    @pytest.mark.parametrize("value", ["abc", None, 2, [True], {"on": True}])
+    async def test_non_boolean_flags_are_a_422(self, async_client, printer_factory, value):
+        printer = await printer_factory()
+        item = await _calibration_item(async_client, printer.id)
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}",
+            json={"action_options": {"bed_leveling": value, "vibration": True}},
+        )
+        assert response.status_code == 422, response.text
+
     async def test_schedule_computes_next_at(self, async_client, printer_factory, monkeypatch):
         monkeypatch.setenv("TZ", "UTC")
         printer = await printer_factory()
