@@ -868,6 +868,101 @@ class TestNtfyPriority:
         headers = mock_client.put.call_args.kwargs["headers"]
         assert headers.get("Priority") == "4"
 
+    # The UI persists the map under the provider toggle names
+    # ("on_print_failed") while every real event passes the bare name
+    # ("print_failed"). The direct tests above call _send_ntfy with the
+    # prefixed name and so never caught the mismatch; these go through the
+    # real dispatch path with the names production actually uses.
+
+    @staticmethod
+    def _ntfy_provider(event_priorities):
+        provider = MagicMock()
+        provider.id = 1
+        provider.name = "ntfy"
+        provider.provider_type = "ntfy"
+        provider.enabled = True
+        provider.config = json.dumps({"topic": "bambuddy", "event_priorities": event_priorities})
+        provider.quiet_hours_enabled = False
+        provider.daily_digest_enabled = False
+        provider.printer_id = None
+        return provider
+
+    @pytest.mark.asyncio
+    async def test_send_to_provider_resolves_prefixed_key_for_bare_event_name(self, service):
+        """event_type="print_failed" must pick up the stored "on_print_failed" entry."""
+        provider = self._ntfy_provider({"on_print_failed": 5})
+        mock_client = self._mock_client(service)
+        with patch.object(service, "_get_client", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = mock_client
+            success, _ = await service._send_to_provider(
+                provider, "Title", "Body", db=AsyncMock(), event_type="print_failed"
+            )
+
+        assert success is True
+        headers = mock_client.post.call_args.kwargs["headers"]
+        assert headers.get("Priority") == "5"
+
+    @pytest.mark.asyncio
+    async def test_send_to_provider_omits_header_for_unmapped_bare_event_name(self, service):
+        """A bare event with no stored entry (under either spelling) sends no header."""
+        provider = self._ntfy_provider({"on_print_failed": 5})
+        mock_client = self._mock_client(service)
+        with patch.object(service, "_get_client", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = mock_client
+            success, _ = await service._send_to_provider(
+                provider, "Title", "Body", db=AsyncMock(), event_type="print_complete"
+            )
+
+        assert success is True
+        headers = mock_client.post.call_args.kwargs["headers"]
+        assert "Priority" not in headers
+
+    @pytest.mark.asyncio
+    async def test_on_print_complete_failed_status_sends_mapped_priority(self, service):
+        """End to end from the event handler: on_print_complete(status="failed")
+        derives event_type "print_failed" and the ntfy request carries the
+        priority stored under "on_print_failed"."""
+        provider = self._ntfy_provider({"on_print_failed": 4, "on_print_complete": 1})
+        mock_client = self._mock_client(service)
+        with (
+            patch.object(service, "_get_client", new_callable=AsyncMock) as mock_get,
+            patch.object(service, "_get_providers_for_event", new_callable=AsyncMock) as mock_providers,
+            patch.object(service, "_build_message_from_template", new_callable=AsyncMock) as mock_build,
+            patch.object(service, "_update_provider_status", new_callable=AsyncMock),
+            patch.object(service, "_log_notification", new_callable=AsyncMock),
+        ):
+            mock_get.return_value = mock_client
+            mock_providers.return_value = [provider]
+            mock_build.return_value = ("Print Failed", "Body")
+
+            await service.on_print_complete(
+                printer_id=1,
+                printer_name="Test Printer",
+                status="failed",
+                data={"filename": "part.3mf"},
+                db=AsyncMock(),
+            )
+
+        mock_client.post.assert_called_once()
+        headers = mock_client.post.call_args.kwargs["headers"]
+        assert headers.get("Priority") == "4"
+
+    @pytest.mark.asyncio
+    async def test_bare_key_in_config_still_resolves(self, service):
+        """A hand-edited config keyed by the bare event name keeps working,
+        and an exact match wins over the prefixed spelling."""
+        config = {
+            "topic": "bambuddy",
+            "event_priorities": {"print_failed": 2, "on_print_failed": 5},
+        }
+        mock_client = self._mock_client(service)
+        with patch.object(service, "_get_client", new_callable=AsyncMock) as mock_get:
+            mock_get.return_value = mock_client
+            await service._send_ntfy(config, "Title", "Body", event_type="print_failed")
+
+        headers = mock_client.post.call_args.kwargs["headers"]
+        assert headers.get("Priority") == "2"
+
 
 class TestHomeAssistantProvider:
     """Tests for Home Assistant notification provider."""
