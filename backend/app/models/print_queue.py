@@ -46,6 +46,13 @@ class PrintQueueItem(Base):
     position: Mapped[int] = mapped_column(Integer, default=0)  # Queue order
     scheduled_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # None = ASAP
     manual_start: Mapped[bool] = mapped_column(Boolean, default=False)  # Requires manual trigger to start
+    # A person asked for this item to start now: the print dialog's "Print
+    # now" (queued at the top) or the ▶ on a staged item. The scheduler's
+    # maintenance holds (#3127) -- a calibration run pending on the printer,
+    # the look-ahead before a scheduled one -- yield to it; every other gate
+    # applies as before. Persisted like skip_filament_check, so the decision
+    # survives the passes between the click and the dispatch.
+    user_started: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
 
     # Conditions
     require_previous_success: Mapped[bool] = mapped_column(Boolean, default=False)

@@ -114,6 +114,9 @@ class PrinterMaintenanceUpdate(BaseModel):
     trigger_mode: str | None = Field(default=None, pattern=f"^({'|'.join(TRIGGER_MODES)})$")
     schedule_days: list[int] | None = None
     schedule_time: str | None = None
+    # With a schedule: keep the print queue from starting a job on the
+    # printer that would still be running at the scheduled time (#3127).
+    reserve_before_schedule: bool | None = None
 
     @field_validator("action_options")
     @classmethod
@@ -128,7 +131,7 @@ class PrinterMaintenanceUpdate(BaseModel):
             checked[BED_TEMP_BELOW_KEY] = normalize_bed_temp_below(value[BED_TEMP_BELOW_KEY])
         return checked
 
-    @field_validator("enabled", "notifications_enabled")
+    @field_validator("enabled", "notifications_enabled", "reserve_before_schedule")
     @classmethod
     def _flag_not_null(cls, value: bool | None, info: ValidationInfo) -> bool:
         if value is None:
@@ -169,6 +172,7 @@ class PrinterMaintenanceResponse(BaseModel):
     # UTCDatetime: naive UTC in the DB, sent with the Z suffix like the queue
     # and scheduled-drying routes so the client parses them as UTC.
     schedule_next_at: UTCDatetime = None
+    reserve_before_schedule: bool = True
     last_auto_run_at: UTCDatetime = None
     created_at: datetime
     updated_at: datetime
@@ -187,8 +191,9 @@ class MaintenanceRunResponse(BaseModel):
     options: dict[str, bool] | None
     start_after: UTCDatetime
     waiting_reason: str | None
-    # Figures behind the reason, e.g. {"bed_temp": 34.2, "threshold": 30.0}
-    # for bed_too_warm; None for the reasons that have none
+    # Figures behind the reason: {"bed_temp": 34.2, "threshold": 30.0} for
+    # bed_too_warm, {"item": "Printer Calibration"} for after_other_run;
+    # None for the reasons that have none
     waiting_detail: dict[str, Any] | None = None
     error_message: str | None
     created_at: UTCDatetime
@@ -266,6 +271,8 @@ class MaintenanceStatus(BaseModel):
     schedule_days: list[int] | None = None
     schedule_time: str | None = None
     schedule_next_at: UTCDatetime = None
+    # The queue keeps clear of the scheduled run (#3127); only read with a schedule
+    reserve_before_schedule: bool = True
     current_run: CurrentRun | None = None
     last_run: MaintenanceRunResponse | None = None
 

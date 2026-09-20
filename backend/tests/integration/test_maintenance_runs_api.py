@@ -873,3 +873,90 @@ class TestTriggerGate:
         await db_session.commit()
         response = await async_client.get(f"/api/v1/maintenance/printers/{printer.id}")
         assert response.json()["require_plate_clear"] is False
+
+
+class TestReserveBeforeSchedule:
+    """The queue keeps clear of a scheduled run (#3127): the per-item flag."""
+
+    async def test_defaults_on_and_round_trips_through_patch(self, async_client, printer_factory):
+        printer = await printer_factory()
+        item = await _calibration_item(async_client, printer.id)
+        assert item["reserve_before_schedule"] is True
+
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}", json={"reserve_before_schedule": False}
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["reserve_before_schedule"] is False
+        assert (await _calibration_item(async_client, printer.id))["reserve_before_schedule"] is False
+
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}", json={"reserve_before_schedule": True}
+        )
+        assert response.status_code == 200
+        assert response.json()["reserve_before_schedule"] is True
+
+    async def test_travels_with_the_schedule_settings(self, async_client, printer_factory):
+        printer = await printer_factory()
+        item = await _calibration_item(async_client, printer.id)
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}",
+            json={
+                "trigger_mode": "schedule",
+                "schedule_days": [6],
+                "schedule_time": "12:00",
+                "reserve_before_schedule": False,
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["trigger_mode"] == "schedule"
+        assert body["reserve_before_schedule"] is False
+
+    async def test_null_is_refused(self, async_client, printer_factory):
+        printer = await printer_factory()
+        item = await _calibration_item(async_client, printer.id)
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}", json={"reserve_before_schedule": None}
+        )
+        assert response.status_code == 422
+
+    async def test_a_reminder_only_item_cannot_carry_it(self, async_client, printer_factory):
+        printer = await printer_factory()
+        response = await async_client.get(f"/api/v1/maintenance/printers/{printer.id}")
+        other = next(i for i in response.json()["maintenance_items"] if i["action"] is None)
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{other['id']}", json={"reserve_before_schedule": False}
+        )
+        assert response.status_code == 400
+
+    async def test_perform_response_carries_the_flag(self, async_client, printer_factory):
+        printer = await printer_factory()
+        item = await _calibration_item(async_client, printer.id)
+        await async_client.patch(f"/api/v1/maintenance/items/{item['id']}", json={"reserve_before_schedule": False})
+        response = await async_client.post(f"/api/v1/maintenance/items/{item['id']}/perform", json={})
+        assert response.status_code == 200
+        assert response.json()["reserve_before_schedule"] is False
+
+
+class TestRunOrderOnTheCard:
+    """A run behind another one on the same printer says so, by item name (#3127)."""
+
+    async def test_after_other_run_and_its_item_reach_the_card(self, async_client, printer_factory, db_session):
+        printer = await printer_factory(model="H2S")
+        item = await _calibration_item(async_client, printer.id)
+        db_session.add(
+            MaintenanceRun(
+                printer_maintenance_id=item["id"],
+                printer_id=printer.id,
+                status="pending",
+                source="schedule",
+                waiting_reason="after_other_run",
+                waiting_detail={"item": "Vision Encoder Calibration"},
+            )
+        )
+        await db_session.commit()
+
+        item = await _calibration_item(async_client, printer.id)
+        assert item["current_run"]["waiting_reason"] == "after_other_run"
+        assert item["current_run"]["waiting_detail"] == {"item": "Vision Encoder Calibration"}

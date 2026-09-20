@@ -205,6 +205,9 @@ class PrintQueueItemResponse(BaseModel):
     # User has acknowledged "Print Anyway" — scheduler skips the deficit check
     # for this item (#1698-followup).
     skip_filament_check: bool = False
+    # A person asked for this item to start now ("Print now", or ▶ on a staged
+    # item): the scheduler's maintenance holds do not apply to it (#3127).
+    user_started: bool = False
     ams_mapping: list[int] | None = None
     plate_id: int | None = None  # Plate ID for multi-plate 3MF files
     # Print options

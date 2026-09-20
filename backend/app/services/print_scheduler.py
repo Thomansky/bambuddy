@@ -6,7 +6,7 @@ import logging
 import time
 import uuid
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -22,7 +22,7 @@ from backend.app.core.tasks import spawn_background_task
 from backend.app.core.websocket import ws_manager
 from backend.app.models.archive import PrintArchive
 from backend.app.models.library import LibraryFile
-from backend.app.models.maintenance import MaintenanceRun, PrinterMaintenance
+from backend.app.models.maintenance import MaintenanceRun, MaintenanceType, PrinterMaintenance
 from backend.app.models.print_queue import PrintQueueItem, PrintQueueVariant
 from backend.app.models.printer import Printer
 from backend.app.models.scheduled_drying import ScheduledDrying
@@ -1257,6 +1257,15 @@ class PrintScheduler:
                 [(i.id, i.printer_id, i.archive_id, i.library_file_id) for i in items],
             )
 
+            # And the other way round (#3127): a printer with a run pending or
+            # running takes no automatic dispatch until the run has closed,
+            # and one with a scheduled run ahead takes only jobs that will be
+            # done before it. Read after the maintenance pass, so the reasons
+            # the queue rows repeat are this pass's.
+            maintenance_reserved = await self._maintenance_reserved_printers(db)
+            schedule_horizons = await self._maintenance_schedule_horizons(db)
+            now_naive = utcnow_naive()
+
             # Seed busy_printers with printers that already have an item in 'printing'
             # status. _is_printer_idle() alone is not sufficient as a dispatch gate —
             # on H2D / P1 series the MQTT state transition from IDLE to RUNNING can
@@ -1398,6 +1407,26 @@ class PrintScheduler:
                 mark_busy(printer_id, log_reason)
                 item_hold_reasons.setdefault(printer_id, item_reason)
                 await hold_item(item, item_reason)
+
+            def maintenance_hold(printer_id: int, item: PrintQueueItem) -> str | None:
+                """Why the maintenance side keeps *item* off *printer_id* this pass, or None (#3127).
+
+                A run pending or running on the printer first; else a
+                scheduled run the job would still be on the printer for. Never
+                for an item a person started by hand -- ▶ on a staged item and
+                the print dialog's "Print now" mean now, maintenance or not.
+                """
+                if item.user_started:
+                    return None
+                run = maintenance_reserved.get(printer_id)
+                if run is not None:
+                    return maintenance_actions.queue_hold_for_run(run)
+                next_at = schedule_horizons.get(printer_id)
+                if next_at is not None and maintenance_actions.schedule_hold_blocks(
+                    next_at, now_naive, item.print_time_seconds
+                ):
+                    return maintenance_actions.queue_hold_for_schedule(next_at, item.print_time_seconds)
+                return None
 
             # Defense-in-depth (#1157): augment busy_printers with any printer
             # still in its post-dispatch hold window. Empirically, the DB seed
@@ -1653,6 +1682,24 @@ class PrintScheduler:
                         )
                         continue
 
+                    # Maintenance first (#3127). Checked once the printer is
+                    # otherwise free for the queue, so a printer that is
+                    # printing still reads as busy and a plate nobody has
+                    # confirmed still asks for it. A pending run takes the
+                    # whole printer out of the pass, and every item behind
+                    # this one reads the same; a scheduled run ahead holds
+                    # only the job that is too long for the time left, so a
+                    # shorter one behind it may still go out -- like an item
+                    # waiting on its own scheduled time.
+                    hold = maintenance_hold(item.printer_id, item)
+                    if hold is not None:
+                        skip_reasons["maintenance_hold"] = skip_reasons.get("maintenance_hold", 0) + 1
+                        if item.printer_id in maintenance_reserved:
+                            await hold_for_printer(item, item.printer_id, "reserved by a maintenance run", hold)
+                        else:
+                            await hold_item(item, hold)
+                        continue
+
                     # Check condition (previous print success)
                     if item.require_previous_success:
                         if not await self._check_previous_success(db, item):
@@ -1821,6 +1868,13 @@ class PrintScheduler:
                             filament_overrides=filament_overrides,
                             require_plate_clear=require_plate_clear,
                             wakeable_ids=wakeable_printer_ids,
+                            # Maintenance first (#3127): a reserved printer is
+                            # passed over and named, and the item runs on a
+                            # sibling if one is free. Not folded into
+                            # busy_printers -- the wake step below may still
+                            # switch a reserved printer on, so that a run
+                            # waiting for it offline is not waiting forever.
+                            maintenance_hold=lambda pid, _item=item: maintenance_hold(pid, _item),
                         )
                         if match_id:
                             printer_id = match_id
@@ -2553,6 +2607,7 @@ class PrintScheduler:
         filament_overrides: list[dict] | None = None,
         require_plate_clear: bool = True,
         wakeable_ids: set[int] | None = None,
+        maintenance_hold: Callable[[int], str | None] | None = None,
     ) -> tuple[int | None, str | None]:
         """Find an idle, connected printer matching the model with compatible filaments.
 
@@ -2570,6 +2625,11 @@ class PrintScheduler:
             wakeable_ids: Printers a smart plug can power on (#2786). Only changes how an
                           offline printer is worded: one Bambuddy will switch on reads
                           differently from one the user has to go and switch on themselves.
+            maintenance_hold: Why the maintenance side keeps this job off a printer (#3127):
+                              a run pending on it, or a scheduled run the job would run into.
+                              Asked about a printer that is connected and idle, i.e. one the
+                              queue would otherwise take; the answer is the printer's entry in
+                              the waiting reason and the printer is passed over.
 
         Returns:
             Tuple of (printer_id, waiting_reason):
@@ -2589,6 +2649,7 @@ class PrintScheduler:
 
         # Track reasons for skipping printers
         printers_busy = []
+        printers_reserved: list[str] = []
         printers_offline = []
         printers_offline_no_plug = []
         printers_missing_filament: list[tuple[str, list[str]]] = []
@@ -2643,6 +2704,12 @@ class PrintScheduler:
                         )
                         continue
                 printers_busy.append(printer.name)
+                continue
+
+            hold = maintenance_hold(printer.id) if maintenance_hold is not None else None
+            if hold is not None:
+                printers_reserved.append(hold)
+                logger.debug("Skipping printer %s (%s) - %s", printer.id, printer.name, hold)
                 continue
 
             # Validate filament compatibility if required types are specified
@@ -2725,6 +2792,8 @@ class PrintScheduler:
                 reasons.append(f"Waiting for filament: {'; '.join(names_and_missing)}")
         if printers_busy:
             reasons.append(f"Busy: {', '.join(printers_busy)}")
+        # One clause per reserved printer: each names its own run or slot.
+        reasons.extend(printers_reserved)
         if printers_offline:
             reasons.append(f"Offline: {', '.join(printers_offline)}")
         if printers_offline_no_plug:
@@ -2741,10 +2810,11 @@ class PrintScheduler:
 
         When all matching printers are simply busy printing, the queued job
         will start automatically once a printer finishes — no user action
-        is required, so we skip the notification.
+        is required, so we skip the notification. The two maintenance holds
+        (#3127) count the same way: the run closes, the slot passes.
         """
         parts = [p.strip() for p in waiting_reason.split(" | ")]
-        return all(p.startswith("Busy:") for p in parts)
+        return all(p.startswith("Busy:") or maintenance_actions.is_queue_hold(p) for p in parts)
 
     def _get_missing_force_color_slots(
         self, printer_id: int, force_overrides: list[dict], raw_data: dict | None = None
@@ -4833,6 +4903,54 @@ class PrintScheduler:
         reserved.update(pid for pid in list(self._dispatch_holds) if self._printer_in_dispatch_hold(pid))
         return reserved
 
+    async def _maintenance_reserved_printers(self, db: AsyncSession) -> dict[int, MaintenanceRun]:
+        """Printers a maintenance run keeps the print queue off, with that run (#3127).
+
+        The other direction of ``_queue_reserved_printers``: a printer with a
+        run pending or running takes no automatic dispatch until the run has
+        closed, so a calibration that fell due during a long print goes out
+        before the next job rather than after it, and a vision encoder run
+        waiting for the bed to cool is not overtaken by a print that heats it
+        again. A run waiting for an offline printer reserves it too -- the
+        queue could not dispatch there anyway. Read after
+        ``_check_maintenance_runs`` so the run's waiting reason, which the
+        queue row repeats, is this pass's. The run returned per printer is
+        the head of its line, as ``maintenance_actions.head_runs`` picks it.
+        """
+        result = await db.execute(
+            select(MaintenanceRun)
+            .where(MaintenanceRun.status.in_(maintenance_actions.RUN_ACTIVE_STATUSES))
+            .options(
+                selectinload(MaintenanceRun.printer_maintenance).selectinload(PrinterMaintenance.maintenance_type),
+            )
+        )
+        return maintenance_actions.head_runs(list(result.scalars().all()), utcnow_naive())
+
+    async def _maintenance_schedule_horizons(self, db: AsyncSession) -> dict[int, datetime]:
+        """Per printer, the next scheduled run the print queue must keep clear of (#3127).
+
+        The earliest ``schedule_next_at`` (naive UTC) over the printer's
+        enabled schedule items whose *reserve_before_schedule* is on. A job
+        is only dispatched to such a printer when it is expected to be done
+        ``SCHEDULE_MARGIN`` before that instant; see
+        ``maintenance_actions.schedule_hold_blocks``.
+        """
+        result = await db.execute(
+            select(PrinterMaintenance.printer_id, PrinterMaintenance.schedule_next_at)
+            .join(PrinterMaintenance.maintenance_type)
+            .where(MaintenanceType.action.is_not(None))
+            .where(MaintenanceType.is_deleted.is_(False))
+            .where(PrinterMaintenance.enabled.is_(True))
+            .where(PrinterMaintenance.trigger_mode == "schedule")
+            .where(PrinterMaintenance.reserve_before_schedule.is_(True))
+            .where(PrinterMaintenance.schedule_next_at.is_not(None))
+        )
+        horizons: dict[int, datetime] = {}
+        for printer_id, next_at in result.all():
+            if printer_id not in horizons or next_at < horizons[printer_id]:
+                horizons[printer_id] = next_at
+        return horizons
+
     async def _check_maintenance_runs(
         self,
         db: AsyncSession,
@@ -4842,7 +4960,9 @@ class PrintScheduler:
         """Queue triggered calibration runs and dispatch the pending ones (#3127).
 
         Same shape as the scheduled-drying check. A pending run is deferred with
-        a ``waiting_reason`` the card shows, never dropped: the printer being
+        a ``waiting_reason`` the card shows, never dropped: another run ahead
+        of it on the same printer (``after_other_run``; see
+        ``maintenance_actions.head_runs`` for the order), the printer being
         offline, a drying run holding it, the print queue having claimed it
         (``queue_reserved``), it not being idle, or its bed still being at or
         above the item's ``bed_temp_below`` threshold. Unlike drying,
@@ -4875,7 +4995,11 @@ class PrintScheduler:
         )
         rows = list(result.scalars().all())
 
-        running_printer_ids = {row.printer_id for row in rows if row.status == "running"}
+        # One run per printer per pass, in a fixed order: the run at the head
+        # of each printer's line is its only dispatch candidate, and every
+        # other pending run on that printer waits behind it by name -- also
+        # while the head is running, rather than as a plain "printer busy".
+        heads = maintenance_actions.head_runs(rows, now)
         recently_dispatched: set[int] = set()
         for row in rows:
             if row.status == "running":
@@ -4887,8 +5011,11 @@ class PrintScheduler:
                 continue
 
             printer_id = row.printer_id
-            if printer_id in running_printer_ids:
-                maintenance_actions.set_waiting(row, "printer_busy")
+            head = heads.get(printer_id)
+            if head is not None and head.id != row.id:
+                maintenance_actions.set_waiting(
+                    row, maintenance_actions.WAIT_AFTER_OTHER_RUN, {"item": maintenance_actions.run_item_name(head)}
+                )
                 continue
 
             state = printer_manager.get_status(printer_id)
@@ -4972,7 +5099,6 @@ class PrintScheduler:
                 row.status = "running"
                 row.started_at = now
                 maintenance_actions.set_waiting(row, None)
-                running_printer_ids.add(printer_id)
                 recently_dispatched.add(printer_id)
             else:
                 maintenance_actions.set_waiting(row, "printer_offline")

@@ -332,7 +332,9 @@ async def test_a_running_run_blocks_a_second_one_on_the_same_printer(scheduler, 
         await scheduler._check_maintenance_runs(db_session, True)
     mock_pm.start_calibration.assert_not_called()
     await db_session.refresh(second)
-    assert second.waiting_reason == "printer_busy"
+    # Behind the run on the printer, by name -- not a plain "printer busy"
+    assert second.waiting_reason == "after_other_run"
+    assert second.waiting_detail == {"item": "Printer Calibration"}
 
 
 @pytest.mark.asyncio

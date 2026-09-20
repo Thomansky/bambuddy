@@ -69,6 +69,10 @@ class PrinterMaintenance(Base):
     schedule_days: Mapped[list | None] = mapped_column(JSON, nullable=True)
     schedule_time: Mapped[str | None] = mapped_column(String(5), nullable=True)
     schedule_next_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # With a schedule: the print queue does not start a job on this printer
+    # that would still be running at schedule_next_at (#3127). Off = the run
+    # simply waits for whatever is on the printer to finish.
+    reserve_before_schedule: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1", nullable=False)
     last_auto_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

@@ -466,6 +466,7 @@ async def _get_printer_maintenance_internal(
                 schedule_days=item.schedule_days,
                 schedule_time=item.schedule_time,
                 schedule_next_at=item.schedule_next_at,
+                reserve_before_schedule=item.reserve_before_schedule,
                 current_run=current_run,
                 last_run=last_run,
             )
@@ -541,7 +542,7 @@ async def update_printer_maintenance(
 
     update_data = data.model_dump(exclude_unset=True)
     action = item.maintenance_type.action
-    action_keys = {"action_options", "trigger_mode", "schedule_days", "schedule_time"}
+    action_keys = {"action_options", "trigger_mode", "schedule_days", "schedule_time", "reserve_before_schedule"}
     if action_keys & update_data.keys() and not action:
         raise HTTPException(status_code=400, detail="This maintenance type has no automatic action")
     if "action_options" in update_data:
@@ -717,6 +718,7 @@ async def perform_maintenance(
         last_performed_at=item.last_performed_at,
         action=item.maintenance_type.action,
         trigger_mode=item.trigger_mode or "manual",
+        reserve_before_schedule=item.reserve_before_schedule,
     )
 
 
