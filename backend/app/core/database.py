@@ -5030,6 +5030,14 @@ async def run_migrations(conn):
     # Run-result notification opt-in (#3127). Off by default: a provider set
     # up before the event existed must not start receiving new messages.
     await _safe_execute(conn, "ALTER TABLE notification_providers ADD COLUMN on_maintenance_run BOOLEAN DEFAULT FALSE")
+    # Keep the queue clear before a scheduled run (#3127). Defaults on: a
+    # schedule that a Saturday-afternoon job can push into Sunday is not
+    # much of a schedule.
+    await _safe_execute(
+        conn, "ALTER TABLE printer_maintenance ADD COLUMN reserve_before_schedule BOOLEAN NOT NULL DEFAULT TRUE"
+    )
+    # Items a person started by hand bypass the maintenance holds (#3127).
+    await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN user_started BOOLEAN DEFAULT FALSE NOT NULL")
 
     # Migration: storage location sensor alerts (#2824), own column rather than
     # reusing on_ha_sensor_alert. That column can be scoped to one printer

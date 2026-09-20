@@ -100,6 +100,39 @@ BED_TEMP_BELOW_MAX = 120.0
 WAIT_BED_TOO_WARM = "bed_too_warm"
 WAIT_BED_TEMP_UNKNOWN = "bed_temp_unknown"
 
+# Runs on one printer go out one at a time, in a fixed order (#3127): the
+# levelling calibration before the vision encoder one -- it heats the bed,
+# and the cold-bed condition then holds the vision encoder run back on its
+# own -- then by start_after, then by id. Every run behind the head of that
+# line waits with this reason and the head's item name in waiting_detail.
+WAIT_AFTER_OTHER_RUN = "after_other_run"
+ACTION_PRIORITY: dict[str, int] = {ACTION_CALIBRATION: 0, ACTION_MOTION_PRECISION: 1}
+
+# The print queue keeps clear of a scheduled run (#3127): a job is only
+# dispatched when it is expected to be done this long before the slot, and a
+# job whose duration is unknown is held from UNKNOWN_DURATION_HOLD before it.
+SCHEDULE_MARGIN = timedelta(minutes=15)
+UNKNOWN_DURATION_HOLD = timedelta(hours=2)
+
+# How the two maintenance holds start on a queue row. The scheduler's
+# busy-only test and the frontend's parser both key on these exact strings,
+# so a reword lands in all three places at once.
+QUEUE_HOLD_RUN_PREFIX = "Maintenance run pending: "
+QUEUE_HOLD_SCHEDULE_PREFIX = "Scheduled maintenance at "
+
+# What a run's state reads as inside the queue hold, in English; the
+# frontend maps these phrases back to its own translations.
+QUEUE_HOLD_RUN_PHRASES: dict[str, str] = {
+    "printer_offline": "printer offline",
+    "printer_busy": "printer busy",
+    "awaiting_plate_clear": "plate not released yet",
+    "already_drying": "AMS drying in progress",
+    WAIT_BED_TOO_WARM: "bed still warm",
+    WAIT_BED_TEMP_UNKNOWN: "bed temperature unknown",
+}
+QUEUE_HOLD_RUN_QUEUED = "queued"
+QUEUE_HOLD_RUN_RUNNING = "running"
+
 # The vision encoder calibration is started as a system gcode file. The
 # directory under /usr/etc/print/ is model-specific and the printer reports
 # it with every internal job it runs (``PrinterState.internal_gcode_dir``);
@@ -222,6 +255,112 @@ def set_waiting(run: MaintenanceRun, reason: str | None, detail: dict | None = N
     """Record why ``run`` is still pending; reason and detail move together."""
     run.waiting_reason = reason
     run.waiting_detail = detail if reason is not None else None
+
+
+# ============== Order on one printer ==============
+
+
+def run_item_name(run: MaintenanceRun) -> str:
+    """The stored type name of the run's item (``printer_maintenance.maintenance_type`` loaded)."""
+    return run.printer_maintenance.maintenance_type.name
+
+
+def run_order_key(run: MaintenanceRun) -> tuple[int, datetime, int]:
+    """Where ``run`` stands in its printer's line; lower goes first.
+
+    Action priority, then ``start_after`` (none first), then id. An action
+    without a priority entry sorts last. ``run.printer_maintenance
+    .maintenance_type`` must be loaded.
+    """
+    action = run.printer_maintenance.maintenance_type.action or ""
+    return (ACTION_PRIORITY.get(action, len(ACTION_PRIORITY)), run.start_after or datetime.min, run.id)
+
+
+def head_runs(runs: list[MaintenanceRun], now: datetime) -> dict[int, MaintenanceRun]:
+    """The run at the head of each printer's line, by printer id.
+
+    A running run heads its printer whatever its action: nothing else can go
+    out while it is on the printer. Otherwise the first pending run whose
+    ``start_after`` has passed, in :func:`run_order_key` order. A pending run
+    whose ``start_after`` is still ahead heads nothing -- it could not be
+    dispatched yet, so it neither holds the other runs nor the print queue.
+    """
+    heads: dict[int, MaintenanceRun] = {}
+    for run in runs:
+        if run.status == "running":
+            heads.setdefault(run.printer_id, run)
+    for run in sorted(runs, key=run_order_key):
+        if run.status == "pending" and (run.start_after is None or run.start_after <= now):
+            heads.setdefault(run.printer_id, run)
+    return heads
+
+
+# ============== Holds on the print queue ==============
+
+_WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+
+def schedule_hold_blocks(next_at: datetime, now: datetime, estimate_seconds: int | None) -> bool:
+    """Would a job started ``now`` still be on the printer at ``next_at``?
+
+    Both naive UTC. With an estimate the job has to be done SCHEDULE_MARGIN
+    before the slot; without one it is held once the slot is
+    UNKNOWN_DURATION_HOLD or less away.
+    """
+    if not estimate_seconds or estimate_seconds <= 0:
+        return next_at - now <= UNKNOWN_DURATION_HOLD
+    return now + timedelta(seconds=estimate_seconds) + SCHEDULE_MARGIN > next_at
+
+
+def format_duration(seconds: int) -> str:
+    hours, minutes = divmod(max(0, int(seconds)) // 60, 60)
+    return f"{hours}h {minutes}m" if hours else f"{minutes}m"
+
+
+def queue_hold_for_run(run: MaintenanceRun) -> str:
+    """The queue row's wording for a printer a maintenance run reserves.
+
+    "Maintenance run pending: <item> (<state>)", the state being the run's
+    waiting reason as a phrase -- with the bed temperature for bed_too_warm
+    -- or "queued" / "running".
+    """
+    if run.status == "running":
+        state = QUEUE_HOLD_RUN_RUNNING
+    elif run.waiting_reason is None:
+        state = QUEUE_HOLD_RUN_QUEUED
+    else:
+        state = QUEUE_HOLD_RUN_PHRASES.get(run.waiting_reason, run.waiting_reason)
+        bed_temp = (run.waiting_detail or {}).get("bed_temp") if run.waiting_reason == WAIT_BED_TOO_WARM else None
+        if isinstance(bed_temp, (int, float)):
+            state = f"{state}, {bed_temp:g} °C"
+    return f"{QUEUE_HOLD_RUN_PREFIX}{run_item_name(run)} ({state})"
+
+
+def queue_hold_for_schedule(next_at: datetime, estimate_seconds: int | None) -> str:
+    """The queue row's wording for a job that would run into the slot at ``next_at`` (naive UTC).
+
+    The slot is written on the server's local clock, the way the card shows
+    the schedule time; the weekday is always English here and translated
+    by the frontend.
+    """
+    local = next_at.replace(tzinfo=timezone.utc).astimezone(local_zone())
+    when = f"{_WEEKDAYS[local.weekday()]} {local:%H:%M}"
+    if not estimate_seconds or estimate_seconds <= 0:
+        return f"{QUEUE_HOLD_SCHEDULE_PREFIX}{when} — this job would run into it (duration unknown)"
+    return (
+        f"{QUEUE_HOLD_SCHEDULE_PREFIX}{when} — this job would run into it "
+        f"(estimated {format_duration(estimate_seconds)})"
+    )
+
+
+def is_queue_hold(clause: str) -> bool:
+    """Is this waiting-reason clause one of the two maintenance holds?
+
+    Both resolve by themselves -- the run closes, the slot passes -- so the
+    scheduler files them with the busy-only reasons: no "job waiting"
+    notification, and the item stays on the queue forecast.
+    """
+    return clause.startswith(QUEUE_HOLD_RUN_PREFIX) or clause.startswith(QUEUE_HOLD_SCHEDULE_PREFIX)
 
 
 def run_options(action: str | None, options: dict | None) -> dict[str, bool] | None:

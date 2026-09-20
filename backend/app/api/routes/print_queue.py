@@ -462,6 +462,7 @@ def _enrich_response(item: PrintQueueItem) -> PrintQueueItemResponse:
         "manual_start": item.manual_start,
         "filament_short": bool(item.filament_short),
         "skip_filament_check": bool(item.skip_filament_check),
+        "user_started": bool(item.user_started),
         "ams_mapping": ams_mapping_parsed,
         "plate_id": item.plate_id,
         "bed_levelling": item.bed_levelling,
@@ -1182,6 +1183,9 @@ async def add_to_queue(
             auto_off_after=data.auto_off_after,
             manual_start=data.manual_start,
             skip_filament_check=data.skip_filament_check,
+            # "Print now" in the print dialog: queued at the top and, like ▶
+            # on a staged item, not held back by the maintenance side (#3127).
+            user_started=data.insert_at_top,
             ams_mapping=ams_mapping_json,
             nozzle_rack_choice=nozzle_rack_choice_json,
             plate_id=data.plate_id,
@@ -2441,6 +2445,9 @@ async def start_queue_item(
     # Print Anyway / no deficit: clear the flags and let the scheduler dispatch.
     item.manual_start = False
     item.filament_short = False
+    # The person pressed ▶: the maintenance side does not hold this item
+    # (#3127); the printer still has to be free as before.
+    item.user_started = True
     # Persist the user's "Print Anyway" decision so the scheduler does not
     # immediately re-flag this item on the next tick (#1698-followup). The
     # pre-fix behaviour bounced between "user said anyway" and
