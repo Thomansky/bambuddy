@@ -23,6 +23,10 @@ import { ProjectsPage } from '../../pages/ProjectsPage';
 import { FileManagerPage } from '../../pages/FileManagerPage';
 import { setAuthToken } from '../../api/client';
 
+// Folder names now also appear as tiles in the content pane (#3019), so
+// folder-row lookups are scoped to the tree in the sidebar.
+const folderTree = () => within(screen.getByTestId('folder-sidebar'));
+
 /** `opacity-0` on its own — with no variant in front of it. */
 const UNCONDITIONALLY_HIDDEN = /(^|\s)opacity-0(\s|$)/;
 
@@ -123,9 +127,9 @@ describe('actions that were hover-only (#2865)', () => {
 
     it('does not hide the folder actions from a pointer that cannot hover', async () => {
       render(<FileManagerPage />);
-      await waitFor(() => expect(screen.getByText('Brackets')).toBeInTheDocument());
+      await waitFor(() => expect(folderTree().getByText('Brackets')).toBeInTheDocument());
 
-      const row = screen.getByText('Brackets').closest('div.group')!;
+      const row = folderTree().getByText('Brackets').closest('div.group')!;
       // The kebab menu's wrapper is what carries the visibility classes.
       const actions = within(row).getAllByRole('button').slice(-1)[0].closest('div.flex-shrink-0')!;
 
