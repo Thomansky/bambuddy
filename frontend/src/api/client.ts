@@ -2990,6 +2990,7 @@ export interface NotificationProvider {
   on_ai_failure_detection: boolean;
   on_filament_low: boolean;
   on_maintenance_due: boolean;
+  on_maintenance_run: boolean;
   // AMS environmental alarms (regular AMS)
   on_ams_humidity_high: boolean;
   on_ams_temperature_high: boolean;
@@ -3057,6 +3058,7 @@ export interface NotificationProviderCreate {
   on_ai_failure_detection?: boolean;
   on_filament_low?: boolean;
   on_maintenance_due?: boolean;
+  on_maintenance_run?: boolean;
   // AMS environmental alarms (regular AMS)
   on_ams_humidity_high?: boolean;
   on_ams_temperature_high?: boolean;
@@ -3117,6 +3119,7 @@ export interface NotificationProviderUpdate {
   on_ai_failure_detection?: boolean;
   on_filament_low?: boolean;
   on_maintenance_due?: boolean;
+  on_maintenance_run?: boolean;
   // AMS environmental alarms (regular AMS)
   on_ams_humidity_high?: boolean;
   on_ams_temperature_high?: boolean;
@@ -3955,12 +3958,13 @@ export interface MaintenanceType {
   icon: string | null;
   wiki_url: string | null;  // Documentation link
   is_system: boolean;
-  action: MaintenanceAction | null;  // "calibration" when Bambuddy performs the task itself (#3127)
+  action: MaintenanceAction | null;  // set when Bambuddy performs the task itself (#3127)
   created_at: string;
 }
 
-// Actionable maintenance (#3127)
-export type MaintenanceAction = 'calibration';
+// Actionable maintenance (#3127): the bed-levelling calibration with its
+// option set, and the H2 series' vision encoder calibration without one.
+export type MaintenanceAction = 'calibration' | 'motion_precision';
 export type MaintenanceTriggerMode = 'manual' | 'when_due' | 'schedule';
 export type CalibrationOption =
   | 'micro_lidar'
@@ -3970,9 +3974,18 @@ export type CalibrationOption =
   | 'nozzle_offset'
   | 'high_temp_heatbed'
   | 'nozzle_clumping';
-export type CalibrationOptions = Partial<Record<CalibrationOption, boolean>>;
+// The flags plus the start condition both actions share: bed_temp_below in
+// °C, absent = no condition. Sent back whole on every change.
+export type CalibrationOptions = Partial<Record<CalibrationOption, boolean>> & { bed_temp_below?: number | null };
 export type MaintenanceRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 export type MaintenanceRunSource = 'manual' | 'due' | 'schedule';
+
+// Figures behind a waiting_reason that has any: bed_too_warm carries the
+// bed temperature and the threshold it has to fall below.
+export interface MaintenanceRunWaitingDetail {
+  bed_temp?: number;
+  threshold?: number;
+}
 
 export interface MaintenanceRun {
   id: number;
@@ -3980,9 +3993,10 @@ export interface MaintenanceRun {
   printer_id: number;
   status: MaintenanceRunStatus;
   source: MaintenanceRunSource;
-  options: CalibrationOptions | null;
+  options: Partial<Record<CalibrationOption, boolean>> | null;
   start_after: string | null;
   waiting_reason: string | null;
+  waiting_detail: MaintenanceRunWaitingDetail | null;
   error_message: string | null;
   created_at: string;
   started_at: string | null;
@@ -3994,6 +4008,7 @@ export interface MaintenanceCurrentRun {
   status: MaintenanceRunStatus;
   source: MaintenanceRunSource;
   waiting_reason: string | null;
+  waiting_detail: MaintenanceRunWaitingDetail | null;
   started_at: string | null;
 }
 
@@ -4001,6 +4016,7 @@ export interface MaintenanceItemUpdate {
   custom_interval_hours?: number | null;
   custom_interval_type?: 'hours' | 'days' | null;
   enabled?: boolean;
+  notifications_enabled?: boolean;  // off = no due reminder, no run result for this item
   action_options?: CalibrationOptions;
   trigger_mode?: MaintenanceTriggerMode;
   schedule_days?: number[];  // 0 = Monday
@@ -4026,6 +4042,7 @@ export interface MaintenanceStatus {
   maintenance_type_icon: string | null;
   maintenance_type_wiki_url: string | null;  // Custom wiki URL from type
   enabled: boolean;
+  notifications_enabled: boolean;  // the bell on the card (#3127)
   interval_hours: number;  // For hours type: print hours; for days type: number of days
   interval_type: 'hours' | 'days';
   current_hours: number;
@@ -4056,6 +4073,8 @@ export interface PrinterMaintenanceOverview {
   maintenance_items: MaintenanceStatus[];
   due_count: number;
   warning_count: number;
+  // The plate-clear gate the automatic calibration triggers wait behind (#3127)
+  require_plate_clear: boolean;
 }
 
 export interface MaintenanceHistory {

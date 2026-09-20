@@ -1885,6 +1885,8 @@ export default {
       replaceHepaFilter: 'Replace HEPA Filter',
       replaceCarbonFilter: 'Replace Carbon Filter',
       lubricateLeftNozzleRail: 'Lubricate Left Nozzle Rail',
+      printerCalibration: 'Printer Calibration',
+      visionEncoderCalibration: 'Vision Encoder Calibration',
     },
     // Toast
     maintenanceComplete: 'Maintenance marked as complete',
@@ -1909,6 +1911,8 @@ export default {
     noPermissionEditIntervals: 'You do not have permission to edit intervals',
     // Configure link
     configureSettings: 'Configure maintenance types and intervals',
+    notificationsOn: 'Notifications on',
+    notificationsOff: 'Notifications off',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
@@ -1920,10 +1924,16 @@ export default {
         micro_lidar: 'Micro Lidar',
         nozzle_clumping: 'Nozzle clumping detection',
       },
+      bedTempBelow: 'Only when the bed is below',
+      bedTempBelowValue: 'Bed temperature threshold (°C)',
+      bedTempUnit: '°C',
+      bedTempBelowSuffix: '',
       trigger: 'Trigger',
       triggerManual: 'Manual',
       triggerWhenDue: 'When due',
       triggerSchedule: 'On a schedule',
+      triggerGatePlateClear: '(only once the plate has been released)',
+      triggerGateIdle: '(once the printer is idle)',
       scheduleDays: 'Weekdays',
       scheduleTime: 'Earliest time',
       runNow: 'Run now',
@@ -1935,6 +1945,8 @@ export default {
       waitingPrinterBusy: 'Waiting: printer busy',
       waitingPlateClear: 'Waiting: plate not released yet',
       waitingAlreadyDrying: 'Waiting: AMS drying in progress',
+      waitingBedTooWarm: 'Waiting: bed still warm ({{temp}} °C)',
+      waitingBedTempUnknown: 'Waiting: bed temperature unknown',
       waitingOther: 'Waiting: {{reason}}',
       lastRunCompleted: 'Last run completed {{time}}',
       lastRunFailed: 'Last run failed {{time}}: {{error}}',
@@ -6087,6 +6099,8 @@ export default {
     replaceHepaFilter: 'Replace HEPA filter for air quality',
     replaceCarbonFilter: 'Replace activated carbon filter',
     lubricateLeftNozzleRail: 'Lubricate left nozzle rail (H2 series)',
+    printerCalibration: 'Bed leveling, vibration compensation and motor noise cancellation, run by the printer itself',
+    visionEncoderCalibration: 'Motion precision calibration of the vision encoder (H2 series), run by the printer itself',
   },
 
   // Smart Plugs
@@ -6469,6 +6483,8 @@ export default {
     lowFilamentLabel: 'Low Filament',
     maintenanceDue: 'Maintenance Due',
     maintenanceDueDescription: 'Notify when maintenance is needed',
+    maintenanceRun: 'Maintenance Run Finished',
+    maintenanceRunDescription: 'Notify when a calibration run Bambuddy queued completed, failed or was cancelled',
     amsHumidityHigh: 'AMS Humidity High',
     amsHumidityHighDescription: 'Regular AMS humidity exceeds threshold',
     amsTemperatureHigh: 'AMS Temperature High',
@@ -6640,6 +6656,7 @@ export default {
       printer_error: 'Printer Error',
       filament_low: 'Low Filament',
       maintenance_due: 'Maintenance Due',
+      maintenance_run: 'Maintenance Run Finished',
       test: 'Test',
     },
     // User email notification preferences

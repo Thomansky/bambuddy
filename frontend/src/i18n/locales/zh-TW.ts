@@ -1865,6 +1865,8 @@ export default {
       replaceHepaFilter: '更換 HEPA 過濾器',
       replaceCarbonFilter: '更換活性炭過濾器',
       lubricateLeftNozzleRail: '潤滑左噴嘴導軌',
+      printerCalibration: '印表機校準',
+      visionEncoderCalibration: '視覺編碼器校準',
     },
     // Toast
     maintenanceComplete: '維護已標記為完成',
@@ -1889,6 +1891,8 @@ export default {
     noPermissionEditIntervals: '您沒有編輯間隔的權限',
     // Configure link
     configureSettings: '設定維護類型和間隔',
+    notificationsOn: '通知已開啟',
+    notificationsOff: '通知已關閉',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
@@ -1900,10 +1904,16 @@ export default {
         micro_lidar: 'Micro Lidar',
         nozzle_clumping: '噴嘴堵塞偵測',
       },
+      bedTempBelow: '僅當熱床溫度低於',
+      bedTempBelowValue: '熱床溫度閾值 (°C)',
+      bedTempUnit: '°C',
+      bedTempBelowSuffix: '',
       trigger: '觸發方式',
       triggerManual: '手動',
       triggerWhenDue: '到期時',
       triggerSchedule: '依排程',
+      triggerGatePlateClear: '（僅在列印板確認清空後）',
+      triggerGateIdle: '（印表機閒置後）',
       scheduleDays: '星期',
       scheduleTime: '最早時間',
       runNow: '立即執行',
@@ -1915,6 +1925,8 @@ export default {
       waitingPrinterBusy: '等待中：印表機忙碌',
       waitingPlateClear: '等待中：列印板尚未確認清空',
       waitingAlreadyDrying: '等待中：AMS 正在乾燥',
+      waitingBedTooWarm: '等待中：熱床仍然較熱（{{temp}} °C）',
+      waitingBedTempUnknown: '等待中：熱床溫度未知',
       waitingOther: '等待中：{{reason}}',
       lastRunCompleted: '上次執行已完成 {{time}}',
       lastRunFailed: '上次執行失敗 {{time}}：{{error}}',
@@ -6017,6 +6029,8 @@ export default {
     replaceHepaFilter: '更換 HEPA 過濾器以保證空氣品質',
     replaceCarbonFilter: '更換活性炭過濾器',
     lubricateLeftNozzleRail: '潤滑左噴嘴導軌（H2 系列）',
+    printerCalibration: '由印表機自行執行的熱床調平、振動補償和馬達降噪',
+    visionEncoderCalibration: '由印表機自行執行的視覺編碼器運動精度校準（H2 系列）',
   },
 
   // Smart Plugs
@@ -6398,6 +6412,8 @@ export default {
     lowFilamentLabel: '耗材不足',
     maintenanceDue: '需要維護',
     maintenanceDueDescription: '需要維護時通知',
+    maintenanceRun: '維護執行已結束',
+    maintenanceRunDescription: '當 Bambuddy 啟動的校準完成、失敗或被取消時通知',
     amsHumidityHigh: 'AMS 濕度過高',
     amsHumidityHighDescription: '普通 AMS 濕度超過閾值',
     amsTemperatureHigh: 'AMS 溫度過高',
@@ -6569,6 +6585,7 @@ export default {
       printer_error: '印表機錯誤',
       filament_low: '耗材不足',
       maintenance_due: '需要維護',
+      maintenance_run: '維護執行已結束',
       test: '測試',
     },
     userEmail: {

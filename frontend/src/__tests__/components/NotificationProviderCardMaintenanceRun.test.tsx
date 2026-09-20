@@ -1,12 +1,7 @@
 /**
- * Tests for the AI Failure Detection toggle on NotificationProviderCard (#1794).
- *
- * Before #1794, Obico failure detection rode the multiplexed
- * on_printer_error toggle so users couldn't subscribe to one without the
- * other. These tests pin the standalone toggle:
- *  - Summary badge renders when enabled.
- *  - The toggle row appears in the expanded settings panel.
- *  - Flipping the toggle PATCHes the correct field.
+ * The "Maintenance Run Finished" event toggle on NotificationProviderCard
+ * (#3127): its badge in the summary strip and the PATCH the toggle sends,
+ * separate from the Maintenance Due toggle next to it.
  */
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
@@ -67,63 +62,59 @@ function buildProvider(overrides: Partial<NotificationProvider> = {}): Notificat
     last_success: null,
     last_error: null,
     last_error_at: null,
-    created_at: '2026-06-22T00:00:00Z',
-    updated_at: '2026-06-22T00:00:00Z',
+    created_at: '2026-04-25T00:00:00Z',
+    updated_at: '2026-04-25T00:00:00Z',
     ...overrides,
   };
 }
 
-describe('NotificationProviderCard — AI Failure Detection badge', () => {
-  it('renders the badge when on_ai_failure_detection is true', async () => {
+describe('NotificationProviderCard — Maintenance Run Finished (#3127)', () => {
+  it('shows the badge only when the event is on', async () => {
+    render(<NotificationProviderCard provider={buildProvider({ on_maintenance_run: true })} onEdit={vi.fn()} />);
+    expect(await screen.findByText('Maintenance Run Finished')).toBeInTheDocument();
+  });
+
+  it('shows no badge for a provider that predates the event', async () => {
+    render(<NotificationProviderCard provider={buildProvider()} onEdit={vi.fn()} />);
+    await screen.findByText('Test Provider');
+    expect(screen.queryByText('Maintenance Run Finished')).not.toBeInTheDocument();
+  });
+
+  it('offers the toggle under Printer Status, next to Maintenance Due', async () => {
+    const user = userEvent.setup();
     render(
       <NotificationProviderCard
-        provider={buildProvider({ on_ai_failure_detection: true })}
+        provider={buildProvider({ on_maintenance_due: true, on_maintenance_run: false })}
         onEdit={vi.fn()}
       />,
     );
-    expect(await screen.findByText('AI Failure Detection')).toBeInTheDocument();
-  });
-
-  it('omits the badge when on_ai_failure_detection is false', async () => {
-    render(<NotificationProviderCard provider={buildProvider()} onEdit={vi.fn()} />);
-    await screen.findByText('Test Provider');
-    expect(screen.queryByText('AI Failure Detection')).not.toBeInTheDocument();
-  });
-});
-
-describe('NotificationProviderCard — AI Failure Detection toggle', () => {
-  it('renders the toggle in the expanded settings panel', async () => {
-    const user = userEvent.setup();
-    render(<NotificationProviderCard provider={buildProvider()} onEdit={vi.fn()} />);
-
     await user.click(await screen.findByText(/event settings/i));
 
-    expect(await screen.findByText('AI Failure Detection')).toBeInTheDocument();
+    const section = (await screen.findByText('Printer Status')).closest('div')!;
+    const dueRow = within(section).getByText('Maintenance Due').closest('div.flex')!;
+    const runRow = within(section).getByText('Maintenance Run Finished').closest('div.flex')!;
+    expect(within(runRow).getByText(/calibration run Bambuddy queued/)).toBeInTheDocument();
+    expect(within(dueRow).getByRole('switch')).toHaveAttribute('aria-checked', 'true');
+    expect(within(runRow).getByRole('switch')).toHaveAttribute('aria-checked', 'false');
   });
 
-  it('PATCHes on_ai_failure_detection (NOT on_printer_error) when toggled on — #1794 regression guard', async () => {
+  it('toggling it PATCHes on_maintenance_run alone', async () => {
     let captured: Record<string, unknown> | null = null;
     server.use(
       http.patch('*/api/v1/notifications/1', async ({ request }) => {
         captured = (await request.json()) as Record<string, unknown>;
-        return HttpResponse.json(buildProvider({ on_ai_failure_detection: true }));
+        return HttpResponse.json(buildProvider({ on_maintenance_run: true }));
       }),
     );
 
     const user = userEvent.setup();
     render(<NotificationProviderCard provider={buildProvider()} onEdit={vi.fn()} />);
-
     await user.click(await screen.findByText(/event settings/i));
 
-    // The toggle label "AI Failure Detection" is unique to this row.
-    const label = await screen.findByText('AI Failure Detection');
-    const row = label.closest('div.flex')!;
-    const toggle = within(row).getByRole('switch');
-    await user.click(toggle);
+    const runRow = (await screen.findByText('Maintenance Run Finished')).closest('div.flex')!;
+    await user.click(within(runRow).getByRole('switch'));
 
     await waitFor(() => expect(captured).not.toBeNull());
-    expect(captured).toMatchObject({ on_ai_failure_detection: true });
-    // Critical: must NOT also flip the legacy multiplexed field.
-    expect(captured).not.toHaveProperty('on_printer_error');
+    expect(captured).toEqual({ on_maintenance_run: true });
   });
 });

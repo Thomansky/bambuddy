@@ -22,7 +22,7 @@ from backend.app.core.tasks import spawn_background_task
 from backend.app.core.websocket import ws_manager
 from backend.app.models.archive import PrintArchive
 from backend.app.models.library import LibraryFile
-from backend.app.models.maintenance import MaintenanceRun
+from backend.app.models.maintenance import MaintenanceRun, PrinterMaintenance
 from backend.app.models.print_queue import PrintQueueItem, PrintQueueVariant
 from backend.app.models.printer import Printer
 from backend.app.models.scheduled_drying import ScheduledDrying
@@ -4844,21 +4844,33 @@ class PrintScheduler:
         Same shape as the scheduled-drying check. A pending run is deferred with
         a ``waiting_reason`` the card shows, never dropped: the printer being
         offline, a drying run holding it, the print queue having claimed it
-        (``queue_reserved``), or it not being idle. Unlike drying,
+        (``queue_reserved``), it not being idle, or its bed still being at or
+        above the item's ``bed_temp_below`` threshold. Unlike drying,
         the plate-clear gate is honoured here when the setting is on -- bed
         levelling with parts on the plate is a crash -- so "Saturday, as soon as
         the plate is released" is literally what a scheduled run waits for.
-        Completion is not tracked here; the printer's own completion event
+        What is sent depends on the item's action: the calibration command with
+        the run's options, or the vision encoder's system gcode file -- whose
+        acknowledgement is awaited, because a refused path is the one failure
+        the completion event never reports. Completion is not tracked here; the printer's own completion event
         closes the run through ``maintenance_actions.on_internal_job_finished``.
+        The runs this pass itself closes -- stale ones and refused dispatches
+        -- are reported to the notification providers after the commit.
         """
         now = utcnow_naive()
 
-        await maintenance_actions.fail_stale_running_runs(db, now)
+        # Runs this pass closes without the printer's say-so; told to the
+        # providers once the commit below has made the outcome final.
+        closed = await maintenance_actions.fail_stale_running_runs(db, now)
         await maintenance_actions.queue_triggered_runs(db, now)
 
         result = await db.execute(
             select(MaintenanceRun)
             .where(MaintenanceRun.status.in_(("pending", "running")))
+            .options(
+                selectinload(MaintenanceRun.printer_maintenance).selectinload(PrinterMaintenance.maintenance_type),
+                selectinload(MaintenanceRun.printer),
+            )
             .order_by(MaintenanceRun.start_after.asc().nullsfirst(), MaintenanceRun.id.asc())
         )
         rows = list(result.scalars().all())
@@ -4876,47 +4888,100 @@ class PrintScheduler:
 
             printer_id = row.printer_id
             if printer_id in running_printer_ids:
-                row.waiting_reason = "printer_busy"
+                maintenance_actions.set_waiting(row, "printer_busy")
                 continue
 
             state = printer_manager.get_status(printer_id)
             if not state or not state.connected:
-                row.waiting_reason = "printer_offline"
+                maintenance_actions.set_waiting(row, "printer_offline")
                 continue
 
             if self._drying_in_progress.get(printer_id) or printer_id in self._scheduled_drying_printer_ids:
-                row.waiting_reason = "already_drying"
+                maintenance_actions.set_waiting(row, "already_drying")
                 continue
 
             if queue_reserved and printer_id in queue_reserved:
-                row.waiting_reason = "printer_busy"
+                maintenance_actions.set_waiting(row, "printer_busy")
                 continue
 
             if not self._is_printer_idle(printer_id, require_plate_clear):
                 if require_plate_clear and printer_manager.is_awaiting_plate_clear(printer_id):
-                    row.waiting_reason = "awaiting_plate_clear"
+                    maintenance_actions.set_waiting(row, "awaiting_plate_clear")
                 else:
-                    row.waiting_reason = "printer_busy"
+                    maintenance_actions.set_waiting(row, "printer_busy")
                 continue
 
-            options = maintenance_actions.normalize_calibration_options(row.options)
-            logger.info(
-                "Maintenance run %d: starting calibration on printer %d (%s)",
-                row.id,
-                printer_id,
-                ", ".join(flag for flag, on in options.items() if on),
+            # Last gate, re-read every pass: the bed cools on its own, and the
+            # threshold comes from the item so a change to it takes effect on
+            # the run that is waiting.
+            bed_wait = maintenance_actions.bed_condition_wait(
+                maintenance_actions.bed_temp_below(row.printer_maintenance.action_options),
+                maintenance_actions.current_bed_temperature(state),
             )
-            if printer_manager.start_calibration(printer_id, **options):
+            if bed_wait is not None:
+                maintenance_actions.set_waiting(row, *bed_wait)
+                continue
+
+            action = row.printer_maintenance.maintenance_type.action
+            if action == maintenance_actions.ACTION_MOTION_PRECISION:
+                path = maintenance_actions.motion_precision_gcode_path(
+                    row.printer.model, getattr(state, "internal_gcode_dir", None)
+                )
+                if path is None:
+                    # Belt and braces: the type gate keeps the item off other
+                    # models, but a row is a row.
+                    row.status = "failed"
+                    row.error_message = (
+                        f"Vision encoder calibration needs an H2-series printer; this one is {row.printer.model}"
+                    )
+                    row.completed_at = now
+                    maintenance_actions.set_waiting(row, None)
+                    logger.warning("Maintenance run %d refused: %s", row.id, row.error_message)
+                    closed.append(row)
+                    continue
+                logger.info(
+                    "Maintenance run %d: starting vision encoder calibration on printer %d (%s)",
+                    row.id,
+                    printer_id,
+                    path,
+                )
+                sent = printer_manager.start_internal_gcode_file(printer_id, path)
+                if sent:
+                    # The reply is the only immediate sign that the directory
+                    # was guessed wrong for this model; without it the run
+                    # would sit "running" until the stale sweep closed it.
+                    accepted, detail = await printer_manager.await_internal_gcode_ack(printer_id, path)
+                    if not accepted:
+                        row.status = "failed"
+                        row.error_message = f"Printer refused the vision encoder calibration file {path} ({detail})"
+                        row.completed_at = now
+                        maintenance_actions.set_waiting(row, None)
+                        logger.warning("Maintenance run %d failed: %s", row.id, row.error_message)
+                        closed.append(row)
+                        continue
+            else:
+                options = maintenance_actions.normalize_calibration_options(row.options)
+                logger.info(
+                    "Maintenance run %d: starting calibration on printer %d (%s)",
+                    row.id,
+                    printer_id,
+                    ", ".join(flag for flag, on in options.items() if on),
+                )
+                sent = printer_manager.start_calibration(printer_id, **options)
+            if sent:
                 row.status = "running"
                 row.started_at = now
-                row.waiting_reason = None
+                maintenance_actions.set_waiting(row, None)
                 running_printer_ids.add(printer_id)
                 recently_dispatched.add(printer_id)
             else:
-                row.waiting_reason = "printer_offline"
+                maintenance_actions.set_waiting(row, "printer_offline")
 
         self._calibrating_printer_ids = recently_dispatched
         await db.commit()
+
+        for run in closed:
+            await maintenance_actions.notify_run_finished(db, run)
 
     def _update_running_scheduled_drying(self, row: ScheduledDrying, now: datetime):
         """Detect completion or interruption of a running scheduled drying.

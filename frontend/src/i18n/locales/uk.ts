@@ -1882,6 +1882,8 @@ export default {
       replaceHepaFilter: "Замінити HEPA-фільтр",
       replaceCarbonFilter: "Замінити вугільний фільтр",
       lubricateLeftNozzleRail: "Змастити ліву напрямну сопла",
+      printerCalibration: "Калібрування принтера",
+      visionEncoderCalibration: "Калібрування візуального енкодера",
     },
     // Toast
     maintenanceComplete: "Технічне обслуговування позначено як завершене",
@@ -1906,6 +1908,8 @@ export default {
     noPermissionEditIntervals: "Ви не маєте дозволу редагувати інтервали",
     // Configure link
     configureSettings: "Налаштувати типи та інтервали технічного обслуговування",
+    notificationsOn: "Сповіщення увімкнено",
+    notificationsOff: "Сповіщення вимкнено",
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
@@ -1917,10 +1921,16 @@ export default {
         micro_lidar: "Micro Lidar",
         nozzle_clumping: "Виявлення засмічення сопла",
       },
+      bedTempBelow: "Лише коли стіл холодніший за",
+      bedTempBelowValue: "Поріг температури стола (°C)",
+      bedTempUnit: "°C",
+      bedTempBelowSuffix: "",
       trigger: "Тригер",
       triggerManual: "Вручну",
       triggerWhenDue: "Коли настане термін",
       triggerSchedule: "За розкладом",
+      triggerGatePlateClear: "(лише після звільнення столу)",
+      triggerGateIdle: "(щойно принтер звільниться)",
       scheduleDays: "Дні тижня",
       scheduleTime: "Не раніше",
       runNow: "Запустити зараз",
@@ -1932,6 +1942,8 @@ export default {
       waitingPrinterBusy: "Очікування: принтер зайнятий",
       waitingPlateClear: "Очікування: стіл ще не звільнено",
       waitingAlreadyDrying: "Очікування: триває сушіння AMS",
+      waitingBedTooWarm: "Очікування: стіл ще теплий ({{temp}} °C)",
+      waitingBedTempUnknown: "Очікування: температура стола невідома",
       waitingOther: "Очікування: {{reason}}",
       lastRunCompleted: "Останній запуск завершено {{time}}",
       lastRunFailed: "Останній запуск не вдався {{time}}: {{error}}",
@@ -6072,6 +6084,8 @@ export default {
     replaceHepaFilter: "Замініть фільтр HEPA для забезпечення якості повітря",
     replaceCarbonFilter: "Замініть фільтр з активованим вугіллям",
     lubricateLeftNozzleRail: "Змастіть ліву рейку сопла (серія H2)",
+    printerCalibration: "Вирівнювання столу, компенсація вібрацій і придушення шуму моторів, які виконує сам принтер",
+    visionEncoderCalibration: "Калібрування точності руху візуального енкодера (серія H2), яке виконує сам принтер",
   },
 
   // Smart Plugs
@@ -6454,6 +6468,8 @@ export default {
     lowFilamentLabel: "Закінчується філамент",
     maintenanceDue: "Настав час технічного обслуговування",
     maintenanceDueDescription: "Повідомити, коли потрібне обслуговування",
+    maintenanceRun: "Запуск обслуговування завершено",
+    maintenanceRunDescription: "Сповіщати, коли запущене Bambuddy калібрування завершено, не вдалося або скасовано",
     amsHumidityHigh: "AMS Висока вологість",
     amsHumidityHighDescription: "Звичайна AMS вологість перевищує порогове значення",
     amsTemperatureHigh: "AMS Висока температура",
@@ -6625,6 +6641,7 @@ export default {
       printer_error: "Помилка принтера",
       filament_low: "Закінчується філамент",
       maintenance_due: "Технічне обслуговування",
+      maintenance_run: "Запуск обслуговування завершено",
       test: "Тест",
     },
     // User email notification preferences

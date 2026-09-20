@@ -2,13 +2,18 @@
 
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.app.models.maintenance import MaintenanceRun, MaintenanceType, PrinterMaintenance
+from backend.app.models.settings import Settings
+from backend.app.services import maintenance_actions
+
+_NOTIFY_RUN = "backend.app.services.notification_service.notification_service.on_maintenance_run"
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
@@ -244,6 +249,27 @@ class TestSettings:
         assert body["action_options"]["vibration"] is False
         assert body["schedule_next_at"] is None
 
+    @pytest.mark.parametrize(("value", "expected"), [("false", False), ("true", True), (0, False), (1, True)])
+    async def test_flags_take_string_and_numeric_booleans(self, async_client, printer_factory, value, expected):
+        printer = await printer_factory()
+        item = await _calibration_item(async_client, printer.id)
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}",
+            json={"action_options": {"bed_leveling": value, "vibration": True}},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["action_options"]["bed_leveling"] is expected
+
+    @pytest.mark.parametrize("value", ["abc", None, 2, [True], {"on": True}])
+    async def test_non_boolean_flags_are_a_422(self, async_client, printer_factory, value):
+        printer = await printer_factory()
+        item = await _calibration_item(async_client, printer.id)
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}",
+            json={"action_options": {"bed_leveling": value, "vibration": True}},
+        )
+        assert response.status_code == 422, response.text
+
     async def test_schedule_computes_next_at(self, async_client, printer_factory, monkeypatch):
         monkeypatch.setenv("TZ", "UTC")
         printer = await printer_factory()
@@ -394,3 +420,456 @@ class TestOverviewWaitingReason:
         assert item["current_run"]["source"] == "schedule"
         assert item["current_run"]["waiting_reason"] == "awaiting_plate_clear"
         assert item["last_run"] is None  # an active run takes the slot
+
+
+# ============== Vision encoder calibration (second action) ==============
+
+
+async def _motion_item(async_client: AsyncClient, printer_id: int) -> dict | None:
+    response = await async_client.get(f"/api/v1/maintenance/printers/{printer_id}")
+    assert response.status_code == 200, response.text
+    items = [i for i in response.json()["maintenance_items"] if i["action"] == "motion_precision"]
+    assert len(items) <= 1
+    return items[0] if items else None
+
+
+class TestVisionEncoderType:
+    async def test_seeded_as_a_seven_day_system_type(self, async_client):
+        response = await async_client.get("/api/v1/maintenance/types")
+        vision = [t for t in response.json() if t["name"] == "Vision Encoder Calibration"]
+        assert len(vision) == 1
+        assert vision[0]["is_system"] is True
+        assert vision[0]["action"] == "motion_precision"
+        assert vision[0]["default_interval_hours"] == 7.0
+        assert vision[0]["interval_type"] == "days"
+
+    @pytest.mark.parametrize("model", ["H2S", "H2D", "H2D Pro", "H2C", "O1S"])
+    async def test_offered_on_the_h2_series(self, async_client, printer_factory, model):
+        printer = await printer_factory(model=model)
+        item = await _motion_item(async_client, printer.id)
+        assert item is not None
+        assert item["interval_type"] == "days"
+        assert item["interval_hours"] == 7.0
+        assert item["is_due"] is True  # never performed
+        # No option set: the job has none
+        assert item["action_options"] is None
+        assert item["action_available_options"] is None
+        assert item["trigger_mode"] == "manual"
+
+    @pytest.mark.parametrize("model", ["X1C", "P1S", "A1", "X2D", None])
+    async def test_not_offered_on_printers_without_a_vision_encoder(self, async_client, printer_factory, model):
+        printer = await printer_factory(model=model)
+        assert await _motion_item(async_client, printer.id) is None
+        # ...while the bed-levelling calibration still is
+        assert await _calibration_item(async_client, printer.id)
+
+    async def test_run_now_needs_no_options(self, async_client, printer_factory):
+        printer = await printer_factory(model="H2S")
+        item = await _motion_item(async_client, printer.id)
+        response = await async_client.post(f"/api/v1/maintenance/items/{item['id']}/run")
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "pending"
+        assert response.json()["options"] is None
+        assert (await async_client.post(f"/api/v1/maintenance/items/{item['id']}/run")).status_code == 409
+
+    async def test_triggers_need_no_options_either(self, async_client, printer_factory, monkeypatch):
+        monkeypatch.setenv("TZ", "UTC")
+        printer = await printer_factory(model="H2S")
+        item = await _motion_item(async_client, printer.id)
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}", json={"trigger_mode": "when_due"}
+        )
+        assert response.status_code == 200, response.text
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}",
+            json={"trigger_mode": "schedule", "schedule_days": [5], "schedule_time": "06:00"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["schedule_next_at"] is not None
+
+    async def test_options_cannot_be_set_on_it(self, async_client, printer_factory):
+        printer = await printer_factory(model="H2S")
+        item = await _motion_item(async_client, printer.id)
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}", json={"action_options": {"bed_leveling": True}}
+        )
+        assert response.status_code == 400
+        assert "no options" in response.json()["detail"]
+
+    async def _running_motion_run(self, async_client, printer_factory, db_session):
+        printer = await printer_factory(model="H2S")
+        item = await _motion_item(async_client, printer.id)
+        run = MaintenanceRun(
+            printer_maintenance_id=item["id"],
+            printer_id=printer.id,
+            status="running",
+            source="manual",
+            started_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        )
+        db_session.add(run)
+        await db_session.commit()
+        return printer, run
+
+    async def test_cancel_stops_the_printer_only_on_the_vision_encoder_job(
+        self, async_client, printer_factory, db_session
+    ):
+        printer, run = await self._running_motion_run(async_client, printer_factory, db_session)
+        with patch("backend.app.api.routes.maintenance.printer_manager") as mock_pm:
+            mock_pm.get_status.return_value = SimpleNamespace(
+                state="RUNNING",
+                gcode_file="/usr/etc/print/O1S/calibrate_motion_precision.gcode",
+                current_print=None,
+                subtask_name="calibrate_motion_precision.gcode",
+            )
+            mock_pm.stop_print.return_value = True
+            response = await async_client.delete(f"/api/v1/maintenance/runs/{run.id}")
+        assert response.status_code == 200
+        mock_pm.stop_print.assert_called_once_with(printer.id)
+        await db_session.refresh(run)
+        assert run.status == "cancelled"
+
+    async def test_cancel_leaves_the_other_calibration_alone(self, async_client, printer_factory, db_session):
+        """The printer is on the bed-levelling run (started from the screen,
+        say) while a stale motion_precision row says running: not ours to stop."""
+        _printer, run = await self._running_motion_run(async_client, printer_factory, db_session)
+        with patch("backend.app.api.routes.maintenance.printer_manager") as mock_pm:
+            mock_pm.get_status.return_value = SimpleNamespace(
+                state="RUNNING",
+                gcode_file="/usr/etc/print/O1S/auto_cali_for_user_param.gcode",
+                current_print=None,
+                subtask_name="auto_cali_for_user_param.gcode",
+            )
+            response = await async_client.delete(f"/api/v1/maintenance/runs/{run.id}")
+        assert response.status_code == 200
+        mock_pm.stop_print.assert_not_called()
+        await db_session.refresh(run)
+        assert run.status == "cancelled"
+
+    async def test_a_calibration_run_is_not_stopped_while_the_vision_encoder_runs(
+        self, async_client, printer_factory, db_session
+    ):
+        printer = await printer_factory(model="H2S")
+        item = await _calibration_item(async_client, printer.id)
+        run = MaintenanceRun(
+            printer_maintenance_id=item["id"],
+            printer_id=printer.id,
+            status="running",
+            source="manual",
+            options={"bed_leveling": True},
+            started_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        )
+        db_session.add(run)
+        await db_session.commit()
+        with patch("backend.app.api.routes.maintenance.printer_manager") as mock_pm:
+            mock_pm.get_status.return_value = SimpleNamespace(
+                state="RUNNING",
+                gcode_file="/usr/etc/print/O1S/calibrate_motion_precision.gcode",
+                current_print=None,
+                subtask_name="calibrate_motion_precision.gcode",
+            )
+            response = await async_client.delete(f"/api/v1/maintenance/runs/{run.id}")
+        assert response.status_code == 200
+        mock_pm.stop_print.assert_not_called()
+
+
+# ============== Bed-temperature start condition ==============
+
+
+class TestBedTempBelowSetting:
+    async def test_set_read_back_and_clear(self, async_client, printer_factory):
+        printer = await printer_factory()
+        item = await _calibration_item(async_client, printer.id)
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}",
+            json={"action_options": {**item["action_options"], "bed_temp_below": 28}},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["action_options"]["bed_temp_below"] == 28.0
+        assert response.json()["action_options"]["bed_leveling"] is True
+
+        item = await _calibration_item(async_client, printer.id)
+        assert item["action_options"]["bed_temp_below"] == 28.0
+
+        # The run carries the flags only; the condition stays on the item.
+        response = await async_client.post(f"/api/v1/maintenance/items/{item['id']}/run")
+        assert response.status_code == 200, response.text
+        assert "bed_temp_below" not in response.json()["options"]
+
+        # null clears it, and so does leaving the key out
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}",
+            json={"action_options": {"bed_leveling": True, "bed_temp_below": None}},
+        )
+        assert response.status_code == 200, response.text
+        assert "bed_temp_below" not in response.json()["action_options"]
+        item = await _calibration_item(async_client, printer.id)
+        assert "bed_temp_below" not in item["action_options"]
+
+    async def test_one_decimal_is_kept(self, async_client, printer_factory):
+        printer = await printer_factory()
+        item = await _calibration_item(async_client, printer.id)
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}",
+            json={"action_options": {"bed_leveling": True, "bed_temp_below": 29.5}},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["action_options"]["bed_temp_below"] == 29.5
+
+    @pytest.mark.parametrize("value", [0, -1, 120.5, 1000, "28", True, [28], 28.25])
+    async def test_out_of_range_and_non_numeric_are_a_422(self, async_client, printer_factory, value):
+        printer = await printer_factory()
+        item = await _calibration_item(async_client, printer.id)
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}",
+            json={"action_options": {"bed_leveling": True, "bed_temp_below": value}},
+        )
+        assert response.status_code == 422, response.text
+
+    async def test_the_vision_encoder_item_takes_the_condition_but_no_flags(self, async_client, printer_factory):
+        printer = await printer_factory(model="H2S")
+        item = await _motion_item(async_client, printer.id)
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}", json={"action_options": {"bed_temp_below": 30}}
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["action_options"] == {"bed_temp_below": 30.0}
+        item = await _motion_item(async_client, printer.id)
+        assert item["action_options"] == {"bed_temp_below": 30.0}
+        assert item["action_available_options"] is None
+
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}",
+            json={"action_options": {"bed_temp_below": 30, "bed_leveling": True}},
+        )
+        assert response.status_code == 400
+
+        response = await async_client.patch(f"/api/v1/maintenance/items/{item['id']}", json={"action_options": {}})
+        assert response.status_code == 200, response.text
+        item = await _motion_item(async_client, printer.id)
+        assert item["action_options"] is None
+
+    async def test_the_waiting_temperature_reaches_the_card(self, async_client, printer_factory, db_session):
+        printer = await printer_factory()
+        item = await _calibration_item(async_client, printer.id)
+        db_session.add(
+            MaintenanceRun(
+                printer_maintenance_id=item["id"],
+                printer_id=printer.id,
+                status="pending",
+                source="due",
+                waiting_reason="bed_too_warm",
+                waiting_detail={"bed_temp": 34.2, "threshold": 30.0},
+            )
+        )
+        await db_session.commit()
+        item = await _calibration_item(async_client, printer.id)
+        assert item["current_run"]["waiting_reason"] == "bed_too_warm"
+        assert item["current_run"]["waiting_detail"] == {"bed_temp": 34.2, "threshold": 30.0}
+
+        response = await async_client.get(f"/api/v1/maintenance/items/{item['id']}/runs")
+        assert response.json()[0]["waiting_detail"] == {"bed_temp": 34.2, "threshold": 30.0}
+
+        # Cancelling clears reason and detail together
+        with patch("backend.app.api.routes.maintenance.printer_manager"):
+            response = await async_client.delete(f"/api/v1/maintenance/runs/{item['current_run']['id']}")
+        assert response.status_code == 200
+        item = await _calibration_item(async_client, printer.id)
+        assert item["last_run"]["waiting_reason"] is None
+        assert item["last_run"]["waiting_detail"] is None
+
+
+class TestNotificationToggle:
+    """The bell on every card (#3127): notifications_enabled per item."""
+
+    async def test_every_item_starts_with_notifications_on(self, async_client, printer_factory):
+        printer = await printer_factory()
+        response = await async_client.get(f"/api/v1/maintenance/printers/{printer.id}")
+        items = response.json()["maintenance_items"]
+        assert items
+        assert all(i["notifications_enabled"] is True for i in items)
+
+    async def test_patch_mutes_a_reminder_only_item_too(self, async_client, printer_factory):
+        """Not gated on the action: due reminders exist for every item."""
+        printer = await printer_factory()
+        response = await async_client.get(f"/api/v1/maintenance/printers/{printer.id}")
+        other = next(i for i in response.json()["maintenance_items"] if i["action"] is None)
+
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{other['id']}", json={"notifications_enabled": False}
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["notifications_enabled"] is False
+        assert response.json()["enabled"] is True
+
+        response = await async_client.get(f"/api/v1/maintenance/printers/{printer.id}")
+        muted = next(i for i in response.json()["maintenance_items"] if i["id"] == other["id"])
+        assert muted["notifications_enabled"] is False
+        assert muted["enabled"] is True
+
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{other['id']}", json={"notifications_enabled": True}
+        )
+        assert response.json()["notifications_enabled"] is True
+
+    async def test_null_is_refused_rather_than_written(self, async_client, printer_factory):
+        """Both flags are NOT NULL columns: an explicit null is a 422, not a crash on commit."""
+        printer = await printer_factory()
+        item = await _calibration_item(async_client, printer.id)
+        for key in ("notifications_enabled", "enabled"):
+            response = await async_client.patch(f"/api/v1/maintenance/items/{item['id']}", json={key: None})
+            assert response.status_code == 422, response.text
+            assert key in response.text
+        item = await _calibration_item(async_client, printer.id)
+        assert item["notifications_enabled"] is True
+        assert item["enabled"] is True
+
+    async def test_perform_response_carries_the_flag(self, async_client, printer_factory):
+        printer = await printer_factory()
+        item = await _calibration_item(async_client, printer.id)
+        await async_client.patch(f"/api/v1/maintenance/items/{item['id']}", json={"notifications_enabled": False})
+        response = await async_client.post(f"/api/v1/maintenance/items/{item['id']}/perform", json={})
+        assert response.status_code == 200
+        assert response.json()["notifications_enabled"] is False
+
+    async def _two_due_items(self, async_client, printer_id):
+        """Leave exactly two enabled hours-based items on the printer, both due."""
+        response = await async_client.get(f"/api/v1/maintenance/printers/{printer_id}")
+        items = [i for i in response.json()["maintenance_items"] if i["interval_type"] == "hours"]
+        keep, mute = items[0], items[1]
+        for item in response.json()["maintenance_items"]:
+            if item["id"] not in (keep["id"], mute["id"]):
+                await async_client.patch(f"/api/v1/maintenance/items/{item['id']}", json={"enabled": False})
+        return keep, mute
+
+    async def test_a_muted_item_is_left_out_of_the_due_reminder(self, async_client, printer_factory):
+        """Two items due on one printer, one muted: the reminder names exactly the other."""
+        printer = await printer_factory()
+        keep, mute = await self._two_due_items(async_client, printer.id)
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{mute['id']}", json={"notifications_enabled": False}
+        )
+        assert response.status_code == 200
+
+        with patch("backend.app.api.routes.maintenance.notification_service") as notify:
+            notify.on_maintenance_due = AsyncMock()
+            response = await async_client.patch(f"/api/v1/maintenance/printers/{printer.id}/hours?total_hours=5000")
+        assert response.status_code == 200, response.text
+        notify.on_maintenance_due.assert_awaited_once()
+        sent = notify.on_maintenance_due.await_args.args[2]
+        assert [i["name"] for i in sent] == [keep["maintenance_type_name"]]
+        assert sent[0]["is_due"] is True
+
+    async def test_no_reminder_when_every_due_item_is_muted(self, async_client, printer_factory):
+        printer = await printer_factory()
+        keep, mute = await self._two_due_items(async_client, printer.id)
+        for item in (keep, mute):
+            await async_client.patch(f"/api/v1/maintenance/items/{item['id']}", json={"notifications_enabled": False})
+
+        with patch("backend.app.api.routes.maintenance.notification_service") as notify:
+            notify.on_maintenance_due = AsyncMock()
+            response = await async_client.patch(f"/api/v1/maintenance/printers/{printer.id}/hours?total_hours=5000")
+        assert response.status_code == 200
+        notify.on_maintenance_due.assert_not_awaited()
+
+        # The mute changes nothing about the item's own state
+        response = await async_client.get(f"/api/v1/maintenance/printers/{printer.id}")
+        muted = next(i for i in response.json()["maintenance_items"] if i["id"] == keep["id"])
+        assert muted["is_due"] is True
+        assert response.json()["due_count"] == 2
+
+    async def test_cancel_from_bambuddy_reports_a_cancelled_run(self, async_client, printer_factory):
+        """The event promises completed, failed or cancelled; a Cancel on the card is the third."""
+        printer = await printer_factory()
+        item = await _calibration_item(async_client, printer.id)
+        run = (await async_client.post(f"/api/v1/maintenance/items/{item['id']}/run")).json()
+        with (
+            patch("backend.app.api.routes.maintenance.printer_manager"),
+            patch(_NOTIFY_RUN, new_callable=AsyncMock) as notify,
+        ):
+            response = await async_client.delete(f"/api/v1/maintenance/runs/{run['id']}")
+        assert response.status_code == 200
+        notify.assert_awaited_once()
+        assert notify.await_args.args[:5] == (printer.id, printer.name, "Printer Calibration", "cancelled", None)
+
+    async def test_cancel_of_a_muted_item_reports_nothing(self, async_client, printer_factory):
+        printer = await printer_factory()
+        item = await _calibration_item(async_client, printer.id)
+        await async_client.patch(f"/api/v1/maintenance/items/{item['id']}", json={"notifications_enabled": False})
+        run = (await async_client.post(f"/api/v1/maintenance/items/{item['id']}/run")).json()
+        with (
+            patch("backend.app.api.routes.maintenance.printer_manager"),
+            patch(_NOTIFY_RUN, new_callable=AsyncMock) as notify,
+        ):
+            response = await async_client.delete(f"/api/v1/maintenance/runs/{run['id']}")
+        assert response.status_code == 200
+        notify.assert_not_awaited()
+        item = await _calibration_item(async_client, printer.id)
+        assert item["last_run"]["status"] == "cancelled"
+
+    async def test_a_running_run_cancelled_from_bambuddy_reports_once(
+        self, async_client, printer_factory, db_session, test_engine
+    ):
+        """The stop makes the printer report FAILED a moment later; that edge
+        finds the row already closed and must not report the run a second time."""
+        printer = await printer_factory()
+        item = await _calibration_item(async_client, printer.id)
+        run = MaintenanceRun(
+            printer_maintenance_id=item["id"],
+            printer_id=printer.id,
+            status="running",
+            source="manual",
+            options={"bed_leveling": True},
+            started_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        )
+        db_session.add(run)
+        await db_session.commit()
+        gcode = "/usr/etc/print/H2S/auto_cali_for_user_param.gcode"
+        maker = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+        with (
+            patch("backend.app.api.routes.maintenance.printer_manager") as mock_pm,
+            patch("backend.app.services.maintenance_actions.async_session", maker),
+            patch(_NOTIFY_RUN, new_callable=AsyncMock) as notify,
+        ):
+            mock_pm.get_status.return_value = SimpleNamespace(
+                state="RUNNING", gcode_file=gcode, current_print=None, subtask_name="auto_cali_for_user_param.gcode"
+            )
+            mock_pm.stop_print.return_value = True
+            response = await async_client.delete(f"/api/v1/maintenance/runs/{run.id}")
+            assert response.status_code == 200
+            mock_pm.stop_print.assert_called_once_with(printer.id)
+            closed_again = await maintenance_actions.on_internal_job_finished(
+                printer.id, gcode, "auto_cali_for_user_param.gcode", "failed", None
+            )
+        assert closed_again is False
+        notify.assert_awaited_once()
+        assert notify.await_args.args[3] == "cancelled"
+        await db_session.refresh(run)
+        assert run.status == "cancelled"
+
+
+class TestTriggerGate:
+    """The overview says which gate the automatic triggers wait behind (#3127)."""
+
+    async def test_defaults_to_the_idle_gate_when_the_setting_is_absent(self, async_client, printer_factory):
+        printer = await printer_factory()
+        response = await async_client.get(f"/api/v1/maintenance/printers/{printer.id}")
+        assert response.json()["require_plate_clear"] is False
+        response = await async_client.get("/api/v1/maintenance/overview")
+        assert response.status_code == 200
+        assert all(o["require_plate_clear"] is False for o in response.json())
+
+    async def test_reports_the_plate_clear_gate_when_the_setting_is_on(self, async_client, printer_factory, db_session):
+        printer = await printer_factory()
+        db_session.add(Settings(key="require_plate_clear", value="true"))
+        await db_session.commit()
+        response = await async_client.get(f"/api/v1/maintenance/printers/{printer.id}")
+        assert response.json()["require_plate_clear"] is True
+        response = await async_client.get("/api/v1/maintenance/overview")
+        assert [o["require_plate_clear"] for o in response.json()] == [True]
+
+    async def test_a_false_setting_row_reads_as_off(self, async_client, printer_factory, db_session):
+        printer = await printer_factory()
+        db_session.add(Settings(key="require_plate_clear", value="false"))
+        await db_session.commit()
+        response = await async_client.get(f"/api/v1/maintenance/printers/{printer.id}")
+        assert response.json()["require_plate_clear"] is False

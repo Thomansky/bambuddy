@@ -4988,6 +4988,7 @@ async def run_migrations(conn):
             options JSON,
             start_after DATETIME,
             waiting_reason TEXT,
+            waiting_detail JSON,
             error_message TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             started_at DATETIME,
@@ -5005,6 +5006,7 @@ async def run_migrations(conn):
             options JSON,
             start_after TIMESTAMP,
             waiting_reason TEXT,
+            waiting_detail JSON,
             error_message TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             started_at TIMESTAMP,
@@ -5026,6 +5028,19 @@ async def run_migrations(conn):
     await _safe_execute(conn, "ALTER TABLE printer_maintenance ADD COLUMN schedule_time VARCHAR(5)")
     await _safe_execute(conn, "ALTER TABLE printer_maintenance ADD COLUMN schedule_next_at TIMESTAMP")
     await _safe_execute(conn, "ALTER TABLE printer_maintenance ADD COLUMN last_auto_run_at TIMESTAMP")
+    # Bed-temperature start condition (#3127): the waiting reason gained a
+    # measurement to show, on a table that may already exist from the
+    # statement above.
+    await _safe_execute(conn, "ALTER TABLE maintenance_runs ADD COLUMN waiting_detail JSON")
+    # Per-item notification mute (#3127). Defaults on so the due reminders
+    # existing items send keep coming. TRUE is the spelling both dialects
+    # apply (see the on_ha_sensor_alert note above).
+    await _safe_execute(
+        conn, "ALTER TABLE printer_maintenance ADD COLUMN notifications_enabled BOOLEAN NOT NULL DEFAULT TRUE"
+    )
+    # Run-result notification opt-in (#3127). Off by default: a provider set
+    # up before the event existed must not start receiving new messages.
+    await _safe_execute(conn, "ALTER TABLE notification_providers ADD COLUMN on_maintenance_run BOOLEAN DEFAULT FALSE")
 
     # Migration: storage location sensor alerts (#2824), own column rather than
     # reusing on_ha_sensor_alert. That column can be scoped to one printer

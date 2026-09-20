@@ -95,6 +95,7 @@ from backend.app.utils.filament_types import is_material_name, printer_filament_
 from backend.app.utils.fts_routing import slot_extruder
 from backend.app.utils.http import build_content_disposition, download_error_response, safe_download_filename
 from backend.app.utils.kprofile_lookup import build_slot_k_resolver
+from backend.app.utils.print_jobs import is_internal_printer_job
 from backend.app.utils.printer_models import MAX_CHAMBER_TEMP_C, uses_exhaust_fan_label
 
 logger = logging.getLogger(__name__)
@@ -502,9 +503,14 @@ async def get_printer_status(
             awaiting_plate_clear=printer_manager.is_awaiting_plate_clear(printer_id),
         )
 
-    # Determine cover URL if there's an active print (including paused)
+    # Determine cover URL if there's an active print (including paused). The
+    # printer's own jobs (calibration, #3127) have no 3MF and so no cover.
     cover_url = None
-    if state.state in ("RUNNING", "PAUSE") and state.gcode_file:
+    if (
+        state.state in ("RUNNING", "PAUSE")
+        and state.gcode_file
+        and not is_internal_printer_job(state.gcode_file, state.subtask_name)
+    ):
         cover_url = f"/api/v1/printers/{printer_id}/cover"
 
     # Convert HMS errors to response format
@@ -1190,6 +1196,12 @@ async def get_printer_cover(
     subtask_name = state.subtask_name
     if not subtask_name:
         raise HTTPException(404, f"No subtask_name in printer state (state={state.state})")
+
+    # The printer's own jobs -- a calibration run -- have no 3MF anywhere on
+    # the printer (#3127). Answer before the FTP sweep, not after eight paths
+    # of it; a stale cover_url from before the job started still lands here.
+    if is_internal_printer_job(state.gcode_file, subtask_name):
+        raise HTTPException(404, f"No cover for the printer's own job '{subtask_name}'")
 
     # Resolve the active plate. Precedence (#1166):
     #   1. The plate Bambuddy dispatched (authoritative when we sent the print)

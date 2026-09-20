@@ -259,6 +259,36 @@ NOZZLE_RACK_MODELS = frozenset(
 )
 
 
+# Models with a vision encoder: the H2 series (H2S, H2D, H2D Pro, H2C). Its
+# motion precision calibration is the printer's own system job
+# ``/usr/etc/print/<dir>/calibrate_motion_precision.gcode`` (H2S capture,
+# #3127); the X1 / P1 / A1 series have no encoder and no such job.
+VISION_ENCODER_MODELS = frozenset(
+    [
+        # Display names (uppercase, no spaces)
+        "H2S",
+        "H2D",
+        "H2DPRO",
+        "H2C",
+        # Internal codes
+        "O1S",  # H2S
+        "O1D",  # H2D
+        "O1E",  # H2D Pro
+        "O2D",  # H2D Pro (alternate)
+        "O1C",  # H2C
+        "O1C2",  # H2C (dual nozzle variant)
+    ]
+)
+
+
+def has_vision_encoder(model: str | None) -> bool:
+    """Return True if the model has a vision encoder (H2 series)."""
+    if not model:
+        return False
+    normalized = model.strip().upper().replace(" ", "").replace("-", "")
+    return normalized in VISION_ENCODER_MODELS
+
+
 # Models where Bambu's own firmware/UI names the enclosure fan (big_fan2 /
 # airduct part id 3) "Exhaust" rather than "Chamber". On these the printer's
 # touchscreen and Bambu Studio both call it the exhaust fan, and on the P2S it

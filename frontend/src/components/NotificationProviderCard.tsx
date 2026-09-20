@@ -168,6 +168,9 @@ export function NotificationProviderCard({ provider, onEdit }: NotificationProvi
             {provider.on_maintenance_due && (
               <span className="px-2 py-0.5 bg-purple-100 dark:bg-purple-500/20 text-purple-700 dark:text-purple-400 text-xs rounded">{t('notifications.maintenance')}</span>
             )}
+            {provider.on_maintenance_run && (
+              <span className="px-2 py-0.5 bg-violet-100 dark:bg-violet-500/20 text-violet-700 dark:text-violet-300 text-xs rounded">{t('notifications.maintenanceRun')}</span>
+            )}
             {provider.on_ams_humidity_high && (
               <span className="px-2 py-0.5 bg-blue-100 dark:bg-blue-600/20 text-blue-700 dark:text-blue-300 text-xs rounded">{t('notifications.amsHumidity')}</span>
             )}
@@ -475,6 +478,17 @@ export function NotificationProviderCard({ provider, onEdit }: NotificationProvi
                   <Toggle
                     checked={provider.on_maintenance_due ?? false}
                     onChange={(checked) => updateMutation.mutate({ on_maintenance_due: checked })}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-white">{t('notifications.maintenanceRun')}</p>
+                    <p className="text-xs text-bambu-gray">{t('notifications.maintenanceRunDescription')}</p>
+                  </div>
+                  <Toggle
+                    checked={provider.on_maintenance_run ?? false}
+                    onChange={(checked) => updateMutation.mutate({ on_maintenance_run: checked })}
                   />
                 </div>
               </div>

@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from backend.app.api.routes.settings import get_setting, setting_is_true
 from backend.app.core.auth import RequirePermissionIfAuthEnabled
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
@@ -29,12 +30,12 @@ from backend.app.schemas.maintenance import (
     PrinterMaintenanceUpdate,
 )
 from backend.app.services import maintenance_actions
-from backend.app.services.maintenance_actions import get_printer_total_hours
+from backend.app.services.maintenance_actions import CALIBRATION_FLAGS, get_printer_total_hours
 from backend.app.services.notification_service import notification_service
 from backend.app.services.printer_manager import printer_manager
 from backend.app.utils.local_time import utcnow_naive
-from backend.app.utils.print_jobs import is_calibration_job
-from backend.app.utils.printer_models import get_rod_type
+from backend.app.utils.print_jobs import matches_action
+from backend.app.utils.printer_models import get_rod_type, has_vision_encoder
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,15 @@ DEFAULT_MAINTENANCE_TYPES = [
         "icon": "Target",
         "action": maintenance_actions.ACTION_CALIBRATION,
     },
+    # H2 series only (vision encoder)
+    {
+        "name": "Vision Encoder Calibration",
+        "description": "Motion precision calibration of the vision encoder",
+        "default_interval_hours": 7.0,
+        "interval_type": "days",
+        "icon": "ScanEye",
+        "action": maintenance_actions.ACTION_MOTION_PRECISION,
+    },
 ]
 
 # System types that only apply to printers with a specific rod/rail type.
@@ -124,8 +134,15 @@ _ROD_TYPE_REQUIREMENTS: dict[str, str] = {
 }
 
 
+# System types that need hardware only some models have (#3127).
+_VISION_ENCODER_TYPES = frozenset({"Vision Encoder Calibration"})
+
+
 def _should_apply_to_printer(type_name: str, printer_model: str | None) -> bool:
     """Check if a system maintenance type should apply to a given printer model."""
+    if type_name in _VISION_ENCODER_TYPES:
+        return has_vision_encoder(printer_model)
+
     rod_requirement = _ROD_TYPE_REQUIREMENTS.get(type_name)
     if rod_requirement is None:
         return True  # Not model-specific, applies to all
@@ -169,6 +186,7 @@ async def ensure_default_types(db: AsyncSession) -> None:
                 name=type_def["name"],
                 description=type_def["description"],
                 default_interval_hours=type_def["default_interval_hours"],
+                interval_type=type_def.get("interval_type", "hours"),
                 icon=type_def["icon"],
                 is_system=True,
                 action=type_def.get("action"),
@@ -283,13 +301,29 @@ async def restore_default_maintenance_types(
 # ============== Printer Maintenance ==============
 
 
+async def _require_plate_clear(db: AsyncSession) -> bool:
+    """The plate-clear gate the automatic calibration triggers wait behind.
+
+    Default False like the scheduler's own read (#1865): a missing row is
+    the gate being off.
+    """
+    return setting_is_true(await get_setting(db, "require_plate_clear"))
+
+
 async def _get_printer_maintenance_internal(
     printer_id: int,
     db: AsyncSession,
     commit: bool = True,
+    require_plate_clear: bool | None = None,
 ) -> PrinterMaintenanceOverview:
-    """Internal helper to get maintenance overview for a specific printer."""
+    """Internal helper to get maintenance overview for a specific printer.
+
+    ``require_plate_clear`` is read from the settings when not given; the
+    all-printers overview reads it once and passes it in.
+    """
     await ensure_default_types(db)
+    if require_plate_clear is None:
+        require_plate_clear = await _require_plate_clear(db)
 
     # Get printer
     result = await db.execute(select(Printer).where(Printer.id == printer_id))
@@ -340,6 +374,7 @@ async def _get_printer_maintenance_internal(
             # Use custom interval type if set, otherwise use type's default
             interval_type = getattr(item, "custom_interval_type", None) or default_interval_type
             enabled = item.enabled
+            notifications_enabled = item.notifications_enabled
             last_performed_hours = item.last_performed_hours
             last_performed_at = item.last_performed_at
             item_id = item.id
@@ -362,6 +397,7 @@ async def _get_printer_maintenance_internal(
             interval = maint_type.default_interval_hours
             interval_type = default_interval_type
             enabled = True
+            notifications_enabled = True
             last_performed_hours = 0.0
             last_performed_at = None
             item_id = item.id
@@ -385,6 +421,7 @@ async def _get_printer_maintenance_internal(
                 status=latest_run.status,
                 source=latest_run.source,
                 waiting_reason=latest_run.waiting_reason,
+                waiting_detail=latest_run.waiting_detail,
                 started_at=latest_run.started_at,
             )
             if latest_run is not None and latest_run.status in maintenance_actions.RUN_ACTIVE_STATUSES
@@ -407,6 +444,7 @@ async def _get_printer_maintenance_internal(
                 maintenance_type_icon=maint_type.icon,
                 maintenance_type_wiki_url=getattr(maint_type, "wiki_url", None),
                 enabled=enabled,
+                notifications_enabled=notifications_enabled,
                 interval_hours=interval,
                 interval_type=interval_type,
                 current_hours=total_hours,
@@ -418,13 +456,11 @@ async def _get_printer_maintenance_internal(
                 is_warning=due.is_warning,
                 last_performed_at=last_performed_at,
                 action=maint_type.action,
-                action_options=(
-                    maintenance_actions.normalize_calibration_options(item.action_options)
-                    if maint_type.action
-                    else None
-                ),
+                action_options=maintenance_actions.response_action_options(maint_type.action, item.action_options),
                 action_available_options=(
-                    maintenance_actions.available_calibration_options(printer.model) if maint_type.action else None
+                    maintenance_actions.available_calibration_options(printer.model)
+                    if maintenance_actions.has_options(maint_type.action)
+                    else None
                 ),
                 trigger_mode=item.trigger_mode or "manual",
                 schedule_days=item.schedule_days,
@@ -446,6 +482,7 @@ async def _get_printer_maintenance_internal(
         maintenance_items=maintenance_items,
         due_count=due_count,
         warning_count=warning_count,
+        require_plate_clear=require_plate_clear,
     )
 
 
@@ -469,11 +506,14 @@ async def get_all_maintenance_overview(
 
     result = await db.execute(select(Printer).where(Printer.is_active.is_(True)))
     printers = result.scalars().all()
+    require_plate_clear = await _require_plate_clear(db)
 
     overviews = []
     for printer in printers:
         # Don't commit after each printer, commit once at the end
-        overview = await _get_printer_maintenance_internal(printer.id, db, commit=False)
+        overview = await _get_printer_maintenance_internal(
+            printer.id, db, commit=False, require_plate_clear=require_plate_clear
+        )
         overviews.append(overview)
 
     # Commit any new maintenance items created
@@ -500,18 +540,28 @@ async def update_printer_maintenance(
         raise HTTPException(status_code=404, detail="Maintenance item not found")
 
     update_data = data.model_dump(exclude_unset=True)
+    action = item.maintenance_type.action
     action_keys = {"action_options", "trigger_mode", "schedule_days", "schedule_time"}
-    if action_keys & update_data.keys() and not item.maintenance_type.action:
+    if action_keys & update_data.keys() and not action:
         raise HTTPException(status_code=400, detail="This maintenance type has no automatic action")
+    if "action_options" in update_data:
+        options = update_data.pop("action_options")
+        if not maintenance_actions.has_options(action) and any(flag in options for flag in CALIBRATION_FLAGS):
+            raise HTTPException(status_code=400, detail="This maintenance action has no options")
+        item.action_options = maintenance_actions.stored_action_options(action, options)
     for key, value in update_data.items():
         setattr(item, key, value)
 
-    if item.maintenance_type.action:
+    if action:
         # Cross-field rules against the merged state, so a PATCH that only
         # flips the trigger is judged with the days and time already stored.
         if item.trigger_mode == "schedule" and (not item.schedule_days or not item.schedule_time):
             raise HTTPException(status_code=400, detail="A schedule needs at least one weekday and a time")
-        if item.trigger_mode != "manual" and not maintenance_actions.selected_calibration_flags(item.action_options):
+        if (
+            item.trigger_mode != "manual"
+            and maintenance_actions.has_options(action)
+            and not maintenance_actions.selected_calibration_flags(item.action_options)
+        ):
             raise HTTPException(status_code=400, detail="Select at least one calibration option")
         maintenance_actions.refresh_schedule(item)
 
@@ -654,6 +704,7 @@ async def perform_maintenance(
         maintenance_type_icon=item.maintenance_type.icon,
         maintenance_type_wiki_url=getattr(item.maintenance_type, "wiki_url", None),
         enabled=item.enabled,
+        notifications_enabled=item.notifications_enabled,
         interval_hours=interval,
         interval_type=interval_type,
         current_hours=current_hours,
@@ -687,9 +738,12 @@ async def run_maintenance_item(
     item = result.scalar_one_or_none()
     if not item:
         raise HTTPException(status_code=404, detail="Maintenance item not found")
-    if not item.maintenance_type.action:
+    action = item.maintenance_type.action
+    if not action:
         raise HTTPException(status_code=400, detail="This maintenance type has no automatic action")
-    if not maintenance_actions.selected_calibration_flags(item.action_options):
+    if maintenance_actions.has_options(action) and not maintenance_actions.selected_calibration_flags(
+        item.action_options
+    ):
         raise HTTPException(status_code=400, detail="Select at least one calibration option")
     if await maintenance_actions.get_active_run(db, item.id) is not None:
         raise HTTPException(status_code=409, detail="A run is already pending or running for this item")
@@ -723,17 +777,18 @@ async def list_maintenance_runs(
     return list(result.scalars().all())
 
 
-def _printer_is_running_calibration(printer_id: int) -> bool:
-    """Is the printer, right now, on the calibration a run dispatched?
+def _printer_is_running_action(printer_id: int, action: str | None) -> bool:
+    """Is the printer, right now, on the job a run of ``action`` dispatched?
 
     Cancelling a run must only ever stop that job. A row can say "running"
     long after the calibration ended (missed completion, refused command),
-    and by then the printer may be hours into somebody's print.
+    and by then the printer may be hours into somebody's print -- or on the
+    other calibration, which is not this run's to stop either.
     """
     state = printer_manager.get_status(printer_id)
     if not state or state.state not in ("RUNNING", "PAUSE", "PREPARE"):
         return False
-    return is_calibration_job(state.gcode_file or state.current_print, state.subtask_name)
+    return matches_action(action, state.gcode_file or state.current_print, state.subtask_name)
 
 
 @router.delete("/runs/{run_id}")
@@ -746,7 +801,10 @@ async def cancel_maintenance_run(
     result = await db.execute(
         select(MaintenanceRun)
         .where(MaintenanceRun.id == run_id)
-        .options(selectinload(MaintenanceRun.printer_maintenance))
+        .options(
+            selectinload(MaintenanceRun.printer_maintenance).selectinload(PrinterMaintenance.maintenance_type),
+            selectinload(MaintenanceRun.printer),
+        )
     )
     run = result.scalar_one_or_none()
     if not run:
@@ -754,7 +812,8 @@ async def cancel_maintenance_run(
     if run.status not in maintenance_actions.RUN_ACTIVE_STATUSES:
         raise HTTPException(status_code=400, detail="Only pending or running runs can be cancelled")
 
-    if run.status == "running" and _printer_is_running_calibration(run.printer_id):
+    action = run.printer_maintenance.maintenance_type.action
+    if run.status == "running" and _printer_is_running_action(run.printer_id, action):
         # Best effort; the row is closed even if the publish fails, and the
         # printer's own FAILED report then finds nothing left to close.
         printer_manager.stop_print(run.printer_id)
@@ -769,10 +828,11 @@ async def cancel_maintenance_run(
         )
 
     run.status = "cancelled"
-    run.waiting_reason = None
+    maintenance_actions.set_waiting(run, None)
     run.completed_at = utcnow_naive()
     maintenance_actions.refresh_schedule(run.printer_maintenance)
     await db.commit()
+    await maintenance_actions.notify_run_finished(db, run)
     return {"status": "cancelled", "id": run.id}
 
 
@@ -866,7 +926,7 @@ async def set_printer_hours(
                 "is_warning": item.is_warning,
             }
             for item in overview.maintenance_items
-            if item.enabled and (item.is_due or item.is_warning)
+            if item.enabled and item.notifications_enabled and (item.is_due or item.is_warning)
         ]
 
         if items_needing_attention:

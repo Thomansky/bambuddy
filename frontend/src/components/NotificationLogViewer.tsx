@@ -18,6 +18,7 @@ const EVENT_COLORS: Record<string, string> = {
   printer_error: 'text-rose-700 dark:text-rose-400',
   filament_low: 'text-cyan-700 dark:text-cyan-400',
   maintenance_due: 'text-purple-700 dark:text-purple-400',
+  maintenance_run: 'text-violet-700 dark:text-violet-300',
   test: 'text-bambu-gray',
 };
 

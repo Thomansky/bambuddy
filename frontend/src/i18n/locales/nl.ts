@@ -1884,6 +1884,8 @@ export default {
       replaceHepaFilter: 'HEPA-filter vervangen',
       replaceCarbonFilter: 'Koolstoffilter vervangen',
       lubricateLeftNozzleRail: 'Linker nozzle-rail smeren',
+      printerCalibration: 'Printerkalibratie',
+      visionEncoderCalibration: 'Vision-encoderkalibratie',
     },
     // Toast
     maintenanceComplete: 'Onderhoud als voltooid gemarkeerd',
@@ -1908,6 +1910,8 @@ export default {
     noPermissionEditIntervals: 'Je hebt geen toestemming om intervallen te bewerken',
     // Configure link
     configureSettings: 'Onderhoudstypen en intervallen configureren',
+    notificationsOn: 'Meldingen aan',
+    notificationsOff: 'Meldingen uit',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
@@ -1919,10 +1923,16 @@ export default {
         micro_lidar: 'Micro Lidar',
         nozzle_clumping: 'Detectie van nozzleverstopping',
       },
+      bedTempBelow: 'Alleen als het bed koeler is dan',
+      bedTempBelowValue: 'Drempelwaarde bedtemperatuur (°C)',
+      bedTempUnit: '°C',
+      bedTempBelowSuffix: '',
       trigger: 'Trigger',
       triggerManual: 'Handmatig',
       triggerWhenDue: 'Wanneer verschuldigd',
       triggerSchedule: 'Volgens schema',
+      triggerGatePlateClear: '(pas nadat de plaat is vrijgegeven)',
+      triggerGateIdle: '(zodra de printer vrij is)',
       scheduleDays: 'Weekdagen',
       scheduleTime: 'Vroegste tijd',
       runNow: 'Nu uitvoeren',
@@ -1934,6 +1944,8 @@ export default {
       waitingPrinterBusy: 'Wacht: printer bezet',
       waitingPlateClear: 'Wacht: plaat nog niet vrijgegeven',
       waitingAlreadyDrying: 'Wacht: AMS-droging bezig',
+      waitingBedTooWarm: 'Wacht: bed nog warm ({{temp}} °C)',
+      waitingBedTempUnknown: 'Wacht: bedtemperatuur onbekend',
       waitingOther: 'Wacht: {{reason}}',
       lastRunCompleted: 'Laatste uitvoering voltooid {{time}}',
       lastRunFailed: 'Laatste uitvoering mislukt {{time}}: {{error}}',
@@ -6084,6 +6096,8 @@ export default {
     replaceHepaFilter: 'Vervang het HEPA-filter voor een goede luchtkwaliteit',
     replaceCarbonFilter: 'Vervang het actieve-koolfilter',
     lubricateLeftNozzleRail: 'Smeer de linker nozzlerail (H2-serie)',
+    printerCalibration: 'Bedkalibratie, trillingscompensatie en motorgeluidsonderdrukking, door de printer zelf uitgevoerd',
+    visionEncoderCalibration: 'Bewegingsprecisiekalibratie van de vision-encoder (H2-serie), door de printer zelf uitgevoerd',
   },
 
   // Smart Plugs
@@ -6466,6 +6480,8 @@ export default {
     lowFilamentLabel: 'Weinig filament',
     maintenanceDue: 'Onderhoud nodig',
     maintenanceDueDescription: 'Melden wanneer onderhoud nodig is',
+    maintenanceRun: 'Onderhoudsrun voltooid',
+    maintenanceRunDescription: 'Melden wanneer een door Bambuddy gestarte kalibratie is voltooid, mislukt of geannuleerd',
     amsHumidityHigh: 'AMS-luchtvochtigheid hoog',
     amsHumidityHighDescription: 'Luchtvochtigheid van normale AMS overschrijdt drempel',
     amsTemperatureHigh: 'AMS-temperatuur hoog',
@@ -6637,6 +6653,7 @@ export default {
       printer_error: 'Printerfout',
       filament_low: 'Weinig filament',
       maintenance_due: 'Onderhoud nodig',
+      maintenance_run: 'Onderhoudsrun voltooid',
       test: 'Testen',
     },
     // User email notification preferences

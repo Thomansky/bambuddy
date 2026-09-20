@@ -51,6 +51,9 @@ class PrinterMaintenance(Base):
 
     # Tracking
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Per-item mute (#3127): off drops the item from the due/warning reminder
+    # and from the run-result notification, without disabling the item.
+    notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1", nullable=False)
     last_performed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_performed_hours: Mapped[float] = mapped_column(Float, default=0.0)  # Hours at last reset
 
@@ -136,7 +139,12 @@ class MaintenanceRun(Base):
     # Earliest start instant, naive UTC (same convention as
     # scheduled_dryings.start_after). None = as soon as the printer is idle.
     start_after: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Why the last scheduler pass left the run pending (a token the card
+    # translates) and, for reasons that carry a measurement, its figures:
+    # {"bed_temp": 34.2, "threshold": 30.0} for bed_too_warm. Written and
+    # cleared together.
     waiting_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    waiting_detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

@@ -1784,7 +1784,9 @@ export default {
       checkPtfeTube: 'PTFE 튜브 확인',
       replaceHepaFilter: 'HEPA 필터 교체',
       replaceCarbonFilter: '활성탄 필터 교체',
-      lubricateLeftNozzleRail: '좌측 노즐 레일 윤활'
+      lubricateLeftNozzleRail: '좌측 노즐 레일 윤활',
+      printerCalibration: '프린터 캘리브레이션',
+      visionEncoderCalibration: '비전 인코더 캘리브레이션'
     },
     maintenanceComplete: '유지보수가 완료로 표시되었습니다',
     typeUpdated: '유지보수 유형이 업데이트되었습니다',
@@ -1805,6 +1807,8 @@ export default {
     noPermissionAssignPrinter: '프린터를 할당할 권한이 없습니다',
     noPermissionEditIntervals: '간격을 편집할 권한이 없습니다',
     configureSettings: '유지보수 유형 및 간격 설정',
+    notificationsOn: '알림 켜짐',
+    notificationsOff: '알림 꺼짐',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
@@ -1816,10 +1820,16 @@ export default {
         micro_lidar: 'Micro Lidar',
         nozzle_clumping: '노즐 뭉침 감지',
       },
+      bedTempBelow: '베드 온도가 다음 값 미만일 때만',
+      bedTempBelowValue: '베드 온도 임계값 (°C)',
+      bedTempUnit: '°C',
+      bedTempBelowSuffix: '',
       trigger: '트리거',
       triggerManual: '수동',
       triggerWhenDue: '기한 도래 시',
       triggerSchedule: '일정에 따라',
+      triggerGatePlateClear: '(플레이트가 해제된 후에만)',
+      triggerGateIdle: '(프린터가 유휴 상태가 되면)',
       scheduleDays: '요일',
       scheduleTime: '가장 이른 시간',
       runNow: '지금 실행',
@@ -1831,6 +1841,8 @@ export default {
       waitingPrinterBusy: '대기 중: 프린터 사용 중',
       waitingPlateClear: '대기 중: 플레이트가 아직 해제되지 않음',
       waitingAlreadyDrying: '대기 중: AMS 건조 진행 중',
+      waitingBedTooWarm: '대기 중: 베드가 아직 따뜻함 ({{temp}} °C)',
+      waitingBedTempUnknown: '대기 중: 베드 온도 알 수 없음',
       waitingOther: '대기 중: {{reason}}',
       lastRunCompleted: '마지막 실행 완료 {{time}}',
       lastRunFailed: '마지막 실행 실패 {{time}}: {{error}}',
@@ -5758,7 +5770,9 @@ export default {
     checkPtfeTube: '마모 또는 손상 여부 확인을 위해 PTFE 튜브 점검',
     replaceHepaFilter: '공기 품질을 위해 HEPA 필터 교체',
     replaceCarbonFilter: '활성탄 필터 교체',
-    lubricateLeftNozzleRail: '왼쪽 노즐 레일 윤활 (H2 시리즈)'
+    lubricateLeftNozzleRail: '왼쪽 노즐 레일 윤활 (H2 시리즈)',
+    printerCalibration: '베드 레벨링, 진동 보정, 모터 소음 제거를 프린터가 직접 실행합니다',
+    visionEncoderCalibration: '비전 인코더의 모션 정밀도 캘리브레이션(H2 시리즈)을 프린터가 직접 실행합니다'
   },
   haSensors: {
     label: '센서',
@@ -6128,6 +6142,8 @@ export default {
     lowFilamentLabel: '필라멘트 부족',
     maintenanceDue: '유지 관리 필요',
     maintenanceDueDescription: '유지 관리가 필요할 때 알림',
+    maintenanceRun: '유지 관리 실행 완료',
+    maintenanceRunDescription: 'Bambuddy가 시작한 캘리브레이션이 완료, 실패 또는 취소되면 알림',
     amsHumidityHigh: 'AMS 습도 높음',
     amsHumidityHighDescription: '일반 AMS 습도가 임계값 초과',
     amsTemperatureHigh: 'AMS 온도 높음',
@@ -6288,6 +6304,7 @@ export default {
       printer_error: '프린터 오류',
       filament_low: '필라멘트 부족',
       maintenance_due: '유지 관리 필요',
+      maintenance_run: '유지 관리 실행 완료',
       test: '테스트'
     },
     userEmail: {

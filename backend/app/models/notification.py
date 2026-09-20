@@ -74,6 +74,9 @@ class NotificationProvider(Base):
     on_ai_failure_detection = Column(Boolean, default=False)  # Obico spaghetti / failure detection (#1794)
     on_filament_low = Column(Boolean, default=False)
     on_maintenance_due = Column(Boolean, default=False)  # Maintenance reminder
+    # A calibration run Bambuddy queued closed: completed, failed or cancelled
+    # (#3127). Off by default so nobody gets new messages after the upgrade.
+    on_maintenance_run = Column(Boolean, default=False)
 
     # Event triggers - AMS environmental alarms (regular AMS with 4 slots)
     on_ams_humidity_high = Column(Boolean, default=False)  # AMS humidity above threshold

@@ -1865,6 +1865,8 @@ export default {
       replaceHepaFilter: 'Substituir Filtro HEPA',
       replaceCarbonFilter: 'Substituir Filtro de Carbono',
       lubricateLeftNozzleRail: 'Lubrificar Trilho do Bico Esquerdo',
+      printerCalibration: 'Calibração da impressora',
+      visionEncoderCalibration: 'Calibração do codificador de visão',
     },
     // Toast
     maintenanceComplete: 'Manutenção marcada como concluída',
@@ -1889,6 +1891,8 @@ export default {
     noPermissionEditIntervals: 'Você não tem permissão para editar intervalos',
     // Configure link
     configureSettings: 'Configure tipos de manutenção e intervalos',
+    notificationsOn: 'Notificações ativadas',
+    notificationsOff: 'Notificações desativadas',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
@@ -1900,10 +1904,16 @@ export default {
         micro_lidar: 'Micro Lidar',
         nozzle_clumping: 'Detecção de entupimento do bico',
       },
+      bedTempBelow: 'Somente quando a mesa estiver abaixo de',
+      bedTempBelowValue: 'Limite de temperatura da mesa (°C)',
+      bedTempUnit: '°C',
+      bedTempBelowSuffix: '',
       trigger: 'Gatilho',
       triggerManual: 'Manual',
       triggerWhenDue: 'Quando vencer',
       triggerSchedule: 'Por agendamento',
+      triggerGatePlateClear: '(somente depois que a mesa for liberada)',
+      triggerGateIdle: '(assim que a impressora estiver livre)',
       scheduleDays: 'Dias da semana',
       scheduleTime: 'Horário mais cedo',
       runNow: 'Executar agora',
@@ -1915,6 +1925,8 @@ export default {
       waitingPrinterBusy: 'Aguardando: impressora ocupada',
       waitingPlateClear: 'Aguardando: mesa ainda não liberada',
       waitingAlreadyDrying: 'Aguardando: secagem do AMS em andamento',
+      waitingBedTooWarm: 'Aguardando: mesa ainda quente ({{temp}} °C)',
+      waitingBedTempUnknown: 'Aguardando: temperatura da mesa desconhecida',
       waitingOther: 'Aguardando: {{reason}}',
       lastRunCompleted: 'Última execução concluída {{time}}',
       lastRunFailed: 'Última execução falhou {{time}}: {{error}}',
@@ -6017,6 +6029,8 @@ export default {
     replaceHepaFilter: 'Substitua o filtro HEPA para qualidade do ar',
     replaceCarbonFilter: 'Substitua o filtro de carbono ativado',
     lubricateLeftNozzleRail: 'Lubrifique o trilho do bico esquerdo (série H2)',
+    printerCalibration: 'Nivelamento da mesa, compensação de vibração e cancelamento do ruído dos motores, executados pela própria impressora',
+    visionEncoderCalibration: 'Calibração de precisão de movimento do codificador de visão (série H2), executada pela própria impressora',
   },
 
   // Smart Plugs
@@ -6399,6 +6413,8 @@ export default {
     lowFilamentLabel: 'Filamento Baixo',
     maintenanceDue: 'Manutenção Necessária',
     maintenanceDueDescription: 'Notificar quando manutenção for necessária',
+    maintenanceRun: 'Execução de manutenção concluída',
+    maintenanceRunDescription: 'Notificar quando uma calibração iniciada pelo Bambuddy for concluída, falhar ou for cancelada',
     amsHumidityHigh: 'Umidade Alta do AMS',
     amsHumidityHighDescription: 'Umidade do AMS regular excede o limite',
     amsTemperatureHigh: 'Temperatura Alta do AMS',
@@ -6570,6 +6586,7 @@ export default {
       printer_error: 'Erro da Impressora',
       filament_low: 'Filamento Baixo',
       maintenance_due: 'Manutenção Necessária',
+      maintenance_run: 'Execução de manutenção concluída',
       test: 'Teste',
     },
     // User email notification preferences

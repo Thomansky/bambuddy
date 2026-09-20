@@ -1867,6 +1867,8 @@ export default {
       replaceHepaFilter: 'HEPA Filtresini Değiştir',
       replaceCarbonFilter: 'Karbon Filtresini Değiştir',
       lubricateLeftNozzleRail: 'Sol Nozul Rayını Yağla',
+      printerCalibration: 'Yazıcı Kalibrasyonu',
+      visionEncoderCalibration: 'Görüntü Kodlayıcı Kalibrasyonu',
     },
     // Toast
     maintenanceComplete: 'Bakım tamamlandı olarak işaretlendi',
@@ -1891,6 +1893,8 @@ export default {
     noPermissionEditIntervals: 'Aralıkları düzenleme izniniz yok',
     // Yapılandırma bağlantısı
     configureSettings: 'Bakım türlerini ve aralıklarını yapılandır',
+    notificationsOn: 'Bildirimler açık',
+    notificationsOff: 'Bildirimler kapalı',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
@@ -1902,10 +1906,16 @@ export default {
         micro_lidar: 'Micro Lidar',
         nozzle_clumping: 'Nozul tıkanma algılama',
       },
+      bedTempBelow: 'Yalnızca tabla şu sıcaklığın altındayken',
+      bedTempBelowValue: 'Tabla sıcaklığı eşiği (°C)',
+      bedTempUnit: '°C',
+      bedTempBelowSuffix: '',
       trigger: 'Tetikleyici',
       triggerManual: 'Manuel',
       triggerWhenDue: 'Süresi dolunca',
       triggerSchedule: 'Zamanlamaya göre',
+      triggerGatePlateClear: '(yalnızca plaka boşaltıldıktan sonra)',
+      triggerGateIdle: '(yazıcı boşta kalır kalmaz)',
       scheduleDays: 'Haftanın günleri',
       scheduleTime: 'En erken saat',
       runNow: 'Şimdi çalıştır',
@@ -1917,6 +1927,8 @@ export default {
       waitingPrinterBusy: 'Bekliyor: yazıcı meşgul',
       waitingPlateClear: 'Bekliyor: plaka henüz boşaltılmadı',
       waitingAlreadyDrying: 'Bekliyor: AMS kurutma sürüyor',
+      waitingBedTooWarm: 'Bekliyor: tabla hâlâ sıcak ({{temp}} °C)',
+      waitingBedTempUnknown: 'Bekliyor: tabla sıcaklığı bilinmiyor',
       waitingOther: 'Bekliyor: {{reason}}',
       lastRunCompleted: 'Son çalıştırma tamamlandı {{time}}',
       lastRunFailed: 'Son çalıştırma başarısız {{time}}: {{error}}',
@@ -5992,6 +6004,8 @@ export default {
     replaceHepaFilter: 'Hava kalitesi için HEPA filtresini değiştir',
     replaceCarbonFilter: 'Aktif karbon filtresini değiştir',
     lubricateLeftNozzleRail: 'Sol nozul rayını yağla (H2 serisi)',
+    printerCalibration: 'Tabla seviyeleme, titreşim telafisi ve motor gürültüsü bastırma, yazıcının kendisi tarafından çalıştırılır',
+    visionEncoderCalibration: 'Görüntü kodlayıcının hareket hassasiyeti kalibrasyonu (H2 serisi), yazıcının kendisi tarafından çalıştırılır',
   },
 
   // Akıllı Prizler
@@ -6366,6 +6380,8 @@ export default {
     lowFilamentLabel: 'Az Filament',
     maintenanceDue: 'Bakım Zamanı',
     maintenanceDueDescription: 'Bakım gerektiğinde bildir',
+    maintenanceRun: 'Bakım Çalıştırması Tamamlandı',
+    maintenanceRunDescription: 'Bambuddy tarafından başlatılan bir kalibrasyon tamamlandığında, başarısız olduğunda veya iptal edildiğinde bildir',
     amsHumidityHigh: 'AMS Nemi Yüksek',
     amsHumidityHighDescription: 'Normal AMS nemi eşiği aşıyor',
     amsTemperatureHigh: 'AMS Sıcaklığı Yüksek',
@@ -6526,6 +6542,7 @@ export default {
       printer_error: 'Yazıcı Hatası',
       filament_low: 'Az Filament',
       maintenance_due: 'Bakım Zamanı',
+      maintenance_run: 'Bakım Çalıştırması Tamamlandı',
       test: 'Test',
     },
     userEmail: {

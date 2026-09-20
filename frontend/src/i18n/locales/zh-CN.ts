@@ -1865,6 +1865,8 @@ export default {
       replaceHepaFilter: '更换 HEPA 过滤器',
       replaceCarbonFilter: '更换活性炭过滤器',
       lubricateLeftNozzleRail: '润滑左喷嘴导轨',
+      printerCalibration: '打印机校准',
+      visionEncoderCalibration: '视觉编码器校准',
     },
     // Toast
     maintenanceComplete: '维护已标记为完成',
@@ -1889,6 +1891,8 @@ export default {
     noPermissionEditIntervals: '您没有编辑间隔的权限',
     // Configure link
     configureSettings: '配置维护类型和间隔',
+    notificationsOn: '通知已开启',
+    notificationsOff: '通知已关闭',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
@@ -1900,10 +1904,16 @@ export default {
         micro_lidar: 'Micro Lidar',
         nozzle_clumping: '喷嘴堵塞检测',
       },
+      bedTempBelow: '仅当热床温度低于',
+      bedTempBelowValue: '热床温度阈值 (°C)',
+      bedTempUnit: '°C',
+      bedTempBelowSuffix: '',
       trigger: '触发方式',
       triggerManual: '手动',
       triggerWhenDue: '到期时',
       triggerSchedule: '按计划',
+      triggerGatePlateClear: '（仅在打印板清空确认后）',
+      triggerGateIdle: '（打印机空闲后）',
       scheduleDays: '星期',
       scheduleTime: '最早时间',
       runNow: '立即运行',
@@ -1915,6 +1925,8 @@ export default {
       waitingPrinterBusy: '等待中：打印机忙碌',
       waitingPlateClear: '等待中：打印板尚未清空确认',
       waitingAlreadyDrying: '等待中：AMS 正在干燥',
+      waitingBedTooWarm: '等待中：热床仍然较热（{{temp}} °C）',
+      waitingBedTempUnknown: '等待中：热床温度未知',
       waitingOther: '等待中：{{reason}}',
       lastRunCompleted: '上次运行已完成 {{time}}',
       lastRunFailed: '上次运行失败 {{time}}：{{error}}',
@@ -6017,6 +6029,8 @@ export default {
     replaceHepaFilter: '更换 HEPA 过滤器以保证空气质量',
     replaceCarbonFilter: '更换活性炭过滤器',
     lubricateLeftNozzleRail: '润滑左喷嘴导轨（H2 系列）',
+    printerCalibration: '由打印机自行执行的热床调平、振动补偿和电机降噪',
+    visionEncoderCalibration: '由打印机自行执行的视觉编码器运动精度校准（H2 系列）',
   },
 
   // Smart Plugs
@@ -6398,6 +6412,8 @@ export default {
     lowFilamentLabel: '耗材不足',
     maintenanceDue: '需要维护',
     maintenanceDueDescription: '需要维护时通知',
+    maintenanceRun: '维护运行已结束',
+    maintenanceRunDescription: '当 Bambuddy 启动的校准完成、失败或被取消时通知',
     amsHumidityHigh: 'AMS 湿度过高',
     amsHumidityHighDescription: '普通 AMS 湿度超过阈值',
     amsTemperatureHigh: 'AMS 温度过高',
@@ -6569,6 +6585,7 @@ export default {
       printer_error: '打印机错误',
       filament_low: '耗材不足',
       maintenance_due: '需要维护',
+      maintenance_run: '维护运行已结束',
       test: '测试',
     },
     userEmail: {

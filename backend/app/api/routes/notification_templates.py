@@ -35,6 +35,7 @@ EVENT_NAMES = {
     "printer_error": "Printer Error",
     "filament_low": "Filament Low",
     "maintenance_due": "Maintenance Due",
+    "maintenance_run": "Maintenance Run Finished",
     "test": "Test Notification",
     # Queue notifications
     "queue_job_added": "Queue Job Added",

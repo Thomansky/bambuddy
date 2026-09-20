@@ -1866,6 +1866,8 @@ export default {
       replaceHepaFilter: 'HEPA-Filter ersetzen',
       replaceCarbonFilter: 'Aktivkohlefilter ersetzen',
       lubricateLeftNozzleRail: 'Linke Düsenschiene schmieren',
+      printerCalibration: 'Druckerkalibrierung',
+      visionEncoderCalibration: 'Vision-Encoder-Kalibrierung',
     },
     // Toast
     maintenanceComplete: 'Wartung als abgeschlossen markiert',
@@ -1890,6 +1892,8 @@ export default {
     noPermissionEditIntervals: 'Sie haben keine Berechtigung, Intervalle zu bearbeiten',
     // Configure link
     configureSettings: 'Wartungstypen und Intervalle konfigurieren',
+    notificationsOn: 'Benachrichtigungen an',
+    notificationsOff: 'Benachrichtigungen aus',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
@@ -1901,10 +1905,16 @@ export default {
         micro_lidar: 'Micro Lidar',
         nozzle_clumping: 'Düsenverklumpungs-Erkennung',
       },
+      bedTempBelow: 'Nur wenn das Druckbett unter',
+      bedTempBelowValue: 'Schwellwert Druckbetttemperatur (°C)',
+      bedTempUnit: '°C',
+      bedTempBelowSuffix: 'ist',
       trigger: 'Auslöser',
       triggerManual: 'Manuell',
       triggerWhenDue: 'Bei Fälligkeit',
       triggerSchedule: 'Nach Zeitplan',
+      triggerGatePlateClear: '(nur wenn die Druckplatte freigegeben wurde)',
+      triggerGateIdle: '(sobald der Drucker frei ist)',
       scheduleDays: 'Wochentage',
       scheduleTime: 'Frühestens um',
       runNow: 'Jetzt ausführen',
@@ -1916,6 +1926,8 @@ export default {
       waitingPrinterBusy: 'Wartet: Drucker beschäftigt',
       waitingPlateClear: 'Wartet: Druckplatte noch nicht freigegeben',
       waitingAlreadyDrying: 'Wartet: AMS-Trocknung läuft',
+      waitingBedTooWarm: 'Wartet: Druckbett noch warm ({{temp}} °C)',
+      waitingBedTempUnknown: 'Wartet: Betttemperatur unbekannt',
       waitingOther: 'Wartet: {{reason}}',
       lastRunCompleted: 'Letzter Lauf abgeschlossen {{time}}',
       lastRunFailed: 'Letzter Lauf fehlgeschlagen {{time}}: {{error}}',
@@ -6033,6 +6045,8 @@ export default {
     replaceHepaFilter: 'HEPA-Filter für Luftqualität ersetzen',
     replaceCarbonFilter: 'Aktivkohlefilter ersetzen',
     lubricateLeftNozzleRail: 'Linke Düsenschiene schmieren (H2-Serie)',
+    printerCalibration: 'Bettnivellierung, Vibrationskompensation und Motorgeräuschunterdrückung, vom Drucker selbst ausgeführt',
+    visionEncoderCalibration: 'Bewegungspräzisions-Kalibrierung des Vision-Encoders (H2-Serie), vom Drucker selbst ausgeführt',
   },
 
   // Smart Plugs
@@ -6415,6 +6429,8 @@ export default {
     lowFilamentLabel: 'Filament niedrig',
     maintenanceDue: 'Wartung fällig',
     maintenanceDueDescription: 'Benachrichtigen, wenn Wartung erforderlich ist',
+    maintenanceRun: 'Wartungslauf abgeschlossen',
+    maintenanceRunDescription: 'Benachrichtigen, wenn ein von Bambuddy gestarteter Kalibrierungslauf abgeschlossen, fehlgeschlagen oder abgebrochen wurde',
     amsHumidityHigh: 'AMS-Feuchtigkeit hoch',
     amsHumidityHighDescription: 'Normale AMS-Feuchtigkeit überschreitet Schwellenwert',
     amsTemperatureHigh: 'AMS-Temperatur hoch',
@@ -6586,6 +6602,7 @@ export default {
       printer_error: 'Druckerfehler',
       filament_low: 'Filament niedrig',
       maintenance_due: 'Wartung fällig',
+      maintenance_run: 'Wartungslauf abgeschlossen',
       test: 'Test',
     },
     // User email notification preferences

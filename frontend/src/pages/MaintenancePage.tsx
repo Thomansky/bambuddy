@@ -33,14 +33,18 @@ import {
   Settings,
   Filter,
   CircleDot,
+  ScanEye,
   Printer,
   ExternalLink,
   Play,
   X,
+  Bell,
+  BellOff,
 } from 'lucide-react';
 import { api } from '../api/client';
 import type {
   CalibrationOption,
+  CalibrationOptions,
   MaintenanceItemUpdate,
   MaintenanceStatus,
   MaintenanceTriggerMode,
@@ -49,6 +53,7 @@ import type {
   Permission,
 } from '../api/client';
 import { getMaintenanceWikiUrl } from '../utils/maintenanceWikiUrls';
+import { maintenanceTypeLabel } from '../utils/maintenanceTypeLabels';
 import { formatDate } from '../utils/date';
 import { Card, CardContent } from '../components/Card';
 import { Button } from '../components/Button';
@@ -80,6 +85,7 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   Settings,
   Filter,
   CircleDot,
+  ScanEye,
 };
 
 function getIcon(iconName: string | null) {
@@ -154,7 +160,20 @@ const WAITING_REASON_KEYS: Record<string, string> = {
   printer_busy: 'maintenance.calibration.waitingPrinterBusy',
   awaiting_plate_clear: 'maintenance.calibration.waitingPlateClear',
   already_drying: 'maintenance.calibration.waitingAlreadyDrying',
+  bed_too_warm: 'maintenance.calibration.waitingBedTooWarm',
+  bed_temp_unknown: 'maintenance.calibration.waitingBedTempUnknown',
 };
+
+// Start condition "only when the bed is below N °C" (#3127): the value the
+// box is first ticked with, and the range the backend accepts.
+const DEFAULT_BED_TEMP_BELOW = 30;
+const BED_TEMP_BELOW_MAX = 120;
+
+function parseBedTemp(text: string): number | null {
+  const value = Number(text);
+  if (text.trim() === '' || !Number.isFinite(value) || value <= 0 || value > BED_TEMP_BELOW_MAX) return null;
+  return Math.round(value * 10) / 10;
+}
 
 // Short weekday names in the UI language, index 0 = Monday like the backend.
 // 2024-01-01 is a Monday; built as local dates so the label is not shifted
@@ -168,11 +187,14 @@ const DEFAULT_SCHEDULE_DAYS = [5]; // Saturday
 const DEFAULT_SCHEDULE_TIME = '06:00';
 
 // Options, trigger, schedule and run status of an actionable item (#3127).
+// The option row belongs to the calibration action only; the vision encoder
+// calibration has no options and shares the rest.
 function CalibrationActionPanel({
   item,
   onUpdate,
   onRun,
   onCancelRun,
+  requirePlateClear,
   hasPermission,
   language,
   t,
@@ -181,16 +203,24 @@ function CalibrationActionPanel({
   onUpdate: (id: number, data: MaintenanceItemUpdate) => void;
   onRun: (id: number) => void;
   onCancelRun: (runId: number) => void;
+  requirePlateClear: boolean;
   hasPermission: (permission: Permission) => boolean;
   language: string;
   t: TFunction;
 }) {
   const canUpdate = hasPermission('maintenance:update');
+  // Both automatic triggers wait behind the scheduler's idle check, whose
+  // gate is the require_plate_clear setting: say so on the option itself.
+  const triggerGate = t(
+    requirePlateClear ? 'maintenance.calibration.triggerGatePlateClear' : 'maintenance.calibration.triggerGateIdle'
+  );
   const options = item.action_options ?? {};
   const available = new Set<CalibrationOption>(item.action_available_options ?? CALIBRATION_OPTION_ORDER);
   const run = item.current_run;
+  const bedTempBelow = options.bed_temp_below ?? null;
   const [scheduleDays, setScheduleDays] = useState<number[]>(item.schedule_days ?? DEFAULT_SCHEDULE_DAYS);
   const [scheduleTime, setScheduleTime] = useState(item.schedule_time ?? DEFAULT_SCHEDULE_TIME);
+  const [bedTempInput, setBedTempInput] = useState(bedTempBelow != null ? String(bedTempBelow) : '');
   const weekdays = useMemo(() => weekdayLabels(language), [language]);
 
   // Follow the server once it has answered (a PATCH from another tab, say).
@@ -198,9 +228,31 @@ function CalibrationActionPanel({
     if (item.schedule_days && item.schedule_days.length > 0) setScheduleDays(item.schedule_days);
     if (item.schedule_time) setScheduleTime(item.schedule_time);
   }, [item.schedule_days, item.schedule_time]);
+  useEffect(() => {
+    setBedTempInput(bedTempBelow != null ? String(bedTempBelow) : '');
+  }, [bedTempBelow]);
 
   const toggleOption = (flag: CalibrationOption) => {
     onUpdate(item.id, { action_options: { ...options, [flag]: !options[flag] } });
+  };
+
+  const toggleBedCondition = () => {
+    if (bedTempBelow != null) {
+      const rest: CalibrationOptions = { ...options };
+      delete rest.bed_temp_below;
+      onUpdate(item.id, { action_options: rest });
+    } else {
+      onUpdate(item.id, { action_options: { ...options, bed_temp_below: DEFAULT_BED_TEMP_BELOW } });
+    }
+  };
+
+  const commitBedTemp = () => {
+    const value = parseBedTemp(bedTempInput);
+    if (value === null) {
+      setBedTempInput(bedTempBelow != null ? String(bedTempBelow) : '');
+      return;
+    }
+    if (value !== bedTempBelow) onUpdate(item.id, { action_options: { ...options, bed_temp_below: value } });
   };
 
   const setTrigger = (mode: MaintenanceTriggerMode) => {
@@ -231,7 +283,11 @@ function CalibrationActionPanel({
     }
     if (run) {
       const key = run.waiting_reason ? WAITING_REASON_KEYS[run.waiting_reason] : null;
-      if (key) return { text: t(key), tone: 'text-amber-700 dark:text-amber-400' };
+      if (key) {
+        const temp = run.waiting_detail?.bed_temp;
+        const text = t(key, { temp: temp != null ? Math.round(temp * 10) / 10 : '?' });
+        return { text, tone: 'text-amber-700 dark:text-amber-400' };
+      }
       if (run.waiting_reason) {
         return { text: t('maintenance.calibration.waitingOther', { reason: run.waiting_reason }), tone: 'text-amber-700 dark:text-amber-400' };
       }
@@ -258,19 +314,60 @@ function CalibrationActionPanel({
   return (
     <div className="mt-3 pt-3 border-t border-bambu-dark-tertiary/60 space-y-2.5" data-testid={`calibration-panel-${item.id}`}>
       {/* Options */}
-      <div className="flex flex-wrap gap-x-3 gap-y-1.5">
-        {CALIBRATION_OPTION_ORDER.filter((flag) => available.has(flag)).map((flag) => (
-          <label key={flag} className="flex items-center gap-1.5 text-xs text-bambu-gray-light cursor-pointer">
+      {item.action === 'calibration' && (
+        <div className="flex flex-wrap gap-x-3 gap-y-1.5">
+          {CALIBRATION_OPTION_ORDER.filter((flag) => available.has(flag)).map((flag) => (
+            <label key={flag} className="flex items-center gap-1.5 text-xs text-bambu-gray-light cursor-pointer">
+              <input
+                type="checkbox"
+                checked={!!options[flag]}
+                onChange={() => toggleOption(flag)}
+                disabled={!canUpdate || !item.enabled}
+                className="accent-bambu-green"
+              />
+              {t(`maintenance.calibration.option.${flag}`)}
+            </label>
+          ))}
+        </div>
+      )}
+
+      {/* Start condition: a cold, settled bed (both actions) */}
+      <div className="flex flex-wrap items-center gap-1.5 text-xs text-bambu-gray-light">
+        <label className="flex items-center gap-1.5 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={bedTempBelow != null}
+            onChange={toggleBedCondition}
+            disabled={!canUpdate || !item.enabled}
+            className="accent-bambu-green"
+          />
+          {t('maintenance.calibration.bedTempBelow')}
+        </label>
+        {bedTempBelow != null && (
+          <>
             <input
-              type="checkbox"
-              checked={!!options[flag]}
-              onChange={() => toggleOption(flag)}
+              type="number"
+              inputMode="decimal"
+              min={0.1}
+              max={BED_TEMP_BELOW_MAX}
+              step={0.1}
+              value={bedTempInput}
+              onChange={(e) => setBedTempInput(e.target.value)}
+              onBlur={commitBedTemp}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+              }}
               disabled={!canUpdate || !item.enabled}
-              className="accent-bambu-green"
+              className={`${selectClass} w-16`}
+              aria-label={t('maintenance.calibration.bedTempBelowValue')}
             />
-            {t(`maintenance.calibration.option.${flag}`)}
-          </label>
-        ))}
+            <span>{t('maintenance.calibration.bedTempUnit')}</span>
+            {/* Languages whose sentence continues after the value (German: "… °C ist") */}
+            {t('maintenance.calibration.bedTempBelowSuffix') && (
+              <span>{t('maintenance.calibration.bedTempBelowSuffix')}</span>
+            )}
+          </>
+        )}
       </div>
 
       {/* Trigger + schedule */}
@@ -284,8 +381,8 @@ function CalibrationActionPanel({
           aria-label={t('maintenance.calibration.trigger')}
         >
           <option value="manual">{t('maintenance.calibration.triggerManual')}</option>
-          <option value="when_due">{t('maintenance.calibration.triggerWhenDue')}</option>
-          <option value="schedule">{t('maintenance.calibration.triggerSchedule')}</option>
+          <option value="when_due">{`${t('maintenance.calibration.triggerWhenDue')} ${triggerGate}`}</option>
+          <option value="schedule">{`${t('maintenance.calibration.triggerSchedule')} ${triggerGate}`}</option>
         </select>
         {item.trigger_mode === 'schedule' && (
           <>
@@ -366,9 +463,11 @@ function MaintenanceCard({
   item,
   onPerform,
   onToggle,
+  onToggleNotifications,
   onUpdate,
   onRun,
   onCancelRun,
+  requirePlateClear,
   hasPermission,
   language,
   t,
@@ -376,14 +475,18 @@ function MaintenanceCard({
   item: MaintenanceStatus;
   onPerform: (id: number) => void;
   onToggle: (id: number, enabled: boolean) => void;
+  onToggleNotifications: (id: number, enabled: boolean) => void;
   onUpdate: (id: number, data: MaintenanceItemUpdate) => void;
   onRun: (id: number) => void;
   onCancelRun: (runId: number) => void;
+  requirePlateClear: boolean;
   hasPermission: (permission: Permission) => boolean;
   language: string;
   t: TFunction;
 }) {
   const Icon = getIcon(item.maintenance_type_icon);
+  const canUpdate = hasPermission('maintenance:update');
+  const notificationsLabel = t(item.notifications_enabled ? 'maintenance.notificationsOn' : 'maintenance.notificationsOff');
   const intervalType = item.interval_type || 'hours';
 
   // Calculate progress based on interval type
@@ -456,7 +559,7 @@ function MaintenanceCard({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <h3 className={`font-medium truncate ${item.enabled ? 'text-white' : 'text-bambu-gray'}`}>
-              {item.maintenance_type_name}
+              {maintenanceTypeLabel(item.maintenance_type_name, t)}
             </h3>
             {intervalType === 'days' && (
               <span title={t('maintenance.timeBasedInterval')}>
@@ -480,6 +583,22 @@ function MaintenanceCard({
                 </a>
               ) : null;
             })()}
+            {/* Per-item mute (#3127): due reminders and run results */}
+            <button
+              type="button"
+              onClick={() => onToggleNotifications(item.id, !item.notifications_enabled)}
+              disabled={!canUpdate}
+              aria-label={notificationsLabel}
+              aria-pressed={item.notifications_enabled}
+              title={canUpdate ? notificationsLabel : t('maintenance.noPermissionUpdate')}
+              className={`shrink-0 transition-colors disabled:cursor-not-allowed ${
+                item.notifications_enabled
+                  ? 'text-bambu-gray hover:text-bambu-green'
+                  : 'text-bambu-gray/50 hover:text-bambu-gray'
+              }`}
+            >
+              {item.notifications_enabled ? <Bell className="w-3.5 h-3.5" /> : <BellOff className="w-3.5 h-3.5" />}
+            </button>
           </div>
 
           {/* Progress bar */}
@@ -523,12 +642,13 @@ function MaintenanceCard({
           </Button>
         </div>
       </div>
-      {item.action === 'calibration' && (
+      {item.action && (
         <CalibrationActionPanel
           item={item}
           onUpdate={onUpdate}
           onRun={onRun}
           onCancelRun={onCancelRun}
+          requirePlateClear={requirePlateClear}
           hasPermission={hasPermission}
           language={language}
           t={t}
@@ -543,6 +663,7 @@ function PrinterSection({
   overview,
   onPerform,
   onToggle,
+  onToggleNotifications,
   onUpdate,
   onRun,
   onCancelRun,
@@ -554,6 +675,7 @@ function PrinterSection({
   overview: PrinterMaintenanceOverview;
   onPerform: (id: number) => void;
   onToggle: (id: number, enabled: boolean) => void;
+  onToggleNotifications: (id: number, enabled: boolean) => void;
   onUpdate: (id: number, data: MaintenanceItemUpdate) => void;
   onRun: (id: number) => void;
   onCancelRun: (runId: number) => void;
@@ -683,7 +805,7 @@ function PrinterSection({
               </div>
               <div>
                 <div className={`text-sm font-medium ${nextTask.is_due ? 'text-red-700 dark:text-red-400' : 'text-amber-700 dark:text-amber-400'}`}>
-                  {nextTask.maintenance_type_name}
+                  {maintenanceTypeLabel(nextTask.maintenance_type_name, t)}
                 </div>
                 <div className={`text-xs ${nextTask.is_due ? 'text-red-700/80 dark:text-red-400/70' : 'text-amber-700/80 dark:text-amber-400/70'}`}>
                   {nextTask.is_due ? t('common.overdue') : t('maintenance.dueSoon')}
@@ -704,9 +826,11 @@ function PrinterSection({
                 item={item}
                 onPerform={onPerform}
                 onToggle={onToggle}
+                onToggleNotifications={onToggleNotifications}
                 onUpdate={onUpdate}
                 onRun={onRun}
                 onCancelRun={onCancelRun}
+                requirePlateClear={overview.require_plate_clear}
                 hasPermission={hasPermission}
                 language={language}
                 t={t}
@@ -1030,11 +1154,11 @@ function SettingsSection({
                     <Icon className="w-5 h-5 text-bambu-gray" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-white truncate">{type.name}</div>
+                    <div className="text-sm font-medium text-white truncate">{maintenanceTypeLabel(type.name, t)}</div>
                     <div className="text-xs text-bambu-gray mt-0.5 flex items-center gap-1">
                       {intervalType === 'days' ? <Calendar className="w-3 h-3" /> : <Timer className="w-3 h-3" />}
                       {formatIntervalLabel(type.default_interval_hours, intervalType, t)}
-                      {type.action === 'calibration' && (
+                      {type.action && (
                         <span className="ml-1 px-1.5 py-0.5 rounded-full bg-bambu-green/20 text-bambu-green flex items-center gap-1">
                           <Play className="w-2.5 h-2.5" />
                           {t('maintenance.calibration.runsCalibration')}
@@ -1262,7 +1386,7 @@ function SettingsSection({
                       return (
                         <div key={item.id} className="flex items-center gap-2 p-2.5 bg-bambu-dark rounded-lg">
                           <Icon className="w-4 h-4 text-bambu-gray shrink-0" />
-                          <span className="text-xs text-bambu-gray flex-1 truncate">{item.maintenance_type_name}</span>
+                          <span className="text-xs text-bambu-gray flex-1 truncate">{maintenanceTypeLabel(item.maintenance_type_name, t)}</span>
 
                           {isEditing ? (
                             <div className="flex items-center gap-1">
@@ -1400,6 +1524,32 @@ export function MaintenancePage() {
     },
   });
 
+  // The bell flips at once and is rolled back if the PATCH fails.
+  const notificationsMutation = useMutation({
+    mutationFn: ({ id, enabled }: { id: number; enabled: boolean }) =>
+      api.updateMaintenanceItem(id, { notifications_enabled: enabled }),
+    onMutate: async ({ id, enabled }) => {
+      await queryClient.cancelQueries({ queryKey: ['maintenanceOverview'] });
+      const previous = queryClient.getQueryData<PrinterMaintenanceOverview[]>(['maintenanceOverview']);
+      queryClient.setQueryData<PrinterMaintenanceOverview[]>(['maintenanceOverview'], (old) =>
+        old?.map((printer) => ({
+          ...printer,
+          maintenance_items: printer.maintenance_items.map((i) =>
+            i.id === id ? { ...i, notifications_enabled: enabled } : i
+          ),
+        }))
+      );
+      return { previous };
+    },
+    onError: (error: Error, _variables, context) => {
+      if (context?.previous) queryClient.setQueryData(['maintenanceOverview'], context.previous);
+      showToast(error.message, 'error');
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['maintenanceOverview'] });
+    },
+  });
+
   const runMutation = useMutation({
     mutationFn: api.runMaintenanceItem,
     onSuccess: () => {
@@ -1510,6 +1660,10 @@ export function MaintenancePage() {
     updateMutation.mutate({ id, data: { enabled } });
   };
 
+  const handleToggleNotifications = (id: number, enabled: boolean) => {
+    notificationsMutation.mutate({ id, enabled });
+  };
+
   const handleUpdate = (id: number, data: MaintenanceItemUpdate) => {
     updateMutation.mutate({ id, data });
   };
@@ -1591,6 +1745,7 @@ export function MaintenancePage() {
                 overview={printerOverview}
                 onPerform={handlePerform}
                 onToggle={handleToggle}
+                onToggleNotifications={handleToggleNotifications}
                 onUpdate={handleUpdate}
                 onRun={(id) => runMutation.mutate(id)}
                 onCancelRun={(runId) => cancelRunMutation.mutate(runId)}

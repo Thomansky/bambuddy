@@ -1,9 +1,10 @@
 """Actionable maintenance: calibration runs Bambuddy performs itself (#3127).
 
-A maintenance type can carry an ``action``; so far the only one is
-``calibration``, which the printer performs on its own once told to (bed
-levelling, vibration compensation, motor noise, and the model-specific extras).
-Each printer item of such a type has an option set and a trigger mode:
+A maintenance type can carry an ``action`` the printer performs on its own
+once told to: ``calibration`` (bed levelling, vibration compensation, motor
+noise, and the model-specific extras, chosen per item) and
+``motion_precision`` (the H2 series' vision encoder calibration, which has no
+options). Each printer item of such a type has a trigger mode:
 
 * ``manual`` -- only the "Run now" button queues a run;
 * ``when_due`` -- the item falling due queues one;
@@ -37,12 +38,13 @@ from backend.app.core.database import async_session
 from backend.app.models.maintenance import MaintenanceHistory, MaintenanceRun, MaintenanceType, PrinterMaintenance
 from backend.app.models.printer import Printer
 from backend.app.utils.local_time import local_zone, utcnow_naive
-from backend.app.utils.print_jobs import is_calibration_job
-from backend.app.utils.printer_models import is_dual_nozzle_model
+from backend.app.utils.print_jobs import action_for_job
+from backend.app.utils.printer_models import has_vision_encoder, is_dual_nozzle_model
 
 logger = logging.getLogger(__name__)
 
 ACTION_CALIBRATION = "calibration"
+ACTION_MOTION_PRECISION = "motion_precision"
 
 # Keyword names of BambuMQTTClient.start_calibration, in bit order.
 CALIBRATION_FLAGS: tuple[str, ...] = (
@@ -88,6 +90,35 @@ DISPATCH_BUSY_WINDOW = timedelta(seconds=120)
 
 AUTO_RUN_NOTES = "Automatic calibration"
 
+# Start condition (#3127): a run only starts once the bed is below this many
+# degrees C. Both actions carry it, stored in ``action_options`` next to the
+# calibration flags; absent = no condition. It is read from the item on
+# every pass rather than frozen onto the run like the flags, so raising the
+# threshold releases a run that is already waiting.
+BED_TEMP_BELOW_KEY = "bed_temp_below"
+BED_TEMP_BELOW_MAX = 120.0
+WAIT_BED_TOO_WARM = "bed_too_warm"
+WAIT_BED_TEMP_UNKNOWN = "bed_temp_unknown"
+
+# The vision encoder calibration is started as a system gcode file. The
+# directory under /usr/etc/print/ is model-specific and the printer reports
+# it with every internal job it runs (``PrinterState.internal_gcode_dir``);
+# this map is the fallback for a printer that has never reported one. Only
+# the H2S entry is verified on hardware (H2S capture, #3127).
+MOTION_PRECISION_GCODE_NAME = "calibrate_motion_precision.gcode"
+INTERNAL_GCODE_DIR_BY_MODEL: dict[str, str] = {
+    "H2S": "O1S",
+    "O1S": "O1S",
+    "H2D": "O1D",
+    "O1D": "O1D",
+    "H2DPRO": "O1D",
+    "O1E": "O1D",
+    "O2D": "O1D",
+    "H2C": "O1C",
+    "O1C": "O1C",
+    "O1C2": "O1C",
+}
+
 
 # ============== Options ==============
 
@@ -103,6 +134,111 @@ def selected_calibration_flags(options: dict | None) -> list[str]:
     return [flag for flag, on in normalize_calibration_options(options).items() if on]
 
 
+def has_options(action: str | None) -> bool:
+    """Does this action carry a per-item option set?"""
+    return action == ACTION_CALIBRATION
+
+
+def normalize_bed_temp_below(value: object) -> float | None:
+    """The validated threshold, or None for absent/null. Raises ValueError."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{BED_TEMP_BELOW_KEY} must be a number")
+    threshold = float(value)
+    if not (0 < threshold <= BED_TEMP_BELOW_MAX):
+        raise ValueError(f"{BED_TEMP_BELOW_KEY} must be above 0 and at most {BED_TEMP_BELOW_MAX:.0f}")
+    if round(threshold, 1) != threshold:
+        raise ValueError(f"{BED_TEMP_BELOW_KEY} allows one decimal at most")
+    return threshold
+
+
+def bed_temp_below(options: dict | None) -> float | None:
+    """The stored start condition; anything unusable reads as no condition."""
+    if not isinstance(options, dict):
+        return None
+    try:
+        return normalize_bed_temp_below(options.get(BED_TEMP_BELOW_KEY))
+    except ValueError:
+        return None
+
+
+def stored_action_options(action: str | None, options: dict) -> dict:
+    """What a PATCH stores for ``action`` from a validated option payload.
+
+    The calibration flags are filled in for the action that has them; the
+    start condition is kept when set and dropped when null or absent.
+    """
+    stored: dict = normalize_calibration_options(options) if has_options(action) else {}
+    threshold = normalize_bed_temp_below(options.get(BED_TEMP_BELOW_KEY))
+    if threshold is not None:
+        stored[BED_TEMP_BELOW_KEY] = threshold
+    return stored
+
+
+def response_action_options(action: str | None, options: dict | None) -> dict | None:
+    """The option set the overview reports: flags plus the start condition.
+
+    None for an action without options and without a condition, so a card
+    that has nothing to show gets nothing.
+    """
+    out: dict = normalize_calibration_options(options) if has_options(action) else {}
+    threshold = bed_temp_below(options)
+    if threshold is not None:
+        out[BED_TEMP_BELOW_KEY] = threshold
+    return out or None
+
+
+def current_bed_temperature(state: object) -> float | None:
+    """The bed temperature the printer last reported, or None when it has not.
+
+    Same source as the bed-cooled notification: ``PrinterState.temperatures
+    ["bed"]``, fed by ``bed_temper`` in every push_status.
+    """
+    temps = getattr(state, "temperatures", None)
+    if not isinstance(temps, dict):
+        return None
+    value = temps.get("bed")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def bed_condition_wait(threshold: float | None, bed_temp: float | None) -> tuple[str, dict | None] | None:
+    """Why the bed condition holds a run back, as (reason, detail), or None.
+
+    "Below" is strict: a bed at exactly the threshold is not below it.
+    """
+    if threshold is None:
+        return None
+    if bed_temp is None:
+        return WAIT_BED_TEMP_UNKNOWN, None
+    if bed_temp >= threshold:
+        return WAIT_BED_TOO_WARM, {"bed_temp": round(bed_temp, 1), "threshold": threshold}
+    return None
+
+
+def set_waiting(run: MaintenanceRun, reason: str | None, detail: dict | None = None) -> None:
+    """Record why ``run`` is still pending; reason and detail move together."""
+    run.waiting_reason = reason
+    run.waiting_detail = detail if reason is not None else None
+
+
+def run_options(action: str | None, options: dict | None) -> dict[str, bool] | None:
+    """The option set a run of ``action`` is dispatched with.
+
+    Raises ValueError when the action has options and none is selected --
+    the firmware would refuse the command, so the run must not be queued.
+    Actions without options get None.
+    """
+    if not has_options(action):
+        return None
+    normalized = normalize_calibration_options(options)
+    if not any(normalized.values()):
+        raise ValueError("No calibration option selected")
+    return normalized
+
+
 def available_calibration_options(printer_model: str | None) -> list[str]:
     """Flags the card should offer for this model.
 
@@ -115,6 +251,29 @@ def available_calibration_options(printer_model: str | None) -> list[str]:
     if not is_dual_nozzle_model(printer_model):
         flags.remove("nozzle_offset")
     return flags
+
+
+def motion_precision_gcode_path(printer_model: str | None, learned_dir: str | None) -> str | None:
+    """Path of the vision encoder calibration for this printer, or None.
+
+    The directory the printer last reported for one of its own jobs wins;
+    otherwise the model map, with a warning because that entry may be a guess.
+    None means the model has no vision encoder and the run must be refused.
+    """
+    if not has_vision_encoder(printer_model):
+        return None
+    if learned_dir:
+        return f"/usr/etc/print/{learned_dir}/{MOTION_PRECISION_GCODE_NAME}"
+    normalized = (printer_model or "").strip().upper().replace(" ", "").replace("-", "")
+    fallback = INTERNAL_GCODE_DIR_BY_MODEL.get(normalized)
+    if fallback is None:
+        return None
+    logger.warning(
+        "Printer model %s has not reported its internal gcode directory yet; assuming /usr/etc/print/%s/",
+        printer_model,
+        fallback,
+    )
+    return f"/usr/etc/print/{fallback}/{MOTION_PRECISION_GCODE_NAME}"
 
 
 # ============== Schedule ==============
@@ -272,12 +431,11 @@ async def create_run(
 ) -> MaintenanceRun:
     """Queue a run for ``item``. Flushed, not committed; the caller commits.
 
-    Raises ValueError when the item's option set selects nothing -- the
-    firmware would refuse the command, so the run must not be queued.
+    Raises ValueError when the item's action has options and none is
+    selected -- the firmware would refuse the command, so the run must not
+    be queued. ``item.maintenance_type`` must be loaded.
     """
-    options = normalize_calibration_options(item.action_options)
-    if not any(options.values()):
-        raise ValueError("No calibration option selected")
+    options = run_options(item.maintenance_type.action, item.action_options)
     run = MaintenanceRun(
         printer_maintenance_id=item.id,
         printer_id=item.printer_id,
@@ -377,16 +535,24 @@ async def queue_triggered_runs(db: AsyncSession, now: datetime | None = None) ->
     return created
 
 
-async def fail_stale_running_runs(db: AsyncSession, now: datetime | None = None) -> int:
+async def fail_stale_running_runs(db: AsyncSession, now: datetime | None = None) -> list[MaintenanceRun]:
     """Close runs that have been "running" longer than any calibration takes.
 
     Covers the restart case: a run dispatched before Bambuddy went down whose
-    completion event was never seen. Flushed, not committed.
+    completion event was never seen. Flushed, not committed. The closed rows
+    come back with their item, type and printer loaded, ready for
+    :func:`notify_run_finished` once the caller has committed.
     """
     now = now or utcnow_naive()
     cutoff = now - STALE_RUNNING_AFTER
     result = await db.execute(
-        select(MaintenanceRun).where(MaintenanceRun.status == "running").where(MaintenanceRun.started_at < cutoff)
+        select(MaintenanceRun)
+        .where(MaintenanceRun.status == "running")
+        .where(MaintenanceRun.started_at < cutoff)
+        .options(
+            selectinload(MaintenanceRun.printer_maintenance).selectinload(PrinterMaintenance.maintenance_type),
+            selectinload(MaintenanceRun.printer),
+        )
     )
     rows = list(result.scalars().all())
     for run in rows:
@@ -396,7 +562,7 @@ async def fail_stale_running_runs(db: AsyncSession, now: datetime | None = None)
         logger.warning(
             "Maintenance run %d on printer %d never reported completion; marked failed", run.id, run.printer_id
         )
-    return len(rows)
+    return rows
 
 
 # ============== Completion ==============
@@ -438,6 +604,33 @@ async def _publish_reset(printer_id: int, printer_name: str, type_name: str) -> 
         pass  # Don't fail if MQTT fails
 
 
+async def notify_run_finished(db: AsyncSession, run: MaintenanceRun) -> bool:
+    """Tell the notification providers that ``run`` closed, unless its item is muted.
+
+    Called after the closing commit from every path that ends a run -- the
+    printer's completion event, the stale sweep, a dispatch the printer
+    refused and a Cancel pressed in Bambuddy -- so a run that was queued
+    reports exactly once, whichever way it ended. ``run`` must carry its item
+    (with type) and printer. Never raises: a provider being
+    down must not undo the run's bookkeeping, so the caller's commit comes
+    first and a failure here is only logged. Returns True when the event was
+    handed to the notification service.
+    """
+    item = run.printer_maintenance
+    if not item.notifications_enabled:
+        return False
+    from backend.app.services.notification_service import notification_service
+
+    try:
+        await notification_service.on_maintenance_run(
+            run.printer_id, run.printer.name, item.maintenance_type.name, run.status, run.error_message, db
+        )
+    except Exception as e:
+        logger.warning("Failed to send the maintenance run notification for run %d: %s", run.id, e)
+        return False
+    return True
+
+
 def resolve_run_outcome(final_status: str | None, print_error: int | None) -> str:
     """Terminal run status for a calibration that ended with ``final_status``.
 
@@ -459,21 +652,27 @@ async def on_internal_job_finished(
     final_status: str | None,
     print_error: int | None = None,
 ) -> bool:
-    """Close the running maintenance run the printer's calibration belonged to.
+    """Close the running maintenance run the printer's job belonged to.
 
-    Called from ``on_print_complete`` for every internal printer job. Returns
-    True when a run was closed; False when the job was not a calibration or
-    nothing was waiting for one, which is also every calibration started by
+    Called from ``on_print_complete`` for every internal printer job. Only a
+    run whose action matches the finished job is closed -- a bed-levelling
+    run is not over because the vision encoder calibration finished. Returns
+    True when a run was closed; False when the job belongs to no action or
+    nothing was waiting for it, which is also every calibration started by
     hand from the screen.
     """
-    if not is_calibration_job(filename, subtask_name):
+    action = action_for_job(filename, subtask_name)
+    if action is None:
         return False
 
     async with async_session() as db:
         result = await db.execute(
             select(MaintenanceRun)
+            .join(MaintenanceRun.printer_maintenance)
+            .join(PrinterMaintenance.maintenance_type)
             .where(MaintenanceRun.printer_id == printer_id)
             .where(MaintenanceRun.status == "running")
+            .where(MaintenanceType.action == action)
             .options(
                 selectinload(MaintenanceRun.printer_maintenance).selectinload(PrinterMaintenance.maintenance_type),
                 selectinload(MaintenanceRun.printer),
@@ -489,7 +688,7 @@ async def on_internal_job_finished(
         outcome = resolve_run_outcome(final_status, print_error)
         run.status = outcome
         run.completed_at = now
-        run.waiting_reason = None
+        set_waiting(run, None)
         item = run.printer_maintenance
 
         if outcome == "completed":
@@ -512,6 +711,7 @@ async def on_internal_job_finished(
         )
         if outcome == "completed":
             await _publish_reset(printer_id, run.printer.name, item.maintenance_type.name)
+        await notify_run_finished(db, run)
         return True
 
 
@@ -546,7 +746,7 @@ async def on_internal_job_failed(
     ``on_print_complete``; a Cancel pressed in the UI meanwhile closes the row
     first and this then finds nothing to do.
     """
-    if not is_calibration_job(filename, subtask_name):
+    if action_for_job(filename, subtask_name) is None:
         return False
     await asyncio.sleep(CANCEL_ECHO_GRACE_SECONDS)
     cancelled = cancel_echo_seen(printer_id, failed_at)

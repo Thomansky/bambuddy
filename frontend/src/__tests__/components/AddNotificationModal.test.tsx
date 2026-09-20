@@ -43,6 +43,7 @@ function buildProvider(overrides: Partial<NotificationProvider> = {}): Notificat
     on_ai_failure_detection: false,
     on_filament_low: false,
     on_maintenance_due: false,
+    on_maintenance_run: false,
     on_ams_humidity_high: false,
     on_ams_temperature_high: false,
     on_ams_ht_humidity_high: false,
@@ -711,5 +712,54 @@ describe('AddNotificationModal — Telegram forum topic (#1518)', () => {
     expect(await screen.findByText(/forum topic id must be a number/i)).toBeInTheDocument();
     expect(patched).toBe(false);
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe('AddNotificationModal — Maintenance Run Finished toggle (#3127)', () => {
+  it('renders the toggle off by default, next to Maintenance Due', async () => {
+    render(<AddNotificationModal provider={buildProvider()} onClose={() => undefined} />);
+
+    const label = await screen.findByText('Maintenance Run Finished');
+    const row = label.closest('div.flex')!;
+    expect(within(row).getByText(/calibration run Bambuddy queued/)).toBeInTheDocument();
+    expect(within(row).getByRole('switch')).toHaveAttribute('aria-checked', 'false');
+  });
+
+  it('persists on_maintenance_run on save (and does NOT touch on_maintenance_due)', async () => {
+    let captured: Record<string, unknown> | null = null;
+    server.use(
+      http.patch('*/api/v1/notifications/1', async ({ request }) => {
+        captured = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ id: 1 });
+      }),
+    );
+
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(<AddNotificationModal provider={buildProvider()} onClose={onClose} />);
+
+    const row = (await screen.findByText('Maintenance Run Finished')).closest('div.flex')!;
+    await user.click(within(row).getByRole('switch'));
+
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+
+    expect(captured).not.toBeNull();
+    expect(captured!.on_maintenance_run).toBe(true);
+    expect(captured!.on_maintenance_due).toBe(false);
+  });
+
+  it('appears in ntfy priority section when enabled', async () => {
+    render(
+      <AddNotificationModal
+        provider={buildProvider({ provider_type: 'ntfy', on_maintenance_run: true })}
+        onClose={() => undefined}
+      />,
+    );
+
+    const priorityHeader = await screen.findByText(/ntfy priority/i);
+    const priorityRoot = priorityHeader.closest('div')!;
+
+    expect(within(priorityRoot).getByText('Maintenance Run Finished')).toBeInTheDocument();
   });
 });

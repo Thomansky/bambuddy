@@ -846,6 +846,20 @@ class PrintOptions:
     filament_tangle_detect: bool = False
 
 
+_INTERNAL_GCODE_PREFIX = "/usr/etc/print/"
+
+
+def _internal_gcode_dir(gcode_file: str | None) -> str | None:
+    """The ``<dir>`` of a reported ``/usr/etc/print/<dir>/<file>`` path, else None."""
+    if not gcode_file or not gcode_file.startswith(_INTERNAL_GCODE_PREFIX):
+        return None
+    rest = gcode_file[len(_INTERNAL_GCODE_PREFIX) :]
+    directory, sep, name = rest.partition("/")
+    if not sep or not directory or not name or "/" in name:
+        return None
+    return directory
+
+
 @dataclass
 class PrinterState:
     connected: bool = False
@@ -869,6 +883,12 @@ class PrinterState:
     # (H2S capture, #3127). Never cleared; consumers compare it to their own
     # stamp of the edge they are judging.
     last_cancel_echo_at: float | None = None
+    # The model-specific directory under /usr/etc/print/ the firmware keeps its
+    # own calibration gcode in ("O1S" on every H2S), learned from the path the
+    # printer reports for any internal job it runs. Never cleared: the
+    # maintenance executor needs it to start the vision encoder calibration
+    # by path (#3127), and the model map is only a fallback.
+    internal_gcode_dir: str | None = None
     kprofiles: list = field(default_factory=list)  # List of KProfile
     sdcard: bool = False  # SD card inserted
     # Whether the printer has ever actually told us about `sdcard`. Without this
@@ -1394,6 +1414,13 @@ class BambuMQTTClient:
         # on both an X1C and an H2D (#2718). Filled by the MQTT thread, drained
         # by await_cali_ack.
         self._pending_cali_acks: dict[str, dict | None] = {}
+
+        # Acks for the firmware's own gcode files started through the plain
+        # gcode_file command (vision encoder calibration, #3127), keyed by the
+        # path sent: the printer echoes it back as ``param``. A refusal is the
+        # only immediate sign that the model-specific directory was guessed
+        # wrong. Filled by the MQTT thread, drained by await_internal_gcode_ack.
+        self._pending_gcode_file_acks: dict[str, dict | None] = {}
 
         # Identifies the one project_file *we* dispatched, so its echo on the
         # topic can be told apart from a slicer's. One-shot: consumed by the
@@ -2354,6 +2381,21 @@ class BambuMQTTClient:
                     ack_seq = str(print_data.get("sequence_id", ""))
                     if ack_seq in self._pending_cali_acks:
                         self._pending_cali_acks[ack_seq] = print_data
+                elif cmd == "gcode_file":
+                    # The printer's verdict on a system gcode file Bambuddy
+                    # started (#3127); a refusal here is what a wrong
+                    # directory guess looks like, so it must reach the log.
+                    logger.info(
+                        "[%s] gcode_file response: result=%s err_code=%s reason=%s param=%s",
+                        self.serial_number,
+                        print_data.get("result"),
+                        print_data.get("err_code"),
+                        print_data.get("reason", ""),
+                        print_data.get("param"),
+                    )
+                    ack_path = print_data.get("param")
+                    if ack_path in self._pending_gcode_file_acks:
+                        self._pending_gcode_file_acks[ack_path] = print_data
                 elif cmd in ("extrusion_cali_sel", "ams_filament_setting"):
                     logger.debug("[%s] %s response: %s", self.serial_number, cmd, print_data)
                     # A refused ams_filament_setting is the printer's verdict on
@@ -3989,6 +4031,9 @@ class BambuMQTTClient:
         if "gcode_file" in data:
             self.state.gcode_file = data["gcode_file"]
             self.state.current_print = data["gcode_file"]
+            internal_dir = _internal_gcode_dir(data["gcode_file"])
+            if internal_dir:
+                self.state.internal_gcode_dir = internal_dir
         if "subtask_name" in data:
             self.state.subtask_name = data["subtask_name"]
             # Prefer subtask_name as current_print if available
@@ -6399,6 +6444,79 @@ class BambuMQTTClient:
         )
 
         return True
+
+    def start_internal_gcode_file(self, path: str) -> bool:
+        """Start one of the firmware's own gcode files by path.
+
+        The vision encoder (motion precision) calibration of the H2 series has
+        no ``calibration`` option bit; the printer runs it as
+        ``/usr/etc/print/<dir>/calibrate_motion_precision.gcode`` through the
+        plain ``gcode_file`` command (H2S capture, #3127), reporting it like
+        any other internal job. Only system paths are accepted: this is not a
+        way to print a user's file.
+
+        Returns:
+            True if command was sent, False if not connected or not a system path
+        """
+        if not path.startswith(_INTERNAL_GCODE_PREFIX):
+            logger.warning("[%s] Refusing to start non-system gcode file %s", self.serial_number, path)
+            return False
+        if not self._client or not self.state.connected:
+            return False
+
+        self._sequence_id += 1
+        command = {
+            "print": {
+                "command": "gcode_file",
+                "sequence_id": str(self._sequence_id),
+                "param": path,
+            }
+        }
+        # Armed before the publish: the H2S answered within 90 ms in the
+        # capture, well before an async caller gets to await the ack.
+        self._pending_gcode_file_acks[path] = None
+        try:
+            self._client.publish(self.topic_publish, json.dumps(command), qos=1)
+        except Exception:
+            self._pending_gcode_file_acks.pop(path, None)
+            raise
+        logger.info("[%s] Starting internal gcode file %s", self.serial_number, path)
+        return True
+
+    async def await_internal_gcode_ack(self, path: str, timeout: float = 5.0) -> tuple[bool, str]:
+        """Wait for the printer's verdict on a ``start_internal_gcode_file``.
+
+        Returns ``(ok, detail)``. ``ok`` is False only when the printer
+        explicitly refused the file (``err_code`` other than 0, or a result
+        that is not SUCCESS) -- the case of a wrong model-specific directory.
+        A timeout returns True with a detail string: silence is not evidence
+        of rejection, and the FINISH/FAILED edge still closes the run. Polled
+        like ``await_cali_ack`` and for the same reason.
+        """
+        deadline = time.monotonic() + timeout
+        try:
+            while time.monotonic() < deadline:
+                ack = self._pending_gcode_file_acks.get(path)
+                if ack is not None:
+                    try:
+                        err_code = int(ack.get("err_code") or 0)
+                    except (TypeError, ValueError):
+                        err_code = 0
+                    result = str(ack.get("result") or "").upper()
+                    reason = str(ack.get("reason") or "")
+                    if err_code != 0 or (result and result != "SUCCESS"):
+                        detail = f"err_code {err_code}"
+                        if reason and reason.upper() != "SUCCESS":
+                            detail = f"{detail}, {reason}"
+                        elif result and result != "SUCCESS":
+                            detail = f"{detail}, {result}"
+                        return (False, detail)
+                    return (True, reason)
+                await asyncio.sleep(0.05)
+        finally:
+            self._pending_gcode_file_acks.pop(path, None)
+        logger.warning("[%s] No ack for gcode_file %s within %.1fs", self.serial_number, path, timeout)
+        return (True, "no acknowledgement from printer")
 
     def disconnect(self, timeout: float = 0):
         """Disconnect from the printer.
