@@ -110,6 +110,20 @@ class TestComputeScheduleNextAtLocalZone:
         now = datetime(2026, 10, 24, 12, 0, tzinfo=timezone.utc)  # Saturday, still CEST
         assert compute_schedule_next_at([0], "06:00", now=now) == datetime(2026, 10, 26, 5, 0)
 
+    def test_the_repeated_hour_of_the_fall_back_night_is_compared_in_utc(self, monkeypatch):
+        """Sunday 02:30 schedule; the 02:30 CEST run (00:30 UTC) is over and it
+        is now 02:20 CET (01:20 UTC), inside the repeated hour. The wall clock
+        says 02:30 fold=0 is still ahead; in UTC it is fifty minutes gone, so
+        the next slot is a week away, not the run that just finished."""
+        monkeypatch.setenv("TZ", "Europe/Berlin")
+        now = datetime(2026, 10, 25, 1, 20, tzinfo=timezone.utc)  # 02:20 CET, fold=1
+        assert compute_schedule_next_at([6], "02:30", now=now) == datetime(2026, 11, 1, 1, 30)
+
+    def test_the_first_pass_of_the_repeated_hour_still_finds_the_earlier_slot(self, monkeypatch):
+        monkeypatch.setenv("TZ", "Europe/Berlin")
+        now = datetime(2026, 10, 25, 0, 0, tzinfo=timezone.utc)  # 02:00 CEST, fold=0
+        assert compute_schedule_next_at([6], "02:30", now=now) == datetime(2026, 10, 25, 0, 30)
+
 
 class TestDueState:
     NOW = datetime(2026, 9, 16, 12, 0, tzinfo=timezone.utc)
@@ -167,3 +181,10 @@ class TestCalibrationJob:
 
     def test_a_users_print_is_neither(self):
         assert not is_calibration_job("Benchy.gcode.3mf", "Benchy")
+
+    def test_other_system_jobs_are_internal_but_not_the_calibration(self):
+        """The H2's motion-precision calibration lives under /usr/ too; a run
+        waiting for bed levelling must not be closed by it."""
+        motion = "/usr/etc/print/O1S/calibrate_motion_precision.gcode"
+        assert is_internal_printer_job(motion, "calibrate_motion_precision.gcode")
+        assert not is_calibration_job(motion, "calibrate_motion_precision.gcode")

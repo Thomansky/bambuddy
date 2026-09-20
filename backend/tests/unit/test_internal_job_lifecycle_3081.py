@@ -45,6 +45,14 @@ def _complete_mocks(stack: ExitStack) -> dict:
     mocks["pm"].get_printer.return_value = None
     mocks["pm"].set_awaiting_plate_clear = MagicMock()
     mocks["finished"].return_value = True
+
+    def _swallow(coro, **_kwargs):
+        # The real helper would schedule it; here it is inspected, not run.
+        if hasattr(coro, "close"):
+            coro.close()
+        return MagicMock()
+
+    mocks["spawn"].side_effect = _swallow
     return mocks
 
 
@@ -86,7 +94,7 @@ class TestPrintCompleteForAnInternalJob:
         )
 
     @pytest.mark.asyncio
-    async def test_cancelled_calibration_passes_the_print_error_on(self):
+    async def test_a_cancel_code_that_travels_with_the_edge_is_passed_on(self):
         tasks_before = set(asyncio.all_tasks())
         with ExitStack() as stack:
             m = _complete_mocks(stack)
@@ -98,8 +106,37 @@ class TestPrintCompleteForAnInternalJob:
         m["finished"].assert_awaited_once_with(
             1, CALIBRATION["filename"], CALIBRATION["subtask_name"], "failed", 50348044
         )
+        m["spawn"].assert_not_called()
         gate_calls = [c for c in m["pm"].set_awaiting_plate_clear.call_args_list if c.args[1] is True]
         assert gate_calls == []
+
+    @pytest.mark.asyncio
+    async def test_failed_without_a_code_is_judged_after_the_cancel_echo_grace(self):
+        """The H2S capture: the FAILED edge says print_error 0 and the cancel
+        code follows seconds later. The run is not closed on the edge; the
+        executor's grace task decides once the echo has had time to arrive."""
+        tasks_before = set(asyncio.all_tasks())
+        with ExitStack() as stack:
+            m = _complete_mocks(stack)
+            failed = stack.enter_context(
+                patch("backend.app.main.maintenance_actions.on_internal_job_failed", new_callable=AsyncMock)
+            )
+            from backend.app.main import on_print_complete
+
+            await on_print_complete(1, {**CALIBRATION, "status": "failed", "raw_data": {"print_error": 0}})
+            await _cancel_new_tasks(tasks_before)
+
+        m["finished"].assert_not_called()
+        failed.assert_called_once()
+        args = failed.call_args.args
+        assert args[:3] == (1, CALIBRATION["filename"], CALIBRATION["subtask_name"])
+        assert isinstance(args[3], float)
+        spawned = [c for c in m["spawn"].call_args_list if c.kwargs.get("name") == "maintenance-run-failed-1"]
+        assert len(spawned) == 1
+        gate_calls = [c for c in m["pm"].set_awaiting_plate_clear.call_args_list if c.args[1] is True]
+        assert gate_calls == []
+        m["usage"].assert_not_called()
+        m["notif"].on_print_complete.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_a_stop_during_the_calibration_does_not_leak_into_the_next_print(self):

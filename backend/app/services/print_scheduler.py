@@ -1225,8 +1225,12 @@ class PrintScheduler:
             # Dispatch and track scheduled drying runs (#2638)
             await self._check_scheduled_dryings(db)
 
-            # Queue and dispatch maintenance calibration runs (#3127)
-            await self._check_maintenance_runs(db, require_plate_clear)
+            # Queue and dispatch maintenance calibration runs (#3127). The
+            # queue's own reservations go in first: a printer the queue has
+            # just dispatched to, is still uploading to, or is holding after a
+            # project_file may report IDLE for a while yet, and a calibration
+            # sent into that window collides with the print.
+            await self._check_maintenance_runs(db, require_plate_clear, await self._queue_reserved_printers(db))
 
             if not items:
                 # No dispatchable pending items — still check auto-drying on idle
@@ -4810,12 +4814,37 @@ class PrintScheduler:
 
         await db.commit()
 
-    async def _check_maintenance_runs(self, db: AsyncSession, require_plate_clear: bool) -> None:
+    async def _queue_reserved_printers(self, db: AsyncSession) -> set[int]:
+        """Printers the print queue has claimed but that may still report IDLE.
+
+        The same three reservations check_queue folds into its busy set: an
+        item already in ``printing`` (the command went out seconds ago), an
+        upload still in flight (``_inflight``; the row is pending until it
+        lands), and a printer inside its post-dispatch hold. ``_is_printer_idle``
+        sees none of them.
+        """
+        result = await db.execute(
+            select(PrintQueueItem.printer_id)
+            .where(PrintQueueItem.status == "printing")
+            .where(PrintQueueItem.printer_id.is_not(None))
+        )
+        reserved: set[int] = {pid for (pid,) in result.all() if pid is not None}
+        reserved.update(pid for (_task, pid) in self._inflight.values() if pid is not None)
+        reserved.update(pid for pid in list(self._dispatch_holds) if self._printer_in_dispatch_hold(pid))
+        return reserved
+
+    async def _check_maintenance_runs(
+        self,
+        db: AsyncSession,
+        require_plate_clear: bool,
+        queue_reserved: set[int] | None = None,
+    ) -> None:
         """Queue triggered calibration runs and dispatch the pending ones (#3127).
 
         Same shape as the scheduled-drying check. A pending run is deferred with
         a ``waiting_reason`` the card shows, never dropped: the printer being
-        offline, a drying run holding it, or it not being idle. Unlike drying,
+        offline, a drying run holding it, the print queue having claimed it
+        (``queue_reserved``), or it not being idle. Unlike drying,
         the plate-clear gate is honoured here when the setting is on -- bed
         levelling with parts on the plate is a crash -- so "Saturday, as soon as
         the plate is released" is literally what a scheduled run waits for.
@@ -4857,6 +4886,10 @@ class PrintScheduler:
 
             if self._drying_in_progress.get(printer_id) or printer_id in self._scheduled_drying_printer_ids:
                 row.waiting_reason = "already_drying"
+                continue
+
+            if queue_reserved and printer_id in queue_reserved:
+                row.waiting_reason = "printer_busy"
                 continue
 
             if not self._is_printer_idle(printer_id, require_plate_clear):

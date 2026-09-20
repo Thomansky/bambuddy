@@ -708,6 +708,25 @@ _expected_prints_cleanup_task: asyncio.Task | None = None
 _ACTIVE_PRINT_STATES: set[str] = {"RUNNING", "PRINTING", "PAUSE"}
 
 
+def _is_firmware_system_job(state) -> bool:
+    """True when the firmware itself marks the current job as its own.
+
+    Two signals, both set by the printer and not by whoever sent the file:
+    the gcode lives on the read-only system partition (``/usr/etc/print/...``
+    for the levelling run, H2S capture) or the push carries
+    ``print_type: system``. Deliberately narrower than
+    ``is_internal_printer_job``, which also matches by name -- fine for the
+    archive and usage paths, where a false positive costs nothing, but the
+    kill switch must not be talked out of a stop by a 3MF that happens to be
+    named ``auto_cali_for_user_param`` (or the pressure-advance line, which
+    does spend filament).
+    """
+    if (state.gcode_file or "").startswith("/usr/"):
+        return True
+    raw = state.raw_data if isinstance(state.raw_data, dict) else {}
+    return raw.get("print_type") == "system"
+
+
 def _build_status_print_keys(printer_id: int, state: PrinterState) -> list[tuple[int, str]]:
     """Build filename keys for matching a printer status update to Bambuddy-owned jobs."""
 
@@ -1600,12 +1619,13 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
     elif _is_bambuddy_authorized_print_in_memory(printer_id, state):
         # Normal Bambuddy-started prints stay entirely on the in-memory path.
         _unauthorized_print_kill_sent.discard(printer_id)
-    elif is_internal_printer_job(state.gcode_file or state.current_print, state.subtask_name):
+    elif _is_firmware_system_job(state):
         # The printer's own calibration run is nobody's print: it has no
         # archive, no queue row and no owner to authorise it, but it spends
         # no filament and no budget either, so the kill switch has nothing to
         # protect. Stopping it would also cancel the run a maintenance
-        # schedule just started (#3127).
+        # schedule just started (#3127). Only the firmware's own markers
+        # count here, not the job name: a user's 3MF can be called anything.
         _unauthorized_print_kill_sent.discard(printer_id)
     else:
         kill_switch_enabled = False
@@ -6275,13 +6295,26 @@ async def on_print_complete(printer_id: int, data: dict):
         )
         raw_data = data.get("raw_data") or {}
         print_error = raw_data.get("print_error") if isinstance(raw_data, dict) else None
+        print_error = int(print_error) if isinstance(print_error, (int, float)) and print_error else None
+        final_status = data.get("status", "completed")
+        if final_status == "failed" and print_error is None:
+            # The cancel code arrives seconds after the FAILED edge (H2S
+            # capture); judged now, every screen cancel would read as a
+            # failure. The executor waits for the echo before closing the run.
+            spawn_background_task(
+                maintenance_actions.on_internal_job_failed(
+                    printer_id, data.get("filename", ""), data.get("subtask_name", ""), time.monotonic()
+                ),
+                name=f"maintenance-run-failed-{printer_id}",
+            )
+            return
         try:
             await maintenance_actions.on_internal_job_finished(
                 printer_id,
                 data.get("filename", ""),
                 data.get("subtask_name", ""),
-                data.get("status", "completed"),
-                int(print_error) if isinstance(print_error, (int, float)) and print_error else None,
+                final_status,
+                print_error,
             )
         except Exception as e:
             logger.warning("Maintenance run completion handling failed for printer %s: %s", printer_id, e)

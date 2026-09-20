@@ -23,7 +23,9 @@ jobs to.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -62,6 +64,17 @@ RUN_TERMINAL_STATUSES: tuple[str, ...] = ("completed", "failed", "cancelled")
 # print_error the firmware reports when a calibration is cancelled from the
 # printer screen: 0x0300400C, "The task was canceled." (H2S capture).
 CALIBRATION_CANCELLED_PRINT_ERROR = 50348044
+
+# The cancel code does not travel with the FAILED edge. In the H2S capture the
+# first FAILED report still says print_error 0 and the 0300_400C echo follows
+# six to eight seconds later, by which time ``on_print_complete`` has long
+# fired. A FAILED calibration without a code is therefore held open for this
+# long before it is judged, and the echo the MQTT client stamped in the
+# meantime (``PrinterState.last_cancel_echo_at``) decides cancelled vs failed.
+# An echo up to this many seconds *before* the edge counts too, in case other
+# firmware orders the two the other way round.
+CANCEL_ECHO_GRACE_SECONDS = 15.0
+CANCEL_ECHO_LOOKBACK_SECONDS = 60.0
 
 # A calibration takes minutes. A run still "running" this long after dispatch
 # has lost its completion event -- a restart mid-run with the printer offline
@@ -135,8 +148,11 @@ def compute_schedule_next_at(
     container's local zone like the local backup schedule. The candidate is
     built on the local wall clock and converted afterwards, so it stays at the
     configured hour across a DST change; ``fold=0`` picks the earlier of an
-    ambiguous fall-back hour. Strictly after ``now``: a time equal to now has
-    already been queued by the pass that saw it.
+    ambiguous fall-back hour. Strictly after ``now``, compared in UTC: a time
+    equal to now has already been queued by the pass that saw it, and a
+    wall-clock comparison would ignore ``fold`` and call the first 02:30 of a
+    fall-back night "later" than a ``now`` in the repeated hour, queueing the
+    same slot twice.
     """
     parsed = parse_schedule_time(time_str)
     weekdays = {int(d) for d in (days or []) if 0 <= int(d) <= 6}
@@ -154,8 +170,9 @@ def compute_schedule_next_at(
         candidate = (now_local + timedelta(days=offset)).replace(
             hour=hour, minute=minute, second=0, microsecond=0, fold=0
         )
-        if candidate.weekday() in weekdays and candidate > now_local:
-            return candidate.astimezone(timezone.utc).replace(tzinfo=None)
+        candidate_utc = candidate.astimezone(timezone.utc)
+        if candidate.weekday() in weekdays and candidate_utc > now_utc:
+            return candidate_utc.replace(tzinfo=None)
     return None
 
 
@@ -496,3 +513,52 @@ async def on_internal_job_finished(
         if outcome == "completed":
             await _publish_reset(printer_id, run.printer.name, item.maintenance_type.name)
         return True
+
+
+def cancel_echo_seen(printer_id: int, failed_at: float, *, now: float | None = None) -> bool:
+    """Did the printer echo a user cancel around the FAILED edge at ``failed_at``?
+
+    ``failed_at`` is a ``time.monotonic()`` stamp; the MQTT client records the
+    echo on the same clock. Anything from ``CANCEL_ECHO_LOOKBACK_SECONDS``
+    before the edge up to now counts.
+    """
+    from backend.app.services.printer_manager import printer_manager
+
+    state = printer_manager.get_status(printer_id)
+    echo_at = getattr(state, "last_cancel_echo_at", None) if state else None
+    if echo_at is None:
+        return False
+    now = time.monotonic() if now is None else now
+    return failed_at - CANCEL_ECHO_LOOKBACK_SECONDS <= echo_at <= now
+
+
+async def on_internal_job_failed(
+    printer_id: int,
+    filename: str | None,
+    subtask_name: str | None,
+    failed_at: float,
+) -> bool:
+    """Close a calibration that reported FAILED without a print_error.
+
+    Waits ``CANCEL_ECHO_GRACE_SECONDS`` for the cancel echo the firmware sends
+    after the edge, then closes the run as cancelled when it came and as
+    failed when it did not. Meant to run as a background task from
+    ``on_print_complete``; a Cancel pressed in the UI meanwhile closes the row
+    first and this then finds nothing to do.
+    """
+    if not is_calibration_job(filename, subtask_name):
+        return False
+    await asyncio.sleep(CANCEL_ECHO_GRACE_SECONDS)
+    cancelled = cancel_echo_seen(printer_id, failed_at)
+    logger.info(
+        "Calibration on printer %d reported FAILED without a code; cancel echo %s",
+        printer_id,
+        "seen, closing as cancelled" if cancelled else "not seen, closing as failed",
+    )
+    return await on_internal_job_finished(
+        printer_id,
+        filename,
+        subtask_name,
+        "failed",
+        CALIBRATION_CANCELLED_PRINT_ERROR if cancelled else None,
+    )
