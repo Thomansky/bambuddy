@@ -3815,6 +3815,8 @@ export default {
       nextPage: '다음 페이지',
       zoomIn: '확대',
       zoomOut: '축소',
+      fullscreen: '전체 화면',
+      exitFullscreen: '전체 화면 종료',
       emptySheet: '이 시트는 비어 있습니다',
       truncatedRows: '전체 {{total}}개 행 중 처음 {{shown}}개 표시 중',
       truncatedCols: '전체 {{total}}개 열 중 처음 {{shown}}개 표시 중',
@@ -5497,6 +5499,8 @@ export default {
     filamentCount_other: '필라멘트 {{count}}개',
     eta: '예상 {{minutes}}분',
     noPreview: '이 파일에 대한 미리보기를 사용할 수 없습니다',
+    fullscreen: '전체 화면',
+    exitFullscreen: '전체 화면 종료',
     pagination: {
       pageOf: '{{total}}페이지 중 {{current}}',
       prev: '이전',

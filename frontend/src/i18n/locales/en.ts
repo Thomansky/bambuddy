@@ -4035,6 +4035,8 @@ export default {
       nextPage: 'Next page',
       zoomIn: 'Zoom in',
       zoomOut: 'Zoom out',
+      fullscreen: 'Fullscreen',
+      exitFullscreen: 'Exit fullscreen',
       emptySheet: 'This sheet is empty',
       truncatedRows: 'Showing the first {{shown}} of {{total}} rows',
       truncatedCols: 'Showing the first {{shown}} of {{total}} columns',
@@ -5814,6 +5816,8 @@ export default {
     filamentCount_other: '{{count}} filaments',
     eta: 'ETA {{minutes}} min',
     noPreview: 'No preview available for this file',
+    fullscreen: 'Fullscreen',
+    exitFullscreen: 'Exit fullscreen',
     pagination: {
       pageOf: 'Page {{current}} of {{total}}',
       prev: 'Prev',

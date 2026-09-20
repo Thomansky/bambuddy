@@ -6,6 +6,7 @@ import { ModelViewer } from './ModelViewer';
 import { Button } from './Button';
 import { api, withMediaToken } from '../api/client';
 import { useToast } from '../contexts/ToastContext';
+import { useElementFullscreen } from '../hooks/useElementFullscreen';
 import { isApiSliceableFileType, isSliceableFileType, openInSlicer, resolveDesktopSlicer, type SlicerType } from '../utils/slicer';
 import type { ArchivePlatesResponse, LibraryFilePlatesResponse, PlateMetadata } from '../types/plates';
 
@@ -156,21 +157,25 @@ export function ModelViewerModal({ archiveId, libraryFileId, title, fileType, on
   const [platesLoading, setPlatesLoading] = useState(false);
   const [selectedPlateId, setSelectedPlateId] = useState<number | null>(null);
   const [platePage, setPlatePage] = useState(0);
-  const [isFullscreen, setIsFullscreen] = useState(false);
   const [platePanelHeight, setPlatePanelHeight] = useState<number | null>(null);
   const [isDraggingDivider, setIsDraggingDivider] = useState(false);
   const [hasCustomSplit, setHasCustomSplit] = useState(false);
   const splitContainerRef = useRef<HTMLDivElement>(null);
   const platesPanelRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  // Real fullscreen where the browser offers it, the viewport-filling layout
+  // below otherwise (#2976).
+  const { isFullscreen, toggleFullscreen } = useElementFullscreen(panelRef);
   const dividerHeight = 10;
   const minPlateHeight = 160;
   const minViewerPx = 240;
   const minViewerRatio = 0.35;
 
-  // Close on Escape key
+  // Close on Escape key. In fullscreen Esc belongs to the browser, which
+  // leaves fullscreen; the modal stays open.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape' && !document.fullscreenElement) onClose();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -459,6 +464,7 @@ export function ModelViewerModal({ archiveId, libraryFileId, title, fileType, on
       onClick={onClose}
     >
       <div
+        ref={panelRef}
         className={`bg-bambu-dark-secondary border border-bambu-dark-tertiary w-full flex flex-col ${
           isFullscreen ? 'h-full max-w-none rounded-none' : 'h-[80vh] max-w-4xl rounded-xl'
         }`}
@@ -509,8 +515,9 @@ export function ModelViewerModal({ archiveId, libraryFileId, title, fileType, on
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => setIsFullscreen((prev) => !prev)}
-              title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+              onClick={toggleFullscreen}
+              title={isFullscreen ? t('modelViewer.exitFullscreen') : t('modelViewer.fullscreen')}
+              aria-label={isFullscreen ? t('modelViewer.exitFullscreen') : t('modelViewer.fullscreen')}
             >
               {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
             </Button>
@@ -764,7 +771,11 @@ export function ModelViewerModal({ archiveId, libraryFileId, title, fileType, on
                   <div className="w-12 h-1 rounded-full bg-bambu-gray/50" />
                 </div>
               )}
-              <div className={`flex-1 ${splitFullscreen ? 'min-h-0' : ''}`}>
+              <div
+                className={`flex-1 ${splitFullscreen ? 'min-h-0' : ''}`}
+                data-testid="model-viewer-area"
+                onDoubleClick={toggleFullscreen}
+              >
                   <ModelViewer
                     url={isLibrary
                       ? api.getLibraryFileDownloadUrl(libraryFileId!)

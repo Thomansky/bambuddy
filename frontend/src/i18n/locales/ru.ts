@@ -3807,6 +3807,8 @@ export default {
       nextPage: 'Следующая страница',
       zoomIn: 'Увеличить',
       zoomOut: 'Уменьшить',
+      fullscreen: 'На весь экран',
+      exitFullscreen: 'Выйти из полноэкранного режима',
       emptySheet: 'Этот лист пуст',
       truncatedRows: 'Показаны первые {{shown}} из {{total}} строк',
       truncatedCols: 'Показаны первые {{shown}} из {{total}} столбцов',
@@ -5485,6 +5487,8 @@ export default {
     filamentCount_other: "{{count}} филаментов",
     eta: "Осталось {{minutes}} мин",
     noPreview: "Для этого файла нет предпросмотра",
+    fullscreen: "На весь экран",
+    exitFullscreen: "Выйти из полноэкранного режима",
     pagination: {
       pageOf: "Страница {{current}} из {{total}}",
       prev: "Назад",

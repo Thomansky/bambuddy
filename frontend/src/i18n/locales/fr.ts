@@ -3994,6 +3994,8 @@ export default {
       nextPage: 'Page suivante',
       zoomIn: 'Zoom avant',
       zoomOut: 'Zoom arrière',
+      fullscreen: 'Plein écran',
+      exitFullscreen: 'Quitter plein écran',
       emptySheet: 'Cette feuille est vide',
       truncatedRows: 'Affichage des {{shown}} premières lignes sur {{total}}',
       truncatedCols: 'Affichage des {{shown}} premières colonnes sur {{total}}',
@@ -5753,6 +5755,8 @@ export default {
     filamentCount_other: '{{count}} filaments',
     eta: 'Fin {{minutes}} min',
     noPreview: 'Aucun aperçu pour ce fichier',
+    fullscreen: 'Plein écran',
+    exitFullscreen: 'Quitter plein écran',
     pagination: {
       pageOf: 'Page {{current}} sur {{total}}',
       prev: 'Préc',

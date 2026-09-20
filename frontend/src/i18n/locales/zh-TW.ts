@@ -3993,6 +3993,8 @@ export default {
       nextPage: '下一頁',
       zoomIn: '放大',
       zoomOut: '縮小',
+      fullscreen: '全螢幕',
+      exitFullscreen: '離開全螢幕',
       emptySheet: '此工作表是空的',
       truncatedRows: '顯示前 {{shown}} 列，共 {{total}} 列',
       truncatedCols: '顯示前 {{shown}} 欄，共 {{total}} 欄',
@@ -5752,6 +5754,8 @@ export default {
     filamentCount_other: '{{count}} 種耗材',
     eta: '預計 {{minutes}} 分鐘',
     noPreview: '此檔案無可用預覽',
+    fullscreen: '全螢幕',
+    exitFullscreen: '離開全螢幕',
     pagination: {
       pageOf: '第 {{current}} / {{total}} 頁',
       prev: '上一頁',

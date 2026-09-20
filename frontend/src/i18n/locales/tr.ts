@@ -4000,6 +4000,8 @@ export default {
       nextPage: 'Sonraki sayfa',
       zoomIn: 'Yakınlaştır',
       zoomOut: 'Uzaklaştır',
+      fullscreen: 'Tam ekran',
+      exitFullscreen: 'Tam ekrandan çık',
       emptySheet: 'Bu sayfa boş',
       truncatedRows: '{{total}} satırdan ilk {{shown}} tanesi gösteriliyor',
       truncatedCols: '{{total}} sütundan ilk {{shown}} tanesi gösteriliyor',
@@ -5727,6 +5729,8 @@ export default {
     filamentCount_other: '{{count}} filament',
     eta: 'ETA {{minutes}} dk',
     noPreview: 'Bu dosya için önizleme yok',
+    fullscreen: 'Tam ekran',
+    exitFullscreen: 'Tam ekrandan çık',
     pagination: {
       pageOf: '{{total}} sayfadan {{current}} tanesi',
       prev: 'Önceki',

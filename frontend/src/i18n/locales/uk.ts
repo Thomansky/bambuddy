@@ -4033,6 +4033,8 @@ export default {
       nextPage: 'Наступна сторінка',
       zoomIn: 'Збільшити',
       zoomOut: 'Зменшити',
+      fullscreen: 'Повний екран',
+      exitFullscreen: 'Вийти з повноекранного режиму',
       emptySheet: 'Цей аркуш порожній',
       truncatedRows: 'Показано перші {{shown}} з {{total}} рядків',
       truncatedCols: 'Показано перші {{shown}} з {{total}} стовпців',
@@ -5806,6 +5808,8 @@ export default {
     filamentCount_other: "Філаментів: {{count}}",
     eta: "ETA {{minutes}} хв",
     noPreview: "Попередній перегляд цього файлу недоступний",
+    fullscreen: "Повний екран",
+    exitFullscreen: "Вийти з повноекранного режиму",
     pagination: {
       pageOf: "Сторінка {{current}} з {{total}}",
       prev: "Назад",

@@ -3993,6 +3993,8 @@ export default {
       nextPage: 'Próxima página',
       zoomIn: 'Aumentar zoom',
       zoomOut: 'Diminuir zoom',
+      fullscreen: 'Tela Cheia',
+      exitFullscreen: 'Sair da Tela Cheia',
       emptySheet: 'Esta planilha está vazia',
       truncatedRows: 'Mostrando as primeiras {{shown}} de {{total}} linhas',
       truncatedCols: 'Mostrando as primeiras {{shown}} de {{total}} colunas',
@@ -5752,6 +5754,8 @@ export default {
     filamentCount_other: '{{count}} filamentos',
     eta: 'ETA {{minutes}} min',
     noPreview: 'Pré-visualização não disponível para este arquivo',
+    fullscreen: 'Tela Cheia',
+    exitFullscreen: 'Sair da Tela Cheia',
     pagination: {
       pageOf: 'Página {{current}} de {{total}}',
       prev: 'Anterior',

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { FileSpreadsheet, Loader2, X } from 'lucide-react';
+import { FileSpreadsheet, Loader2, Maximize2, Minimize2, X } from 'lucide-react';
 import { api, getAuthToken } from '../api/client';
 import { formatFileSize } from '../utils/file';
+import { useElementFullscreen } from '../hooks/useElementFullscreen';
 
 // Parsing an arbitrarily large workbook would freeze the tab — anything over
 // this size (or beyond the row/column caps) falls back to a truncation notice.
@@ -101,10 +102,14 @@ export function SpreadsheetPreviewModal({
   useEffect(() => {
     onSnapshotRef.current = onSnapshot;
   });
+  const panelRef = useRef<HTMLDivElement>(null);
+  const { isFullscreen, toggleFullscreen } = useElementFullscreen(panelRef);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      // In fullscreen Esc belongs to the browser, which leaves fullscreen;
+      // the modal stays open.
+      if (e.key === 'Escape' && !document.fullscreenElement) onClose();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -201,22 +206,35 @@ export function SpreadsheetPreviewModal({
   const colsTruncated = sheet != null && sheet.totalCols > MAX_COLS;
   const shownCols = sheet == null ? 0 : Math.min(sheet.totalCols, MAX_COLS);
 
+  const iconButtonClass = 'p-1.5 rounded hover:bg-bambu-dark text-bambu-gray hover:text-white transition-colors';
+
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-      <div className="bg-bambu-dark-secondary rounded-lg w-full max-w-6xl h-[85vh] border border-bambu-dark-tertiary flex flex-col">
+    <div className={`fixed inset-0 bg-black/70 flex items-center justify-center z-50 ${isFullscreen ? 'p-0' : 'p-4'}`}>
+      <div
+        ref={panelRef}
+        className={`bg-bambu-dark-secondary w-full border border-bambu-dark-tertiary flex flex-col ${
+          isFullscreen ? 'h-full max-w-none rounded-none' : 'max-w-6xl h-[85vh] rounded-lg'
+        }`}
+      >
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-bambu-dark-tertiary">
           <div className="flex items-center gap-2 min-w-0">
             <FileSpreadsheet className="w-5 h-5 text-bambu-green flex-shrink-0" />
             <h2 className="text-lg font-semibold text-white truncate">{filename}</h2>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded hover:bg-bambu-dark text-bambu-gray hover:text-white transition-colors"
-            aria-label={t('common.close')}
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button
+              onClick={toggleFullscreen}
+              className={iconButtonClass}
+              aria-label={isFullscreen ? t('fileManager.preview.exitFullscreen') : t('fileManager.preview.fullscreen')}
+              title={isFullscreen ? t('fileManager.preview.exitFullscreen') : t('fileManager.preview.fullscreen')}
+            >
+              {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+            </button>
+            <button onClick={onClose} className={iconButtonClass} aria-label={t('common.close')}>
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Sheet tabs */}
@@ -239,7 +257,11 @@ export function SpreadsheetPreviewModal({
         )}
 
         {/* Content */}
-        <div className="flex-1 min-h-0 overflow-auto bg-bambu-dark rounded-b-lg">
+        <div
+          data-testid="spreadsheet-preview-content"
+          className={`flex-1 min-h-0 overflow-auto bg-bambu-dark ${isFullscreen ? '' : 'rounded-b-lg'}`}
+          onDoubleClick={toggleFullscreen}
+        >
           {error ? (
             <div className="h-full flex items-center justify-center p-6">
               <p className="text-bambu-gray text-center">{error}</p>

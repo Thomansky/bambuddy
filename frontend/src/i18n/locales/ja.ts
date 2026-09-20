@@ -4005,6 +4005,8 @@ export default {
       nextPage: '次のページ',
       zoomIn: '拡大',
       zoomOut: '縮小',
+      fullscreen: 'フルスクリーン',
+      exitFullscreen: 'フルスクリーンを終了',
       emptySheet: 'このシートは空です',
       truncatedRows: '全{{total}}行のうち最初の{{shown}}行を表示しています',
       truncatedCols: '全{{total}}列のうち最初の{{shown}}列を表示しています',
@@ -5764,6 +5766,8 @@ export default {
     filamentCount_other: '{{count}} フィラメント',
     eta: '予想時間 {{minutes}} 分',
     noPreview: 'このファイルのプレビューは利用できません',
+    fullscreen: 'フルスクリーン',
+    exitFullscreen: 'フルスクリーンを終了',
     pagination: {
       pageOf: 'ページ {{current}} / {{total}}',
       prev: '前へ',
