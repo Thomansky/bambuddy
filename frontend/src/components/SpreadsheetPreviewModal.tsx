@@ -186,7 +186,8 @@ export function SpreadsheetPreviewModal({
           if (blob && !cancelled) onSnapshotRef.current?.(blob);
         }
       }
-    })().catch(() => {
+    })().catch((err: unknown) => {
+      console.error('[sheet-preview] load failed', err);
       if (!cancelled) setError(t('fileManager.preview.error'));
     });
 

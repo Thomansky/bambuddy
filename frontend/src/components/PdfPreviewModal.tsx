@@ -95,7 +95,11 @@ export function PdfPreviewModal({ libraryFileId, filename, fileSize, onClose, on
         return;
       }
       setDoc(loaded);
-    })().catch(() => {
+    })().catch((err: unknown) => {
+      // The reason never reaches the UI beyond a generic line, so leave it in
+      // the console: an HTTP status, a refused worker or a parser failure each
+      // need a different fix, and "cannot be previewed" hides which one it was.
+      console.error('[pdf-preview] load failed', err);
       if (!cancelled) {
         setError(t('fileManager.preview.error'));
         setRendering(false);
@@ -148,6 +152,7 @@ export function PdfPreviewModal({ libraryFileId, filename, fileSize, onClose, on
     })().catch((err: unknown) => {
       // A cancelled render throws RenderingCancelledException — not an error.
       if (!cancelled && (err as { name?: string })?.name !== 'RenderingCancelledException') {
+        console.error('[pdf-preview] render failed', err);
         setError(t('fileManager.preview.error'));
         setRendering(false);
       }
