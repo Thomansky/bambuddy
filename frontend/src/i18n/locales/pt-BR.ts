@@ -2289,6 +2289,8 @@ export default {
     defaultTimelapseDesc: 'Gravar vídeo timelapse',
     defaultConfirmOutcome: 'Perguntar o Resultado',
     defaultConfirmOutcomeDesc: 'Perguntar se a impressão saiu bem após a conclusão',
+    confirmOutcomeExternalPrints: 'Perguntar também em impressões iniciadas fora do Bambuddy',
+    confirmOutcomeExternalPrintsDesc: 'Impressões iniciadas na impressora, no Bambu Studio ou no app Handy também são arquivadas pelo Bambuddy. Com esta opção, elas recebem a mesma pergunta de resultado das impressões da fila.',
     confirmDefaultGoodOnPlateClear: 'Contar resultados sem resposta como bons ao liberar a placa',
     confirmDefaultGoodOnPlateClearDescription: 'Quando a placa é liberada (manualmente ou pela próxima impressão na fila) e a pergunta sobre o resultado da impressão ainda não foi respondida, registrá-la automaticamente como peça boa.',
     defaultNozzleOffsetCali: 'Calibração de offset dos bicos',

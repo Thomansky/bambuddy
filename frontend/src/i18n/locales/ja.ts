@@ -2332,6 +2332,8 @@ export default {
     defaultTimelapseDesc: 'タイムラプス動画を記録',
     defaultConfirmOutcome: '結果の確認',
     defaultConfirmOutcomeDesc: '印刷完了後に仕上がりの良否を確認',
+    confirmOutcomeExternalPrints: 'Bambuddy 以外で開始した印刷にも確認する',
+    confirmOutcomeExternalPrintsDesc: 'プリンター本体、Bambu Studio、Handy アプリから開始した印刷も Bambuddy がアーカイブします。この設定をオンにすると、キューの印刷と同じ結果確認が届きます。',
     confirmDefaultGoodOnPlateClear: 'プレートクリア時に未回答の結果を良品として記録',
     confirmDefaultGoodOnPlateClearDescription: 'プレートがクリアされた際（手動またはキューの次の印刷による）、その印刷の結果確認が未回答の場合、自動的に良品として記録します。',
     defaultNozzleOffsetCali: 'ノズルオフセットキャリブレーション',

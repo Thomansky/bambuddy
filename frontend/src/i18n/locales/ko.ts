@@ -2213,6 +2213,8 @@ export default {
     defaultTimelapseDesc: '타임랩스 영상 녹화',
     defaultConfirmOutcome: '결과 확인 요청',
     defaultConfirmOutcomeDesc: '인쇄 완료 후 결과가 잘 나왔는지 물어봅니다',
+    confirmOutcomeExternalPrints: 'Bambuddy 외부에서 시작한 인쇄도 확인',
+    confirmOutcomeExternalPrintsDesc: '프린터, Bambu Studio 또는 Handy 앱에서 시작한 인쇄도 Bambuddy에 보관됩니다. 이 옵션을 켜면 대기열 인쇄와 동일한 결과 확인을 받습니다.',
     confirmDefaultGoodOnPlateClear: '플레이트 비움 시 미응답 결과를 양품으로 기록',
     confirmDefaultGoodOnPlateClearDescription: '플레이트 비움이 확인될 때(수동 또는 다음 대기열 인쇄에 의해) 해당 인쇄의 결과 확인이 아직 응답되지 않았다면 자동으로 양품으로 기록합니다.',
     defaultNozzleOffsetCali: '노즐 오프셋 보정',

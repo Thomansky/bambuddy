@@ -2289,6 +2289,8 @@ export default {
     defaultTimelapseDesc: 'Registra un video timelapse',
     defaultConfirmOutcome: 'Chiedi esito',
     defaultConfirmOutcomeDesc: 'Chiedi se la stampa è venuta bene una volta completata',
+    confirmOutcomeExternalPrints: 'Chiedi anche per le stampe avviate fuori da Bambuddy',
+    confirmOutcomeExternalPrintsDesc: 'Le stampe avviate sulla stampante, in Bambu Studio o nell\'app Handy vengono archiviate anche da Bambuddy. Con questa opzione ricevono la stessa richiesta di esito dei lavori in coda.',
     confirmDefaultGoodOnPlateClear: 'Conta gli esiti senza risposta come buoni alla liberazione del piatto',
     confirmDefaultGoodOnPlateClearDescription: 'Quando il piatto viene liberato (manualmente o dalla stampa successiva in coda) e la richiesta di esito della stampa è ancora senza risposta, registra automaticamente il pezzo come buono.',
     defaultNozzleOffsetCali: 'Calibrazione offset ugelli',

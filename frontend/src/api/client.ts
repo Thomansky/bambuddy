@@ -1448,6 +1448,8 @@ export interface AppSettings {
   default_nozzle_offset_cali: CalibrationMode;
   // Default for the per-job "ask for outcome afterwards" toggle (#1898)
   default_confirm_outcome: boolean;
+  // Also ask for prints Bambuddy archived but did not dispatch (#1898)
+  confirm_outcome_external_prints: boolean;
   // Count unanswered outcome prompts as "good" when the plate is released (#1898)
   confirm_default_good_on_plate_clear: boolean;
   // Staggered batch start defaults

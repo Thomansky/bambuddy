@@ -2353,6 +2353,8 @@ export default {
     defaultTimelapseDesc: 'Record timelapse video',
     defaultConfirmOutcome: 'Ask for Outcome',
     defaultConfirmOutcomeDesc: 'Ask whether the print came out well after it completes',
+    confirmOutcomeExternalPrints: 'Also ask for prints started outside Bambuddy',
+    confirmOutcomeExternalPrintsDesc: 'Prints started at the printer, in Bambu Studio or in the Handy app are archived by Bambuddy too. With this on, they get the same outcome prompt as queued prints.',
     confirmDefaultGoodOnPlateClear: 'Count unanswered outcomes as good on plate release',
     confirmDefaultGoodOnPlateClearDescription: 'When the plate is released (manually or by the next queued print) and the print\'s outcome prompt is still unanswered, record it as a good part automatically.',
     defaultNozzleOffsetCali: 'Nozzle Offset Calibration',

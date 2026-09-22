@@ -2352,6 +2352,8 @@ export default {
     defaultTimelapseDesc: "Записувати таймлапс",
     defaultConfirmOutcome: "Запитувати про результат",
     defaultConfirmOutcomeDesc: "Запитувати після завершення друку, чи вдалим він вийшов",
+    confirmOutcomeExternalPrints: "Запитувати й про друк, запущений поза Bambuddy",
+    confirmOutcomeExternalPrintsDesc: "Друк, запущений на принтері, у Bambu Studio чи в застосунку Handy, також потрапляє до архіву Bambuddy. З цією опцією щодо нього ставиться те саме запитання про результат, що й для завдань із черги.",
     confirmDefaultGoodOnPlateClear: "Вважати непідтверджені результати вдалими після очищення пластини",
     confirmDefaultGoodOnPlateClearDescription: "Якщо пластину очищено (вручну або наступним друком із черги), а запит щодо результату друку залишився без відповіді, автоматично записувати його як придатну деталь.",
     defaultNozzleOffsetCali: "Калібрування зсуву сопла",

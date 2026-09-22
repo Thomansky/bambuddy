@@ -2336,6 +2336,8 @@ export default {
     defaultTimelapseDesc: 'Grabar vídeo time-lapse',
     defaultConfirmOutcome: 'Preguntar el resultado',
     defaultConfirmOutcomeDesc: 'Preguntar si la impresión ha salido bien después de completarse',
+    confirmOutcomeExternalPrints: 'Preguntar también por impresiones iniciadas fuera de Bambuddy',
+    confirmOutcomeExternalPrintsDesc: 'Las impresiones iniciadas en la impresora, en Bambu Studio o en la app Handy también se archivan en Bambuddy. Con esta opción reciben la misma pregunta de resultado que los trabajos de la cola.',
     confirmDefaultGoodOnPlateClear: 'Contar resultados sin responder como buenos al despejar la cama',
     confirmDefaultGoodOnPlateClearDescription: 'Cuando se despeja la cama (manualmente o por la siguiente impresión en cola) y la pregunta sobre el resultado de la impresión sigue sin responder, registrarla automáticamente como pieza buena.',
     defaultNozzleOffsetCali: 'Calibración del offset de boquillas',
