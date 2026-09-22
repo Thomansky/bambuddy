@@ -113,10 +113,18 @@ class PrintArchive(Base):
     # opt-in flag at dispatch (like plate_id) and drives the prompt + the
     # "unconfirmed" badge; confirm_token is a per-archive capability for the
     # one-tap verdict links in push notifications, minted when the prompt
-    # fires and cleared once a verdict lands.
+    # fires. A landed verdict RETIRES the token by stamping
+    # confirm_token_used_at rather than clearing the value: the link stays
+    # resolvable so a second tap can say "already answered, here is what was
+    # recorded" instead of the bare "invalid or already used" 404.
+    # user_verdict_source records how the verdict arrived ('dialog', 'link',
+    # 'plate_clear', 'printer_card', 'api', 'reaction') so the UI can explain
+    # a verdict nobody remembers giving.
     user_verdict: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    user_verdict_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
     confirm_requested: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     confirm_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    confirm_token_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=None)
 
     # Energy tracking
     energy_kwh: Mapped[float | None] = mapped_column(Float)  # Energy consumed in kWh

@@ -3834,7 +3834,9 @@ async def on_print_start(printer_id: int, data: dict):
                 # nobody ever judged.
                 if archive.confirm_requested:
                     archive.user_verdict = None
+                    archive.user_verdict_source = None
                     archive.confirm_token = None
+                    archive.confirm_token_used_at = None
 
                 # Reprint of an archive reuses the source row. Without resetting
                 # ``timelapse_path`` _scan_for_timelapse_with_retries early-returns

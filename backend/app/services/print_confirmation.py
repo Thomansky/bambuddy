@@ -1,6 +1,7 @@
 """Post-print outcome confirmation helpers (#1898)."""
 
 import logging
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +10,25 @@ from backend.app.models.archive import PrintArchive
 from backend.app.models.print_log import PrintLogEntry
 
 logger = logging.getLogger(__name__)
+
+# How a verdict reached the archive. 'reaction' is written by the Telegram
+# reaction handler (#3046), which lives on its own branch — listed here so the
+# vocabulary is complete and the UI can label it the day that lands.
+VERDICT_SOURCES = ("dialog", "link", "plate_clear", "printer_card", "api", "reaction")
+
+
+def retire_confirm_token(archive: PrintArchive) -> None:
+    """Spend the one-tap capability token without destroying it.
+
+    The token is still single-use: once ``confirm_token_used_at`` is stamped,
+    no verdict path accepts it again. Keeping the VALUE is what lets the
+    one-tap route recognise a link belonging to an already-answered print and
+    say so, instead of 404ing as if the link had never been real (the live-farm
+    case: the plate-clear default answered the prompt, then the user tapped the
+    Telegram button and got "invalid or already used").
+    """
+    if archive.confirm_token and archive.confirm_token_used_at is None:
+        archive.confirm_token_used_at = datetime.now(timezone.utc)
 
 
 async def resolve_pending_confirmation_as_good(db: AsyncSession, printer_id: int) -> int | None:
@@ -43,7 +63,8 @@ async def resolve_pending_confirmation_as_good(db: AsyncSession, printer_id: int
         return None
 
     archive.user_verdict = "good"
-    archive.confirm_token = None
+    archive.user_verdict_source = "plate_clear"
+    retire_confirm_token(archive)
 
     latest_entry = await db.scalar(
         select(PrintLogEntry).where(PrintLogEntry.archive_id == archive.id).order_by(PrintLogEntry.id.desc()).limit(1)

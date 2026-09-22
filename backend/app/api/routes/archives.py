@@ -40,6 +40,7 @@ from backend.app.services.archive import ArchiveService
 from backend.app.services.bambu_ftp import ftps_handshake_blocked, list_files_result_async
 from backend.app.services.design_settings import overrides_from_config
 from backend.app.services.filament_requirements import annotate_rack_groups
+from backend.app.services.print_confirmation import retire_confirm_token
 from backend.app.services.print_storage import (
     REASON_FTP_TRANSFER_FAILED,
     REASON_FTPS_COOLOFF,
@@ -370,6 +371,7 @@ def archive_to_response(
         # Post-print outcome confirmation (#1898). confirm_token stays
         # server-side — it is a capability and never belongs in a response.
         "user_verdict": archive.user_verdict,
+        "user_verdict_source": archive.user_verdict_source,
         "confirm_requested": archive.confirm_requested,
         "quantity": archive.quantity,
         "energy_kwh": archive.energy_kwh,
@@ -1767,13 +1769,21 @@ async def update_archive(
     previous_filament_grams = archive.filament_used_grams
 
     update_payload = update_data.model_dump(exclude_unset=True)
+    # #1898: how the verdict arrived is recorded with it, never on its own.
+    verdict_source = update_payload.pop("user_verdict_source", None)
     for field, value in update_payload.items():
         setattr(archive, field, value)
 
     # #1898: a landed verdict retires the one-tap capability token from the
-    # push notification — the links should stop working once someone decided.
-    if update_payload.get("user_verdict") is not None:
-        archive.confirm_token = None
+    # push notification — the links stop changing anything once someone
+    # decided, and report the recorded verdict instead. Clearing the verdict
+    # drops the provenance but leaves the token spent: it was used.
+    if "user_verdict" in update_payload:
+        if update_payload["user_verdict"] is None:
+            archive.user_verdict_source = None
+        else:
+            archive.user_verdict_source = verdict_source or "api"
+            retire_confirm_token(archive)
 
     # #1444: Mirror per-run classification fields to the most recent
     # PrintLogEntry for this archive. PrintLogEntry.failure_reason is captured
@@ -3408,6 +3418,71 @@ async def delete_photo(
 # Post-print outcome confirmation (#1898)
 # ============================================
 
+# English-only on purpose: this page is rendered by the backend for a phone
+# browser that carries no session and therefore no language preference.
+_VERDICT_LABELS = {"good": "Good part", "reject": "Rejected"}
+_VERDICT_SOURCE_PHRASES = {
+    "dialog": "in the app",
+    "link": "with a one-tap link",
+    "plate_clear": "automatically when the print plate was cleared",
+    "printer_card": "from the printer card",
+    "api": "through the API",
+    "reaction": "with a reaction in chat",
+}
+
+
+def _confirm_page(glyph: str, heading: str, body: str) -> str:
+    """The small HTML page every one-tap outcome link renders."""
+    return (
+        "<!doctype html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>"
+        "<title>Bambuddy</title></head>"
+        "<body style='font-family: system-ui, sans-serif; background:#1a1d21; color:#fff; display:flex;"
+        " align-items:center; justify-content:center; min-height:90vh; margin:0'>"
+        f"<div style='text-align:center; padding:0 1.5rem; max-width:32rem'>"
+        f"<div style='font-size:3rem'>{glyph}</div><h2>{heading}</h2>{body}</div></body></html>"
+    )
+
+
+async def _render_already_answered_page(db: AsyncSession, archive: PrintArchive) -> str:
+    """Explain a spent one-tap link instead of calling it invalid.
+
+    The plate-clear default, the app and the other link all answer the same
+    prompt, so the button in a push notification is routinely tapped after the
+    question is settled. Report the verdict on file, when and how it landed,
+    and where to change it.
+    """
+    from backend.app.api.routes.settings import get_external_base_url
+
+    name = html_escape(archive.print_name or archive.filename or "")
+    used_at = archive.confirm_token_used_at
+    if used_at is not None and used_at.tzinfo is not None:
+        used_at = used_at.astimezone(timezone.utc)
+    when = used_at.strftime("%Y-%m-%d %H:%M UTC") if used_at else None
+    how = _VERDICT_SOURCE_PHRASES.get(archive.user_verdict_source or "")
+    label = _VERDICT_LABELS.get(archive.user_verdict or "")
+
+    if label:
+        recorded = f"Recorded as <strong>{label}</strong>"
+        if how:
+            recorded += f" {how}"
+        if when:
+            recorded += f" on {when}"
+        recorded += "."
+    else:
+        # The verdict was cleared again in the app; the link stays spent.
+        recorded = "This prompt was already answered and the verdict has since been cleared."
+
+    base = await get_external_base_url(db)
+    link = html_escape(f"{base}/archives?confirm={archive.id}", quote=True)
+    glyph = "&#10003;" if archive.user_verdict == "good" else "&#10007;" if archive.user_verdict else "&#8505;"
+    return _confirm_page(
+        glyph,
+        "Already answered",
+        f"<p style='color:#9ca3af'>{name}</p>"
+        f"<p style='color:#9ca3af'>{recorded}</p>"
+        f"<p><a style='color:#00ae42' href='{link}'>Open this print in Bambuddy</a> to change it.</p>",
+    )
+
 
 @router.get("/confirm/{token}/{verdict}")
 async def confirm_outcome_by_token(
@@ -3417,11 +3492,14 @@ async def confirm_outcome_by_token(
 ):
     """Record a print-outcome verdict via the capability token from a push notification.
 
-    Deliberately unauthenticated: the token IS the credential. It is minted
-    per archive when the confirmation prompt fires, only ever grants writing
-    good/reject on that one archive, and is retired on first use. GET rather
-    than POST so it works as a plain link in every notification channel and
-    as an ntfy action button. Returns a small HTML page for the phone browser.
+    Deliberately unauthenticated: the token IS the credential. It is a 256-bit
+    per-archive capability, minted when the confirmation prompt fires, and it
+    only ever grants writing good/reject on that one archive, exactly once.
+    "Exactly once" is enforced by ``confirm_token_used_at`` rather than by
+    dropping the token value, so a link for a print that was already answered
+    can be recognised and explained instead of looking broken. GET rather than
+    POST so it works as a plain link in every notification channel and as an
+    ntfy action button. Returns a small HTML page for the phone browser.
     """
     from fastapi.responses import HTMLResponse
 
@@ -3435,8 +3513,14 @@ async def confirm_outcome_by_token(
     if not archive:
         raise HTTPException(404, "Confirmation link is invalid or was already used")
 
+    if archive.confirm_token_used_at is not None:
+        # Answered already — by hand, by the other link, by the plate-clear
+        # default or by a reaction. Report what is on file and change nothing.
+        return HTMLResponse(await _render_already_answered_page(db, archive))
+
     archive.user_verdict = verdict
-    archive.confirm_token = None
+    archive.user_verdict_source = "link"
+    retire_confirm_token(archive)
 
     # Same mirror as the PATCH route (#1444): verdict-aware statistics read
     # print_log_entries, so the latest run must carry the verdict too.
@@ -3453,13 +3537,12 @@ async def confirm_outcome_by_token(
     label = "Good part" if verdict == "good" else "Rejected"
     name = archive.print_name or archive.filename
     return HTMLResponse(
-        "<!doctype html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>"
-        "<title>Bambuddy</title></head>"
-        "<body style='font-family: system-ui, sans-serif; background:#1a1d21; color:#fff; display:flex;"
-        " align-items:center; justify-content:center; min-height:90vh; margin:0'>"
-        f"<div style='text-align:center'><div style='font-size:3rem'>{'&#10003;' if verdict == 'good' else '&#10007;'}"
-        f"</div><h2>{label}</h2><p style='color:#9ca3af'>{html_escape(name)}</p>"
-        "<p style='color:#9ca3af'>Saved &mdash; you can close this page.</p></div></body></html>"
+        _confirm_page(
+            "&#10003;" if verdict == "good" else "&#10007;",
+            label,
+            f"<p style='color:#9ca3af'>{html_escape(name)}</p>"
+            "<p style='color:#9ca3af'>Saved &mdash; you can close this page.</p>",
+        )
     )
 
 
