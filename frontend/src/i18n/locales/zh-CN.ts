@@ -1877,6 +1877,8 @@ export default {
       manual: '手动',
     },
     noItemsForFilter: '没有符合此筛选条件的项目',
+    switchedOffCount: '{{count}} 项已关闭',
+    allItemsSwitchedOff: '此打印机的所有项目均已关闭',
     coverage: '已用于 {{total}} 台打印机中的 {{used}} 台',
     printersButton: '打印机',
     printersPanelTitle: '使用此类型的打印机',

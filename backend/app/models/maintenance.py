@@ -27,8 +27,9 @@ class MaintenanceType(Base):
     # and the restore route can clear both together (#3127). Naive UTC.
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # What Bambuddy can do itself for this type instead of only reminding
-    # (#3127). "calibration" is the only value so far; None = reminder only.
-    # System types only — custom types cannot carry an action.
+    # (#3127): one of maintenance_actions.KNOWN_ACTIONS, None = reminder only.
+    # A custom type can carry one too (the types tab offers them when a type
+    # is created); it is fixed from then on.
     action: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 

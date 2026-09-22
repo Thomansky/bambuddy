@@ -744,6 +744,7 @@ function PrinterSection({
   t: TFunction;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [showDisabled, setShowDisabled] = useState(false);
   const [editingHours, setEditingHours] = useState(false);
   const [hoursInput, setHoursInput] = useState(overview.total_print_hours.toFixed(1));
 
@@ -758,12 +759,24 @@ function PrinterSection({
 
   // An item switched off is not on this printer: unticking it in the types
   // tab and switching it off on the card mean the same thing, so neither
-  // leaves a card behind (#3127). The Printers panel on the types tab is
-  // where it comes back.
+  // leaves a card among the ones in use (#3127). It is not gone, though --
+  // the card carries the toggle that switched it off, so the switched-off
+  // ones stay one disclosure away instead of only being reachable from the
+  // types tab.
   const activeItems = sortedItems.filter((item) => item.enabled);
   const automaticCount = activeItems.filter((item) => isAutomatedMaintenance(item.action)).length;
   const manualCount = activeItems.length - automaticCount;
   const visibleItems = activeItems.filter((item) => matchesKindFilter(item.action, kindFilter));
+  const disabledItems = sortedItems.filter(
+    (item) => !item.enabled && matchesKindFilter(item.action, kindFilter)
+  );
+
+  // Switching an item off on its card moves it into the disclosure rather
+  // than making it vanish.
+  const handleToggle = (id: number, enabled: boolean) => {
+    if (!enabled) setShowDisabled(true);
+    onToggle(id, enabled);
+  };
 
   const nextTask = sortedItems.find(item => item.enabled && (item.is_due || item.is_warning));
 
@@ -901,7 +914,7 @@ function PrinterSection({
                 key={item.id}
                 item={item}
                 onPerform={onPerform}
-                onToggle={onToggle}
+                onToggle={handleToggle}
                 onToggleNotifications={onToggleNotifications}
                 onUpdate={onUpdate}
                 onRun={onRun}
@@ -913,9 +926,49 @@ function PrinterSection({
               />
             ))}
             {visibleItems.length === 0 && (
-              <p className="text-sm text-bambu-gray py-2">{t('maintenance.noItemsForFilter')}</p>
+              <p className="text-sm text-bambu-gray py-2">
+                {/* With the filter on "All" an empty list means the items are
+                    switched off, not filtered away (#3127). */}
+                {activeItems.length === 0 && disabledItems.length > 0
+                  ? t('maintenance.allItemsSwitchedOff')
+                  : t('maintenance.noItemsForFilter')}
+              </p>
             )}
           </div>
+          {disabledItems.length > 0 && (
+            <div className="pt-3">
+              <button
+                type="button"
+                onClick={() => setShowDisabled(!showDisabled)}
+                aria-expanded={showDisabled}
+                data-testid={`switched-off-${overview.printer_id}`}
+                className="flex items-center gap-1.5 text-xs text-bambu-gray hover:text-white transition-colors"
+              >
+                {showDisabled ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                {t('maintenance.switchedOffCount', { count: disabledItems.length })}
+              </button>
+              {showDisabled && (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 pt-3">
+                  {disabledItems.map((item) => (
+                    <MaintenanceCard
+                      key={item.id}
+                      item={item}
+                      onPerform={onPerform}
+                      onToggle={handleToggle}
+                      onToggleNotifications={onToggleNotifications}
+                      onUpdate={onUpdate}
+                      onRun={onRun}
+                      onCancelRun={onCancelRun}
+                      requirePlateClear={overview.require_plate_clear}
+                      hasPermission={hasPermission}
+                      language={language}
+                      t={t}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </CardContent>
       )}
     </Card>
@@ -1982,6 +2035,9 @@ export function MaintenancePage() {
     },
     onError: (error: Error) => {
       showToast(error.message, 'error');
+      // The refusal usually means the tab's coverage is behind what the
+      // server has; refetch so the boxes stop lying (#3127).
+      queryClient.invalidateQueries({ queryKey: ['maintenanceTypes'] });
     },
   });
 

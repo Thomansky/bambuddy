@@ -1879,6 +1879,8 @@ export default {
       manual: 'Manuel',
     },
     noItemsForFilter: 'Bu filtreye uyan öğe yok',
+    switchedOffCount: '{{count}} kapalı',
+    allItemsSwitchedOff: 'Bu yazıcıdaki tüm bakım öğeleri kapalı',
     coverage: '{{total}} yazıcıdan {{used}} tanesinde',
     printersButton: 'Yazıcılar',
     printersPanelTitle: 'Bu türü kullanan yazıcılar',

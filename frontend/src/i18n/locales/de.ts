@@ -1877,6 +1877,8 @@ export default {
       manual: 'Manuell',
     },
     noItemsForFilter: 'Keine Einträge für diesen Filter',
+    switchedOffCount: '{{count}} ausgeschaltet',
+    allItemsSwitchedOff: 'Alle Wartungspunkte dieses Druckers sind ausgeschaltet',
     coverage: 'auf {{used}} von {{total}} Druckern',
     printersButton: 'Drucker',
     printersPanelTitle: 'Drucker mit diesem Typ',

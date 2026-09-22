@@ -210,6 +210,72 @@ class TestTheLineOnOnePrinter:
         assert (run_a.status, run_b.status) == ("running", "running")
 
 
+class TestRunsNobodyOwnsAnyMore:
+    """A pending run whose item was switched off, or whose type was hidden (#3127).
+
+    Its card -- the only place with a Cancel button -- has left the
+    maintenance page, so the run must not go on holding the print queue and
+    must never reach the printer. The routes cancel it as it happens; this
+    is the scheduler's own sweep, which also catches rows an older version
+    left behind.
+    """
+
+    async def _pending_run(self, db_session, printer_factory, *, enabled=True, hidden=False, name="A"):
+        printer = await printer_factory(model="X1C", name=name)
+        maint_type = await _make_type(db_session, "Printer Calibration", "calibration")
+        maint_type.is_deleted = hidden
+        item = await _make_item(db_session, printer.id, maint_type, enabled=enabled)
+        return printer, await _make_run(db_session, item)
+
+    @pytest.mark.asyncio
+    async def test_the_pass_cancels_the_run_of_a_switched_off_item(self, scheduler, db_session, printer_factory):
+        _printer, run = await self._pending_run(db_session, printer_factory, enabled=False)
+        with patch("backend.app.services.print_scheduler.printer_manager") as mock_pm:
+            mock_pm.get_status.return_value = _mock_state()
+            mock_pm.is_connected.return_value = True
+            mock_pm.start_calibration.return_value = True
+            await scheduler._check_maintenance_runs(db_session, False)
+        mock_pm.start_calibration.assert_not_called()
+        await db_session.refresh(run)
+        assert run.status == "cancelled"
+        assert run.waiting_reason is None
+        assert run.completed_at is not None
+
+    @pytest.mark.asyncio
+    async def test_the_pass_cancels_the_run_of_a_hidden_type(self, scheduler, db_session, printer_factory):
+        _printer, run = await self._pending_run(db_session, printer_factory, hidden=True)
+        with patch("backend.app.services.print_scheduler.printer_manager") as mock_pm:
+            mock_pm.get_status.return_value = _mock_state()
+            mock_pm.is_connected.return_value = True
+            mock_pm.start_calibration.return_value = True
+            await scheduler._check_maintenance_runs(db_session, False)
+        mock_pm.start_calibration.assert_not_called()
+        await db_session.refresh(run)
+        assert run.status == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_it_reserves_no_printer_while_it_is_still_pending(self, scheduler, db_session, printer_factory):
+        printer, _run = await self._pending_run(db_session, printer_factory, enabled=False)
+        assert await scheduler._maintenance_reserved_printers(db_session) == {}
+
+        # The same run on an item that is on does reserve it.
+        other, run = await self._pending_run(db_session, printer_factory, name="B")
+        reserved = await scheduler._maintenance_reserved_printers(db_session)
+        assert list(reserved) == [other.id]
+        assert reserved[other.id].id == run.id
+        assert printer.id not in reserved
+
+    @pytest.mark.asyncio
+    async def test_a_run_already_on_the_printer_still_reserves_it(self, scheduler, db_session, printer_factory):
+        printer, run = await self._pending_run(db_session, printer_factory, enabled=False)
+        run.status = "running"
+        run.started_at = _utcnow_naive()
+        await db_session.commit()
+
+        # The calibration is on the machine whatever the item now says.
+        assert list(await scheduler._maintenance_reserved_printers(db_session)) == [printer.id]
+
+
 class TestHeadRuns:
     """The pure ordering rule, on plain objects."""
 

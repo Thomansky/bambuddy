@@ -1877,6 +1877,8 @@ export default {
       manual: 'Manuali',
     },
     noItemsForFilter: 'Nessun elemento corrisponde a questo filtro',
+    switchedOffCount: '{{count}} disattivati',
+    allItemsSwitchedOff: 'Tutti gli elementi di questa stampante sono disattivati',
     coverage: 'su {{used}} di {{total}} stampanti',
     printersButton: 'Stampanti',
     printersPanelTitle: 'Stampanti che usano questo tipo',

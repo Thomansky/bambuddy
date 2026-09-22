@@ -1894,6 +1894,8 @@ export default {
       manual: 'Ручні',
     },
     noItemsForFilter: 'Немає елементів для цього фільтра',
+    switchedOffCount: 'Вимкнено: {{count}}',
+    allItemsSwitchedOff: 'Усі пункти обслуговування цього принтера вимкнено',
     coverage: 'на {{used}} з {{total}} принтерів',
     printersButton: 'Принтери',
     printersPanelTitle: 'Принтери з цим типом',

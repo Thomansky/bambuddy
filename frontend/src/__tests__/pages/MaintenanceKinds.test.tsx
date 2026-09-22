@@ -179,8 +179,48 @@ describe('MaintenancePage manual vs automated', () => {
     });
   });
 
-  it('leaves a switched-off item out of the printer section', async () => {
-    await expandPrinter();
-    expect(screen.queryByText('Check Belt Tension')).not.toBeInTheDocument();
+  describe('the switched-off items', () => {
+    it('leaves a switched-off item out of the items in use', async () => {
+      await expandPrinter();
+      expect(screen.queryByText('Check Belt Tension')).not.toBeInTheDocument();
+    });
+
+    it('keeps it one disclosure away, with the toggle that switches it back on', async () => {
+      const patches: { id: string; body: unknown }[] = [];
+      server.use(
+        http.patch('/api/v1/maintenance/items/:id', async ({ request, params }) => {
+          patches.push({ id: String(params.id), body: await request.json() });
+          return HttpResponse.json({});
+        })
+      );
+      await expandPrinter();
+
+      fireEvent.click(screen.getByTestId('switched-off-1'));
+      const card = cardFor('Check Belt Tension');
+      expect(within(card).getByText('Disabled')).toBeInTheDocument();
+
+      fireEvent.click(within(card).getByRole('switch'));
+      await waitFor(() =>
+        expect(patches).toEqual([{ id: '5', body: { enabled: true } }])
+      );
+    });
+
+    it('says the items are switched off rather than filtered when none is on', async () => {
+      server.use(
+        http.get('/api/v1/maintenance/overview', () =>
+          HttpResponse.json([
+            { ...overview[0], maintenance_items: [item({ enabled: false }), switchedOff] },
+          ])
+        )
+      );
+      render(<MaintenancePage />);
+      fireEvent.click(await screen.findByRole('button', { name: /expand/i }));
+
+      expect(
+        await screen.findByText('Every item on this printer is switched off')
+      ).toBeInTheDocument();
+      expect(screen.queryByText('No items match this filter')).not.toBeInTheDocument();
+      expect(screen.getByTestId('switched-off-1')).toHaveTextContent('2 switched off');
+    });
   });
 });

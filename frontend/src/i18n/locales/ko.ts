@@ -1793,6 +1793,8 @@ export default {
       manual: '수동',
     },
     noItemsForFilter: '이 필터와 일치하는 항목이 없습니다',
+    switchedOffCount: '{{count}}개 비활성화됨',
+    allItemsSwitchedOff: '이 프린터의 모든 항목이 비활성화되어 있습니다',
     coverage: '프린터 {{total}}대 중 {{used}}대에서 사용',
     printersButton: '프린터',
     printersPanelTitle: '이 유형을 사용하는 프린터',

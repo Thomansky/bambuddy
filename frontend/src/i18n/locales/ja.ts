@@ -1876,6 +1876,8 @@ export default {
       manual: '手動',
     },
     noItemsForFilter: 'この絞り込みに一致する項目はありません',
+    switchedOffCount: '{{count}} 件が無効',
+    allItemsSwitchedOff: 'このプリンターの項目はすべて無効になっています',
     coverage: '{{total}} 台中 {{used}} 台のプリンターで有効',
     printersButton: 'プリンター',
     printersPanelTitle: 'このタイプを使用するプリンター',
