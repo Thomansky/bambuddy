@@ -23,9 +23,13 @@ class MaintenanceType(Base):
     wiki_url: Mapped[str | None] = mapped_column(String(500))  # Documentation link
     is_system: Mapped[bool] = mapped_column(Boolean, default=False)  # Pre-defined vs custom
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)  # Hidden/removed type
+    # When it was hidden, so the "Deleted types" list can say how long ago
+    # and the restore route can clear both together (#3127). Naive UTC.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # What Bambuddy can do itself for this type instead of only reminding
-    # (#3127). "calibration" is the only value so far; None = reminder only.
-    # System types only — custom types cannot carry an action.
+    # (#3127): one of maintenance_actions.KNOWN_ACTIONS, None = reminder only.
+    # A custom type can carry one too (the types tab offers them when a type
+    # is created); it is fixed from then on.
     action: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
@@ -69,6 +73,10 @@ class PrinterMaintenance(Base):
     schedule_days: Mapped[list | None] = mapped_column(JSON, nullable=True)
     schedule_time: Mapped[str | None] = mapped_column(String(5), nullable=True)
     schedule_next_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # With a schedule: the print queue does not start a job on this printer
+    # that would still be running at schedule_next_at (#3127). Off = the run
+    # simply waits for whatever is on the printer to finish.
+    reserve_before_schedule: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1", nullable=False)
     last_auto_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

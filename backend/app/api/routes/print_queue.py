@@ -462,6 +462,7 @@ def _enrich_response(item: PrintQueueItem) -> PrintQueueItemResponse:
         "manual_start": item.manual_start,
         "filament_short": bool(item.filament_short),
         "skip_filament_check": bool(item.skip_filament_check),
+        "user_started": bool(item.user_started),
         "ams_mapping": ams_mapping_parsed,
         "plate_id": item.plate_id,
         "bed_levelling": item.bed_levelling,
@@ -2440,6 +2441,9 @@ async def start_queue_item(
     # Print Anyway / no deficit: clear the flags and let the scheduler dispatch.
     item.manual_start = False
     item.filament_short = False
+    # The person pressed ▶: the maintenance side does not hold this item
+    # (#3127); the printer still has to be free as before.
+    item.user_started = True
     # Persist the user's "Print Anyway" decision so the scheduler does not
     # immediately re-flag this item on the next tick (#1698-followup). The
     # pre-fix behaviour bounced between "user said anyway" and

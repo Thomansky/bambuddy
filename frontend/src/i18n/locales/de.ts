@@ -1326,6 +1326,21 @@ export default {
       unknown: 'unbekannt',
       printAnyway: 'Trotzdem drucken',
     },
+    maintenanceHold: {
+      run: 'Wartungslauf steht an: {{item}} ({{state}})',
+      schedule: 'Wartungstermin {{when}} — Auftrag würde hineinlaufen (geschätzt {{duration}})',
+      scheduleUnknown: 'Wartungstermin {{when}} — Auftrag würde hineinlaufen (Dauer unbekannt)',
+      state: {
+        queued: 'eingereiht',
+        running: 'läuft',
+        printerOffline: 'Drucker offline',
+        printerBusy: 'Drucker beschäftigt',
+        plateClear: 'Druckplatte noch nicht freigegeben',
+        alreadyDrying: 'AMS-Trocknung läuft',
+        bedTooWarm: 'Druckbett noch warm, {{temp}} °C',
+        bedTempUnknown: 'Betttemperatur unbekannt',
+      },
+    },
     slicerAmsMapping: {
       rowBadge: 'AMS-Steckplätze für diesen Drucker gespeichert',
       rowTooltip: 'Dieses Archiv enthält die genauen AMS-Steckplätze, die der Slicer ausgewählt hat, gespeichert für den Drucker dieses Eintrags. Ein erneuter Druck darauf kann diese Fächer wiederverwenden, statt erneut nach Typ und Farbe zuzuordnen.',
@@ -1846,10 +1861,6 @@ export default {
     intervalOverrides: 'Intervall-Überschreibungen',
     intervalOverridesDescription: 'Intervalle für bestimmte Drucker anpassen',
     // Printer assignment
-    assignedToPrinters: 'Druckern zugewiesen:',
-    noPrintersAssigned: 'Keine Drucker zugewiesen',
-    addPrinterShort: 'Hinzufügen:',
-    printersAssignedClick: '{{count}} Drucker zugewiesen - klicken zum Verwalten',
     removeFromPrinter: 'Von diesem Drucker entfernen',
     // Types
     types: {
@@ -1897,6 +1908,38 @@ export default {
     configureSettings: 'Wartungstypen und Intervalle konfigurieren',
     notificationsOn: 'Benachrichtigungen an',
     notificationsOff: 'Benachrichtigungen aus',
+    // Manual versus automated maintenance, coverage and deleted types (#3127)
+    kind: {
+      automatic: 'Automatisch',
+      onRequest: 'Auf Anfrage',
+      manual: 'Manuell',
+    },
+    kindCounts: '{{automatic}} automatisch, {{manual}} manuell',
+    filterKind: 'Nach Art filtern',
+    filter: {
+      all: 'Alle',
+      automatic: 'Automatisch',
+      manual: 'Manuell',
+    },
+    noItemsForFilter: 'Keine Einträge für diesen Filter',
+    switchedOffCount: '{{count}} ausgeschaltet',
+    allItemsSwitchedOff: 'Alle Wartungspunkte dieses Druckers sind ausgeschaltet',
+    coverage: 'auf {{used}} von {{total}} Druckern',
+    printersButton: 'Drucker',
+    printersPanelTitle: 'Drucker mit diesem Typ',
+    noEligiblePrinters: 'Kein Drucker kann diesen Typ verwenden',
+    action: 'Aktion',
+    actionNone: 'Keine (nur Erinnerung)',
+    actionCalibration: 'Druckerkalibrierung',
+    actionMotionPrecision: 'Vision-Encoder-Kalibrierung',
+    actionHint: 'Bambuddy führt diese Aufgabe selbst aus. Später nicht mehr änderbar.',
+    deletedTypes: 'Gelöschte Typen',
+    noDeletedTypes: 'Nichts gelöscht',
+    deletedAt: 'Gelöscht am {{date}}',
+    deletedAtUnknown: 'Früher gelöscht',
+    deletedItemsTitle: 'Erhaltene Druckereinträge',
+    restoreType: 'Wiederherstellen',
+    typeRestored: 'Wartungstyp wiederhergestellt',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
@@ -1920,6 +1963,7 @@ export default {
       triggerGateIdle: '(sobald der Drucker frei ist)',
       scheduleDays: 'Wochentage',
       scheduleTime: 'Frühestens um',
+      reserveBeforeSchedule: 'Keine Aufträge starten, die in den Termin hineinlaufen würden',
       runNow: 'Jetzt ausführen',
       cancelRun: 'Lauf abbrechen',
       runQueued: 'Eingereiht – startet, sobald der Drucker frei ist',
@@ -1931,6 +1975,7 @@ export default {
       waitingAlreadyDrying: 'Wartet: AMS-Trocknung läuft',
       waitingBedTooWarm: 'Wartet: Druckbett noch warm ({{temp}} °C)',
       waitingBedTempUnknown: 'Wartet: Betttemperatur unbekannt',
+      waitingAfterOtherRun: 'Wartet: nach {{item}}',
       waitingOther: 'Wartet: {{reason}}',
       lastRunCompleted: 'Letzter Lauf abgeschlossen {{time}}',
       lastRunFailed: 'Letzter Lauf fehlgeschlagen {{time}}: {{error}}',

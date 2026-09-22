@@ -1326,6 +1326,21 @@ export default {
       unknown: '不明',
       printAnyway: '仍要列印',
     },
+    maintenanceHold: {
+      run: '維護執行待處理：{{item}}（{{state}}）',
+      schedule: '{{when}} 有排程維護 — 此工作會佔用該時間（預計 {{duration}}）',
+      scheduleUnknown: '{{when}} 有排程維護 — 此工作會佔用該時間（時長未知）',
+      state: {
+        queued: '已排隊',
+        running: '執行中',
+        printerOffline: '印表機離線',
+        printerBusy: '印表機忙碌',
+        plateClear: '列印板尚未確認清空',
+        alreadyDrying: 'AMS 正在乾燥',
+        bedTooWarm: '熱床仍然較熱，{{temp}} °C',
+        bedTempUnknown: '熱床溫度未知',
+      },
+    },
     slicerAmsMapping: {
       rowBadge: '已為此印表機儲存 AMS 槽位',
       rowTooltip: '此封存保留了切片軟體選擇的確切 AMS 槽位，並為此項目的目標印表機儲存。在該印表機上重新列印時，可重複使用這些料盤，而不必再依類型與顏色重新比對。',
@@ -1845,10 +1860,6 @@ export default {
     intervalOverrides: '間隔覆蓋',
     intervalOverridesDescription: '為特定印表機自訂間隔',
     // Printer assignment
-    assignedToPrinters: '已分配給印表機：',
-    noPrintersAssigned: '未分配印表機',
-    addPrinterShort: '新增：',
-    printersAssignedClick: '已分配 {{count}} 臺印表機 - 點選管理',
     removeFromPrinter: '從此印表機移除',
     // Types
     types: {
@@ -1896,6 +1907,38 @@ export default {
     configureSettings: '設定維護類型和間隔',
     notificationsOn: '通知已開啟',
     notificationsOff: '通知已關閉',
+    // Manual versus automated maintenance, coverage and deleted types (#3127)
+    kind: {
+      automatic: '自動',
+      onRequest: '依需求執行',
+      manual: '手動',
+    },
+    kindCounts: '自動 {{automatic}} 項、手動 {{manual}} 項',
+    filterKind: '依類型篩選',
+    filter: {
+      all: '全部',
+      automatic: '自動',
+      manual: '手動',
+    },
+    noItemsForFilter: '沒有符合此篩選條件的項目',
+    switchedOffCount: '{{count}} 項已關閉',
+    allItemsSwitchedOff: '此印表機的所有項目均已關閉',
+    coverage: '已用於 {{total}} 台印表機中的 {{used}} 台',
+    printersButton: '印表機',
+    printersPanelTitle: '使用此類型的印表機',
+    noEligiblePrinters: '沒有印表機可以使用此類型',
+    action: '動作',
+    actionNone: '無（僅提醒）',
+    actionCalibration: '印表機校正',
+    actionMotionPrecision: '視覺編碼器校正',
+    actionHint: 'Bambuddy 會自行執行此工作。建立後無法變更。',
+    deletedTypes: '已刪除的類型',
+    noDeletedTypes: '沒有已刪除的類型',
+    deletedAt: '於 {{date}} 刪除',
+    deletedAtUnknown: '先前已刪除',
+    deletedItemsTitle: '保留的印表機項目',
+    restoreType: '還原',
+    typeRestored: '維護類型已還原',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
@@ -1919,6 +1962,7 @@ export default {
       triggerGateIdle: '（印表機閒置後）',
       scheduleDays: '星期',
       scheduleTime: '最早時間',
+      reserveBeforeSchedule: '不啟動會佔用排程時間的工作',
       runNow: '立即執行',
       cancelRun: '取消執行',
       runQueued: '已排隊 – 印表機閒置後立即開始',
@@ -1930,6 +1974,7 @@ export default {
       waitingAlreadyDrying: '等待中：AMS 正在乾燥',
       waitingBedTooWarm: '等待中：熱床仍然較熱（{{temp}} °C）',
       waitingBedTempUnknown: '等待中：熱床溫度未知',
+      waitingAfterOtherRun: '等待中：在{{item}}之後',
       waitingOther: '等待中：{{reason}}',
       lastRunCompleted: '上次執行已完成 {{time}}',
       lastRunFailed: '上次執行失敗 {{time}}：{{error}}',

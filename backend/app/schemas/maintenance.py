@@ -9,6 +9,7 @@ from backend.app.schemas.print_queue import UTCDatetime
 from backend.app.services.maintenance_actions import (
     BED_TEMP_BELOW_KEY,
     CALIBRATION_FLAGS,
+    KNOWN_ACTIONS,
     TRIGGER_MODES,
     normalize_bed_temp_below,
     parse_schedule_time,
@@ -42,7 +43,22 @@ class MaintenanceTypeBase(BaseModel):
 
 
 class MaintenanceTypeCreate(MaintenanceTypeBase):
-    pass
+    # What Bambuddy performs itself for this type (#3127), so a second
+    # calibration with its own interval and schedule can sit next to the
+    # seeded one. Fixed at creation: MaintenanceTypeUpdate has no action.
+    action: str | None = None
+    # Printers the type is put on right away. Each must be able to run the
+    # action; the route refuses the request otherwise.
+    printer_ids: list[int] | None = None
+
+    @field_validator("action")
+    @classmethod
+    def _known_action(cls, value: str | None) -> str | None:
+        if value is None or value == "":
+            return None
+        if value not in KNOWN_ACTIONS:
+            raise ValueError(f"action must be one of: {', '.join(KNOWN_ACTIONS)}")
+        return value
 
 
 class MaintenanceTypeUpdate(BaseModel):
@@ -60,9 +76,36 @@ class MaintenanceTypeResponse(MaintenanceTypeBase):
     # "calibration" when Bambuddy can perform the task itself (#3127)
     action: str | None = None
     created_at: datetime
+    # Coverage on the fleet (#3127). printer_count / printer_ids are the
+    # active printers with an ENABLED item of this type; eligible_count is
+    # how many active printers the type can apply to at all (model gate for
+    # system types and for an action, every printer otherwise). Computed in
+    # the route -- a bare from_attributes read leaves them at zero.
+    printer_count: int = 0
+    eligible_count: int = 0
+    printer_ids: list[int] = Field(default_factory=list)
+    # The printers behind eligible_count, so the tab can offer one checkbox
+    # per printer without repeating the model gate in the client.
+    eligible_printer_ids: list[int] = Field(default_factory=list)
 
     class Config:
         from_attributes = True
+
+
+class DeletedMaintenanceTypeResponse(BaseModel):
+    """A hidden type as the "Deleted types" list shows it (#3127)."""
+
+    id: int
+    name: str
+    icon: str | None = None
+    is_system: bool
+    action: str | None = None
+    default_interval_hours: float
+    interval_type: str = "hours"
+    # Naive UTC in the DB; NULL on rows hidden before the column existed.
+    deleted_at: UTCDatetime = None
+    # Printer items still attached, which come back with the type.
+    item_count: int = 0
 
 
 # Printer Maintenance schemas
@@ -114,6 +157,9 @@ class PrinterMaintenanceUpdate(BaseModel):
     trigger_mode: str | None = Field(default=None, pattern=f"^({'|'.join(TRIGGER_MODES)})$")
     schedule_days: list[int] | None = None
     schedule_time: str | None = None
+    # With a schedule: keep the print queue from starting a job on the
+    # printer that would still be running at the scheduled time (#3127).
+    reserve_before_schedule: bool | None = None
 
     @field_validator("action_options")
     @classmethod
@@ -128,7 +174,7 @@ class PrinterMaintenanceUpdate(BaseModel):
             checked[BED_TEMP_BELOW_KEY] = normalize_bed_temp_below(value[BED_TEMP_BELOW_KEY])
         return checked
 
-    @field_validator("enabled", "notifications_enabled")
+    @field_validator("enabled", "notifications_enabled", "reserve_before_schedule")
     @classmethod
     def _flag_not_null(cls, value: bool | None, info: ValidationInfo) -> bool:
         if value is None:
@@ -169,6 +215,7 @@ class PrinterMaintenanceResponse(BaseModel):
     # UTCDatetime: naive UTC in the DB, sent with the Z suffix like the queue
     # and scheduled-drying routes so the client parses them as UTC.
     schedule_next_at: UTCDatetime = None
+    reserve_before_schedule: bool = True
     last_auto_run_at: UTCDatetime = None
     created_at: datetime
     updated_at: datetime
@@ -187,8 +234,9 @@ class MaintenanceRunResponse(BaseModel):
     options: dict[str, bool] | None
     start_after: UTCDatetime
     waiting_reason: str | None
-    # Figures behind the reason, e.g. {"bed_temp": 34.2, "threshold": 30.0}
-    # for bed_too_warm; None for the reasons that have none
+    # Figures behind the reason: {"bed_temp": 34.2, "threshold": 30.0} for
+    # bed_too_warm, {"item": "Printer Calibration"} for after_other_run;
+    # None for the reasons that have none
     waiting_detail: dict[str, Any] | None = None
     error_message: str | None
     created_at: UTCDatetime
@@ -266,6 +314,8 @@ class MaintenanceStatus(BaseModel):
     schedule_days: list[int] | None = None
     schedule_time: str | None = None
     schedule_next_at: UTCDatetime = None
+    # The queue keeps clear of the scheduled run (#3127); only read with a schedule
+    reserve_before_schedule: bool = True
     current_run: CurrentRun | None = None
     last_run: MaintenanceRunResponse | None = None
 
@@ -284,6 +334,9 @@ class PrinterMaintenanceOverview(BaseModel):
     # trigger actually waits for (#3127): both go through the scheduler's
     # idle check with this gate.
     require_plate_clear: bool = False
+    # Actions this printer model can perform (#3127), so the "Add type" form
+    # can offer the printers that fit the action the user picked.
+    available_actions: list[str] = Field(default_factory=list)
 
 
 class PerformMaintenanceRequest(BaseModel):

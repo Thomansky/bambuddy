@@ -27,10 +27,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -45,6 +46,10 @@ logger = logging.getLogger(__name__)
 
 ACTION_CALIBRATION = "calibration"
 ACTION_MOTION_PRECISION = "motion_precision"
+# Actions a type may carry. A custom type can be created with one of these
+# so a second calibration item with its own interval and schedule can live
+# next to the seeded one (#3127); the action is fixed at creation.
+KNOWN_ACTIONS: tuple[str, ...] = (ACTION_CALIBRATION, ACTION_MOTION_PRECISION)
 
 # Keyword names of BambuMQTTClient.start_calibration, in bit order.
 CALIBRATION_FLAGS: tuple[str, ...] = (
@@ -100,6 +105,41 @@ BED_TEMP_BELOW_MAX = 120.0
 WAIT_BED_TOO_WARM = "bed_too_warm"
 WAIT_BED_TEMP_UNKNOWN = "bed_temp_unknown"
 
+# Runs on one printer go out one at a time, in a fixed order (#3127): the
+# levelling calibration before the vision encoder one -- it heats the bed,
+# and the cold-bed condition then holds the vision encoder run back on its
+# own -- then by start_after, then by id. Every run behind the head of that
+# line waits with this reason and the head's item name in waiting_detail.
+WAIT_AFTER_OTHER_RUN = "after_other_run"
+ACTION_PRIORITY: dict[str, int] = {ACTION_CALIBRATION: 0, ACTION_MOTION_PRECISION: 1}
+
+# The print queue keeps clear of a scheduled run (#3127): a job is only
+# dispatched when it is expected to be done this long before the slot, and a
+# job whose duration is unknown is held from UNKNOWN_DURATION_HOLD before it.
+SCHEDULE_MARGIN = timedelta(minutes=15)
+UNKNOWN_DURATION_HOLD = timedelta(hours=2)
+
+# How the two maintenance holds start on a queue row. The scheduler's
+# busy-only test and the frontend's parser both key on these exact strings,
+# so a reword lands in all three places at once. On an "Any <model>" row the
+# hold ends with the printers it is about, after QUEUE_HOLD_PRINTERS_JOINER.
+QUEUE_HOLD_RUN_PREFIX = "Maintenance run pending: "
+QUEUE_HOLD_SCHEDULE_PREFIX = "Scheduled maintenance at "
+QUEUE_HOLD_PRINTERS_JOINER = " — "
+
+# What a run's state reads as inside the queue hold, in English; the
+# frontend maps these phrases back to its own translations.
+QUEUE_HOLD_RUN_PHRASES: dict[str, str] = {
+    "printer_offline": "printer offline",
+    "printer_busy": "printer busy",
+    "awaiting_plate_clear": "plate not released yet",
+    "already_drying": "AMS drying in progress",
+    WAIT_BED_TOO_WARM: "bed still warm",
+    WAIT_BED_TEMP_UNKNOWN: "bed temperature unknown",
+}
+QUEUE_HOLD_RUN_QUEUED = "queued"
+QUEUE_HOLD_RUN_RUNNING = "running"
+
 # The vision encoder calibration is started as a system gcode file. The
 # directory under /usr/etc/print/ is model-specific and the printer reports
 # it with every internal job it runs (``PrinterState.internal_gcode_dir``);
@@ -137,6 +177,18 @@ def selected_calibration_flags(options: dict | None) -> list[str]:
 def has_options(action: str | None) -> bool:
     """Does this action carry a per-item option set?"""
     return action == ACTION_CALIBRATION
+
+
+def action_applies_to_printer(action: str | None, printer_model: str | None) -> bool:
+    """Can this printer perform the action at all?
+
+    The model gate a custom type with an action inherits from the seeded one
+    (#3127): only the H2 series has the vision encoder, every printer can be
+    told to level its bed. A reminder type (no action) applies everywhere.
+    """
+    if action == ACTION_MOTION_PRECISION:
+        return has_vision_encoder(printer_model)
+    return True
 
 
 def normalize_bed_temp_below(value: object) -> float | None:
@@ -222,6 +274,126 @@ def set_waiting(run: MaintenanceRun, reason: str | None, detail: dict | None = N
     """Record why ``run`` is still pending; reason and detail move together."""
     run.waiting_reason = reason
     run.waiting_detail = detail if reason is not None else None
+
+
+# ============== Order on one printer ==============
+
+
+def run_item_name(run: MaintenanceRun) -> str:
+    """The stored type name of the run's item (``printer_maintenance.maintenance_type`` loaded)."""
+    return run.printer_maintenance.maintenance_type.name
+
+
+def run_order_key(run: MaintenanceRun) -> tuple[int, datetime, int]:
+    """Where ``run`` stands in its printer's line; lower goes first.
+
+    Action priority, then ``start_after`` (none first), then id. An action
+    without a priority entry sorts last. ``run.printer_maintenance
+    .maintenance_type`` must be loaded.
+    """
+    action = run.printer_maintenance.maintenance_type.action or ""
+    return (ACTION_PRIORITY.get(action, len(ACTION_PRIORITY)), run.start_after or datetime.min, run.id)
+
+
+def head_runs(runs: list[MaintenanceRun], now: datetime) -> dict[int, MaintenanceRun]:
+    """The run at the head of each printer's line, by printer id.
+
+    A running run heads its printer whatever its action: nothing else can go
+    out while it is on the printer. Otherwise the first pending run whose
+    ``start_after`` has passed, in :func:`run_order_key` order. A pending run
+    whose ``start_after`` is still ahead heads nothing -- it could not be
+    dispatched yet, so it neither holds the other runs nor the print queue.
+    """
+    heads: dict[int, MaintenanceRun] = {}
+    for run in runs:
+        if run.status == "running":
+            heads.setdefault(run.printer_id, run)
+    for run in sorted(runs, key=run_order_key):
+        if run.status == "pending" and (run.start_after is None or run.start_after <= now):
+            heads.setdefault(run.printer_id, run)
+    return heads
+
+
+# ============== Holds on the print queue ==============
+
+_WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+
+def schedule_hold_blocks(next_at: datetime, now: datetime, estimate_seconds: int | None) -> bool:
+    """Would a job started ``now`` still be on the printer at ``next_at``?
+
+    Both naive UTC. With an estimate the job has to be done SCHEDULE_MARGIN
+    before the slot; without one it is held once the slot is
+    UNKNOWN_DURATION_HOLD or less away.
+    """
+    if not estimate_seconds or estimate_seconds <= 0:
+        return next_at - now <= UNKNOWN_DURATION_HOLD
+    return now + timedelta(seconds=estimate_seconds) + SCHEDULE_MARGIN > next_at
+
+
+def format_duration(seconds: int) -> str:
+    hours, minutes = divmod(max(0, int(seconds)) // 60, 60)
+    return f"{hours}h {minutes}m" if hours else f"{minutes}m"
+
+
+def queue_hold_for_run(run: MaintenanceRun) -> str:
+    """The queue row's wording for a printer a maintenance run reserves.
+
+    "Maintenance run pending: <item> (<state>)", the state being the run's
+    waiting reason as a phrase -- with the bed temperature for bed_too_warm
+    -- or "queued" / "running".
+    """
+    if run.status == "running":
+        state = QUEUE_HOLD_RUN_RUNNING
+    elif run.waiting_reason is None:
+        state = QUEUE_HOLD_RUN_QUEUED
+    else:
+        state = QUEUE_HOLD_RUN_PHRASES.get(run.waiting_reason, run.waiting_reason)
+        bed_temp = (run.waiting_detail or {}).get("bed_temp") if run.waiting_reason == WAIT_BED_TOO_WARM else None
+        if isinstance(bed_temp, (int, float)):
+            state = f"{state}, {bed_temp:g} °C"
+    return f"{QUEUE_HOLD_RUN_PREFIX}{run_item_name(run)} ({state})"
+
+
+def queue_hold_for_schedule(next_at: datetime, estimate_seconds: int | None) -> str:
+    """The queue row's wording for a job that would run into the slot at ``next_at`` (naive UTC).
+
+    The slot is written on the server's local clock, the way the card shows
+    the schedule time; the weekday is always English here and translated
+    by the frontend.
+    """
+    local = next_at.replace(tzinfo=timezone.utc).astimezone(local_zone())
+    when = f"{_WEEKDAYS[local.weekday()]} {local:%H:%M}"
+    if not estimate_seconds or estimate_seconds <= 0:
+        return f"{QUEUE_HOLD_SCHEDULE_PREFIX}{when} — this job would run into it (duration unknown)"
+    return (
+        f"{QUEUE_HOLD_SCHEDULE_PREFIX}{when} — this job would run into it "
+        f"(estimated {format_duration(estimate_seconds)})"
+    )
+
+
+def queue_hold_clauses(reserved: list[tuple[str, str]]) -> list[str]:
+    """The waiting-reason clauses for the printers a model-based item was kept off.
+
+    One clause per distinct hold, in the order the holds were met, naming
+    the printers under it the way the neighbouring "Busy: A, B" does:
+    "Maintenance run pending: Printer Calibration (queued) — H2S-01, H2S-02".
+    Four printers all scheduled for Sunday noon give one sentence, not four.
+    """
+    names_by_hold: dict[str, list[str]] = {}
+    for name, hold in reserved:
+        names_by_hold.setdefault(hold, []).append(name)
+    return [f"{hold}{QUEUE_HOLD_PRINTERS_JOINER}{', '.join(names)}" for hold, names in names_by_hold.items()]
+
+
+def is_queue_hold(clause: str) -> bool:
+    """Is this waiting-reason clause one of the two maintenance holds?
+
+    Both resolve by themselves -- the run closes, the slot passes -- so the
+    scheduler files them with the busy-only reasons: no "job waiting"
+    notification, and the item stays on the queue forecast.
+    """
+    return clause.startswith(QUEUE_HOLD_RUN_PREFIX) or clause.startswith(QUEUE_HOLD_SCHEDULE_PREFIX)
 
 
 def run_options(action: str | None, options: dict | None) -> dict[str, bool] | None:
@@ -563,6 +735,57 @@ async def fail_stale_running_runs(db: AsyncSession, now: datetime | None = None)
             "Maintenance run %d on printer %d never reported completion; marked failed", run.id, run.printer_id
         )
     return rows
+
+
+def _cancel_runs(runs: list[MaintenanceRun], now: datetime) -> list[MaintenanceRun]:
+    """Close ``runs`` as cancelled, exactly as the Cancel button would."""
+    for run in runs:
+        run.status = "cancelled"
+        set_waiting(run, None)
+        run.completed_at = now
+        logger.info("Maintenance run %d cancelled: its item is no longer active", run.id)
+    return runs
+
+
+async def cancel_pending_runs_for_items(
+    db: AsyncSession, item_ids: Sequence[int], *, now: datetime | None = None
+) -> list[MaintenanceRun]:
+    """Cancel the pending runs of items that have just been switched off (#3127).
+
+    Switching an item off -- on its card, by unticking its printer on the
+    types tab, or by hiding the whole type -- takes its card off the page,
+    and with it the only Cancel button there is. A run left pending would go
+    on holding the printer's print queue and would still be dispatched once
+    its wait cleared, for something the user has just turned off, so it goes
+    with the card. A run already *running* is left alone: the command is on
+    the printer and the printer's own completion event closes it. Flushed,
+    not committed.
+    """
+    if not item_ids:
+        return []
+    result = await db.execute(
+        select(MaintenanceRun)
+        .where(MaintenanceRun.printer_maintenance_id.in_(set(item_ids)))
+        .where(MaintenanceRun.status == "pending")
+    )
+    return _cancel_runs(list(result.scalars().all()), now or utcnow_naive())
+
+
+async def cancel_orphaned_pending_runs(db: AsyncSession, now: datetime | None = None) -> list[MaintenanceRun]:
+    """Cancel pending runs whose item is switched off or whose type is hidden.
+
+    The routes close these the moment the user switches the item off; this
+    sweep is what catches the rows an older version left behind and any a
+    concurrent request slipped past. Flushed, not committed.
+    """
+    result = await db.execute(
+        select(MaintenanceRun)
+        .join(MaintenanceRun.printer_maintenance)
+        .join(PrinterMaintenance.maintenance_type)
+        .where(MaintenanceRun.status == "pending")
+        .where(or_(PrinterMaintenance.enabled.is_(False), MaintenanceType.is_deleted.is_(True)))
+    )
+    return _cancel_runs(list(result.scalars().all()), now or utcnow_naive())
 
 
 # ============== Completion ==============

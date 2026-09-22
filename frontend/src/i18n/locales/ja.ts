@@ -1325,6 +1325,21 @@ export default {
       unknown: '不明',
       printAnyway: 'それでも印刷',
     },
+    maintenanceHold: {
+      run: 'メンテナンス実行待ち: {{item}} ({{state}})',
+      schedule: '{{when}} にメンテナンス予定 — このジョブは予定時刻に食い込みます (推定 {{duration}})',
+      scheduleUnknown: '{{when}} にメンテナンス予定 — このジョブは予定時刻に食い込みます (所要時間不明)',
+      state: {
+        queued: '待機中',
+        running: '実行中',
+        printerOffline: 'プリンターがオフライン',
+        printerBusy: 'プリンターが使用中',
+        plateClear: 'プレートがまだ解放されていません',
+        alreadyDrying: 'AMS 乾燥中',
+        bedTooWarm: 'ベッドがまだ温かい、{{temp}} °C',
+        bedTempUnknown: 'ベッド温度が不明',
+      },
+    },
     slicerAmsMapping: {
       rowBadge: 'このプリンター用に保存されたAMSスロット',
       rowTooltip: 'このアーカイブには、スライサーが選択した正確なAMSスロットが、この項目の対象プリンター用に保存されています。そのプリンターでの再印刷では、タイプと色で照合し直す代わりにそれらのトレイを再利用できます。',
@@ -1845,10 +1860,6 @@ export default {
     intervalOverrides: 'インターバルのオーバーライド',
     intervalOverridesDescription: '特定のプリンターの間隔をカスタマイズ',
     // Printer assignment
-    assignedToPrinters: '割り当て済みプリンター：',
-    noPrintersAssigned: 'プリンター未割り当て',
-    addPrinterShort: '追加:',
-    printersAssignedClick: '{{count}}台のプリンターを割り当て済み - クリックして管理',
     removeFromPrinter: 'このプリンターから削除',
     // Types
     types: {
@@ -1896,6 +1907,38 @@ export default {
     configureSettings: 'メンテナンスタイプと間隔を設定',
     notificationsOn: '通知オン',
     notificationsOff: '通知オフ',
+    // Manual versus automated maintenance, coverage and deleted types (#3127)
+    kind: {
+      automatic: '自動',
+      onRequest: 'リクエスト時に実行',
+      manual: '手動',
+    },
+    kindCounts: '自動 {{automatic}} 件、手動 {{manual}} 件',
+    filterKind: '種類で絞り込む',
+    filter: {
+      all: 'すべて',
+      automatic: '自動',
+      manual: '手動',
+    },
+    noItemsForFilter: 'この絞り込みに一致する項目はありません',
+    switchedOffCount: '{{count}} 件が無効',
+    allItemsSwitchedOff: 'このプリンターの項目はすべて無効になっています',
+    coverage: '{{total}} 台中 {{used}} 台のプリンターで有効',
+    printersButton: 'プリンター',
+    printersPanelTitle: 'このタイプを使用するプリンター',
+    noEligiblePrinters: 'このタイプを使用できるプリンターはありません',
+    action: 'アクション',
+    actionNone: 'なし（リマインダーのみ）',
+    actionCalibration: 'プリンターのキャリブレーション',
+    actionMotionPrecision: 'ビジョンエンコーダーのキャリブレーション',
+    actionHint: 'Bambuddy がこの作業を自動で実行します。後から変更できません。',
+    deletedTypes: '削除されたタイプ',
+    noDeletedTypes: '削除されたものはありません',
+    deletedAt: '{{date}} に削除',
+    deletedAtUnknown: '以前に削除',
+    deletedItemsTitle: '保持されているプリンター項目',
+    restoreType: '復元',
+    typeRestored: 'メンテナンスタイプを復元しました',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
@@ -1919,6 +1962,7 @@ export default {
       triggerGateIdle: '（プリンターがアイドルになり次第）',
       scheduleDays: '曜日',
       scheduleTime: '最早開始時刻',
+      reserveBeforeSchedule: '予定時刻に食い込むジョブを開始しない',
       runNow: '今すぐ実行',
       cancelRun: '実行をキャンセル',
       runQueued: '待機中 – プリンターが空き次第開始します',
@@ -1930,6 +1974,7 @@ export default {
       waitingAlreadyDrying: '待機中: AMS 乾燥中',
       waitingBedTooWarm: '待機中: ベッドがまだ温かい ({{temp}} °C)',
       waitingBedTempUnknown: '待機中: ベッド温度が不明',
+      waitingAfterOtherRun: '待機中: {{item}}の後',
       waitingOther: '待機中: {{reason}}',
       lastRunCompleted: '前回の実行完了 {{time}}',
       lastRunFailed: '前回の実行失敗 {{time}}: {{error}}',

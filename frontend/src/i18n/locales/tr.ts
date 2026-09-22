@@ -1328,6 +1328,21 @@ export default {
       unknown: 'bilinmiyor',
       printAnyway: 'Yine de Yazdır',
     },
+    maintenanceHold: {
+      run: 'Bakım çalışması bekliyor: {{item}} ({{state}})',
+      schedule: '{{when}} planlı bakım — bu iş ona taşardı (tahmini {{duration}})',
+      scheduleUnknown: '{{when}} planlı bakım — bu iş ona taşardı (süre bilinmiyor)',
+      state: {
+        queued: 'sırada',
+        running: 'çalışıyor',
+        printerOffline: 'yazıcı çevrimdışı',
+        printerBusy: 'yazıcı meşgul',
+        plateClear: 'plaka henüz boşaltılmadı',
+        alreadyDrying: 'AMS kurutma sürüyor',
+        bedTooWarm: 'tabla hâlâ sıcak, {{temp}} °C',
+        bedTempUnknown: 'tabla sıcaklığı bilinmiyor',
+      },
+    },
     slicerAmsMapping: {
       rowBadge: 'Bu yazıcı için kaydedilen AMS yuvaları',
       rowTooltip: 'Bu arşiv, dilimleyicinin seçtiği tam AMS yuvalarını bu öğenin hedeflediği yazıcı için saklar. O yazıcıda yeniden yazdırma, tür ve renge göre yeniden eşleştirmek yerine bu makaraları yeniden kullanabilir.',
@@ -1847,10 +1862,6 @@ export default {
     intervalOverrides: 'Aralık Geçersiz Kılmaları',
     intervalOverridesDescription: 'Belirli yazıcılar için aralıkları özelleştir',
     // Yazıcı ataması
-    assignedToPrinters: 'Atanan yazıcılar:',
-    noPrintersAssigned: 'Atanan yazıcı yok',
-    addPrinterShort: 'Ekle:',
-    printersAssignedClick: '{{count}} yazıcı atandı - yönetmek için tıklayın',
     removeFromPrinter: 'Bu yazıcıdan kaldır',
     // Türler
     types: {
@@ -1898,6 +1909,38 @@ export default {
     configureSettings: 'Bakım türlerini ve aralıklarını yapılandır',
     notificationsOn: 'Bildirimler açık',
     notificationsOff: 'Bildirimler kapalı',
+    // Manual versus automated maintenance, coverage and deleted types (#3127)
+    kind: {
+      automatic: 'Otomatik',
+      onRequest: 'İstek üzerine',
+      manual: 'Manuel',
+    },
+    kindCounts: '{{automatic}} otomatik, {{manual}} manuel',
+    filterKind: 'Türe göre filtrele',
+    filter: {
+      all: 'Tümü',
+      automatic: 'Otomatik',
+      manual: 'Manuel',
+    },
+    noItemsForFilter: 'Bu filtreye uyan öğe yok',
+    switchedOffCount: '{{count}} kapalı',
+    allItemsSwitchedOff: 'Bu yazıcıdaki tüm bakım öğeleri kapalı',
+    coverage: '{{total}} yazıcıdan {{used}} tanesinde',
+    printersButton: 'Yazıcılar',
+    printersPanelTitle: 'Bu türü kullanan yazıcılar',
+    noEligiblePrinters: 'Bu türü kullanabilecek yazıcı yok',
+    action: 'Eylem',
+    actionNone: 'Yok (yalnızca hatırlatma)',
+    actionCalibration: 'Yazıcı kalibrasyonu',
+    actionMotionPrecision: 'Görüş kodlayıcı kalibrasyonu',
+    actionHint: 'Bambuddy bu görevi kendisi yapar. Sonradan değiştirilemez.',
+    deletedTypes: 'Silinen türler',
+    noDeletedTypes: 'Silinen bir şey yok',
+    deletedAt: '{{date}} tarihinde silindi',
+    deletedAtUnknown: 'Daha önce silindi',
+    deletedItemsTitle: 'Korunan yazıcı kayıtları',
+    restoreType: 'Geri yükle',
+    typeRestored: 'Bakım türü geri yüklendi',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
@@ -1921,6 +1964,7 @@ export default {
       triggerGateIdle: '(yazıcı boşta kalır kalmaz)',
       scheduleDays: 'Haftanın günleri',
       scheduleTime: 'En erken saat',
+      reserveBeforeSchedule: 'Planlanan zamana taşacak işleri başlatma',
       runNow: 'Şimdi çalıştır',
       cancelRun: 'Çalıştırmayı iptal et',
       runQueued: 'Sırada – yazıcı boşalır boşalmaz başlar',
@@ -1932,6 +1976,7 @@ export default {
       waitingAlreadyDrying: 'Bekliyor: AMS kurutma sürüyor',
       waitingBedTooWarm: 'Bekliyor: tabla hâlâ sıcak ({{temp}} °C)',
       waitingBedTempUnknown: 'Bekliyor: tabla sıcaklığı bilinmiyor',
+      waitingAfterOtherRun: 'Bekliyor: {{item}} sonrasında',
       waitingOther: 'Bekliyor: {{reason}}',
       lastRunCompleted: 'Son çalıştırma tamamlandı {{time}}',
       lastRunFailed: 'Son çalıştırma başarısız {{time}}: {{error}}',

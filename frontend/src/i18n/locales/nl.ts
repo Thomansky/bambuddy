@@ -1338,6 +1338,21 @@ export default {
       unknown: 'onbekend',
       printAnyway: 'Toch afdrukken',
     },
+    maintenanceHold: {
+      run: 'Onderhoudsrun staat klaar: {{item}} ({{state}})',
+      schedule: 'Gepland onderhoud {{when}} — deze opdracht zou erin doorlopen (geschat {{duration}})',
+      scheduleUnknown: 'Gepland onderhoud {{when}} — deze opdracht zou erin doorlopen (duur onbekend)',
+      state: {
+        queued: 'in de wachtrij',
+        running: 'bezig',
+        printerOffline: 'printer niet online',
+        printerBusy: 'printer bezet',
+        plateClear: 'plaat nog niet vrijgegeven',
+        alreadyDrying: 'AMS-droging bezig',
+        bedTooWarm: 'bed nog warm, {{temp}} °C',
+        bedTempUnknown: 'bedtemperatuur onbekend',
+      },
+    },
     slicerAmsMapping: {
       rowBadge: 'AMS-sleuven opgeslagen voor deze printer',
       rowTooltip: 'Dit archief bevat de exacte AMS-sleuven die de slicer heeft gekozen, opgeslagen voor de printer waarop dit item is gericht. Bij opnieuw afdrukken op deze printer kunnen die trays worden hergebruikt in plaats van opnieuw op type en kleur te matchen.',
@@ -1864,10 +1879,6 @@ export default {
     intervalOverrides: 'Intervaloverschrijvingen',
     intervalOverridesDescription: 'Intervallen aanpassen voor specifieke printers',
     // Printer assignment
-    assignedToPrinters: 'Toegewezen aan printers:',
-    noPrintersAssigned: 'Geen printers toegewezen',
-    addPrinterShort: 'Toevoegen:',
-    printersAssignedClick: '{{count}} printer(s) toegewezen - klik om te beheren',
     removeFromPrinter: 'Van deze printer verwijderen',
     // Types
     types: {
@@ -1915,6 +1926,38 @@ export default {
     configureSettings: 'Onderhoudstypen en intervallen configureren',
     notificationsOn: 'Meldingen aan',
     notificationsOff: 'Meldingen uit',
+    // Manual versus automated maintenance, coverage and deleted types (#3127)
+    kind: {
+      automatic: 'Automatisch',
+      onRequest: 'Op verzoek',
+      manual: 'Handmatig',
+    },
+    kindCounts: '{{automatic}} automatisch, {{manual}} handmatig',
+    filterKind: 'Filteren op soort',
+    filter: {
+      all: 'Alle',
+      automatic: 'Automatisch',
+      manual: 'Handmatig',
+    },
+    noItemsForFilter: 'Geen items voor dit filter',
+    switchedOffCount: '{{count}} uitgeschakeld',
+    allItemsSwitchedOff: 'Alle items van deze printer zijn uitgeschakeld',
+    coverage: 'op {{used}} van {{total}} printers',
+    printersButton: 'Printers',
+    printersPanelTitle: 'Printers die dit type gebruiken',
+    noEligiblePrinters: 'Geen printer kan dit type gebruiken',
+    action: 'Actie',
+    actionNone: 'Geen (alleen herinnering)',
+    actionCalibration: 'Printerkalibratie',
+    actionMotionPrecision: 'Vision-encoderkalibratie',
+    actionHint: 'Bambuddy voert deze taak zelf uit. Later niet meer te wijzigen.',
+    deletedTypes: 'Verwijderde typen',
+    noDeletedTypes: 'Niets verwijderd',
+    deletedAt: 'Verwijderd op {{date}}',
+    deletedAtUnknown: 'Eerder verwijderd',
+    deletedItemsTitle: 'Behouden printeritems',
+    restoreType: 'Herstellen',
+    typeRestored: 'Onderhoudstype hersteld',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
@@ -1938,6 +1981,7 @@ export default {
       triggerGateIdle: '(zodra de printer vrij is)',
       scheduleDays: 'Weekdagen',
       scheduleTime: 'Vroegste tijd',
+      reserveBeforeSchedule: 'Geen opdrachten starten die in de geplande tijd zouden doorlopen',
       runNow: 'Nu uitvoeren',
       cancelRun: 'Uitvoering annuleren',
       runQueued: 'In wachtrij – start zodra de printer vrij is',
@@ -1949,6 +1993,7 @@ export default {
       waitingAlreadyDrying: 'Wacht: AMS-droging bezig',
       waitingBedTooWarm: 'Wacht: bed nog warm ({{temp}} °C)',
       waitingBedTempUnknown: 'Wacht: bedtemperatuur onbekend',
+      waitingAfterOtherRun: 'Wacht: na {{item}}',
       waitingOther: 'Wacht: {{reason}}',
       lastRunCompleted: 'Laatste uitvoering voltooid {{time}}',
       lastRunFailed: 'Laatste uitvoering mislukt {{time}}: {{error}}',

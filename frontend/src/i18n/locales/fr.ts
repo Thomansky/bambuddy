@@ -1326,6 +1326,21 @@ export default {
       unknown: 'inconnu',
       printAnyway: 'Imprimer quand meme',
     },
+    maintenanceHold: {
+      run: 'Maintenance en attente : {{item}} ({{state}})',
+      schedule: 'Maintenance planifiée {{when}} — ce travail empiéterait dessus (estimé {{duration}})',
+      scheduleUnknown: 'Maintenance planifiée {{when}} — ce travail empiéterait dessus (durée inconnue)',
+      state: {
+        queued: 'en file d\'attente',
+        running: 'en cours',
+        printerOffline: 'imprimante hors ligne',
+        printerBusy: 'imprimante occupée',
+        plateClear: 'plateau pas encore libéré',
+        alreadyDrying: 'séchage AMS en cours',
+        bedTooWarm: 'plateau encore chaud, {{temp}} °C',
+        bedTempUnknown: 'température du plateau inconnue',
+      },
+    },
     slicerAmsMapping: {
       rowBadge: 'Emplacements AMS enregistrés pour cette imprimante',
       rowTooltip: 'Cette archive conserve les emplacements AMS exacts choisis par le slicer, enregistrés pour l\'imprimante de cet élément. Une réimpression dessus peut réutiliser ces bobines au lieu de refaire la correspondance par type et couleur.',
@@ -1845,10 +1860,6 @@ export default {
     intervalOverrides: 'Exceptions d\'intervalle',
     intervalOverridesDescription: 'Intervalles spécifiques par imprimante',
     // Printer assignment
-    assignedToPrinters: 'Assigné aux imprimantes :',
-    noPrintersAssigned: 'Aucune imprimante assignée',
-    addPrinterShort: 'Ajouter :',
-    printersAssignedClick: '{{count}} imprimante(s) assignée(s) - gérer',
     removeFromPrinter: 'Retirer de cette imprimante',
     // Types
     types: {
@@ -1896,6 +1907,38 @@ export default {
     configureSettings: 'Configurer types et intervalles',
     notificationsOn: 'Notifications activées',
     notificationsOff: 'Notifications désactivées',
+    // Manual versus automated maintenance, coverage and deleted types (#3127)
+    kind: {
+      automatic: 'Automatique',
+      onRequest: 'Sur demande',
+      manual: 'Manuel',
+    },
+    kindCounts: '{{automatic}} automatiques, {{manual}} manuelles',
+    filterKind: 'Filtrer par type',
+    filter: {
+      all: 'Toutes',
+      automatic: 'Automatiques',
+      manual: 'Manuelles',
+    },
+    noItemsForFilter: 'Aucun élément ne correspond à ce filtre',
+    switchedOffCount: '{{count}} désactivés',
+    allItemsSwitchedOff: 'Tous les éléments de cette imprimante sont désactivés',
+    coverage: 'sur {{used}} des {{total}} imprimantes',
+    printersButton: 'Imprimantes',
+    printersPanelTitle: 'Imprimantes utilisant ce type',
+    noEligiblePrinters: 'Aucune imprimante ne peut utiliser ce type',
+    action: 'Action',
+    actionNone: 'Aucune (rappel uniquement)',
+    actionCalibration: 'Calibration de l\'imprimante',
+    actionMotionPrecision: 'Calibration de l\'encodeur de vision',
+    actionHint: 'Bambuddy effectue cette tâche lui-même. Non modifiable par la suite.',
+    deletedTypes: 'Types supprimés',
+    noDeletedTypes: 'Rien de supprimé',
+    deletedAt: 'Supprimé le {{date}}',
+    deletedAtUnknown: 'Supprimé auparavant',
+    deletedItemsTitle: 'Éléments d\'imprimante conservés',
+    restoreType: 'Restaurer',
+    typeRestored: 'Type de maintenance restauré',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
@@ -1919,6 +1962,7 @@ export default {
       triggerGateIdle: '(dès que l\'imprimante est libre)',
       scheduleDays: 'Jours de la semaine',
       scheduleTime: 'Heure au plus tôt',
+      reserveBeforeSchedule: 'Ne pas lancer de travaux qui empiéteraient sur l\'heure planifiée',
       runNow: 'Lancer maintenant',
       cancelRun: 'Annuler l\'exécution',
       runQueued: 'En attente – démarre dès que l\'imprimante est libre',
@@ -1930,6 +1974,7 @@ export default {
       waitingAlreadyDrying: 'En attente : séchage AMS en cours',
       waitingBedTooWarm: 'En attente : plateau encore chaud ({{temp}} °C)',
       waitingBedTempUnknown: 'En attente : température du plateau inconnue',
+      waitingAfterOtherRun: 'En attente : après {{item}}',
       waitingOther: 'En attente : {{reason}}',
       lastRunCompleted: 'Dernière exécution terminée {{time}}',
       lastRunFailed: 'Dernière exécution échouée {{time}} : {{error}}',

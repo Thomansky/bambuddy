@@ -1339,6 +1339,21 @@ export default {
       unknown: 'unknown',
       printAnyway: 'Print Anyway',
     },
+    maintenanceHold: {
+      run: 'Maintenance run pending: {{item}} ({{state}})',
+      schedule: 'Scheduled maintenance at {{when}} — this job would run into it (estimated {{duration}})',
+      scheduleUnknown: 'Scheduled maintenance at {{when}} — this job would run into it (duration unknown)',
+      state: {
+        queued: 'queued',
+        running: 'running',
+        printerOffline: 'printer offline',
+        printerBusy: 'printer busy',
+        plateClear: 'plate not released yet',
+        alreadyDrying: 'AMS drying in progress',
+        bedTooWarm: 'bed still warm, {{temp}} °C',
+        bedTempUnknown: 'bed temperature unknown',
+      },
+    },
     slicerAmsMapping: {
       rowBadge: 'AMS slots saved for this printer',
       rowTooltip: 'This archive carries the exact AMS slots the slicer picked, saved for the printer this item targets. A reprint on it can reuse those trays instead of matching again by type and colour.',
@@ -1865,10 +1880,6 @@ export default {
     intervalOverrides: 'Interval Overrides',
     intervalOverridesDescription: 'Customize intervals for specific printers',
     // Printer assignment
-    assignedToPrinters: 'Assigned to printers:',
-    noPrintersAssigned: 'No printers assigned',
-    addPrinterShort: 'Add:',
-    printersAssignedClick: '{{count}} printer(s) assigned - click to manage',
     removeFromPrinter: 'Remove from this printer',
     // Types
     types: {
@@ -1916,6 +1927,38 @@ export default {
     configureSettings: 'Configure maintenance types and intervals',
     notificationsOn: 'Notifications on',
     notificationsOff: 'Notifications off',
+    // Manual versus automated maintenance, coverage and deleted types (#3127)
+    kind: {
+      automatic: 'Automatic',
+      onRequest: 'Runs on request',
+      manual: 'Manual',
+    },
+    kindCounts: '{{automatic}} automatic, {{manual}} manual',
+    filterKind: 'Filter by kind',
+    filter: {
+      all: 'All',
+      automatic: 'Automatic',
+      manual: 'Manual',
+    },
+    noItemsForFilter: 'No items match this filter',
+    switchedOffCount: '{{count}} switched off',
+    allItemsSwitchedOff: 'Every item on this printer is switched off',
+    coverage: 'on {{used}} of {{total}} printers',
+    printersButton: 'Printers',
+    printersPanelTitle: 'Printers using this type',
+    noEligiblePrinters: 'No printer can use this type',
+    action: 'Action',
+    actionNone: 'None (reminder only)',
+    actionCalibration: 'Printer calibration',
+    actionMotionPrecision: 'Vision encoder calibration',
+    actionHint: 'Bambuddy performs this task itself. It cannot be changed later.',
+    deletedTypes: 'Deleted types',
+    noDeletedTypes: 'Nothing deleted',
+    deletedAt: 'Deleted {{date}}',
+    deletedAtUnknown: 'Deleted earlier',
+    deletedItemsTitle: 'Printer items kept',
+    restoreType: 'Restore',
+    typeRestored: 'Maintenance type restored',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
@@ -1939,6 +1982,7 @@ export default {
       triggerGateIdle: '(once the printer is idle)',
       scheduleDays: 'Weekdays',
       scheduleTime: 'Earliest time',
+      reserveBeforeSchedule: 'Don\'t start jobs that would run into the scheduled time',
       runNow: 'Run now',
       cancelRun: 'Cancel run',
       runQueued: 'Queued – starts as soon as the printer is idle',
@@ -1950,6 +1994,7 @@ export default {
       waitingAlreadyDrying: 'Waiting: AMS drying in progress',
       waitingBedTooWarm: 'Waiting: bed still warm ({{temp}} °C)',
       waitingBedTempUnknown: 'Waiting: bed temperature unknown',
+      waitingAfterOtherRun: 'Waiting: after {{item}}',
       waitingOther: 'Waiting: {{reason}}',
       lastRunCompleted: 'Last run completed {{time}}',
       lastRunFailed: 'Last run failed {{time}}: {{error}}',

@@ -5048,6 +5048,18 @@ async def run_migrations(conn):
         await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN rfid_precheck_at DATETIME")
     else:
         await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN rfid_precheck_at TIMESTAMP")
+    # Keep the queue clear before a scheduled run (#3127). Defaults on: a
+    # schedule that a Saturday-afternoon job can push into Sunday is not
+    # much of a schedule.
+    await _safe_execute(
+        conn, "ALTER TABLE printer_maintenance ADD COLUMN reserve_before_schedule BOOLEAN NOT NULL DEFAULT TRUE"
+    )
+    # Items a person started by hand bypass the maintenance holds (#3127).
+    await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN user_started BOOLEAN DEFAULT FALSE NOT NULL")
+    # When a maintenance type was hidden, so the types tab can offer it back
+    # (#3127). Rows hidden before this column existed keep a NULL here and
+    # simply show no date.
+    await _safe_execute(conn, "ALTER TABLE maintenance_types ADD COLUMN deleted_at TIMESTAMP")
 
     # Migration: storage location sensor alerts (#2824), own column rather than
     # reusing on_ha_sensor_alert. That column can be scoped to one printer

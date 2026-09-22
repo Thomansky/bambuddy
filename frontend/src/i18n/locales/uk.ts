@@ -1337,6 +1337,21 @@ export default {
       unknown: "невідомо",
       printAnyway: "Усе одно друкувати",
     },
+    maintenanceHold: {
+      run: "Очікується обслуговування: {{item}} ({{state}})",
+      schedule: "Обслуговування заплановано на {{when}} — це завдання захопить його (оцінка {{duration}})",
+      scheduleUnknown: "Обслуговування заплановано на {{when}} — це завдання захопить його (тривалість невідома)",
+      state: {
+        queued: "у черзі",
+        running: "виконується",
+        printerOffline: "принтер офлайн",
+        printerBusy: "принтер зайнятий",
+        plateClear: "стіл ще не звільнено",
+        alreadyDrying: "триває сушіння AMS",
+        bedTooWarm: "стіл ще теплий, {{temp}} °C",
+        bedTempUnknown: "температура стола невідома",
+      },
+    },
     slicerAmsMapping: {
       rowBadge: "Слоти AMS збережено для цього принтера",
       rowTooltip: "Цей запис містить точні слоти AMS, вибрані слайсером, збережені для принтера, на який націлено це завдання. Повторний друк на ньому може використати ті самі котушки замість повторного добору за типом і кольором.",
@@ -1862,10 +1877,6 @@ export default {
     intervalOverrides: "Перевизначення інтервалів",
     intervalOverridesDescription: "Налаштувати інтервали для конкретних принтерів",
     // Printer assignment
-    assignedToPrinters: "Призначено для принтерів:",
-    noPrintersAssigned: "Принтерів не призначено",
-    addPrinterShort: "Додати:",
-    printersAssignedClick: "Призначено принтерів: {{count}} — натисніть, щоб керувати",
     removeFromPrinter: "Видалити з цього принтера",
     // Types
     types: {
@@ -1913,6 +1924,38 @@ export default {
     configureSettings: "Налаштувати типи та інтервали технічного обслуговування",
     notificationsOn: "Сповіщення увімкнено",
     notificationsOff: "Сповіщення вимкнено",
+    // Manual versus automated maintenance, coverage and deleted types (#3127)
+    kind: {
+      automatic: 'Автоматично',
+      onRequest: 'На запит',
+      manual: 'Вручну',
+    },
+    kindCounts: 'автоматичних: {{automatic}}, вручну: {{manual}}',
+    filterKind: 'Фільтр за видом',
+    filter: {
+      all: 'Усі',
+      automatic: 'Автоматичні',
+      manual: 'Ручні',
+    },
+    noItemsForFilter: 'Немає елементів для цього фільтра',
+    switchedOffCount: 'Вимкнено: {{count}}',
+    allItemsSwitchedOff: 'Усі пункти обслуговування цього принтера вимкнено',
+    coverage: 'на {{used}} з {{total}} принтерів',
+    printersButton: 'Принтери',
+    printersPanelTitle: 'Принтери з цим типом',
+    noEligiblePrinters: 'Жоден принтер не може використовувати цей тип',
+    action: 'Дія',
+    actionNone: 'Немає (лише нагадування)',
+    actionCalibration: 'Калібрування принтера',
+    actionMotionPrecision: 'Калібрування оптичного енкодера',
+    actionHint: 'Bambuddy виконує це завдання самостійно. Згодом змінити не можна.',
+    deletedTypes: 'Видалені типи',
+    noDeletedTypes: 'Нічого не видалено',
+    deletedAt: 'Видалено {{date}}',
+    deletedAtUnknown: 'Видалено раніше',
+    deletedItemsTitle: 'Збережені записи принтерів',
+    restoreType: 'Відновити',
+    typeRestored: 'Тип обслуговування відновлено',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
@@ -1936,6 +1979,7 @@ export default {
       triggerGateIdle: "(щойно принтер звільниться)",
       scheduleDays: "Дні тижня",
       scheduleTime: "Не раніше",
+      reserveBeforeSchedule: "Не запускати завдання, які захоплять запланований час",
       runNow: "Запустити зараз",
       cancelRun: "Скасувати запуск",
       runQueued: "У черзі – почнеться, щойно принтер звільниться",
@@ -1947,6 +1991,7 @@ export default {
       waitingAlreadyDrying: "Очікування: триває сушіння AMS",
       waitingBedTooWarm: "Очікування: стіл ще теплий ({{temp}} °C)",
       waitingBedTempUnknown: "Очікування: температура стола невідома",
+      waitingAfterOtherRun: "Очікування: після {{item}}",
       waitingOther: "Очікування: {{reason}}",
       lastRunCompleted: "Останній запуск завершено {{time}}",
       lastRunFailed: "Останній запуск не вдався {{time}}: {{error}}",

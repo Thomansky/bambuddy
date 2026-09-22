@@ -1326,6 +1326,21 @@ export default {
       unknown: '未知',
       printAnyway: '仍要打印',
     },
+    maintenanceHold: {
+      run: '维护运行待处理：{{item}}（{{state}}）',
+      schedule: '{{when}} 有计划维护 — 此任务会占用该时间（预计 {{duration}}）',
+      scheduleUnknown: '{{when}} 有计划维护 — 此任务会占用该时间（时长未知）',
+      state: {
+        queued: '已排队',
+        running: '运行中',
+        printerOffline: '打印机离线',
+        printerBusy: '打印机忙碌',
+        plateClear: '打印板尚未清空确认',
+        alreadyDrying: 'AMS 正在干燥',
+        bedTooWarm: '热床仍然较热，{{temp}} °C',
+        bedTempUnknown: '热床温度未知',
+      },
+    },
     slicerAmsMapping: {
       rowBadge: '已为此打印机保存 AMS 槽位',
       rowTooltip: '此存档保留了切片软件选择的确切 AMS 槽位，并为该项目的目标打印机保存。在该打印机上重新打印时，可复用这些料盘，而不必再按类型和颜色重新匹配。',
@@ -1845,10 +1860,6 @@ export default {
     intervalOverrides: '间隔覆盖',
     intervalOverridesDescription: '为特定打印机自定义间隔',
     // Printer assignment
-    assignedToPrinters: '已分配给打印机：',
-    noPrintersAssigned: '未分配打印机',
-    addPrinterShort: '添加：',
-    printersAssignedClick: '已分配 {{count}} 台打印机 - 点击管理',
     removeFromPrinter: '从此打印机移除',
     // Types
     types: {
@@ -1896,6 +1907,38 @@ export default {
     configureSettings: '配置维护类型和间隔',
     notificationsOn: '通知已开启',
     notificationsOff: '通知已关闭',
+    // Manual versus automated maintenance, coverage and deleted types (#3127)
+    kind: {
+      automatic: '自动',
+      onRequest: '按需运行',
+      manual: '手动',
+    },
+    kindCounts: '自动 {{automatic}} 项，手动 {{manual}} 项',
+    filterKind: '按类型筛选',
+    filter: {
+      all: '全部',
+      automatic: '自动',
+      manual: '手动',
+    },
+    noItemsForFilter: '没有符合此筛选条件的项目',
+    switchedOffCount: '{{count}} 项已关闭',
+    allItemsSwitchedOff: '此打印机的所有项目均已关闭',
+    coverage: '已用于 {{total}} 台打印机中的 {{used}} 台',
+    printersButton: '打印机',
+    printersPanelTitle: '使用此类型的打印机',
+    noEligiblePrinters: '没有打印机可以使用此类型',
+    action: '操作',
+    actionNone: '无（仅提醒）',
+    actionCalibration: '打印机校准',
+    actionMotionPrecision: '视觉编码器校准',
+    actionHint: 'Bambuddy 会自行执行此任务。创建后无法更改。',
+    deletedTypes: '已删除的类型',
+    noDeletedTypes: '没有已删除的类型',
+    deletedAt: '于 {{date}} 删除',
+    deletedAtUnknown: '此前已删除',
+    deletedItemsTitle: '保留的打印机条目',
+    restoreType: '恢复',
+    typeRestored: '维护类型已恢复',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
@@ -1919,6 +1962,7 @@ export default {
       triggerGateIdle: '（打印机空闲后）',
       scheduleDays: '星期',
       scheduleTime: '最早时间',
+      reserveBeforeSchedule: '不启动会占用计划时间的任务',
       runNow: '立即运行',
       cancelRun: '取消运行',
       runQueued: '已排队 – 打印机空闲后立即开始',
@@ -1930,6 +1974,7 @@ export default {
       waitingAlreadyDrying: '等待中：AMS 正在干燥',
       waitingBedTooWarm: '等待中：热床仍然较热（{{temp}} °C）',
       waitingBedTempUnknown: '等待中：热床温度未知',
+      waitingAfterOtherRun: '等待中：在{{item}}之后',
       waitingOther: '等待中：{{reason}}',
       lastRunCompleted: '上次运行已完成 {{time}}',
       lastRunFailed: '上次运行失败 {{time}}：{{error}}',

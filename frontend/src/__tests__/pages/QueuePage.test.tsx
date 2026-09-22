@@ -462,6 +462,53 @@ describe('QueuePage', () => {
       expect(within(row).queryByTestId('queue-item-eta')).not.toBeInTheDocument();
     });
 
+    it('shows a pending-run hold in the UI language, with the item name translated (#3127)', async () => {
+      server.use(
+        http.get('/api/v1/queue/', () => {
+          return HttpResponse.json([
+            {
+              ...mockQueueItems[0],
+              archive_name: 'Held Print',
+              waiting_reason: 'Maintenance run pending: Vision Encoder Calibration (bed still warm, 45 °C)',
+            },
+          ]);
+        }),
+      );
+
+      render(<QueuePage />);
+
+      expect(
+        await screen.findByText('Maintenance run pending: Vision Encoder Calibration (bed still warm, 45 °C)'),
+      ).toBeInTheDocument();
+      // Still "waiting its turn": the row keeps its if-started-now ETA off but
+      // reads as a hold, not as something the user has to fix
+      const row = screen.getByText('Held Print').closest('.group');
+      expect(within(row as HTMLElement).queryByTestId('queue-item-eta')).not.toBeInTheDocument();
+    });
+
+    it('shows a schedule look-ahead hold with the weekday spelled out (#3127)', async () => {
+      server.use(
+        http.get('/api/v1/queue/', () => {
+          return HttpResponse.json([
+            {
+              ...mockQueueItems[0],
+              archive_name: 'Long Print',
+              waiting_reason:
+                'Scheduled maintenance at Sunday 12:00 — this job would run into it (estimated 3h 50m)',
+            },
+          ]);
+        }),
+      );
+
+      render(<QueuePage />);
+
+      expect(
+        await screen.findByText(
+          'Scheduled maintenance at Sunday 12:00 — this job would run into it (estimated 3h 50m)',
+        ),
+      ).toBeInTheDocument();
+    });
+
     it('does not show an if-started-now ETA for a scheduled item', async () => {
       server.use(
         http.get('/api/v1/queue/', () => {

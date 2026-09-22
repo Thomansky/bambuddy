@@ -1,10 +1,11 @@
 """Maintenance tracking API routes."""
 
 import logging
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func as sa_func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -18,6 +19,7 @@ from backend.app.models.printer import Printer
 from backend.app.models.user import User
 from backend.app.schemas.maintenance import (
     CurrentRun,
+    DeletedMaintenanceTypeResponse,
     MaintenanceHistoryResponse,
     MaintenanceRunResponse,
     MaintenanceStatus,
@@ -155,6 +157,18 @@ def _should_apply_to_printer(type_name: str, printer_model: str | None) -> bool:
     return rod_type == rod_requirement
 
 
+def _type_applies_to_printer(maint_type: MaintenanceType, printer_model: str | None) -> bool:
+    """Can this printer use the type at all?
+
+    System types answer through their rod/hardware gate; a custom type
+    answers through its action's gate (#3127), which is "everywhere" for a
+    reminder type and for the levelling calibration.
+    """
+    if maint_type.is_system:
+        return _should_apply_to_printer(maint_type.name, printer_model)
+    return maintenance_actions.action_applies_to_printer(maint_type.action, printer_model)
+
+
 async def ensure_default_types(db: AsyncSession) -> None:
     """Ensure default maintenance types exist, remove stale/duplicate ones."""
     result = await db.execute(
@@ -199,19 +213,157 @@ async def ensure_default_types(db: AsyncSession) -> None:
 # ============== Maintenance Types ==============
 
 
+@dataclass
+class _Coverage:
+    """How far a type reaches across the fleet (#3127)."""
+
+    printer_count: int = 0
+    eligible_count: int = 0
+    printer_ids: list[int] = field(default_factory=list)
+    eligible_printer_ids: list[int] = field(default_factory=list)
+
+
+async def _type_coverage(db: AsyncSession, types: list[MaintenanceType]) -> dict[int, _Coverage]:
+    """Per type: the active printers it applies to, and those that have it on.
+
+    "Has it on" means an enabled item — unticking a printer in the types tab
+    disables its item rather than deleting the history, so a disabled item
+    must not count towards the coverage.
+    """
+    result = await db.execute(select(Printer).where(Printer.is_active.is_(True)))
+    printers = list(result.scalars().all())
+
+    type_ids = [t.id for t in types]
+    enabled_by_type: dict[int, set[int]] = {}
+    if type_ids:
+        result = await db.execute(
+            select(PrinterMaintenance.maintenance_type_id, PrinterMaintenance.printer_id)
+            .where(PrinterMaintenance.maintenance_type_id.in_(type_ids))
+            .where(PrinterMaintenance.enabled.is_(True))
+        )
+        for type_id, printer_id in result.all():
+            enabled_by_type.setdefault(type_id, set()).add(printer_id)
+
+    coverage: dict[int, _Coverage] = {}
+    for maint_type in types:
+        eligible = [p for p in printers if _type_applies_to_printer(maint_type, p.model)]
+        enabled = enabled_by_type.get(maint_type.id, set())
+        coverage[maint_type.id] = _Coverage(
+            printer_count=sum(1 for p in eligible if p.id in enabled),
+            eligible_count=len(eligible),
+            printer_ids=[p.id for p in eligible if p.id in enabled],
+            eligible_printer_ids=[p.id for p in eligible],
+        )
+    return coverage
+
+
+async def _ensure_system_items(db: AsyncSession, types: list[MaintenanceType]) -> None:
+    """Create the items every system type is due on the printers it applies to.
+
+    The coverage the types tab shows is counted from the item rows, and those
+    rows used to be created by the overview alone (#3127): a printer added
+    since the last overview load read as "not covered", and ticking its box
+    then answered "already assigned" as soon as the overview caught up. Only
+    a missing row is created -- a printer whose item was deliberately
+    switched off keeps it off, exactly as the overview leaves it.
+    """
+    system_types = [t for t in types if t.is_system]
+    if not system_types:
+        return
+    result = await db.execute(select(Printer).where(Printer.is_active.is_(True)))
+    printers = list(result.scalars().all())
+    if not printers:
+        return
+
+    result = await db.execute(
+        select(PrinterMaintenance.maintenance_type_id, PrinterMaintenance.printer_id).where(
+            PrinterMaintenance.maintenance_type_id.in_([t.id for t in system_types])
+        )
+    )
+    existing = {(type_id, printer_id) for type_id, printer_id in result.all()}
+
+    created = False
+    for maint_type in system_types:
+        for printer in printers:
+            if (maint_type.id, printer.id) in existing or not _type_applies_to_printer(maint_type, printer.model):
+                continue
+            db.add(
+                PrinterMaintenance(
+                    printer_id=printer.id,
+                    maintenance_type_id=maint_type.id,
+                    enabled=True,
+                    last_performed_hours=0.0,
+                )
+            )
+            created = True
+    if created:
+        await db.commit()
+
+
+def _type_response(maint_type: MaintenanceType, coverage: _Coverage | None) -> MaintenanceTypeResponse:
+    response = MaintenanceTypeResponse.model_validate(maint_type)
+    if coverage is not None:
+        response.printer_count = coverage.printer_count
+        response.eligible_count = coverage.eligible_count
+        response.printer_ids = coverage.printer_ids
+        response.eligible_printer_ids = coverage.eligible_printer_ids
+    return response
+
+
 @router.get("/types", response_model=list[MaintenanceTypeResponse])
 async def get_maintenance_types(
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.MAINTENANCE_READ),
 ):
-    """Get all maintenance types."""
+    """Get all maintenance types, each with its coverage across the fleet."""
     await ensure_default_types(db)
     result = await db.execute(
         select(MaintenanceType)
         .where(MaintenanceType.is_deleted.is_(False))
         .order_by(MaintenanceType.is_system.desc(), MaintenanceType.name)
     )
-    return result.scalars().all()
+    types = list(result.scalars().all())
+    await _ensure_system_items(db, types)
+    coverage = await _type_coverage(db, types)
+    return [_type_response(t, coverage.get(t.id)) for t in types]
+
+
+@router.get("/types/deleted", response_model=list[DeletedMaintenanceTypeResponse])
+async def get_deleted_maintenance_types(
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.MAINTENANCE_READ),
+):
+    """Hidden types, newest first, with the items that come back with them."""
+    result = await db.execute(
+        select(MaintenanceType)
+        .where(MaintenanceType.is_deleted.is_(True))
+        .order_by(MaintenanceType.deleted_at.desc().nullslast(), MaintenanceType.id.desc())
+    )
+    types = list(result.scalars().all())
+    if not types:
+        return []
+
+    result = await db.execute(
+        select(PrinterMaintenance.maintenance_type_id, sa_func.count(PrinterMaintenance.id))
+        .where(PrinterMaintenance.maintenance_type_id.in_([t.id for t in types]))
+        .group_by(PrinterMaintenance.maintenance_type_id)
+    )
+    item_counts = dict(result.all())
+
+    return [
+        DeletedMaintenanceTypeResponse(
+            id=t.id,
+            name=t.name,
+            icon=t.icon,
+            is_system=t.is_system,
+            action=t.action,
+            default_interval_hours=t.default_interval_hours,
+            interval_type=t.interval_type or "hours",
+            deleted_at=t.deleted_at,
+            item_count=item_counts.get(t.id, 0),
+        )
+        for t in types
+    ]
 
 
 @router.post("/types", response_model=MaintenanceTypeResponse)
@@ -220,7 +372,7 @@ async def create_maintenance_type(
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.MAINTENANCE_CREATE),
 ):
-    """Create a custom maintenance type."""
+    """Create a custom maintenance type, optionally on a set of printers."""
     new_type = MaintenanceType(
         name=data.name,
         description=data.description,
@@ -229,11 +381,43 @@ async def create_maintenance_type(
         icon=data.icon,
         wiki_url=data.wiki_url,
         is_system=False,
+        action=data.action,
     )
+
+    printers: list[Printer] = []
+    if data.printer_ids:
+        result = await db.execute(select(Printer).where(Printer.id.in_(set(data.printer_ids))))
+        printers = list(result.scalars().all())
+        found = {p.id for p in printers}
+        missing = sorted(set(data.printer_ids) - found)
+        if missing:
+            raise HTTPException(status_code=404, detail=f"Printer(s) not found: {missing}")
+        # The model gate before anything is written, so a request naming one
+        # printer that cannot run the action leaves no half-created type.
+        ineligible = [
+            p.name for p in printers if not maintenance_actions.action_applies_to_printer(data.action, p.model)
+        ]
+        if ineligible:
+            raise HTTPException(
+                status_code=400,
+                detail=f"This action cannot run on: {', '.join(sorted(ineligible))}",
+            )
+
     db.add(new_type)
+    await db.flush()
+    for printer in printers:
+        db.add(
+            PrinterMaintenance(
+                printer_id=printer.id,
+                maintenance_type_id=new_type.id,
+                enabled=True,
+                last_performed_hours=0.0,
+            )
+        )
     await db.commit()
     await db.refresh(new_type)
-    return new_type
+    coverage = await _type_coverage(db, [new_type])
+    return _type_response(new_type, coverage.get(new_type.id))
 
 
 @router.patch("/types/{type_id}", response_model=MaintenanceTypeResponse)
@@ -255,7 +439,8 @@ async def update_maintenance_type(
 
     await db.commit()
     await db.refresh(maint_type)
-    return maint_type
+    coverage = await _type_coverage(db, [maint_type])
+    return _type_response(maint_type, coverage.get(maint_type.id))
 
 
 @router.delete("/types/{type_id}")
@@ -264,20 +449,45 @@ async def delete_maintenance_type(
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.MAINTENANCE_DELETE),
 ):
-    """Delete a maintenance type."""
+    """Hide a maintenance type.
+
+    Custom types are hidden rather than erased (#3127) so the types tab can
+    offer them back with their items and history intact, exactly as it does
+    for a seeded one.
+    """
     result = await db.execute(select(MaintenanceType).where(MaintenanceType.id == type_id))
     maint_type = result.scalar_one_or_none()
     if not maint_type:
         raise HTTPException(status_code=404, detail="Maintenance type not found")
 
-    if maint_type.is_system:
-        maint_type.is_deleted = True
-        await db.commit()
-        return {"status": "deleted"}
-
-    await db.delete(maint_type)
+    maint_type.is_deleted = True
+    maint_type.deleted_at = utcnow_naive()
+    # The cards of a hidden type are gone from the maintenance page, and with
+    # them the Cancel button of anything they had queued (#3127).
+    result = await db.execute(select(PrinterMaintenance.id).where(PrinterMaintenance.maintenance_type_id == type_id))
+    await maintenance_actions.cancel_pending_runs_for_items(db, [item_id for (item_id,) in result.all()])
     await db.commit()
     return {"status": "deleted"}
+
+
+@router.post("/types/{type_id}/restore", response_model=MaintenanceTypeResponse)
+async def restore_maintenance_type(
+    type_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.MAINTENANCE_UPDATE),
+):
+    """Bring a hidden type back; its items and history return with it."""
+    result = await db.execute(select(MaintenanceType).where(MaintenanceType.id == type_id))
+    maint_type = result.scalar_one_or_none()
+    if not maint_type:
+        raise HTTPException(status_code=404, detail="Maintenance type not found")
+
+    maint_type.is_deleted = False
+    maint_type.deleted_at = None
+    await db.commit()
+    await db.refresh(maint_type)
+    coverage = await _type_coverage(db, [maint_type])
+    return _type_response(maint_type, coverage.get(maint_type.id))
 
 
 @router.post("/types/restore-defaults")
@@ -293,6 +503,7 @@ async def restore_default_maintenance_types(
     deleted_types = result.scalars().all()
     for maint_type in deleted_types:
         maint_type.is_deleted = False
+        maint_type.deleted_at = None
 
     await db.commit()
     return {"restored": len(deleted_types)}
@@ -466,6 +677,7 @@ async def _get_printer_maintenance_internal(
                 schedule_days=item.schedule_days,
                 schedule_time=item.schedule_time,
                 schedule_next_at=item.schedule_next_at,
+                reserve_before_schedule=item.reserve_before_schedule,
                 current_run=current_run,
                 last_run=last_run,
             )
@@ -483,6 +695,11 @@ async def _get_printer_maintenance_internal(
         due_count=due_count,
         warning_count=warning_count,
         require_plate_clear=require_plate_clear,
+        available_actions=[
+            action
+            for action in maintenance_actions.KNOWN_ACTIONS
+            if maintenance_actions.action_applies_to_printer(action, printer.model)
+        ],
     )
 
 
@@ -541,7 +758,7 @@ async def update_printer_maintenance(
 
     update_data = data.model_dump(exclude_unset=True)
     action = item.maintenance_type.action
-    action_keys = {"action_options", "trigger_mode", "schedule_days", "schedule_time"}
+    action_keys = {"action_options", "trigger_mode", "schedule_days", "schedule_time", "reserve_before_schedule"}
     if action_keys & update_data.keys() and not action:
         raise HTTPException(status_code=400, detail="This maintenance type has no automatic action")
     if "action_options" in update_data:
@@ -551,6 +768,11 @@ async def update_printer_maintenance(
         item.action_options = maintenance_actions.stored_action_options(action, options)
     for key, value in update_data.items():
         setattr(item, key, value)
+
+    if update_data.get("enabled") is False:
+        # Same reason as hiding the type: the card the Cancel button lives on
+        # disappears from the printer section (#3127).
+        await maintenance_actions.cancel_pending_runs_for_items(db, [item.id])
 
     if action:
         # Cross-field rules against the merged state, so a PATCH that only
@@ -577,7 +799,12 @@ async def assign_maintenance_type(
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.MAINTENANCE_CREATE),
 ):
-    """Assign a maintenance type to a specific printer (for custom types)."""
+    """Put a maintenance type on a printer.
+
+    Ticking a printer in the types tab lands here (#3127). An item that was
+    unticked earlier is disabled, not gone: it is switched back on with its
+    interval and history rather than started from zero.
+    """
     # Verify printer exists
     result = await db.execute(select(Printer).where(Printer.id == printer_id))
     printer = result.scalar_one_or_none()
@@ -590,6 +817,9 @@ async def assign_maintenance_type(
     if not maint_type:
         raise HTTPException(status_code=404, detail="Maintenance type not found")
 
+    if not _type_applies_to_printer(maint_type, printer.model):
+        raise HTTPException(status_code=400, detail="This maintenance type does not apply to this printer model")
+
     # Check if already assigned
     result = await db.execute(
         select(PrinterMaintenance).where(
@@ -598,17 +828,20 @@ async def assign_maintenance_type(
         )
     )
     existing = result.scalar_one_or_none()
-    if existing:
+    if existing and existing.enabled:
         raise HTTPException(status_code=400, detail="Maintenance type already assigned to this printer")
 
-    # Create the assignment
-    item = PrinterMaintenance(
-        printer_id=printer_id,
-        maintenance_type_id=type_id,
-        enabled=True,
-        last_performed_hours=0.0,
-    )
-    db.add(item)
+    if existing:
+        existing.enabled = True
+        item = existing
+    else:
+        item = PrinterMaintenance(
+            printer_id=printer_id,
+            maintenance_type_id=type_id,
+            enabled=True,
+            last_performed_hours=0.0,
+        )
+        db.add(item)
     await db.commit()
 
     # Re-fetch with relationship loaded for response serialization
@@ -717,6 +950,7 @@ async def perform_maintenance(
         last_performed_at=item.last_performed_at,
         action=item.maintenance_type.action,
         trigger_mode=item.trigger_mode or "manual",
+        reserve_before_schedule=item.reserve_before_schedule,
     )
 
 

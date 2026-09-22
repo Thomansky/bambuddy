@@ -329,6 +329,29 @@ class TestPrintQueueAPI:
         assert result["archive_id"] == archive.id
         assert result["status"] == "pending"
         assert result["manual_start"] is True
+        assert result["user_started"] is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_queueing_at_the_top_is_not_a_person_starting_the_item(
+        self, async_client: AsyncClient, printer_factory, archive_factory, db_session
+    ):
+        """The print dialog's "ASAP" is a place in the queue, not a start: it
+        sends insert_at_top, and the scheduler dispatches the item like any
+        other. Nothing here sets user_started, which is what the maintenance
+        holds (#3127) yield to -- only ▶ on a staged item does."""
+        printer = await printer_factory()
+        archive = await archive_factory()
+
+        response = await async_client.post(
+            "/api/v1/queue/", json={"printer_id": printer.id, "archive_id": archive.id, "insert_at_top": True}
+        )
+        assert response.status_code == 200
+        assert response.json()["user_started"] is False
+
+        response = await async_client.post("/api/v1/queue/", json={"printer_id": printer.id, "archive_id": archive.id})
+        assert response.status_code == 200
+        assert response.json()["user_started"] is False
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -1241,6 +1264,29 @@ class TestQueueStartEndpoint:
 
         await db_session.refresh(item)
         assert item.skip_filament_check is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_start_records_that_a_person_started_the_item(
+        self,
+        async_client: AsyncClient,
+        queue_item_factory,
+        db_session,
+    ):
+        """▶ persists user_started, which the scheduler's maintenance holds
+        (#3127) read as "this one goes out regardless of a pending run or a
+        scheduled one ahead"; the item itself stays an ordinary pending row."""
+        item = await queue_item_factory(manual_start=True)
+        assert item.user_started is False
+
+        response = await async_client.post(f"/api/v1/queue/{item.id}/start")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["user_started"] is True
+        assert body["manual_start"] is False
+
+        await db_session.refresh(item)
+        assert item.user_started is True
 
 
 class TestQueueCancelEndpoint:
