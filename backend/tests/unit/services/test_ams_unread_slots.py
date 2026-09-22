@@ -15,9 +15,13 @@ the same bit layout ``apply_tray_exist_bits`` decodes.
 from types import SimpleNamespace
 
 from backend.app.services.ams_slot_presence import (
+    UNREAD_NO_IDENTITY,
+    UNREAD_NOT_DONE,
+    detection_signals,
     slot_identity,
     slot_read_done,
     unidentified_slots,
+    unread_ams_slot_reasons,
     unread_ams_slots,
 )
 from backend.app.services.bambu_mqtt import apply_tray_exist_bits, tray_bit_position
@@ -104,6 +108,54 @@ class TestTheBitSaysDoneButNobodyKnowsWhatIsInThere:
     def test_an_empty_slot_is_never_unread_whatever_the_bits_say(self):
         units = [{"id": "0", "tray": [_tray(0, read=False, state=9)]}]
         assert unread_ams_slots(_state(units, exist="0", read_done="1")) == []
+
+
+class TestWhichRuleSaidSo:
+    """The caller has to tell the two rules apart. Firmware's own cleared bit
+    is a fresh "not read yet" and is worth a command every time it is seen;
+    "no identity" is an inference that stays true of a spool nothing can read
+    for as long as it sits in the slot, so acting on it has to be bounded."""
+
+    def test_a_cleared_bit_is_reported_as_the_bit(self):
+        units = [{"id": "0", "tray": [_tray(0), _tray(1, read=False)]}]
+        assert unread_ams_slot_reasons(_state(units, exist="3", read_done="1")) == {(0, 1): UNREAD_NOT_DONE}
+
+    def test_a_nameless_slot_the_firmware_calls_done_is_reported_as_the_inference(self):
+        units = [{"id": "0", "tray": [_tray(0), _tray(1, read=False)]}]
+        assert unread_ams_slot_reasons(_state(units, exist="3", read_done="3")) == {(0, 1): UNREAD_NO_IDENTITY}
+
+    def test_the_bit_wins_when_both_would_fit(self):
+        """A spool put in mid-print is nameless *and* has its bit clear. It is
+        firmware's word, not ours: a caller that skips slots it once found
+        unreadable must not skip this one."""
+        units = [{"id": "0", "tray": [_tray(0, read=False)]}]
+        assert unread_ams_slot_reasons(_state(units, exist="1", read_done="0")) == {(0, 0): UNREAD_NOT_DONE}
+
+    def test_without_a_read_done_mask_only_the_inference_is_left(self):
+        units = [{"id": "0", "tray": [_tray(0, read=False)]}]
+        assert unread_ams_slot_reasons(_state(units, exist="1")) == {(0, 0): UNREAD_NO_IDENTITY}
+
+    def test_the_slots_are_the_reasons_keys(self):
+        units = [{"id": "0", "tray": [_tray(0, read=False), _tray(1), _tray(2, read=False)]}]
+        state = _state(units, exist="7", read_done="3")
+        assert unread_ams_slots(state) == list(unread_ams_slot_reasons(state)) == [(0, 0), (0, 2)]
+
+
+class TestWhichSignalsWereAvailable:
+    """Printed next to the raw masks, so a report of a wrong verdict says
+    whether there was a mask to read at all."""
+
+    def test_both_masks(self):
+        assert detection_signals(_state([], exist="f", read_done="f")) == "masks"
+
+    def test_read_done_only(self):
+        assert detection_signals(_state([], read_done="f")) == "read-done mask + tray fields"
+
+    def test_exist_only(self):
+        assert detection_signals(_state([], exist="f")) == "exist mask + tray fields"
+
+    def test_neither(self):
+        assert detection_signals(_state([])) == "tray fields"
 
 
 class TestUnidentifiedSlots:

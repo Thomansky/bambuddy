@@ -152,22 +152,39 @@ def slot_read_done(state: Any, ams_id: int, tray_id: int) -> bool | None:
     return bool((mask >> bit) & 1)
 
 
-def unread_ams_slots(state: Any) -> list[tuple[int, int]]:
-    """Slots holding a spool the AMS has not read: ``[(ams_id, tray_id), ...]``.
+# Why a slot counts as unread, in the words the scheduler's log line uses.
+#
+# The two are not interchangeable to a caller. NOT_DONE is firmware's own "I
+# have not read this one" and is worth a command every time it is seen -- it
+# is the spool-inserted-during-a-print case the pre-read exists for. NO_IDENTITY
+# is an inference drawn from empty tray fields, which stays true of a spool
+# nothing can read for as long as it sits in the slot, so a caller acting on it
+# has to bound itself to one attempt per spool.
+UNREAD_NOT_DONE = "read-done bit clear"
+UNREAD_NO_IDENTITY = "no identity"
+
+
+def unread_ams_slot_reasons(state: Any) -> dict[tuple[int, int], str]:
+    """Every unread slot with the rule that says so: ``{(ams_id, tray_id): reason}``.
 
     A slot qualifies when it holds a spool -- ``tray_exist_bits`` where the
     firmware sends it, the tray's own presence annotation or firmware's 9/10
     "no spool" states otherwise -- and either
 
-    * its ``tray_read_done_bits`` bit is clear, the case of a spool inserted
-      while the printer was busy: the AMS notices it (the exist bit flips) but
-      cannot move filament to read its tag during a print, and does not come
-      back to it afterwards; or
-    * the AMS has put no identity on it at all (``_looks_unread``), **whatever
-      the read-done bit says**. Firmware sets that bit for an attempt that
-      finished, including one that found nothing, so trusting it alone leaves
-      exactly the slot this feature exists for looking read. It is also the
-      only signal on firmware that sends no mask.
+    * its ``tray_read_done_bits`` bit is clear (``UNREAD_NOT_DONE``), the case
+      of a spool inserted while the printer was busy: the AMS notices it (the
+      exist bit flips) but cannot move filament to read its tag during a print,
+      and does not come back to it afterwards; or
+    * the AMS has put no identity on it at all (``UNREAD_NO_IDENTITY``,
+      ``_looks_unread``), **whatever the read-done bit says**. Firmware sets
+      that bit for an attempt that finished, including one that found nothing,
+      so trusting it alone leaves exactly the slot this feature exists for
+      looking read. It is also the only signal on firmware that sends no mask.
+
+    The bit is asked first, so a slot firmware itself calls unread is never
+    reported as the weaker inference: that distinction is what lets the
+    scheduler spend one read per unreadable spool without ever going quiet on
+    a slot firmware is still asking about.
 
     The queue asks for the read before a job is mapped, so the mapping sees
     what is actually loaded. The external spool (254) and the virtual trays
@@ -178,17 +195,45 @@ def unread_ams_slots(state: Any) -> list[tuple[int, int]]:
     exist_mask = parse_tray_bits(getattr(state, "tray_exist_bits", None))
     done_mask = parse_tray_bits(getattr(state, "tray_read_done_bits", None))
 
-    unread: list[tuple[int, int]] = []
+    reasons: dict[tuple[int, int], str] = {}
     for ams_id, tray_id, tray, bit in _ams_slots(state):
         if not _slot_present(tray, bit, exist_mask):
             continue
-        if _looks_unread(tray):
-            unread.append((ams_id, tray_id))
-            continue
-        if done_mask is None or (done_mask >> bit) & 1:
-            continue
-        unread.append((ams_id, tray_id))
-    return unread
+        if done_mask is not None and not (done_mask >> bit) & 1:
+            reasons[(ams_id, tray_id)] = UNREAD_NOT_DONE
+        elif _looks_unread(tray):
+            reasons[(ams_id, tray_id)] = UNREAD_NO_IDENTITY
+    return reasons
+
+
+def unread_ams_slots(state: Any) -> list[tuple[int, int]]:
+    """Slots holding a spool the AMS has not read: ``[(ams_id, tray_id), ...]``.
+
+    :func:`unread_ams_slot_reasons` without the reasons, for callers that only
+    need the list.
+    """
+    return list(unread_ams_slot_reasons(state))
+
+
+def detection_signals(state: Any) -> str:
+    """Which signals :func:`unread_ams_slot_reasons` had to work with, in words.
+
+    The scheduler prints this next to the raw masks, so a report of a wrong
+    verdict says whether a mask was there to be read at all. It decodes the
+    masks here rather than at the call site: one module owns that, and the
+    log cannot drift from the detection it describes.
+    """
+    from backend.app.services.bambu_mqtt import parse_tray_bits
+
+    exist = parse_tray_bits(getattr(state, "tray_exist_bits", None)) is not None
+    done = parse_tray_bits(getattr(state, "tray_read_done_bits", None)) is not None
+    if exist and done:
+        return "masks"
+    if done:
+        return "read-done mask + tray fields"
+    if exist:
+        return "exist mask + tray fields"
+    return "tray fields"
 
 
 def unidentified_slots(state: Any) -> set[tuple[int, int]]:
