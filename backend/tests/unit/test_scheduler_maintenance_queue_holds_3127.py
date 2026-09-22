@@ -12,8 +12,16 @@ Two holds, both on the automatic dispatch only:
   15 minutes before the slot, and holds a job of unknown length from two hours
   before it.
 
-Neither applies to an item a person started by hand -- ▶ on a staged item or
-"Print now" in the print dialog -- which is what ``user_started`` records.
+Neither applies to an item a person started by hand -- ▶ on a staged item,
+which is what ``user_started`` records. Nothing the print dialog queues
+counts, "ASAP" included: that is a place at the top of the queue, and the
+scheduler then dispatches the item like any other.
+
+Both are holds on the item, not on the printer: the printer is idle, and
+``busy_printers`` keeps meaning "a print is on it or imminent", which is
+what keep-warm reads it as. So a ▶ item behind a held one on the same
+printer still goes out, and no bed is heated for a job the run is waiting
+to cool it for.
 
 Driven through ``check_queue`` like the #3074 tests: real rows, the printer
 manager and the upload launcher mocked.
@@ -34,6 +42,8 @@ from backend.app.models.library import LibraryFile
 from backend.app.models.maintenance import MaintenanceRun, MaintenanceType, PrinterMaintenance
 from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer import Printer
+from backend.app.models.settings import Settings
+from backend.app.models.smart_plug import SmartPlug
 from backend.app.services import maintenance_actions
 from backend.app.services.print_scheduler import PrintScheduler
 
@@ -108,6 +118,7 @@ async def _add_item(
     position=1,
     print_time_seconds=3600,
     user_started=False,
+    **columns,
 ):
     async with ctx.session_maker() as db:
         lib = LibraryFile(
@@ -127,6 +138,7 @@ async def _add_item(
             library_file_id=lib.id,
             print_time_seconds=print_time_seconds,
             user_started=user_started,
+            **columns,
         )
         db.add(item)
         await db.commit()
@@ -158,6 +170,24 @@ async def _add_maintenance(ctx, *, printer_id=1, **kwargs):
         return SimpleNamespace(item_id=item.id, run_id=run_id)
 
 
+async def _add_auto_on_plug(ctx, printer_id=1):
+    async with ctx.session_maker() as db:
+        db.add(SmartPlug(name=f"plug-{printer_id}", printer_id=printer_id, enabled=True, auto_on=True))
+        await db.commit()
+
+
+async def _plugs(ctx):
+    async with ctx.session_maker() as db:
+        return list((await db.execute(select(SmartPlug))).scalars().all())
+
+
+async def _set_settings(ctx, **values):
+    async with ctx.session_maker() as db:
+        for key, value in values.items():
+            db.add(Settings(key=key, value="true" if value is True else "false" if value is False else str(value)))
+        await db.commit()
+
+
 async def _item(ctx, item_id):
     async with ctx.session_maker() as db:
         return (await db.execute(select(PrintQueueItem).where(PrintQueueItem.id == item_id))).scalar_one()
@@ -176,27 +206,38 @@ async def _set_run_status(ctx, run_id, status):
         await db.commit()
 
 
-def _status(bed=20.0):
+def _status(bed=20.0, state_name="IDLE", trays=None, bed_target=None):
     state = MagicMock()
-    state.state = "IDLE"
+    state.state = state_name
     state.connected = True
-    state.temperatures = {"bed": bed}
+    state.temperatures = {"bed": bed} if bed_target is None else {"bed": bed, "bed_target": bed_target}
     state.internal_gcode_dir = "O1S"
+    if trays is not None:
+        state.raw_data = {"ams": [{"tray": trays}], "vt_tray": []}
     return state
 
 
-async def _pass(ctx, scheduler, *, idle=True, connected=True, bed=20.0, launched=None, waiting=None):
-    """One check_queue pass with every printer connected and (by default) idle."""
+def _tray(filament_type, color):
+    return {"tray_type": filament_type, "tray_color": color, "tray_info_idx": ""}
+
+
+async def _pass(
+    ctx, scheduler, *, idle=True, connected=True, bed=20.0, launched=None, waiting=None, status=None, patches=()
+):
+    """One check_queue pass with every printer connected and (by default) idle.
+
+    *status* replaces the one status every printer reports; *patches* are
+    applied after the defaults and win over them.
+    """
     launched = launched or MagicMock()
     waiting = waiting or AsyncMock()
+    if status is None:
+        status = MagicMock(return_value=_status(bed) if connected else None)
     patches = [
         patch("backend.app.services.print_scheduler.async_session", ctx.session_maker),
         patch("backend.app.core.database.async_session", ctx.session_maker),
         patch("backend.app.services.print_scheduler.printer_manager.is_connected", MagicMock(return_value=connected)),
-        patch(
-            "backend.app.services.print_scheduler.printer_manager.get_status",
-            MagicMock(return_value=_status(bed) if connected else None),
-        ),
+        patch("backend.app.services.print_scheduler.printer_manager.get_status", status),
         patch(
             "backend.app.services.print_scheduler.printer_manager.is_awaiting_plate_clear",
             MagicMock(return_value=False),
@@ -211,6 +252,7 @@ async def _pass(ctx, scheduler, *, idle=True, connected=True, bed=20.0, launched
         patch.object(scheduler, "_block_on_filament_deficit", AsyncMock(return_value=False)),
         patch.object(scheduler, "_get_smart_plugs", AsyncMock(return_value=[])),
         patch.object(scheduler, "_launch_uploads", launched),
+        *patches,
     ]
     with ExitStack() as stack:
         for p in patches:
@@ -294,8 +336,8 @@ class TestMaintenanceFirst:
 
     @pytest.mark.asyncio
     async def test_an_item_a_person_started_is_not_held(self, ctx):
-        """▶ on a staged item and "Print now" mean now: the run waits for the
-        print instead, as it does for any print already on the printer."""
+        """▶ on a staged item means now: the run waits for the print instead,
+        as it does for any print already on the printer."""
         await _add_maintenance(ctx, action_options={"bed_temp_below": 30}, run={})
         item_id = await _add_item(ctx, user_started=True)
 
@@ -303,6 +345,86 @@ class TestMaintenanceFirst:
 
         assert _launched_ids(launched) == [item_id]
         assert (await _item(ctx, item_id)).waiting_reason is None
+
+    @pytest.mark.asyncio
+    async def test_an_item_a_person_started_goes_out_behind_a_held_one(self, ctx):
+        """▶ is pressed on a staged item that is not first in line for its
+        printer -- the normal case, /start does not move it. The hold on the
+        item ahead is a hold on that item, not on the printer, so the ▶ item
+        goes out and the one ahead keeps reading the run."""
+        await _add_maintenance(ctx, action_options={"bed_temp_below": 30}, run={})
+        ahead = await _add_item(ctx, position=1)
+        started = await _add_item(ctx, position=2, user_started=True)
+
+        launched = await _pass(ctx, PrintScheduler(), bed=45.0)
+
+        assert _launched_ids(launched) == [started]
+        assert (await _item(ctx, ahead)).waiting_reason == (
+            "Maintenance run pending: Printer Calibration (bed still warm, 45 °C)"
+        )
+        assert (await _item(ctx, started)).waiting_reason is None
+
+    @pytest.mark.asyncio
+    async def test_a_run_hold_releases_keep_warm_rather_than_engaging_it(self, ctx):
+        """The Sunday afternoon: an ASA job finishes, keep-warm holds the bed
+        at 90 °C for the ASA job behind it while the plate is not confirmed.
+        The plate is confirmed, the calibration run is created and waits for
+        the bed to cool -- and keep-warm must let go of the bed now, not heat
+        it for the job the run is holding. Held, the printer is idle and not
+        in busy_printers, which is what keep-warm reads as the gap to heat."""
+        await _set_settings(ctx, queue_keep_bed_warm=True, preheat_enabled=True, require_plate_clear=True)
+        item_id = await _add_item(ctx, preheat_chamber_target_override=60)
+        client = MagicMock()
+        scheduler = PrintScheduler()
+        client_patch = patch(
+            "backend.app.services.print_scheduler.printer_manager.get_client", MagicMock(return_value=client)
+        )
+
+        # Plate not confirmed yet: the printer is FINISH and held, keep-warm engages.
+        finish = MagicMock(return_value=_status(bed=60.0, state_name="FINISH"))
+        await _pass(ctx, scheduler, idle=False, status=finish, patches=[client_patch])
+        assert scheduler._keep_warm[1].held_target == 90
+        client.set_bed_temperature.assert_called_once_with(90)
+        assert (await _item(ctx, item_id)).waiting_reason == "Busy: H2S-01"
+
+        # Plate confirmed, the run created and waiting for the bed: released.
+        await _add_maintenance(ctx, action_options={"bed_temp_below": 30}, run={})
+        client.set_bed_temperature.reset_mock()
+        finish = MagicMock(return_value=_status(bed=60.0, state_name="FINISH", bed_target=90))
+        launched = await _pass(ctx, scheduler, status=finish, patches=[client_patch])
+
+        launched.assert_not_called()
+        assert 1 not in scheduler._keep_warm
+        client.set_bed_temperature.assert_called_once_with(0)
+        assert (await _item(ctx, item_id)).waiting_reason == (
+            "Maintenance run pending: Printer Calibration (bed still warm, 60 °C)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_keep_warm_leaves_the_bed_of_a_reserved_printer_alone(self, ctx):
+        """The same the other way round: the plate is not confirmed yet, so the
+        printer is busy for a reason of its own and keep-warm would engage --
+        but the item it would heat the bed for is not going out there while the
+        run is pending, and the run may be the one waiting for a cold bed."""
+        await _set_settings(ctx, queue_keep_bed_warm=True, preheat_enabled=True, require_plate_clear=True)
+        await _add_maintenance(ctx, action_options={"bed_temp_below": 30}, run={})
+        await _add_item(ctx, preheat_chamber_target_override=60)
+        client = MagicMock()
+        scheduler = PrintScheduler()
+        finish = MagicMock(return_value=_status(bed=60.0, state_name="FINISH"))
+
+        await _pass(
+            ctx,
+            scheduler,
+            idle=False,
+            status=finish,
+            patches=[
+                patch("backend.app.services.print_scheduler.printer_manager.get_client", MagicMock(return_value=client))
+            ],
+        )
+
+        assert 1 not in scheduler._keep_warm
+        client.set_bed_temperature.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_a_model_based_item_takes_a_free_sibling_over_the_reserved_printer(self, ctx):
@@ -317,6 +439,7 @@ class TestMaintenanceFirst:
 
     @pytest.mark.asyncio
     async def test_a_model_based_item_waits_with_the_hold_when_no_printer_is_free_of_it(self, ctx):
+        """Named like "Busy: H2S-01" is: the row says which printer it means."""
         await _add_maintenance(ctx, action_options={"bed_temp_below": 30}, run={})
         item_id = await _add_item(ctx, printer_id=None, target_model="H2S")
 
@@ -324,8 +447,72 @@ class TestMaintenanceFirst:
 
         launched.assert_not_called()
         assert (await _item(ctx, item_id)).waiting_reason == (
-            "Maintenance run pending: Printer Calibration (bed still warm, 45 °C)"
+            "Maintenance run pending: Printer Calibration (bed still warm, 45 °C) — H2S-01"
         )
+
+    @pytest.mark.asyncio
+    async def test_printers_under_the_same_hold_share_one_clause(self, ctx):
+        """The user's farm: every printer has its run waiting on the bed. One
+        sentence naming them all, not the sentence once per printer."""
+        await _add_printer(ctx, 2, "H2S-02")
+        await _add_maintenance(ctx, printer_id=1, action_options={"bed_temp_below": 30}, run={})
+        await _add_maintenance(ctx, printer_id=2, action_options={"bed_temp_below": 30}, run={})
+        item_id = await _add_item(ctx, printer_id=None, target_model="H2S")
+        waiting = AsyncMock()
+
+        launched = await _pass(ctx, PrintScheduler(), bed=45.0, waiting=waiting)
+
+        launched.assert_not_called()
+        assert (await _item(ctx, item_id)).waiting_reason == (
+            "Maintenance run pending: Printer Calibration (bed still warm, 45 °C) — H2S-01, H2S-02"
+        )
+        waiting.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_reserved_printer_that_has_the_colour_is_named_as_reserved(self, ctx):
+        """Force-colour job for red PLA. H2S-01 has it loaded and a run
+        pending; H2S-02 has only black. The row names the run on H2S-01 --
+        the job starts by itself when it closes -- rather than asking for a
+        spool change, and nobody is notified about one."""
+        await _add_printer(ctx, 2, "H2S-02")
+        await _add_maintenance(ctx, printer_id=1, action_options={"bed_temp_below": 30}, run={})
+        item_id = await _add_item(
+            ctx,
+            printer_id=None,
+            target_model="H2S",
+            required_filament_types='["PLA"]',
+            filament_overrides='[{"type": "PLA", "color": "#FF0000", "color_name": "red", "force_color_match": true}]',
+        )
+        loaded = {1: _status(bed=45.0, trays=[_tray("PLA", "FF0000FF")]), 2: _status(trays=[_tray("PLA", "000000FF")])}
+        waiting = AsyncMock()
+
+        launched = await _pass(ctx, PrintScheduler(), status=MagicMock(side_effect=loaded.get), waiting=waiting)
+
+        launched.assert_not_called()
+        assert (await _item(ctx, item_id)).waiting_reason == (
+            "Maintenance run pending: Printer Calibration (bed still warm, 45 °C) — H2S-01"
+        )
+        waiting.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_reserved_printer_without_the_colour_still_asks_for_the_spool(self, ctx):
+        """The same job when neither printer has red loaded: the run on
+        H2S-01 is beside the point, the spool is what the job waits for."""
+        await _add_printer(ctx, 2, "H2S-02")
+        await _add_maintenance(ctx, printer_id=1, action_options={"bed_temp_below": 30}, run={})
+        item_id = await _add_item(
+            ctx,
+            printer_id=None,
+            target_model="H2S",
+            required_filament_types='["PLA"]',
+            filament_overrides='[{"type": "PLA", "color": "#FF0000", "color_name": "red", "force_color_match": true}]',
+        )
+        loaded = {1: _status(bed=45.0, trays=[_tray("PLA", "000000FF")]), 2: _status(trays=[_tray("PLA", "000000FF")])}
+
+        launched = await _pass(ctx, PrintScheduler(), status=MagicMock(side_effect=loaded.get))
+
+        launched.assert_not_called()
+        assert (await _item(ctx, item_id)).waiting_reason == "No matching material/color. Waiting on PLA (red)"
 
     @pytest.mark.asyncio
     async def test_a_reserved_printer_still_reads_as_busy_while_it_prints(self, ctx):
@@ -457,7 +644,100 @@ class TestKeepClearOfTheSlot:
         launched = await _pass(ctx, PrintScheduler())
 
         launched.assert_not_called()
-        assert (await _item(ctx, item_id)).waiting_reason == self._hold(next_at, "estimated 5h 0m")
+        assert (await _item(ctx, item_id)).waiting_reason == self._hold(next_at, "estimated 5h 0m") + " — H2S-01"
+
+    @pytest.mark.asyncio
+    async def test_the_farm_scheduled_for_the_same_slot_reads_as_one_clause(self, ctx):
+        """Every H2S scheduled for Sunday noon: the "Any H2S" row names the
+        slot once, with the printers under it, for the two hours it is held."""
+        await _add_printer(ctx, 2, "H2S-02")
+        next_at = await self._schedule(ctx, hours_ahead=1.5, printer_id=1)
+        await self._schedule(ctx, hours_ahead=1.5, printer_id=2)
+        item_id = await _add_item(ctx, printer_id=None, target_model="H2S", print_time_seconds=None)
+
+        launched = await _pass(ctx, PrintScheduler())
+
+        launched.assert_not_called()
+        assert (await _item(ctx, item_id)).waiting_reason == (
+            self._hold(next_at, "duration unknown") + " — H2S-01, H2S-02"
+        )
+
+    @pytest.mark.asyncio
+    async def test_an_offline_printer_is_not_switched_on_for_a_job_the_slot_would_hold(self, ctx):
+        """The printer is off with an Auto On plug and the job would run into
+        the slot: nothing to gain from a boot, the item is held as it would
+        be with the printer up, and the plug is left alone."""
+        next_at = await self._schedule(ctx, hours_ahead=1.5)
+        await _add_auto_on_plug(ctx)
+        item_id = await _add_item(ctx, print_time_seconds=None)
+        scheduler = PrintScheduler()
+        power_on = AsyncMock(return_value=True)
+        plugs = await _plugs(ctx)
+
+        launched = await _pass(
+            ctx,
+            scheduler,
+            connected=False,
+            patches=[
+                patch.object(scheduler, "_get_smart_plugs", AsyncMock(return_value=plugs)),
+                patch.object(scheduler, "_power_on_and_wait", power_on),
+            ],
+        )
+
+        launched.assert_not_called()
+        power_on.assert_not_called()
+        assert (await _item(ctx, item_id)).waiting_reason == self._hold(next_at, "duration unknown")
+
+    @pytest.mark.asyncio
+    async def test_a_model_based_job_does_not_wake_a_printer_the_slot_would_hold(self, ctx):
+        """The same for "Any H2S": the wake step passes the printer over, and
+        the row names the slot rather than an offline printer Bambuddy is
+        deliberately not switching on -- so nobody is told to go and do it."""
+        next_at = await self._schedule(ctx, hours_ahead=1.5)
+        await _add_auto_on_plug(ctx)
+        item_id = await _add_item(ctx, printer_id=None, target_model="H2S", print_time_seconds=None)
+        scheduler = PrintScheduler()
+        power_on = AsyncMock(return_value=True)
+        plugs = await _plugs(ctx)
+        waiting = AsyncMock()
+
+        launched = await _pass(
+            ctx,
+            scheduler,
+            connected=False,
+            waiting=waiting,
+            patches=[
+                patch.object(scheduler, "_get_smart_plugs", AsyncMock(return_value=plugs)),
+                patch.object(scheduler, "_power_on_and_wait", power_on),
+            ],
+        )
+
+        launched.assert_not_called()
+        power_on.assert_not_called()
+        assert (await _item(ctx, item_id)).waiting_reason == self._hold(next_at, "duration unknown") + " — H2S-01"
+        waiting.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_an_offline_printer_is_still_switched_on_for_a_job_that_fits(self, ctx):
+        """The control: with the slot far enough out the wake goes ahead."""
+        await self._schedule(ctx, hours_ahead=4.0)
+        await _add_auto_on_plug(ctx)
+        await _add_item(ctx, print_time_seconds=3600)
+        scheduler = PrintScheduler()
+        power_on = AsyncMock(return_value=False)
+        plugs = await _plugs(ctx)
+
+        await _pass(
+            ctx,
+            scheduler,
+            connected=False,
+            patches=[
+                patch.object(scheduler, "_get_smart_plugs", AsyncMock(return_value=plugs)),
+                patch.object(scheduler, "_power_on_and_wait", power_on),
+            ],
+        )
+
+        power_on.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_a_model_based_job_takes_the_printer_without_a_slot_ahead(self, ctx):

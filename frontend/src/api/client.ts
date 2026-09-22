@@ -2562,8 +2562,8 @@ export interface PrintQueueItem {
   // start route when skip_filament_check=true, or at queue creation if
   // PrintModal's deficit warning was acknowledged.
   skip_filament_check: boolean;
-  // A person asked for this item to start now ("Print now", or ▶ on a staged
-  // item): the scheduler's maintenance holds do not apply to it (#3127).
+  // A person pressed ▶ on this staged item: the scheduler's maintenance
+  // holds do not apply to it (#3127).
   user_started?: boolean;
   // True when the source archive carries the slicer's own live-resolved
   // AMS-slot pick (extra_data.slicer_ams_mapping) — a reprint reuses that

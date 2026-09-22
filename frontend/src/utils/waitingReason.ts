@@ -13,8 +13,10 @@
  * printer, a scheduled one the job would run into — count as busy-only on
  * both sides: they resolve themselves. They are also the only reasons the
  * queue row translates: the backend writes them in a fixed English shape
- * (`maintenance_actions.queue_hold_for_run` / `queue_hold_for_schedule`) and
- * `formatWaitingReason` maps that shape onto the locale's own sentence.
+ * (`maintenance_actions.queue_hold_for_run` / `queue_hold_for_schedule`,
+ * on an "Any <model>" row followed by " — " and the printers it is about,
+ * `queue_hold_clauses`) and `formatWaitingReason` maps that shape onto the
+ * locale's own sentence, the printer names carried over as written.
  *
  * Kept in one place on this side too, so the halves of the contract are one
  * grep apart.
@@ -57,14 +59,20 @@ const RUN_STATE_KEYS: Record<string, string> = {
 const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
 // A clause ends at the string's end or at one of the scheduler's joiners
-// (" | " between busy-only clauses, "; " between labelled ones).
+// (" | " between busy-only clauses, "; " between labelled ones), optionally
+// after the printers the hold is about.
+const PRINTERS = '(?: — (.+?))?';
 const CLAUSE_END = '(?=$| \\| |; )';
-const RUN_HOLD_RE = new RegExp(`${RUN_HOLD_PREFIX}(.+?) \\(([^()]*)\\)${CLAUSE_END}`, 'g');
+const RUN_HOLD_RE = new RegExp(`${RUN_HOLD_PREFIX}(.+?) \\(([^()]*)\\)${PRINTERS}${CLAUSE_END}`, 'g');
 const SCHEDULE_HOLD_RE = new RegExp(
   `${SCHEDULE_HOLD_PREFIX}(${WEEKDAYS.join('|')}) (\\d{2}:\\d{2}) — this job would run into it ` +
-    `\\((?:estimated (.+?)|duration unknown)\\)${CLAUSE_END}`,
+    `\\((?:estimated (.+?)|duration unknown)\\)${PRINTERS}${CLAUSE_END}`,
   'g',
 );
+
+function withPrinters(text: string, printers?: string): string {
+  return printers ? `${text} — ${printers}` : text;
+}
 
 // 2024-01-01 is a Monday; a local date so the label is not shifted by the zone.
 function weekdayName(index: number, language: string): string {
@@ -77,16 +85,20 @@ function weekdayName(index: number, language: string): string {
  */
 export function formatWaitingReason(reason: string, t: TFunction, language: string): string {
   return reason
-    .replace(RUN_HOLD_RE, (_match, item: string, state: string) => {
+    .replace(RUN_HOLD_RE, (_match, item: string, state: string, printers?: string) => {
       const bed = /^bed still warm, (.+) °C$/.exec(state);
       const key = RUN_STATE_KEYS[bed ? 'bed still warm' : state];
       const stateText = key ? t(`queue.maintenanceHold.state.${key}`, { temp: bed?.[1] }) : state;
-      return t('queue.maintenanceHold.run', { item: maintenanceTypeLabel(item, t), state: stateText });
+      return withPrinters(
+        t('queue.maintenanceHold.run', { item: maintenanceTypeLabel(item, t), state: stateText }),
+        printers,
+      );
     })
-    .replace(SCHEDULE_HOLD_RE, (_match, weekday: string, time: string, duration?: string) => {
+    .replace(SCHEDULE_HOLD_RE, (_match, weekday: string, time: string, duration?: string, printers?: string) => {
       const when = `${weekdayName(WEEKDAYS.indexOf(weekday), language)} ${time}`;
-      return duration
+      const text = duration
         ? t('queue.maintenanceHold.schedule', { when, duration })
         : t('queue.maintenanceHold.scheduleUnknown', { when });
+      return withPrinters(text, printers);
     });
 }

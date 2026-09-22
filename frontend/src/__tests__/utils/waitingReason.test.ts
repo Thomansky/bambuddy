@@ -52,6 +52,7 @@ describe('isBusyOnlyWaitingReason', () => {
     'Maintenance run pending: Printer Calibration (queued)',
     'Scheduled maintenance at Sunday 12:00 — this job would run into it (estimated 3h 20m)',
     'Busy: H2S-01 | Maintenance run pending: Vision Encoder Calibration (bed still warm, 45 °C)',
+    'Maintenance run pending: Printer Calibration (queued) — H2S-01, H2S-02',
   ])('reads the maintenance hold %s as waiting its turn (#3127)', reason => {
     // Both resolve by themselves: the run closes, the slot passes. The
     // scheduler files them with the busy-only reasons and so does the UI.
@@ -113,6 +114,31 @@ describe('formatWaitingReason', () => {
     expect(formatWaitingReason('Waiting for plate confirmation: X1C-01', t, 'de')).toBe(
       'Waiting for plate confirmation: X1C-01',
     );
+  });
+
+  it('keeps the printers an "Any <model>" hold names, after the translated sentence', () => {
+    // One clause for however many printers are under the same run or slot
+    // (#3127): the names are the backend's own and are carried over as written.
+    expect(
+      formatWaitingReason('Maintenance run pending: Printer Calibration (queued) — H2S-01, H2S-02', t, 'de'),
+    ).toBe('Wartungslauf steht an: Druckerkalibrierung (eingereiht) — H2S-01, H2S-02');
+    expect(
+      formatWaitingReason(
+        'Scheduled maintenance at Sunday 12:00 — this job would run into it (duration unknown) — H2S-01, H2S-02',
+        t,
+        'de',
+      ),
+    ).toBe('Wartungstermin Sonntag 12:00 — Auftrag würde hineinlaufen (Dauer unbekannt) — H2S-01, H2S-02');
+  });
+
+  it('stops the printer list at the clause it belongs to', () => {
+    expect(
+      formatWaitingReason(
+        'Maintenance run pending: Printer Calibration (queued) — H2S-01 | Busy: H2S-03',
+        t,
+        'de',
+      ),
+    ).toBe('Wartungslauf steht an: Druckerkalibrierung (eingereiht) — H2S-01 | Busy: H2S-03');
   });
 
   it('keeps a state or a type name it does not know as the backend wrote it', () => {

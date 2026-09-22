@@ -423,8 +423,8 @@ function CalibrationActionPanel({
       </div>
 
       {/* Keep the print queue clear of the slot: no job that would still be
-          running at the scheduled time (only the automatic dispatch; ▶ and
-          "Print now" are not held) */}
+          running at the scheduled time (only the automatic dispatch; ▶ on a
+          staged item is not held) */}
       {item.trigger_mode === 'schedule' && (
         <label className="flex items-center gap-1.5 text-xs text-bambu-gray-light cursor-pointer">
           <input

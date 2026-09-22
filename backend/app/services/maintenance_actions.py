@@ -116,9 +116,11 @@ UNKNOWN_DURATION_HOLD = timedelta(hours=2)
 
 # How the two maintenance holds start on a queue row. The scheduler's
 # busy-only test and the frontend's parser both key on these exact strings,
-# so a reword lands in all three places at once.
+# so a reword lands in all three places at once. On an "Any <model>" row the
+# hold ends with the printers it is about, after QUEUE_HOLD_PRINTERS_JOINER.
 QUEUE_HOLD_RUN_PREFIX = "Maintenance run pending: "
 QUEUE_HOLD_SCHEDULE_PREFIX = "Scheduled maintenance at "
+QUEUE_HOLD_PRINTERS_JOINER = " — "
 
 # What a run's state reads as inside the queue hold, in English; the
 # frontend maps these phrases back to its own translations.
@@ -351,6 +353,20 @@ def queue_hold_for_schedule(next_at: datetime, estimate_seconds: int | None) -> 
         f"{QUEUE_HOLD_SCHEDULE_PREFIX}{when} — this job would run into it "
         f"(estimated {format_duration(estimate_seconds)})"
     )
+
+
+def queue_hold_clauses(reserved: list[tuple[str, str]]) -> list[str]:
+    """The waiting-reason clauses for the printers a model-based item was kept off.
+
+    One clause per distinct hold, in the order the holds were met, naming
+    the printers under it the way the neighbouring "Busy: A, B" does:
+    "Maintenance run pending: Printer Calibration (queued) — H2S-01, H2S-02".
+    Four printers all scheduled for Sunday noon give one sentence, not four.
+    """
+    names_by_hold: dict[str, list[str]] = {}
+    for name, hold in reserved:
+        names_by_hold.setdefault(hold, []).append(name)
+    return [f"{hold}{QUEUE_HOLD_PRINTERS_JOINER}{', '.join(names)}" for hold, names in names_by_hold.items()]
 
 
 def is_queue_hold(clause: str) -> bool:
