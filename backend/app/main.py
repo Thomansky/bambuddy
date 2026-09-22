@@ -3355,6 +3355,42 @@ def _schedule_fallback_3mf_retry(
     )
 
 
+async def _ask_outcome_for_external_print(db, printer_id: int) -> bool:
+    """Whether an archive created here should ask for the print's outcome (#1898).
+
+    Only a print Bambuddy did not dispatch reaches the archive-*creating*
+    branches below: a queued job already has its archive and takes the
+    expected-print branch, where the queue item's own ``confirm_outcome``
+    decides. The queue is still consulted, because a restart mid-print empties
+    ``_expected_prints`` — without the check the setting could override a queue
+    item that deliberately has the flag off. Any failure answers "don't ask":
+    an unwanted prompt is worse than a missing one, and this must never be the
+    reason a print goes unarchived.
+    """
+    try:
+        from backend.app.api.routes.settings import get_setting, setting_is_true
+
+        if not setting_is_true(await get_setting(db, "confirm_outcome_external_prints")):
+            return False
+
+        from backend.app.models.print_queue import PrintQueueItem
+
+        dispatched_here = await db.scalar(
+            select(PrintQueueItem.id)
+            .where(
+                PrintQueueItem.printer_id == printer_id,
+                PrintQueueItem.status == "printing",
+            )
+            .limit(1)
+        )
+        return dispatched_here is None
+    except Exception as e:
+        logging.getLogger(__name__).warning(
+            "[CALLBACK] Could not decide the outcome prompt for printer %s: %s", printer_id, e
+        )
+        return False
+
+
 async def on_print_start(printer_id: int, data: dict):
     """Handle print start - archive the 3MF file immediately."""
     logger = logging.getLogger(__name__)
@@ -4464,6 +4500,7 @@ async def on_print_start(printer_id: int, data: dict):
                     status="printing",
                     started_at=datetime.now(timezone.utc),
                     subtask_id=subtask_id,
+                    confirm_requested=await _ask_outcome_for_external_print(db, printer_id),
                     filament_type=mqtt_filament_meta.get("filament_type"),
                     filament_color=mqtt_filament_meta.get("filament_color"),
                     extra_data={
@@ -4597,6 +4634,13 @@ async def on_print_start(printer_id: int, data: dict):
             )
 
             if archive:
+                # Ask-for-outcome for a print Bambuddy did not dispatch (#1898).
+                # Set on the row rather than passed to archive_print, which also
+                # serves the queue dispatcher — there the queue item decides.
+                if await _ask_outcome_for_external_print(db, printer_id):
+                    archive.confirm_requested = True
+                    await db.commit()
+
                 # Track this active print (use both original filename and downloaded filename)
                 _active_prints[(printer_id, downloaded_filename)] = archive.id
                 if filename and filename != downloaded_filename:

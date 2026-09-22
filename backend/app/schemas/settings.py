@@ -401,6 +401,13 @@ class AppSettings(BaseModel):
         default=False,
         description="Default for asking for a post-print outcome verdict on new prints (#1898)",
     )
+    confirm_outcome_external_prints: bool = Field(
+        default=False,
+        description=(
+            "Also ask for the outcome of prints Bambuddy archived but did not dispatch — started at "
+            "the printer, in Bambu Studio or in the Handy app (#1898)"
+        ),
+    )
     confirm_default_good_on_plate_clear: bool = Field(
         default=False,
         description=(
@@ -749,6 +756,7 @@ class AppSettingsUpdate(BaseModel):
     default_timelapse: bool | None = None
     default_nozzle_offset_cali: TriState | None = None
     default_confirm_outcome: bool | None = None
+    confirm_outcome_external_prints: bool | None = None
     confirm_default_good_on_plate_clear: bool | None = None
     stagger_group_size: int | None = Field(default=None, ge=1, le=50)
     stagger_interval_minutes: int | None = Field(default=None, ge=1, le=60)
