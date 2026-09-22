@@ -5423,9 +5423,9 @@ async def upload_preview_thumbnail(
 ):
     """Store a client-rendered preview thumbnail for a file (#2976).
 
-    STEP, PDF and spreadsheet previews are rendered in the browser; the FE
-    posts its first render here so the grid gets a thumbnail without the
-    server needing OpenCascade. Only file types in ``CLIENT_THUMBNAIL_TYPES``
+    STEP, PDF, spreadsheet and Outlook-message previews are rendered in the
+    browser; the FE posts its first render here so the grid gets a thumbnail
+    without the server needing OpenCascade. Only types in ``CLIENT_THUMBNAIL_TYPES``
     are accepted, and only while the file has no thumbnail yet — a stored
     thumbnail is never replaced by this route, which is also what keeps the
     server-rendered PDF thumbnail from upload authoritative.

@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Download, Loader2, Mail, Paperclip, X } from 'lucide-react';
+import { Download, Loader2, Mail, Paperclip } from 'lucide-react';
 import { api, getAuthToken } from '../api/client';
 import { formatFileSize } from '../utils/file';
 import { rtfToText } from '../utils/rtfToText';
+import { PreviewModalShell } from './PreviewModalShell';
+import { usePreviewFullscreen } from '../hooks/usePreviewFullscreen';
 
 // An .msg with attachments is parsed fully in memory — anything over this
 // size shows a notice instead of stalling the tab (same cap as PDF).
@@ -115,6 +117,8 @@ function drawMsgSnapshot(fields: MsgFields, bodyText: string): Promise<Blob | nu
 
 export function MsgPreviewModal({ libraryFileId, filename, fileSize, onClose, onSnapshot }: MsgPreviewModalProps) {
   const { t } = useTranslation();
+  const fullscreen = usePreviewFullscreen();
+  const { isFullscreen, toggleFullscreen } = fullscreen;
   const [parsed, setParsed] = useState<ParsedMsg | null>(null);
   const [error, setError] = useState<string | null>(null);
   const snapshotSentRef = useRef(false);
@@ -122,14 +126,6 @@ export function MsgPreviewModal({ libraryFileId, filename, fileSize, onClose, on
   useEffect(() => {
     onSnapshotRef.current = onSnapshot;
   });
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
 
   useEffect(() => {
     let cancelled = false;
@@ -212,107 +208,98 @@ export function MsgPreviewModal({ libraryFileId, filename, fileSize, onClose, on
   const sender = fields ? recipientLabel({ name: fields.senderName, smtpAddress: fields.senderEmail }) : '';
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-      <div className="bg-bambu-dark-secondary rounded-lg w-full max-w-4xl h-[85vh] border border-bambu-dark-tertiary flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-bambu-dark-tertiary">
-          <div className="flex items-center gap-2 min-w-0">
-            <Mail className="w-5 h-5 text-bambu-green flex-shrink-0" />
-            <h2 className="text-lg font-semibold text-white truncate">{fields?.subject || filename}</h2>
+    <PreviewModalShell
+      title={fields?.subject || filename}
+      fullscreen={fullscreen}
+      onClose={onClose}
+      icon={<Mail className="w-5 h-5 text-bambu-green flex-shrink-0" />}
+    >
+      <div
+        data-testid="msg-preview-content"
+        className={`flex-1 min-h-0 overflow-auto bg-bambu-dark ${isFullscreen ? '' : 'rounded-b-lg'}`}
+        onDoubleClick={toggleFullscreen}
+      >
+        {error ? (
+          <div className="h-full flex items-center justify-center p-6">
+            <p className="text-bambu-gray text-center">{error}</p>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded hover:bg-bambu-dark text-bambu-gray hover:text-white transition-colors"
-            aria-label={t('common.close')}
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
+        ) : !parsed ? (
+          <div className="h-full flex items-center justify-center">
+            <Loader2 className="w-8 h-8 text-bambu-green animate-spin" />
+          </div>
+        ) : (
+          <div className="p-4 space-y-4">
+            {/* Envelope headers */}
+            <div className="text-sm space-y-1">
+              {sender && (
+                <div className="flex gap-2">
+                  <span className="text-bambu-gray w-14 flex-shrink-0">{t('fileManager.preview.msg.from')}</span>
+                  <span className="text-bambu-gray-light break-all">{sender}</span>
+                </div>
+              )}
+              {to.length > 0 && (
+                <div className="flex gap-2">
+                  <span className="text-bambu-gray w-14 flex-shrink-0">{t('fileManager.preview.msg.to')}</span>
+                  <span className="text-bambu-gray-light break-all">{to.map(recipientLabel).join('; ')}</span>
+                </div>
+              )}
+              {cc.length > 0 && (
+                <div className="flex gap-2">
+                  <span className="text-bambu-gray w-14 flex-shrink-0">{t('fileManager.preview.msg.cc')}</span>
+                  <span className="text-bambu-gray-light break-all">{cc.map(recipientLabel).join('; ')}</span>
+                </div>
+              )}
+              {date && (
+                <div className="flex gap-2">
+                  <span className="text-bambu-gray w-14 flex-shrink-0">{t('fileManager.preview.msg.date')}</span>
+                  <span className="text-bambu-gray-light">{date}</span>
+                </div>
+              )}
+            </div>
 
-        {/* Content */}
-        <div className="flex-1 min-h-0 overflow-auto bg-bambu-dark rounded-b-lg">
-          {error ? (
-            <div className="h-full flex items-center justify-center p-6">
-              <p className="text-bambu-gray text-center">{error}</p>
-            </div>
-          ) : !parsed ? (
-            <div className="h-full flex items-center justify-center">
-              <Loader2 className="w-8 h-8 text-bambu-green animate-spin" />
-            </div>
-          ) : (
-            <div className="p-4 space-y-4">
-              {/* Envelope headers */}
-              <div className="text-sm space-y-1">
-                {sender && (
-                  <div className="flex gap-2">
-                    <span className="text-bambu-gray w-14 flex-shrink-0">{t('fileManager.preview.msg.from')}</span>
-                    <span className="text-bambu-gray-light break-all">{sender}</span>
-                  </div>
-                )}
-                {to.length > 0 && (
-                  <div className="flex gap-2">
-                    <span className="text-bambu-gray w-14 flex-shrink-0">{t('fileManager.preview.msg.to')}</span>
-                    <span className="text-bambu-gray-light break-all">{to.map(recipientLabel).join('; ')}</span>
-                  </div>
-                )}
-                {cc.length > 0 && (
-                  <div className="flex gap-2">
-                    <span className="text-bambu-gray w-14 flex-shrink-0">{t('fileManager.preview.msg.cc')}</span>
-                    <span className="text-bambu-gray-light break-all">{cc.map(recipientLabel).join('; ')}</span>
-                  </div>
-                )}
-                {date && (
-                  <div className="flex gap-2">
-                    <span className="text-bambu-gray w-14 flex-shrink-0">{t('fileManager.preview.msg.date')}</span>
-                    <span className="text-bambu-gray-light">{date}</span>
-                  </div>
-                )}
+            {/* Attachments */}
+            {(fields?.attachments?.length ?? 0) > 0 && (
+              <div className="border border-bambu-dark-tertiary rounded-lg p-3">
+                <div className="flex items-center gap-1.5 text-xs text-bambu-gray font-medium uppercase tracking-wide mb-2">
+                  <Paperclip className="w-3.5 h-3.5" />
+                  {t('fileManager.preview.msg.attachments')} ({fields!.attachments!.length})
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {fields!.attachments!.map((att, index) => (
+                    <button
+                      key={`${att.fileName}-${index}`}
+                      onClick={() => downloadAttachment(att)}
+                      className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-bambu-dark-secondary border border-bambu-dark-tertiary text-xs text-bambu-gray-light hover:border-bambu-green/50 hover:text-white transition-colors"
+                      title={t('common.download')}
+                    >
+                      <Download className="w-3 h-3 text-bambu-green" />
+                      <span className="max-w-[240px] truncate">{att.fileName || '?'}</span>
+                      {att.contentLength != null && (
+                        <span className="text-bambu-gray">{formatFileSize(att.contentLength)}</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
               </div>
+            )}
 
-              {/* Attachments */}
-              {(fields?.attachments?.length ?? 0) > 0 && (
-                <div className="border border-bambu-dark-tertiary rounded-lg p-3">
-                  <div className="flex items-center gap-1.5 text-xs text-bambu-gray font-medium uppercase tracking-wide mb-2">
-                    <Paperclip className="w-3.5 h-3.5" />
-                    {t('fileManager.preview.msg.attachments')} ({fields!.attachments!.length})
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {fields!.attachments!.map((att, index) => (
-                      <button
-                        key={`${att.fileName}-${index}`}
-                        onClick={() => downloadAttachment(att)}
-                        className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-bambu-dark-secondary border border-bambu-dark-tertiary text-xs text-bambu-gray-light hover:border-bambu-green/50 hover:text-white transition-colors"
-                        title={t('common.download')}
-                      >
-                        <Download className="w-3 h-3 text-bambu-green" />
-                        <span className="max-w-[240px] truncate">{att.fileName || '?'}</span>
-                        {att.contentLength != null && (
-                          <span className="text-bambu-gray">{formatFileSize(att.contentLength)}</span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Body — plain text only; HTML bodies are reduced to text, so
-                  nothing from the mail is ever rendered as markup. */}
-              {parsed.bodyText ? (
-                <div>
-                  {parsed.bodyFromRtf && (
-                    <p className="text-xs text-bambu-gray italic mb-2">{t('fileManager.preview.msg.rtfNote')}</p>
-                  )}
-                  <pre className="text-sm text-bambu-gray-light whitespace-pre-wrap break-words font-sans">
-                    {parsed.bodyText}
-                  </pre>
-                </div>
-              ) : (
-                <p className="text-bambu-gray text-sm">{t('fileManager.preview.msg.noBody')}</p>
-              )}
-            </div>
-          )}
-        </div>
+            {/* Body — plain text only; HTML bodies are reduced to text, so
+                nothing from the mail is ever rendered as markup. */}
+            {parsed.bodyText ? (
+              <div>
+                {parsed.bodyFromRtf && (
+                  <p className="text-xs text-bambu-gray italic mb-2">{t('fileManager.preview.msg.rtfNote')}</p>
+                )}
+                <pre className="text-sm text-bambu-gray-light whitespace-pre-wrap break-words font-sans">
+                  {parsed.bodyText}
+                </pre>
+              </div>
+            ) : (
+              <p className="text-bambu-gray text-sm">{t('fileManager.preview.msg.noBody')}</p>
+            )}
+          </div>
+        )}
       </div>
-    </div>
+    </PreviewModalShell>
   );
 }

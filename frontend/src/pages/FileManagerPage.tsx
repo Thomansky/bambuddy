@@ -55,6 +55,7 @@ import {
   StickyNote,
   Camera,
   Eye,
+  type LucideIcon,
 } from 'lucide-react';
 import { api } from '../api/client';
 import type {
@@ -134,21 +135,28 @@ function isPreviewableImageType(fileType: string): boolean {
   return PREVIEWABLE_IMAGE_TYPES.has(fileType.toLowerCase());
 }
 
+type PreviewKind = 'gcode' | 'model' | 'pdf' | 'msg' | 'spreadsheet' | 'image';
+
+// The one table of which preview a file opens (#2976), null for a file that
+// has none. `openPreview` dispatches on it, `isPreviewableLibraryFile` asks
+// whether there is one and `isModelPreview` whether it is one of the 3D ones:
+// a type added here reaches all three at once.
+function previewKind(file: LibraryFileListItem): PreviewKind | null {
+  const type = file.file_type;
+  if (isSlicedLibraryFile(file)) return 'gcode';
+  if (type === '3mf' || type === 'stl' || isStepType(type)) return 'model';
+  if (type === 'pdf') return 'pdf';
+  if (type === 'msg') return 'msg';
+  if (isSpreadsheetType(type)) return 'spreadsheet';
+  if (isPreviewableImageType(type)) return 'image';
+  return null;
+}
+
 // Which files have a preview at all: what a double-click opens, and what the
 // toolbar's Preview button appears for (#2976). Sliced files go to the
 // full-page gcode viewer, everything else to a modal.
 function isPreviewableLibraryFile(file: LibraryFileListItem): boolean {
-  const type = file.file_type;
-  return (
-    isSlicedLibraryFile(file) ||
-    type === '3mf' ||
-    type === 'stl' ||
-    isStepType(type) ||
-    type === 'pdf' ||
-    type === 'msg' ||
-    isSpreadsheetType(type) ||
-    isPreviewableImageType(type)
-  );
+  return previewKind(file) !== null;
 }
 
 // Spread onto a card/row subtree that is not "the row": its own controls must
@@ -162,14 +170,32 @@ const stopRowActivation = {
 
 // Whether the preview is the 3D one, which has its own menu label.
 function isModelPreview(file: LibraryFileListItem): boolean {
-  return isSlicedLibraryFile(file) || file.file_type === '3mf' || file.file_type === 'stl' || isStepType(file.file_type);
+  const kind = previewKind(file);
+  return kind === 'gcode' || kind === 'model';
+}
+
+// The one type -> icon table, used by the grid card, the list row, the
+// columns view and the preview entry of the per-file menu. null is a type
+// with no icon of its own; each caller supplies its own fallback.
+function fileTypeIcon(fileType: string): LucideIcon | null {
+  if (fileType === 'pdf') return FileText;
+  if (fileType === 'msg') return Mail;
+  if (isSpreadsheetType(fileType)) return FileSpreadsheet;
+  if (isImageType(fileType)) return Image;
+  return null;
 }
 
 function documentPreviewIcon(fileType: string) {
-  if (fileType === 'pdf') return <FileText className="w-4 h-4" />;
-  if (fileType === 'msg') return <Mail className="w-4 h-4" />;
-  if (isSpreadsheetType(fileType)) return <FileSpreadsheet className="w-4 h-4" />;
-  return <Image className="w-4 h-4" />;
+  const Icon = fileTypeIcon(fileType) ?? Image;
+  return <Icon className="w-4 h-4" />;
+}
+
+// Placeholder for a file with no thumbnail. csv/xlsx/ods/msg never get a
+// server-rendered one, so for those this icon is all the grid, the list and
+// the columns view have to tell them apart (#2976).
+function FileTypePlaceholderIcon({ fileType, className }: { fileType: string; className: string }) {
+  const Icon = fileTypeIcon(fileType) ?? FileBox;
+  return <Icon className={className} />;
 }
 
 // Types the server renders thumbnails for itself, so the batch button and the
@@ -179,19 +205,37 @@ function hasServerThumbnail(fileType: string): boolean {
   return fileType === 'stl' || fileType === 'pdf';
 }
 
-// Type badge colours shared by the list row and the columns view. Sliced
-// output shares the gcode blue so users see at a glance that the file is
-// already sliced and ready to print (#1543).
-function fileTypeBadgeClass(fileType: string): string {
-  if (fileType === '3mf') return 'bg-bambu-green/20 text-bambu-green';
-  if (fileType === 'gcode' || fileType === 'gcode.3mf') return 'bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-400';
-  if (fileType === 'stl') return 'bg-purple-100 dark:bg-purple-500/20 text-purple-700 dark:text-purple-400';
-  if (isStepType(fileType)) return 'bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400';
-  if (fileType === 'pdf') return 'bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-400';
-  if (isSpreadsheetType(fileType)) return 'bg-teal-100 dark:bg-teal-500/20 text-teal-700 dark:text-teal-400';
-  if (fileType === 'msg') return 'bg-sky-100 dark:bg-sky-500/20 text-sky-700 dark:text-sky-400';
-  if (isImageType(fileType)) return 'bg-indigo-100 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-400';
-  return 'bg-bambu-gray/20 text-bambu-gray';
+// The one type -> badge colour table, in the two variants the views need:
+// 'tinted' for the list row and the columns view, 'solid' for the grid card's
+// badge, which sits on top of the thumbnail. Sliced output shares the gcode
+// blue so users see at a glance that the file is already sliced and ready to
+// print (#1543). Both variants are spelled out in full because Tailwind only
+// keeps class names it can read in the source.
+function fileTypeBadgeClass(fileType: string, variant: 'tinted' | 'solid' = 'tinted'): string {
+  const solid = variant === 'solid';
+  if (fileType === '3mf') return solid ? 'bg-bambu-green/90 text-white' : 'bg-bambu-green/20 text-bambu-green';
+  if (fileType === 'gcode' || fileType === 'gcode.3mf') {
+    return solid ? 'bg-blue-500/90 text-white' : 'bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-400';
+  }
+  if (fileType === 'stl') {
+    return solid ? 'bg-purple-500/90 text-white' : 'bg-purple-100 dark:bg-purple-500/20 text-purple-700 dark:text-purple-400';
+  }
+  if (isStepType(fileType)) {
+    return solid ? 'bg-amber-500/90 text-white' : 'bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400';
+  }
+  if (fileType === 'pdf') {
+    return solid ? 'bg-red-500/90 text-white' : 'bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-400';
+  }
+  if (isSpreadsheetType(fileType)) {
+    return solid ? 'bg-teal-500/90 text-white' : 'bg-teal-100 dark:bg-teal-500/20 text-teal-700 dark:text-teal-400';
+  }
+  if (fileType === 'msg') {
+    return solid ? 'bg-sky-500/90 text-white' : 'bg-sky-100 dark:bg-sky-500/20 text-sky-700 dark:text-sky-400';
+  }
+  if (isImageType(fileType)) {
+    return solid ? 'bg-indigo-500/90 text-white' : 'bg-indigo-100 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-400';
+  }
+  return solid ? 'bg-bambu-gray/90 text-white' : 'bg-bambu-gray/20 text-bambu-gray';
 }
 
 // New Folder Modal
@@ -1063,31 +1107,11 @@ function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, o
             alt={file.filename}
             className="w-full h-full object-cover"
           />
-        ) : file.file_type === 'pdf' ? (
-          <FileText className="w-12 h-12 text-bambu-gray/30" />
-        ) : isSpreadsheetType(file.file_type) ? (
-          <FileSpreadsheet className="w-12 h-12 text-bambu-gray/30" />
-        ) : file.file_type === 'msg' ? (
-          <Mail className="w-12 h-12 text-bambu-gray/30" />
-        ) : isImageType(file.file_type) ? (
-          <Image className="w-12 h-12 text-bambu-gray/30" />
         ) : (
-          <FileBox className="w-12 h-12 text-bambu-gray/30" />
+          <FileTypePlaceholderIcon fileType={file.file_type} className="w-12 h-12 text-bambu-gray/30" />
         )}
         {/* File type badge */}
-        <div className={`absolute top-2 right-2 text-xs px-1.5 py-0.5 rounded font-medium ${
-          file.file_type === '3mf' ? 'bg-bambu-green/90 text-white'
-          // Sliced output — share the gcode blue so users see at a glance
-          // that the file is already sliced and ready to print (#1543).
-          : file.file_type === 'gcode' || file.file_type === 'gcode.3mf' ? 'bg-blue-500/90 text-white'
-          : file.file_type === 'stl' ? 'bg-purple-500/90 text-white'
-          : isStepType(file.file_type) ? 'bg-amber-500/90 text-white'
-          : file.file_type === 'pdf' ? 'bg-red-500/90 text-white'
-          : isSpreadsheetType(file.file_type) ? 'bg-teal-500/90 text-white'
-          : file.file_type === 'msg' ? 'bg-sky-500/90 text-white'
-          : isImageType(file.file_type) ? 'bg-indigo-500/90 text-white'
-          : 'bg-bambu-gray/90 text-white'
-        }`}>
+        <div className={`absolute top-2 right-2 text-xs px-1.5 py-0.5 rounded font-medium ${fileTypeBadgeClass(file.file_type, 'solid')}`}>
           {file.file_type.toUpperCase()}
         </div>
       </div>
@@ -2022,19 +2046,20 @@ export function FileManagerPage() {
   // opens the modal for its type. A file with no preview does nothing.
   const openPreview = useCallback((file: LibraryFileListItem) => {
     if (!hasPermission('library:read')) return;
-    if (isSlicedLibraryFile(file)) {
-      navigate(`/gcode-viewer?library_file=${file.id}`);
-    } else if (file.file_type === '3mf' || file.file_type === 'stl' || isStepType(file.file_type)) {
-      setViewerFile(file);
-    } else if (file.file_type === 'pdf') {
-      setPdfPreviewFile(file);
-    } else if (file.file_type === 'msg') {
-      setMsgPreviewFile(file);
-    } else if (isSpreadsheetType(file.file_type)) {
-      setSheetPreviewFile(file);
-    } else if (isPreviewableImageType(file.file_type)) {
-      setImagePreviewFile(file);
-    }
+    const kind = previewKind(file);
+    if (!kind) return;
+    // A Record rather than a chain of ifs: a preview kind added without a
+    // branch here is a type error instead of a Preview button that silently
+    // does nothing.
+    const open: Record<PreviewKind, () => void> = {
+      gcode: () => navigate(`/gcode-viewer?library_file=${file.id}`),
+      model: () => setViewerFile(file),
+      pdf: () => setPdfPreviewFile(file),
+      msg: () => setMsgPreviewFile(file),
+      spreadsheet: () => setSheetPreviewFile(file),
+      image: () => setImagePreviewFile(file),
+    };
+    open[kind]();
   }, [hasPermission, navigate]);
 
   // The toolbar's Preview button acts on one file, so it is offered only for
@@ -3300,7 +3325,7 @@ export function FileManagerPage() {
                                 className="w-full h-full object-cover"
                               />
                             ) : (
-                              <FileBox className="w-5 h-5 text-bambu-gray/50" />
+                              <FileTypePlaceholderIcon fileType={file.file_type} className="w-5 h-5 text-bambu-gray/50" />
                             )}
                           </div>
                           <div className="flex-1 min-w-0">
@@ -3512,17 +3537,7 @@ export function FileManagerPage() {
                             />
                           ) : (
                             <div className="w-full h-full flex items-center justify-center">
-                              {file.file_type === 'pdf' ? (
-                                <FileText className="w-5 h-5 text-bambu-gray/50" />
-                              ) : isSpreadsheetType(file.file_type) ? (
-                                <FileSpreadsheet className="w-5 h-5 text-bambu-gray/50" />
-                              ) : file.file_type === 'msg' ? (
-                                <Mail className="w-5 h-5 text-bambu-gray/50" />
-                              ) : isImageType(file.file_type) ? (
-                                <Image className="w-5 h-5 text-bambu-gray/50" />
-                              ) : (
-                                <FileBox className="w-5 h-5 text-bambu-gray/50" />
-                              )}
+                              <FileTypePlaceholderIcon fileType={file.file_type} className="w-5 h-5 text-bambu-gray/50" />
                             </div>
                           )}
                         </div>

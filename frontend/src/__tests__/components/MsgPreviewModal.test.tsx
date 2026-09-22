@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import * as CFB from 'cfb';
 import { MsgPreviewModal } from '../../components/MsgPreviewModal';
 import { rtfToText } from '../../utils/rtfToText';
@@ -79,6 +79,33 @@ describe('MsgPreviewModal', () => {
     expect(screen.getByText(/Thomas <thomas@example\.test>/)).toBeInTheDocument();
     expect(screen.getByText(/your filament order has shipped/)).toBeInTheDocument();
     expect(screen.getByText('invoice-4711.pdf')).toBeInTheDocument();
+  });
+
+  // The message preview is a preview like any other (#2976): same panel size
+  // and the same fullscreen toggle as the PDF sitting next to it in a folder.
+  it('renders inside the shared preview shell, fullscreen toggle included', async () => {
+    stubFetchWith(buildMsg());
+    renderModal();
+
+    const title = await screen.findByText('Order confirmation #4711');
+    const panel = title.closest('.flex-col') as HTMLElement;
+    expect(panel.className).toContain('w-[min(1800px,96vw)]');
+    expect(panel.className).toContain('h-[94vh]');
+    expect(screen.getByRole('button', { name: 'Fullscreen' })).toBeInTheDocument();
+  });
+
+  // jsdom has no Fullscreen API, so the hook takes its viewport-filling
+  // fallback — which is what an iPhone gets as well.
+  it('goes fullscreen on a double-click in the message body', async () => {
+    stubFetchWith(buildMsg());
+    renderModal();
+
+    const title = await screen.findByText('Order confirmation #4711');
+    const panel = title.closest('.flex-col') as HTMLElement;
+    fireEvent.doubleClick(screen.getByTestId('msg-preview-content'));
+
+    expect(panel.className).toContain('max-w-none');
+    expect(screen.getByRole('button', { name: 'Exit fullscreen' })).toBeInTheDocument();
   });
 
   it('shows an error message for a file that is not a CFB container', async () => {
