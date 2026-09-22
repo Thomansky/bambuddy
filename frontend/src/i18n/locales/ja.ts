@@ -1815,10 +1815,6 @@ export default {
     intervalOverrides: 'インターバルのオーバーライド',
     intervalOverridesDescription: '特定のプリンターの間隔をカスタマイズ',
     // Printer assignment
-    assignedToPrinters: '割り当て済みプリンター：',
-    noPrintersAssigned: 'プリンター未割り当て',
-    addPrinterShort: '追加:',
-    printersAssignedClick: '{{count}}台のプリンターを割り当て済み - クリックして管理',
     removeFromPrinter: 'このプリンターから削除',
     // Types
     types: {
@@ -1866,6 +1862,36 @@ export default {
     configureSettings: 'メンテナンスタイプと間隔を設定',
     notificationsOn: '通知オン',
     notificationsOff: '通知オフ',
+    // Manual versus automated maintenance, coverage and deleted types (#3127)
+    kind: {
+      automatic: '自動',
+      onRequest: 'リクエスト時に実行',
+      manual: '手動',
+    },
+    kindCounts: '自動 {{automatic}} 件、手動 {{manual}} 件',
+    filterKind: '種類で絞り込む',
+    filter: {
+      all: 'すべて',
+      automatic: '自動',
+      manual: '手動',
+    },
+    noItemsForFilter: 'この絞り込みに一致する項目はありません',
+    coverage: '{{total}} 台中 {{used}} 台のプリンターで有効',
+    printersButton: 'プリンター',
+    printersPanelTitle: 'このタイプを使用するプリンター',
+    noEligiblePrinters: 'このタイプを使用できるプリンターはありません',
+    action: 'アクション',
+    actionNone: 'なし（リマインダーのみ）',
+    actionCalibration: 'プリンターのキャリブレーション',
+    actionMotionPrecision: 'ビジョンエンコーダーのキャリブレーション',
+    actionHint: 'Bambuddy がこの作業を自動で実行します。後から変更できません。',
+    deletedTypes: '削除されたタイプ',
+    noDeletedTypes: '削除されたものはありません',
+    deletedAt: '{{date}} に削除',
+    deletedAtUnknown: '以前に削除',
+    deletedItemsTitle: '保持されているプリンター項目',
+    restoreType: '復元',
+    typeRestored: 'メンテナンスタイプを復元しました',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {

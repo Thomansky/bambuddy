@@ -1737,10 +1737,6 @@ export default {
     timeBasedInterval: '시간 기반 간격',
     intervalOverrides: '간격 재정의',
     intervalOverridesDescription: '특정 프린터의 간격 사용자 지정',
-    assignedToPrinters: '할당된 프린터:',
-    noPrintersAssigned: '할당된 프린터 없음',
-    addPrinterShort: '추가:',
-    printersAssignedClick: '{{count}}개 프린터 할당됨 - 클릭하여 관리',
     removeFromPrinter: '이 프린터에서 제거',
     types: {
       lubricateCarbonRods: '카본 로드 윤활',
@@ -1783,6 +1779,36 @@ export default {
     configureSettings: '유지보수 유형 및 간격 설정',
     notificationsOn: '알림 켜짐',
     notificationsOff: '알림 꺼짐',
+    // Manual versus automated maintenance, coverage and deleted types (#3127)
+    kind: {
+      automatic: '자동',
+      onRequest: '요청 시 실행',
+      manual: '수동',
+    },
+    kindCounts: '자동 {{automatic}}개, 수동 {{manual}}개',
+    filterKind: '종류로 필터링',
+    filter: {
+      all: '전체',
+      automatic: '자동',
+      manual: '수동',
+    },
+    noItemsForFilter: '이 필터와 일치하는 항목이 없습니다',
+    coverage: '프린터 {{total}}대 중 {{used}}대에서 사용',
+    printersButton: '프린터',
+    printersPanelTitle: '이 유형을 사용하는 프린터',
+    noEligiblePrinters: '이 유형을 사용할 수 있는 프린터가 없습니다',
+    action: '작업',
+    actionNone: '없음 (알림만)',
+    actionCalibration: '프린터 캘리브레이션',
+    actionMotionPrecision: '비전 인코더 캘리브레이션',
+    actionHint: 'Bambuddy가 이 작업을 직접 수행합니다. 나중에 변경할 수 없습니다.',
+    deletedTypes: '삭제된 유형',
+    noDeletedTypes: '삭제된 항목 없음',
+    deletedAt: '{{date}}에 삭제됨',
+    deletedAtUnknown: '이전에 삭제됨',
+    deletedItemsTitle: '보관된 프린터 항목',
+    restoreType: '복원',
+    typeRestored: '유지보수 유형이 복원되었습니다',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {

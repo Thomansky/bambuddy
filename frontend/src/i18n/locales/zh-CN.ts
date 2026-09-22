@@ -1816,10 +1816,6 @@ export default {
     intervalOverrides: '间隔覆盖',
     intervalOverridesDescription: '为特定打印机自定义间隔',
     // Printer assignment
-    assignedToPrinters: '已分配给打印机：',
-    noPrintersAssigned: '未分配打印机',
-    addPrinterShort: '添加：',
-    printersAssignedClick: '已分配 {{count}} 台打印机 - 点击管理',
     removeFromPrinter: '从此打印机移除',
     // Types
     types: {
@@ -1867,6 +1863,36 @@ export default {
     configureSettings: '配置维护类型和间隔',
     notificationsOn: '通知已开启',
     notificationsOff: '通知已关闭',
+    // Manual versus automated maintenance, coverage and deleted types (#3127)
+    kind: {
+      automatic: '自动',
+      onRequest: '按需运行',
+      manual: '手动',
+    },
+    kindCounts: '自动 {{automatic}} 项，手动 {{manual}} 项',
+    filterKind: '按类型筛选',
+    filter: {
+      all: '全部',
+      automatic: '自动',
+      manual: '手动',
+    },
+    noItemsForFilter: '没有符合此筛选条件的项目',
+    coverage: '已用于 {{total}} 台打印机中的 {{used}} 台',
+    printersButton: '打印机',
+    printersPanelTitle: '使用此类型的打印机',
+    noEligiblePrinters: '没有打印机可以使用此类型',
+    action: '操作',
+    actionNone: '无（仅提醒）',
+    actionCalibration: '打印机校准',
+    actionMotionPrecision: '视觉编码器校准',
+    actionHint: 'Bambuddy 会自行执行此任务。创建后无法更改。',
+    deletedTypes: '已删除的类型',
+    noDeletedTypes: '没有已删除的类型',
+    deletedAt: '于 {{date}} 删除',
+    deletedAtUnknown: '此前已删除',
+    deletedItemsTitle: '保留的打印机条目',
+    restoreType: '恢复',
+    typeRestored: '维护类型已恢复',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {

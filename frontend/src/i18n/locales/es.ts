@@ -1817,10 +1817,6 @@ export default {
     intervalOverrides: 'Anulaciones de intervalo',
     intervalOverridesDescription: 'Personalizar intervalos para impresoras concretas',
     // Printer assignment
-    assignedToPrinters: 'Asignado a las impresoras:',
-    noPrintersAssigned: 'No hay impresoras asignadas',
-    addPrinterShort: 'Añadir:',
-    printersAssignedClick: '{{count}} impresora(s) asignada(s) - haga clic para gestionar',
     removeFromPrinter: 'Quitar de esta impresora',
     // Types
     types: {
@@ -1868,6 +1864,36 @@ export default {
     configureSettings: 'Configurar tipos e intervalos de mantenimiento',
     notificationsOn: 'Notificaciones activadas',
     notificationsOff: 'Notificaciones desactivadas',
+    // Manual versus automated maintenance, coverage and deleted types (#3127)
+    kind: {
+      automatic: 'Automático',
+      onRequest: 'A petición',
+      manual: 'Manual',
+    },
+    kindCounts: '{{automatic}} automáticos, {{manual}} manuales',
+    filterKind: 'Filtrar por tipo',
+    filter: {
+      all: 'Todos',
+      automatic: 'Automáticos',
+      manual: 'Manuales',
+    },
+    noItemsForFilter: 'Ningún elemento coincide con este filtro',
+    coverage: 'en {{used}} de {{total}} impresoras',
+    printersButton: 'Impresoras',
+    printersPanelTitle: 'Impresoras que usan este tipo',
+    noEligiblePrinters: 'Ninguna impresora puede usar este tipo',
+    action: 'Acción',
+    actionNone: 'Ninguna (solo recordatorio)',
+    actionCalibration: 'Calibración de la impresora',
+    actionMotionPrecision: 'Calibración del codificador de visión',
+    actionHint: 'Bambuddy realiza esta tarea por sí mismo. No se puede cambiar después.',
+    deletedTypes: 'Tipos eliminados',
+    noDeletedTypes: 'Nada eliminado',
+    deletedAt: 'Eliminado el {{date}}',
+    deletedAtUnknown: 'Eliminado anteriormente',
+    deletedItemsTitle: 'Elementos de impresora conservados',
+    restoreType: 'Restaurar',
+    typeRestored: 'Tipo de mantenimiento restaurado',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
