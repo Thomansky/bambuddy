@@ -588,4 +588,66 @@ describe('EditArchiveModal', () => {
       expect(Number(field.value)).toBeGreaterThanOrEqual(0);
     });
   });
+
+  // Post-print outcome confirmation (#1898)
+  describe('outcome verdict source', () => {
+    const completed = {
+      ...mockArchive,
+      status: 'completed',
+      user_verdict: 'good',
+      confirm_requested: true,
+    };
+
+    it('explains a verdict the plate-clear default recorded', () => {
+      render(
+        <EditArchiveModal
+          archive={{ ...completed, user_verdict_source: 'plate_clear' }}
+          onClose={mockOnClose}
+          onSave={mockOnSave}
+        />,
+      );
+
+      expect(screen.getByTestId('verdict-source-hint')).toHaveTextContent(
+        'Recorded when the plate was cleared.',
+      );
+    });
+
+    it('shows no hint for a verdict with no recorded source', () => {
+      render(
+        <EditArchiveModal
+          archive={{ ...completed, user_verdict_source: null }}
+          onClose={mockOnClose}
+          onSave={mockOnSave}
+        />,
+      );
+
+      expect(screen.queryByTestId('verdict-source-hint')).not.toBeInTheDocument();
+    });
+
+    it('stamps the dialog as the source when the verdict is changed here', async () => {
+      const user = userEvent.setup();
+      let seen: Record<string, unknown> | null = null;
+      server.use(
+        http.patch('/api/v1/archives/:id', async ({ request }) => {
+          seen = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json({ ...completed, ...seen });
+        }),
+      );
+
+      render(
+        <EditArchiveModal
+          archive={{ ...completed, user_verdict_source: 'plate_clear' }}
+          onClose={mockOnClose}
+          onSave={mockOnSave}
+        />,
+      );
+
+      await user.selectOptions(screen.getByLabelText(/outcome verdict/i), 'reject');
+      await user.click(screen.getByRole('button', { name: /save/i }));
+
+      await waitFor(() => expect(seen).not.toBeNull());
+      expect(seen!.user_verdict).toBe('reject');
+      expect(seen!.user_verdict_source).toBe('dialog');
+    });
+  });
 });

@@ -48,6 +48,7 @@ const baseArchive = {
   photos: ['finish_1.jpg'],
   failure_reason: null,
   user_verdict: null,
+  user_verdict_source: null,
   confirm_requested: true,
   quantity: 1,
   energy_kwh: null,
@@ -91,7 +92,7 @@ describe('ConfirmOutcomeDialog', () => {
     await user.click(screen.getByText('Good'));
 
     await waitFor(() => {
-      expect(patchPayload).toEqual({ user_verdict: 'good' });
+      expect(patchPayload).toEqual({ user_verdict: 'good', user_verdict_source: 'dialog' });
     });
     await waitFor(() => {
       expect(onClose).toHaveBeenCalled();
@@ -114,7 +115,11 @@ describe('ConfirmOutcomeDialog', () => {
     await user.click(screen.getByText('Save'));
 
     await waitFor(() => {
-      expect(patchPayload).toEqual({ user_verdict: 'reject', failure_reason: 'warping' });
+      expect(patchPayload).toEqual({
+        user_verdict: 'reject',
+        failure_reason: 'warping',
+        user_verdict_source: 'dialog',
+      });
     });
     await waitFor(() => {
       expect(onClose).toHaveBeenCalled();
@@ -133,7 +138,7 @@ describe('ConfirmOutcomeDialog', () => {
     await user.click(await screen.findByText('Print again'));
 
     await waitFor(() => {
-      expect(patchPayload).toEqual({ user_verdict: 'reject' });
+      expect(patchPayload).toEqual({ user_verdict: 'reject', user_verdict_source: 'dialog' });
     });
     await waitFor(() => {
       expect(screen.getByTestId('print-modal')).toBeInTheDocument();
@@ -152,5 +157,23 @@ describe('ConfirmOutcomeDialog', () => {
       expect(screen.getByText('Already marked as rejected.')).toBeInTheDocument();
     });
     expect(screen.queryByText('Good')).not.toBeInTheDocument();
+    // No source on file (an archive answered before #1898 recorded it): no hint.
+    expect(screen.queryByTestId('verdict-source-hint')).not.toBeInTheDocument();
+  });
+
+  it('explains a verdict the plate-clear default recorded', async () => {
+    server.use(
+      http.get('/api/v1/archives/42', () =>
+        HttpResponse.json({ ...baseArchive, user_verdict: 'good', user_verdict_source: 'plate_clear' })
+      ),
+    );
+    render(<ConfirmOutcomeDialog archiveId={42} onClose={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Already confirmed as a good part.')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('verdict-source-hint')).toHaveTextContent(
+      'Recorded when the plate was cleared.'
+    );
   });
 });

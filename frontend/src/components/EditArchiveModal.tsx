@@ -8,6 +8,7 @@ import { Button } from './Button';
 import { PrintLogTable } from './PrintLogTable';
 import { invalidateArchiveAndProjectViews } from '../utils/projectQueries';
 import { assignableProjects } from '../utils/projectTree';
+import { verdictSourceKey } from '../utils/verdictSource';
 
 // Keys for failure reasons - translated at render time.
 // Exported so the Print Log per-row classification editor (#1687 part 4)
@@ -91,6 +92,7 @@ export function EditArchiveModal({ archive, onClose, existingTags = [] }: EditAr
   const [status, setStatus] = useState(archive.status);
   // Post-print quality verdict (#1898): '' = none, 'good' / 'reject'
   const [userVerdict, setUserVerdict] = useState<string>(archive.user_verdict ?? '');
+  const verdictSourceHintKey = verdictSourceKey(archive.user_verdict_source);
   const [quantity, setQuantity] = useState(archive.quantity ?? 1);
   // Kept as a string so the field can be genuinely empty: a print archived
   // without its 3MF has no figure at all, and "" has to stay distinguishable
@@ -251,6 +253,7 @@ export function EditArchiveModal({ archive, onClose, existingTags = [] }: EditAr
     // Verdict only when touched, same reasoning as status; '' clears it.
     if (userVerdict !== (archive.user_verdict ?? '')) {
       updateData.user_verdict = userVerdict === '' ? null : (userVerdict as 'good' | 'reject');
+      updateData.user_verdict_source = 'dialog';
     }
 
     // Sent only when the user actually touched it, so an ordinary save of an
@@ -555,6 +558,14 @@ export function EditArchiveModal({ archive, onClose, existingTags = [] }: EditAr
                 <option value="good">{t('editArchive.verdicts.good')}</option>
                 <option value="reject">{t('editArchive.verdicts.reject')}</option>
               </select>
+              {/* How the stored verdict got here (#1898) — hidden once the
+                  select no longer shows that verdict, since the hint would
+                  then describe an answer the user is replacing. */}
+              {verdictSourceHintKey && userVerdict === (archive.user_verdict ?? '') && (
+                <p className="text-xs text-bambu-gray/70 mt-1" data-testid="verdict-source-hint">
+                  {t(verdictSourceHintKey)}
+                </p>
+              )}
             </div>
           )}
 

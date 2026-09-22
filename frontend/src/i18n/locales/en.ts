@@ -2356,7 +2356,7 @@ export default {
     confirmOutcomeExternalPrints: 'Also ask for prints started outside Bambuddy',
     confirmOutcomeExternalPrintsDesc: 'Prints started at the printer, in Bambu Studio or in the Handy app are archived by Bambuddy too. With this on, they get the same outcome prompt as queued prints.',
     confirmDefaultGoodOnPlateClear: 'Count unanswered outcomes as good on plate release',
-    confirmDefaultGoodOnPlateClearDescription: 'When the plate is released (manually or by the next queued print) and the print\'s outcome prompt is still unanswered, record it as a good part automatically.',
+    confirmDefaultGoodOnPlateClearDescription: 'When the plate is released (manually or by the next queued print) and the print\'s outcome prompt is still unanswered, record it as a good part automatically. The print then counts as good as soon as the plate is released; a Telegram or link answer after that only shows the recorded result.',
     defaultNozzleOffsetCali: 'Nozzle Offset Calibration',
     defaultNozzleOffsetCaliDesc: 'Calibrate nozzle offsets between extruders',
     tempFanPresetsTitle: 'Temperature & Fan Presets',
@@ -5488,6 +5488,14 @@ export default {
     alreadyGood: 'Already confirmed as a good part.',
     alreadyRejected: 'Already marked as rejected.',
     cardPrompt: 'How did it come out?',
+    sources: {
+      dialog: 'Recorded in the app.',
+      link: 'Recorded with a one-tap link.',
+      plateClear: 'Recorded when the plate was cleared.',
+      printerCard: 'Recorded from the printer card.',
+      api: 'Recorded through the API.',
+      reaction: 'Recorded with a reaction in chat.',
+    },
   },
   // Edit archive modal
   // Edit Archive Modal

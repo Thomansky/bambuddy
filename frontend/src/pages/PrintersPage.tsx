@@ -2888,7 +2888,10 @@ function PrinterCard({
   const [showConfirmOutcome, setShowConfirmOutcome] = useState(false);
   const cardVerdictMutation = useMutation({
     mutationFn: (verdict: 'good' | 'reject') =>
-      api.updateArchive(pendingConfirmArchive!.id, { user_verdict: verdict }),
+      api.updateArchive(pendingConfirmArchive!.id, {
+        user_verdict: verdict,
+        user_verdict_source: 'printer_card',
+      }),
     onSuccess: () => {
       showToast(t('confirmOutcome.savedGood'), 'success');
       queryClient.invalidateQueries({ queryKey: ['archives'] });

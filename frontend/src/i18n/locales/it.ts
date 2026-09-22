@@ -2292,7 +2292,7 @@ export default {
     confirmOutcomeExternalPrints: 'Chiedi anche per le stampe avviate fuori da Bambuddy',
     confirmOutcomeExternalPrintsDesc: 'Le stampe avviate sulla stampante, in Bambu Studio o nell\'app Handy vengono archiviate anche da Bambuddy. Con questa opzione ricevono la stessa richiesta di esito dei lavori in coda.',
     confirmDefaultGoodOnPlateClear: 'Conta gli esiti senza risposta come buoni alla liberazione del piatto',
-    confirmDefaultGoodOnPlateClearDescription: 'Quando il piatto viene liberato (manualmente o dalla stampa successiva in coda) e la richiesta di esito della stampa è ancora senza risposta, registra automaticamente il pezzo come buono.',
+    confirmDefaultGoodOnPlateClearDescription: 'Quando il piatto viene liberato (manualmente o dalla stampa successiva in coda) e la richiesta di esito della stampa è ancora senza risposta, registra automaticamente il pezzo come buono. La stampa vale come buona non appena il piatto viene liberato; una risposta successiva via Telegram o tramite link mostra solo il risultato registrato.',
     defaultNozzleOffsetCali: 'Calibrazione offset ugelli',
     defaultNozzleOffsetCaliDesc: 'Calibra gli offset tra gli ugelli',
     tempFanPresetsTitle: 'Preset di temperatura e ventola',
@@ -5425,6 +5425,14 @@ export default {
     alreadyGood: 'Già confermata come pezzo buono.',
     alreadyRejected: 'Già contrassegnata come scartata.',
     cardPrompt: 'Com\'è venuta?',
+    sources: {
+      dialog: 'Registrato in Bambuddy.',
+      link: 'Registrato con un link rapido.',
+      plateClear: 'Registrato alla liberazione del piatto.',
+      printerCard: 'Registrato dalla scheda stampante.',
+      api: 'Registrato tramite API.',
+      reaction: 'Registrato con una reazione in chat.',
+    },
   },
 
   // Edit archive modal

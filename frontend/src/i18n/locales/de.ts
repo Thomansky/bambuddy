@@ -2336,7 +2336,7 @@ export default {
     confirmOutcomeExternalPrints: 'Auch bei Drucken fragen, die nicht über Bambuddy gestartet wurden',
     confirmOutcomeExternalPrintsDesc: 'Drucke, die am Drucker, in Bambu Studio oder in der Handy-App gestartet wurden, landen ebenfalls im Archiv. Mit dieser Option bekommen sie dieselbe Ergebnisabfrage wie Aufträge aus der Warteschlange.',
     confirmDefaultGoodOnPlateClear: 'Unbeantwortete Ergebnisse bei Druckplatten-Freigabe als gut zählen',
-    confirmDefaultGoodOnPlateClearDescription: 'Wenn die Druckplatte freigegeben wird (manuell oder durch den nächsten geplanten Druck) und die Ergebnisabfrage des Drucks noch unbeantwortet ist, wird er automatisch als Gutteil erfasst.',
+    confirmDefaultGoodOnPlateClearDescription: 'Wenn die Druckplatte freigegeben wird (manuell oder durch den nächsten geplanten Druck) und die Ergebnisabfrage des Drucks noch unbeantwortet ist, wird er automatisch als Gutteil erfasst. Der Druck gilt dann als gut, sobald die Druckplatte freigegeben wird; eine Telegram- oder Link-Antwort danach zeigt nur noch das gespeicherte Ergebnis.',
     defaultNozzleOffsetCali: 'Düsenversatz-Kalibrierung',
     defaultNozzleOffsetCaliDesc: 'Düsenversatz zwischen Extrudern kalibrieren',
     tempFanPresetsTitle: 'Temperatur- und Lüfter-Vorgaben',
@@ -5437,6 +5437,14 @@ export default {
     alreadyGood: 'Bereits als Gutteil bestätigt.',
     alreadyRejected: 'Bereits als Ausschuss markiert.',
     cardPrompt: 'Wie ist der Druck geworden?',
+    sources: {
+      dialog: 'In der App erfasst.',
+      link: 'Über einen Ein-Tipp-Link erfasst.',
+      plateClear: 'Bei der Freigabe der Druckplatte erfasst.',
+      printerCard: 'Über die Druckerkarte erfasst.',
+      api: 'Über die API erfasst.',
+      reaction: 'Über eine Reaktion im Chat erfasst.',
+    },
   },
 
   // Edit archive modal

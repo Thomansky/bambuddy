@@ -2216,7 +2216,7 @@ export default {
     confirmOutcomeExternalPrints: 'Bambuddy 외부에서 시작한 인쇄도 확인',
     confirmOutcomeExternalPrintsDesc: '프린터, Bambu Studio 또는 Handy 앱에서 시작한 인쇄도 Bambuddy에 보관됩니다. 이 옵션을 켜면 대기열 인쇄와 동일한 결과 확인을 받습니다.',
     confirmDefaultGoodOnPlateClear: '플레이트 비움 시 미응답 결과를 양품으로 기록',
-    confirmDefaultGoodOnPlateClearDescription: '플레이트 비움이 확인될 때(수동 또는 다음 대기열 인쇄에 의해) 해당 인쇄의 결과 확인이 아직 응답되지 않았다면 자동으로 양품으로 기록합니다.',
+    confirmDefaultGoodOnPlateClearDescription: '플레이트 비움이 확인될 때(수동 또는 다음 대기열 인쇄에 의해) 해당 인쇄의 결과 확인이 아직 응답되지 않았다면 자동으로 양품으로 기록합니다. 플레이트를 비우는 순간 해당 인쇄는 양품으로 처리되며, 그 뒤에 텔레그램이나 링크로 답해도 이미 기록된 결과만 표시됩니다.',
     defaultNozzleOffsetCali: '노즐 오프셋 보정',
     defaultNozzleOffsetCaliDesc: '익스트루더 간 노즐 오프셋 보정',
     tempFanPresetsTitle: '온도 및 팬 프리셋',
@@ -5188,6 +5188,14 @@ export default {
     alreadyGood: '이미 양품으로 확인되었습니다.',
     alreadyRejected: '이미 불량으로 표시되었습니다.',
     cardPrompt: '결과가 어땠나요?',
+    sources: {
+      dialog: '앱에서 기록되었습니다.',
+      link: '원탭 링크로 기록되었습니다.',
+      plateClear: '플레이트를 비울 때 기록되었습니다.',
+      printerCard: '프린터 카드에서 기록되었습니다.',
+      api: 'API를 통해 기록되었습니다.',
+      reaction: '채팅 반응으로 기록되었습니다.',
+    },
   },
   editArchive: {
     title: '아카이브 편집',

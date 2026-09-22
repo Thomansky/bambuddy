@@ -2337,7 +2337,7 @@ export default {
     confirmOutcomeExternalPrints: '也询问非 Bambuddy 启动的打印',
     confirmOutcomeExternalPrintsDesc: '在打印机、Bambu Studio 或 Handy 应用中启动的打印同样会被 Bambuddy 归档。开启后，它们会收到与队列打印相同的成品确认。',
     confirmDefaultGoodOnPlateClear: '打印板清空时将未回答的结果计为良品',
-    confirmDefaultGoodOnPlateClearDescription: '当打印板被清空（手动或由下一个排队打印触发）而该打印的结果询问仍未回答时，自动将其记录为良品。',
+    confirmDefaultGoodOnPlateClearDescription: '当打印板被清空（手动或由下一个排队打印触发）而该打印的结果询问仍未回答时，自动将其记录为良品。打印板被清空后，该打印即算作良品；此后通过 Telegram 或链接作答只会显示已记录的结果。',
     defaultNozzleOffsetCali: '喷嘴偏移校准',
     defaultNozzleOffsetCaliDesc: '校准两个挤出机之间的喷嘴偏移',
     tempFanPresetsTitle: '温度与风扇预设',
@@ -5425,6 +5425,14 @@ export default {
     alreadyGood: '已确认为良品。',
     alreadyRejected: '已标记为报废。',
     cardPrompt: '打印效果如何？',
+    sources: {
+      dialog: '在应用中记录。',
+      link: '通过一键链接记录。',
+      plateClear: '在清空打印板时记录。',
+      printerCard: '从打印机卡片记录。',
+      api: '通过 API 记录。',
+      reaction: '通过聊天中的表情回应记录。',
+    },
   },
 
   // Edit archive modal

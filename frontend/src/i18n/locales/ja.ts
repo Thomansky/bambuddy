@@ -2335,7 +2335,7 @@ export default {
     confirmOutcomeExternalPrints: 'Bambuddy 以外で開始した印刷にも確認する',
     confirmOutcomeExternalPrintsDesc: 'プリンター本体、Bambu Studio、Handy アプリから開始した印刷も Bambuddy がアーカイブします。この設定をオンにすると、キューの印刷と同じ結果確認が届きます。',
     confirmDefaultGoodOnPlateClear: 'プレートクリア時に未回答の結果を良品として記録',
-    confirmDefaultGoodOnPlateClearDescription: 'プレートがクリアされた際（手動またはキューの次の印刷による）、その印刷の結果確認が未回答の場合、自動的に良品として記録します。',
+    confirmDefaultGoodOnPlateClearDescription: 'プレートがクリアされた際（手動またはキューの次の印刷による）、その印刷の結果確認が未回答の場合、自動的に良品として記録します。プレートがクリアされた時点でその印刷は良品として扱われ、その後に Telegram やリンクから回答しても、記録済みの結果が表示されるだけです。',
     defaultNozzleOffsetCali: 'ノズルオフセットキャリブレーション',
     defaultNozzleOffsetCaliDesc: 'エクストルーダー間のノズルオフセットを校正',
     tempFanPresetsTitle: '温度・ファンプリセット',
@@ -5437,6 +5437,14 @@ export default {
     alreadyGood: 'すでに良品として確認済みです。',
     alreadyRejected: 'すでに不良として記録済みです。',
     cardPrompt: '仕上がりはどうでしたか？',
+    sources: {
+      dialog: 'アプリで記録されました。',
+      link: 'ワンタップリンクで記録されました。',
+      plateClear: 'プレートのクリア時に記録されました。',
+      printerCard: 'プリンターカードから記録されました。',
+      api: 'API 経由で記録されました。',
+      reaction: 'チャットのリアクションで記録されました。',
+    },
   },
 
   // Edit archive modal
