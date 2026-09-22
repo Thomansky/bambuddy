@@ -1721,6 +1721,73 @@ describe('SettingsPage', () => {
       });
     });
   });
+
+  // --------------------------------------------------------------------
+  // Ask for the outcome of prints Bambuddy did not start (#1898)
+  // --------------------------------------------------------------------
+  describe('outcome prompt for external prints (#1898)', () => {
+    const externalLabel = 'Also ask for prints started outside Bambuddy';
+
+    const openDefaultPrintOptions = async () => {
+      render(<SettingsPage />);
+      const user = userEvent.setup();
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Workflow' })).toBeInTheDocument());
+      await user.click(screen.getByRole('button', { name: 'Workflow' }));
+      return user;
+    };
+
+    it('offers the toggle alongside the per-job outcome default', async () => {
+      await openDefaultPrintOptions();
+
+      expect(await screen.findByText(externalLabel)).toBeInTheDocument();
+      expect(screen.getByText('Ask for Outcome')).toBeInTheDocument();
+    });
+
+    it('shows it off when the backend has no value for it', async () => {
+      // Default false: an install that never touches it keeps today's
+      // behaviour, where only queued prints are asked about.
+      await openDefaultPrintOptions();
+
+      const label = await screen.findByText(externalLabel);
+      const row = label.closest('div')!.parentElement!;
+      expect(within(row).getByRole('checkbox')).not.toBeChecked();
+    });
+
+    it('sends the new value on save', async () => {
+      let saved: Record<string, unknown> | null = null;
+      server.use(
+        http.put('/api/v1/settings/', async ({ request }) => {
+          saved = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json({ ...mockSettings, ...saved });
+        })
+      );
+      const user = await openDefaultPrintOptions();
+
+      const label = await screen.findByText(externalLabel);
+      // The page suppresses auto-save for 100ms after the settings load.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const row = label.closest('div')!.parentElement!;
+      await user.click(within(row).getByRole('checkbox'));
+
+      await waitFor(() => {
+        expect(saved).not.toBeNull();
+      }, { timeout: 3000 });
+      expect(saved!.confirm_outcome_external_prints).toBe(true);
+    });
+
+    it('reflects a value the backend already has', async () => {
+      server.use(
+        http.get('/api/v1/settings/', () =>
+          HttpResponse.json({ ...mockSettings, confirm_outcome_external_prints: true })
+        )
+      );
+      await openDefaultPrintOptions();
+
+      const label = await screen.findByText(externalLabel);
+      const row = label.closest('div')!.parentElement!;
+      expect(within(row).getByRole('checkbox')).toBeChecked();
+    });
+  });
 });
 
 /**

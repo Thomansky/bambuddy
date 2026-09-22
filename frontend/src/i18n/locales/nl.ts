@@ -2478,6 +2478,8 @@ export default {
     defaultTimelapseDesc: 'Timelapsevideo opnemen',
     defaultConfirmOutcome: 'Vragen om resultaat',
     defaultConfirmOutcomeDesc: 'Vragen of de afdruk goed is gelukt nadat deze is voltooid',
+    confirmOutcomeExternalPrints: 'Ook vragen bij prints die buiten Bambuddy zijn gestart',
+    confirmOutcomeExternalPrintsDesc: 'Prints die op de printer, in Bambu Studio of in de Handy-app zijn gestart, worden ook door Bambuddy gearchiveerd. Met deze optie krijgen ze dezelfde resultaatvraag als prints uit de wachtrij.',
     confirmDefaultGoodOnPlateClear: 'Onbeantwoorde resultaten als goed tellen bij plaatvrijgave',
     confirmDefaultGoodOnPlateClearDescription: 'Wanneer de plaat wordt vrijgegeven (handmatig of door de volgende afdruk in de wachtrij) en de resultaatvraag van de afdruk nog onbeantwoord is, wordt deze automatisch als goed onderdeel geregistreerd.',
     defaultNozzleOffsetCali: 'Nozzle-offsetkalibratie',

@@ -2458,6 +2458,8 @@ export default {
     defaultTimelapseDesc: 'Zeitraffervideo aufnehmen',
     defaultConfirmOutcome: 'Nach Ergebnis fragen',
     defaultConfirmOutcomeDesc: 'Nach Abschluss fragen, ob der Druck gut geworden ist',
+    confirmOutcomeExternalPrints: 'Auch bei Drucken fragen, die nicht über Bambuddy gestartet wurden',
+    confirmOutcomeExternalPrintsDesc: 'Drucke, die am Drucker, in Bambu Studio oder in der Handy-App gestartet wurden, landen ebenfalls im Archiv. Mit dieser Option bekommen sie dieselbe Ergebnisabfrage wie Aufträge aus der Warteschlange.',
     confirmDefaultGoodOnPlateClear: 'Unbeantwortete Ergebnisse bei Druckplatten-Freigabe als gut zählen',
     confirmDefaultGoodOnPlateClearDescription: 'Wenn die Druckplatte freigegeben wird (manuell oder durch den nächsten geplanten Druck) und die Ergebnisabfrage des Drucks noch unbeantwortet ist, wird er automatisch als Gutteil erfasst.',
     defaultNozzleOffsetCali: 'Düsenversatz-Kalibrierung',

@@ -1205,6 +1205,7 @@ export function SettingsPage() {
       (baseline.default_timelapse ?? false) !== (localSettings.default_timelapse ?? false) ||
       (baseline.default_nozzle_offset_cali ?? 'auto') !== (localSettings.default_nozzle_offset_cali ?? 'auto') ||
       (baseline.default_confirm_outcome ?? false) !== (localSettings.default_confirm_outcome ?? false) ||
+      (baseline.confirm_outcome_external_prints ?? false) !== (localSettings.confirm_outcome_external_prints ?? false) ||
       (baseline.confirm_default_good_on_plate_clear ?? false) !== (localSettings.confirm_default_good_on_plate_clear ?? false) ||
       (baseline.stagger_group_size ?? 2) !== (localSettings.stagger_group_size ?? 2) ||
       (baseline.stagger_interval_minutes ?? 5) !== (localSettings.stagger_interval_minutes ?? 5) ||
@@ -1323,6 +1324,7 @@ export function SettingsPage() {
         default_timelapse: localSettings.default_timelapse,
         default_nozzle_offset_cali: localSettings.default_nozzle_offset_cali,
         default_confirm_outcome: localSettings.default_confirm_outcome,
+        confirm_outcome_external_prints: localSettings.confirm_outcome_external_prints,
         confirm_default_good_on_plate_clear: localSettings.confirm_default_good_on_plate_clear,
         stagger_group_size: localSettings.stagger_group_size,
         stagger_interval_minutes: localSettings.stagger_interval_minutes,
@@ -5042,6 +5044,27 @@ export function SettingsPage() {
                   )}
                 </div>
               ))}
+              {/* Prints Bambuddy only archived, never dispatched, carry no
+                  queue item to read the ask-for-outcome flag from (#1898). */}
+              <div className="flex items-center justify-between">
+                <div className="flex-1 mr-4">
+                  <p className="text-sm text-white">
+                    {t('settings.confirmOutcomeExternalPrints', 'Also ask for prints started outside Bambuddy')}
+                  </p>
+                  <p className="text-xs text-bambu-gray mt-0.5">
+                    {t('settings.confirmOutcomeExternalPrintsDesc', 'Prints started at the printer, in Bambu Studio or in the Handy app are archived by Bambuddy too. With this on, they get the same outcome prompt as queued prints.')}
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={localSettings.confirm_outcome_external_prints ?? false}
+                    onChange={(e) => updateSetting('confirm_outcome_external_prints', e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-bambu-dark-tertiary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-bambu-green"></div>
+                </label>
+              </div>
             </CardContent>
           </Card>
 

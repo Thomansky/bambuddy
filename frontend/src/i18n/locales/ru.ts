@@ -2336,6 +2336,8 @@ export default {
     defaultTimelapseDesc: "Записывать таймлапс",
     defaultConfirmOutcome: "Запрашивать результат",
     defaultConfirmOutcomeDesc: "Спрашивать после завершения печати, удалась ли она",
+    confirmOutcomeExternalPrints: "Спрашивать и о печати, запущенной вне Bambuddy",
+    confirmOutcomeExternalPrintsDesc: "Печать, запущенная на принтере, в Bambu Studio или в приложении Handy, тоже попадает в архив Bambuddy. С этой опцией по ней задаётся тот же вопрос о результате, что и по заданиям из очереди.",
     confirmDefaultGoodOnPlateClear: "Считать неотвеченные результаты годными при очистке пластины",
     confirmDefaultGoodOnPlateClearDescription: "Если пластина очищена (вручную или следующей печатью из очереди), а запрос результата печати остался без ответа, автоматически записывать её как годную деталь.",
     defaultNozzleOffsetCali: "Калибровка смещения сопел",

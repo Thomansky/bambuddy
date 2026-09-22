@@ -2457,6 +2457,8 @@ export default {
     defaultTimelapseDesc: '录制延时摄影视频',
     defaultConfirmOutcome: '询问成品结果',
     defaultConfirmOutcomeDesc: '打印完成后询问成品是否良好',
+    confirmOutcomeExternalPrints: '也询问非 Bambuddy 启动的打印',
+    confirmOutcomeExternalPrintsDesc: '在打印机、Bambu Studio 或 Handy 应用中启动的打印同样会被 Bambuddy 归档。开启后，它们会收到与队列打印相同的成品确认。',
     confirmDefaultGoodOnPlateClear: '打印板清空时将未回答的结果计为良品',
     confirmDefaultGoodOnPlateClearDescription: '当打印板被清空（手动或由下一个排队打印触发）而该打印的结果询问仍未回答时，自动将其记录为良品。',
     defaultNozzleOffsetCali: '喷嘴偏移校准',

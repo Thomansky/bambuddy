@@ -2460,6 +2460,8 @@ export default {
     defaultTimelapseDesc: 'Zaman atlamalı video kaydet',
     defaultConfirmOutcome: 'Sonucu Sor',
     defaultConfirmOutcomeDesc: 'Baskı tamamlandıktan sonra iyi çıkıp çıkmadığını sor',
+    confirmOutcomeExternalPrints: 'Bambuddy dışında başlatılan baskılar için de sor',
+    confirmOutcomeExternalPrintsDesc: 'Yazıcıda, Bambu Studio\'da veya Handy uygulamasında başlatılan baskılar da Bambuddy tarafından arşivlenir. Bu seçenek açıkken, kuyruktaki baskılarla aynı sonuç sorusunu alırlar.',
     confirmDefaultGoodOnPlateClear: 'Plaka temizlendiğinde yanıtsız sonuçları iyi olarak say',
     confirmDefaultGoodOnPlateClearDescription: 'Plaka temizlendi olarak onaylandığında (elle veya kuyruktaki bir sonraki baskıyla) ve baskının sonuç sorusu hâlâ yanıtsızsa, otomatik olarak iyi parça olarak kaydet.',
     defaultNozzleOffsetCali: 'Nozül Ofset Kalibrasyonu',
