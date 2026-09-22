@@ -3355,7 +3355,7 @@ def _schedule_fallback_3mf_retry(
     )
 
 
-async def _ask_outcome_for_external_print(db, printer_id: int) -> bool:
+async def _ask_outcome_for_external_print(db, printer_id: int, observed_name: str | None = None) -> bool:
     """Whether an archive created here should ask for the print's outcome (#1898).
 
     Only a print Bambuddy did not dispatch reaches the archive-*creating*
@@ -3366,7 +3366,17 @@ async def _ask_outcome_for_external_print(db, printer_id: int) -> bool:
     item that deliberately has the flag off. Any failure answers "don't ask":
     an unwanted prompt is worse than a missing one, and this must never be the
     reason a print goes unarchived.
+
+    A ``printing`` row is not proof on its own, though: Bambuddy deliberately
+    leaves one behind when a completion cannot be matched to it
+    (``_completion_belongs_to_queue_item``), and the scheduler's stranded sweep
+    only takes it back once the printer has sat connected and terminal for
+    minutes. Until then every screen-started print on that printer would
+    silently lose its prompt, so the row is held against ``observed_name`` by
+    the same comparison a completion uses: a positive disagreement means the row
+    is about some other run and this print is external after all.
     """
+    logger = logging.getLogger(__name__)
     try:
         from backend.app.api.routes.settings import get_setting, setting_is_true
 
@@ -3376,19 +3386,121 @@ async def _ask_outcome_for_external_print(db, printer_id: int) -> bool:
         from backend.app.models.print_queue import PrintQueueItem
 
         dispatched_here = await db.scalar(
-            select(PrintQueueItem.id)
+            select(PrintQueueItem)
             .where(
                 PrintQueueItem.printer_id == printer_id,
                 PrintQueueItem.status == "printing",
             )
             .limit(1)
         )
-        return dispatched_here is None
-    except Exception as e:
-        logging.getLogger(__name__).warning(
-            "[CALLBACK] Could not decide the outcome prompt for printer %s: %s", printer_id, e
+        if dispatched_here is None:
+            return True
+
+        expected = await _queue_item_dispatched_name(db, dispatched_here)
+        observed = (observed_name or "").strip()
+        if not expected or not observed or _subtask_names_match(expected, observed):
+            logger.info(
+                "[CALLBACK] Not asking for the outcome on printer %s: queue item %s is still printing, so "
+                "Bambuddy dispatched this run and the item's own ask-for-outcome flag decides.",
+                printer_id,
+                dispatched_here.id,
+            )
+            return False
+
+        logger.info(
+            "[CALLBACK] Queue item %s is still marked printing on printer %s but was dispatched as %r, not "
+            "%r; treating this as an externally started print.",
+            dispatched_here.id,
+            printer_id,
+            expected,
+            observed,
         )
+        return True
+    except Exception as e:
+        logger.warning("[CALLBACK] Could not decide the outcome prompt for printer %s: %s", printer_id, e)
+        # A failed statement deactivates the transaction, so without this the
+        # caller's own add()/commit() would raise PendingRollbackError and the
+        # print would go unarchived over a question that answers "no".
+        try:
+            await db.rollback()
+        except Exception:
+            pass
         return False
+
+
+async def dispatch_outcome_confirmation(
+    db,
+    printer_id: int,
+    printer_name: str,
+    data: dict,
+    archive_id: int,
+    archive_data: dict | None = None,
+) -> bool:
+    """Emit the post-print outcome prompt for a completed archive (#1898).
+
+    Gated on the archive itself: ``confirm_requested`` is the opt-in (from the
+    queue item, or from ``confirm_outcome_external_prints`` for a print
+    Bambuddy did not start) and ``user_verdict`` being unset is what makes the
+    question still open. Mints the per-archive capability token the one-tap
+    verdict links carry.
+
+    Lives here rather than inline in ``on_print_complete``'s notification task
+    because that task swallows every exception: extracted, the gate and the two
+    emissions can be driven by a test, which is the only thing standing between
+    a regression here and a farm that quietly stops asking.
+
+    Returns whether a prompt was sent.
+    """
+    logger = logging.getLogger(__name__)
+    from backend.app.models.archive import PrintArchive
+
+    confirm_archive = (await db.execute(select(PrintArchive).where(PrintArchive.id == archive_id))).scalar_one_or_none()
+    if not (confirm_archive and confirm_archive.confirm_requested and confirm_archive.user_verdict is None):
+        return False
+
+    import secrets as _secrets
+
+    if not confirm_archive.confirm_token:
+        confirm_archive.confirm_token = _secrets.token_urlsafe(32)
+        await db.commit()
+
+    from backend.app.api.routes.settings import get_external_base_url, get_setting
+
+    base = await get_external_base_url(db)
+    if not await get_setting(db, "external_url"):
+        # Both the Telegram inline keyboard and the ntfy action buttons need an
+        # absolute URL, so an unconfigured install used to get a message body
+        # with two unusable relative paths and no buttons at all. The shared
+        # fallback at least produces tappable links; say which setting makes
+        # them resolve from a phone.
+        logger.warning(
+            "[#1898] No external_url configured — the outcome prompt's Good/Reject links point at %s. "
+            "Set Settings → External URL so they resolve away from this host.",
+            base,
+        )
+    token = confirm_archive.confirm_token
+    good_url = f"{base}/api/v1/archives/confirm/{token}/good"
+    reject_url = f"{base}/api/v1/archives/confirm/{token}/reject"
+    confirm_url = f"{base}/archives?confirm={archive_id}"
+
+    await ws_manager.send_print_confirm_request(
+        printer_id,
+        {
+            "archive_id": archive_id,
+            "print_name": confirm_archive.print_name or confirm_archive.filename,
+        },
+    )
+    await notification_service.on_print_confirm_request(
+        printer_id,
+        printer_name,
+        data,
+        db,
+        archive_data=archive_data,
+        good_url=good_url,
+        reject_url=reject_url,
+        confirm_url=confirm_url,
+    )
+    return True
 
 
 async def on_print_start(printer_id: int, data: dict):
@@ -3714,6 +3826,15 @@ async def on_print_start(printer_id: int, data: dict):
                 # Update archive status to printing
                 archive.status = "printing"
                 archive.started_at = datetime.now(timezone.utc)
+
+                # The previous run's answer is still on this row and the
+                # completion prompt is gated on ``user_verdict is None`` (#1898),
+                # so without a reset the second run inherits the first run's
+                # verdict: no prompt at all, and a green "good" badge on a run
+                # nobody ever judged.
+                if archive.confirm_requested:
+                    archive.user_verdict = None
+                    archive.confirm_token = None
 
                 # Reprint of an archive reuses the source row. Without resetting
                 # ``timelapse_path`` _scan_for_timelapse_with_retries early-returns
@@ -4500,7 +4621,7 @@ async def on_print_start(printer_id: int, data: dict):
                     status="printing",
                     started_at=datetime.now(timezone.utc),
                     subtask_id=subtask_id,
-                    confirm_requested=await _ask_outcome_for_external_print(db, printer_id),
+                    confirm_requested=await _ask_outcome_for_external_print(db, printer_id, subtask_name),
                     filament_type=mqtt_filament_meta.get("filament_type"),
                     filament_color=mqtt_filament_meta.get("filament_color"),
                     extra_data={
@@ -4637,9 +4758,21 @@ async def on_print_start(printer_id: int, data: dict):
                 # Ask-for-outcome for a print Bambuddy did not dispatch (#1898).
                 # Set on the row rather than passed to archive_print, which also
                 # serves the queue dispatcher — there the queue item decides.
-                if await _ask_outcome_for_external_print(db, printer_id):
-                    archive.confirm_requested = True
-                    await db.commit()
+                # Guarded because this branch has no ``except``: an unhandled
+                # write error would take the _active_prints registration, the
+                # start notification, the energy reading and the timelapse
+                # baseline below it with it, and a missing prompt is by far the
+                # cheaper failure.
+                try:
+                    if await _ask_outcome_for_external_print(db, printer_id, subtask_name):
+                        archive.confirm_requested = True
+                        await db.commit()
+                except Exception as e:
+                    logger.warning("Could not flag archive %s for the outcome prompt: %s", archive.id, e)
+                    try:
+                        await db.rollback()
+                    except Exception:
+                        pass
 
                 # Track this active print (use both original filename and downloaded filename)
                 _active_prints[(printer_id, downloaded_filename)] = archive.id
@@ -6201,6 +6334,23 @@ def _subtask_names_match(expected: str, observed: str) -> bool:
     return False
 
 
+async def _queue_item_dispatched_name(db, item) -> str:
+    """The subtask name *item* was dispatched under, or "" when unknowable.
+
+    A row with no archive, or an archive with no file name, is unverifiable
+    rather than wrong; every caller answers that with its permissive branch.
+    """
+    if item.archive_id is None:
+        return ""
+
+    from backend.app.models.archive import PrintArchive
+
+    archive = await db.get(PrintArchive, item.archive_id)
+    if archive is None or not archive.filename:
+        return ""
+    return _subtask_name_from_filename(archive.filename)
+
+
 async def _completion_belongs_to_queue_item(db, item, data: dict) -> bool:
     """Whether this completion event is plausibly about *item*'s print.
 
@@ -7662,52 +7812,12 @@ async def on_print_complete(printer_id: int, data: dict):
 
                 # Post-print outcome confirmation (#1898). Runs in this
                 # background task so the finish photo fetched above rides
-                # along with the prompt. Mints the per-archive capability
-                # token the one-tap verdict links carry; URLs fall back to
-                # relative paths when no external_url is configured (the
-                # ntfy action buttons then stay off — they need absolute).
+                # along with the prompt.
                 if print_status == "completed" and archive_id:
                     try:
-                        confirm_archive = (
-                            await db.execute(select(PrintArchive).where(PrintArchive.id == archive_id))
-                        ).scalar_one_or_none()
-                        if (
-                            confirm_archive
-                            and confirm_archive.confirm_requested
-                            and confirm_archive.user_verdict is None
-                        ):
-                            import secrets as _secrets
-
-                            if not confirm_archive.confirm_token:
-                                confirm_archive.confirm_token = _secrets.token_urlsafe(32)
-                                await db.commit()
-
-                            from backend.app.api.routes.settings import get_setting
-
-                            _ext = await get_setting(db, "external_url")
-                            _base = _ext.rstrip("/") if _ext else ""
-                            _token = confirm_archive.confirm_token
-                            good_url = f"{_base}/api/v1/archives/confirm/{_token}/good"
-                            reject_url = f"{_base}/api/v1/archives/confirm/{_token}/reject"
-                            confirm_url = f"{_base}/archives?confirm={archive_id}"
-
-                            await ws_manager.send_print_confirm_request(
-                                printer_id,
-                                {
-                                    "archive_id": archive_id,
-                                    "print_name": confirm_archive.print_name or confirm_archive.filename,
-                                },
-                            )
-                            await notification_service.on_print_confirm_request(
-                                printer_id,
-                                printer_name,
-                                data,
-                                db,
-                                archive_data=archive_data,
-                                good_url=good_url,
-                                reject_url=reject_url,
-                                confirm_url=confirm_url,
-                            )
+                        await dispatch_outcome_confirmation(
+                            db, printer_id, printer_name, data, archive_id, archive_data
+                        )
                     except Exception as e:
                         logger.error("[NOTIFY-BG] Outcome-confirmation dispatch failed: %s", e, exc_info=True)
 

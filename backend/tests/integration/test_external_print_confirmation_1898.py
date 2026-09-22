@@ -252,7 +252,11 @@ class TestAQueuedPrintStillDecidesForItself:
         the queue row — which the scheduler commits to "printing" before the
         MQTT send — is the durable record that Bambuddy started this."""
         printer = await printer_factory()
-        source = await archive_factory(printer.id, status="printing", with_run=False)
+        # Dispatched but not yet reported as started: the archive the scheduler
+        # attached to the row only turns "printing" once on_print_start runs, so
+        # the name-match resume above cannot find it and the queue row is the
+        # only record that Bambuddy sent this print.
+        source = await archive_factory(printer.id, filename=f"{SUBTASK}.gcode.3mf", status="pending", with_run=False)
         db_session.add(
             PrintQueueItem(
                 printer_id=printer.id,
@@ -338,3 +342,221 @@ class TestSettingsRoundTrip:
         body = (await async_client.put("/api/v1/settings/", json={"confirm_outcome_external_prints": True})).json()
         assert body["default_confirm_outcome"] is True
         assert body["confirm_outcome_external_prints"] is True
+
+
+class TestAStrandedQueueRowDoesNotMuteTheSetting:
+    """A ``printing`` row is not proof that Bambuddy started what is printing now.
+
+    ``_completion_belongs_to_queue_item`` deliberately leaves a row open when a
+    completion's subtask name disagrees with the file it was dispatched with,
+    and the scheduler's stranded sweep only takes it back once the printer has
+    sat connected and terminal for minutes. Treating any such row as "we
+    dispatched this" switched the setting off for every screen-started print in
+    between -- the exact symptom the setting exists to cure.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_row_left_open_for_another_file_still_asks(
+        self, test_engine, db_session, printer_factory, archive_factory
+    ):
+        printer = await printer_factory()
+        stranded_for = await archive_factory(
+            printer.id, filename="SomeOtherJob.gcode.3mf", status="printing", with_run=False
+        )
+        db_session.add(
+            PrintQueueItem(
+                printer_id=printer.id,
+                archive_id=stranded_for.id,
+                status="printing",
+                confirm_outcome=False,
+            )
+        )
+        await db_session.commit()
+        await _set_setting(db_session, "confirm_outcome_external_prints", "true")
+        stranded_filename = stranded_for.filename
+
+        await _drive_print_start(test_engine, printer, download_ok=False)
+
+        archive = await _created_archive(db_session, printer.id)
+        assert archive.filename != stranded_filename
+        assert archive.confirm_requested is True
+
+
+class TestAReprintAsksAgain:
+    """The reprint reuses the archive row, and the completion prompt is gated on
+    ``user_verdict is None`` -- so without a reset the second run inherits the
+    first run's answer and is never asked about."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_the_previous_runs_verdict_does_not_carry_over(
+        self, test_engine, db_session, printer_factory, archive_factory
+    ):
+        from backend.app.main import register_expected_print
+
+        printer = await printer_factory()
+        archive = await archive_factory(
+            printer.id,
+            filename=f"{SUBTASK}.gcode.3mf",
+            status="completed",
+            confirm_requested=True,
+            user_verdict="good",
+            confirm_token="token-from-the-first-run",
+            with_run=False,
+        )
+        archive_id, printer_id = archive.id, printer.id
+        register_expected_print(printer_id, f"{SUBTASK}.gcode.3mf", archive_id)
+
+        await _drive_print_start(test_engine, printer, download_ok=False)
+
+        db_session.expire_all()
+        refreshed = await db_session.get(PrintArchive, archive_id)
+        assert refreshed.status == "printing"
+        assert refreshed.confirm_requested is True
+        assert refreshed.user_verdict is None
+        assert refreshed.confirm_token is None
+
+        # And the completion really does ask again, which is the point.
+        refreshed.status = "completed"
+        await db_session.commit()
+        sent, ws, notif = await _dispatch(db_session, printer_id, archive_id)
+        assert sent is True
+        ws.send_print_confirm_request.assert_awaited_once()
+        notif.on_print_confirm_request.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_an_archive_that_was_never_asked_about_keeps_its_verdict(
+        self, test_engine, db_session, printer_factory, archive_factory
+    ):
+        """The reset is scoped to rows that ask. An archive answered once and
+        later reprinted with the flag off must keep the answer it has."""
+        from backend.app.main import register_expected_print
+
+        printer = await printer_factory()
+        archive = await archive_factory(
+            printer.id,
+            filename=f"{SUBTASK}.gcode.3mf",
+            status="completed",
+            confirm_requested=False,
+            user_verdict="reject",
+            with_run=False,
+        )
+        archive_id = archive.id
+        register_expected_print(printer.id, f"{SUBTASK}.gcode.3mf", archive_id)
+
+        await _drive_print_start(test_engine, printer, download_ok=False)
+
+        db_session.expire_all()
+        assert (await db_session.get(PrintArchive, archive_id)).user_verdict == "reject"
+
+
+async def _dispatch(db_session, printer_id: int, archive_id: int, **kwargs):
+    """Run the completion path's outcome dispatch with the two emitters mocked."""
+    from backend.app.main import dispatch_outcome_confirmation
+
+    with (
+        patch("backend.app.main.ws_manager") as ws,
+        patch("backend.app.main.notification_service") as notif,
+    ):
+        ws.send_print_confirm_request = AsyncMock()
+        notif.on_print_confirm_request = AsyncMock()
+        sent = await dispatch_outcome_confirmation(
+            db_session,
+            printer_id,
+            "Bench P1S",
+            {"subtask_name": SUBTASK},
+            archive_id,
+            **kwargs,
+        )
+    return sent, ws, notif
+
+
+class TestTheCompletionEmitsThePrompt:
+    """The half of the feature the user actually sees.
+
+    Everything else here asserts a column value; this drives the block
+    ``on_print_complete``'s notification task runs -- which is wrapped in a bare
+    ``except Exception`` that only logs, so a regression in it is invisible
+    unless something pins it.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_an_external_print_gets_a_prompt_with_one_tap_links(self, test_engine, db_session, printer_factory):
+        printer = await printer_factory()
+        printer_id = printer.id
+        await _set_setting(db_session, "confirm_outcome_external_prints", "true")
+        await _set_setting(db_session, "external_url", "https://farm.example.com/")
+
+        await _drive_print_start(test_engine, printer, download_ok=False)
+
+        archive = await _created_archive(db_session, printer_id)
+        archive_id = archive.id
+        assert archive.confirm_requested is True
+        archive.status = "completed"
+        await db_session.commit()
+
+        sent, ws, notif = await _dispatch(db_session, printer_id, archive_id)
+
+        assert sent is True
+        ws.send_print_confirm_request.assert_awaited_once()
+        assert ws.send_print_confirm_request.await_args.args[1]["archive_id"] == archive_id
+
+        notif.on_print_confirm_request.assert_awaited_once()
+        kwargs = notif.on_print_confirm_request.await_args.kwargs
+        token = (await db_session.get(PrintArchive, archive_id)).confirm_token
+        assert token, "the one-tap links need a minted capability token"
+        assert kwargs["good_url"] == f"https://farm.example.com/api/v1/archives/confirm/{token}/good"
+        assert kwargs["reject_url"] == f"https://farm.example.com/api/v1/archives/confirm/{token}/reject"
+        assert kwargs["confirm_url"] == f"https://farm.example.com/archives?confirm={archive_id}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_the_links_stay_absolute_without_an_external_url(self, test_engine, db_session, printer_factory):
+        """Telegram's inline keyboard and ntfy's action buttons are both dropped
+        for a relative URL, so an install that never set external_url used to
+        get a message carrying two unusable paths and no buttons at all."""
+        printer = await printer_factory()
+        printer_id = printer.id
+        await _set_setting(db_session, "confirm_outcome_external_prints", "true")
+
+        await _drive_print_start(test_engine, printer, download_ok=False)
+
+        archive = await _created_archive(db_session, printer_id)
+        archive_id = archive.id
+        archive.status = "completed"
+        await db_session.commit()
+
+        _, _, notif = await _dispatch(db_session, printer_id, archive_id)
+
+        kwargs = notif.on_print_confirm_request.await_args.kwargs
+        assert kwargs["good_url"].startswith("http")
+        assert kwargs["reject_url"].startswith("http")
+        assert kwargs["confirm_url"].startswith("http")
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_an_already_answered_archive_is_not_asked_again(self, db_session, printer_factory, archive_factory):
+        printer = await printer_factory()
+        archive = await archive_factory(
+            printer.id, status="completed", confirm_requested=True, user_verdict="good", with_run=False
+        )
+
+        sent, ws, notif = await _dispatch(db_session, printer.id, archive.id)
+
+        assert sent is False
+        ws.send_print_confirm_request.assert_not_awaited()
+        notif.on_print_confirm_request.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_an_archive_that_never_opted_in_is_not_asked(self, db_session, printer_factory, archive_factory):
+        printer = await printer_factory()
+        archive = await archive_factory(printer.id, status="completed", confirm_requested=False, with_run=False)
+
+        sent, _, notif = await _dispatch(db_session, printer.id, archive.id)
+
+        assert sent is False
+        notif.on_print_confirm_request.assert_not_awaited()

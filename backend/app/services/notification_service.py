@@ -575,41 +575,58 @@ class NotificationService:
 
         client = await self._get_client()
 
-        if image_data:
-            # Use sendPhoto to attach the thumbnail with the caption
-            url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
-            form: dict[str, Any] = {"chat_id": chat_id, "caption": message, "parse_mode": "Markdown"}
-            if message_thread_id is not None:
-                form["message_thread_id"] = message_thread_id
-            if buttons:
-                # Multipart form fields are strings — reply_markup goes JSON-encoded.
-                form["reply_markup"] = json.dumps({"inline_keyboard": [buttons]})
-            response = await client.post(
-                url,
-                data=form,
-                files={"photo": ("photo.jpg", image_data, "image/jpeg")},
-            )
-        else:
+        async def _post(with_buttons: bool):
+            if image_data:
+                # Use sendPhoto to attach the thumbnail with the caption
+                url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
+                form: dict[str, Any] = {"chat_id": chat_id, "caption": message, "parse_mode": "Markdown"}
+                if message_thread_id is not None:
+                    form["message_thread_id"] = message_thread_id
+                if with_buttons:
+                    # Multipart form fields are strings — reply_markup goes JSON-encoded.
+                    form["reply_markup"] = json.dumps({"inline_keyboard": [buttons]})
+                return await client.post(
+                    url,
+                    data=form,
+                    files={"photo": ("photo.jpg", image_data, "image/jpeg")},
+                )
+
             url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-            data: dict[str, Any] = {
+            payload: dict[str, Any] = {
                 "chat_id": chat_id,
                 "text": message,
                 "parse_mode": "Markdown",
             }
             if message_thread_id is not None:
-                data["message_thread_id"] = message_thread_id
-            if buttons:
-                data["reply_markup"] = {"inline_keyboard": [buttons]}
-            response = await client.post(url, json=data)
+                payload["message_thread_id"] = message_thread_id
+            if with_buttons:
+                payload["reply_markup"] = {"inline_keyboard": [buttons]}
+            return await client.post(url, json=payload)
 
-        if response.status_code == 200:
-            result = response.json()
+        def _failure(resp) -> str | None:
+            """What Telegram objected to, or None when the send went through."""
+            if resp.status_code != 200:
+                return f"HTTP {resp.status_code}: {resp.text[:200]}"
+            result = resp.json()
             if result.get("ok"):
-                return True, "Message sent successfully"
-            else:
-                return False, f"Telegram error: {result.get('description', 'Unknown error')}"
-        else:
-            return False, f"HTTP {response.status_code}: {response.text[:200]}"
+                return None
+            return f"Telegram error: {result.get('description', 'Unknown error')}"
+
+        response = await _post(bool(buttons))
+        failure = _failure(response)
+        if failure and buttons:
+            # Telegram validates every inline-keyboard URL and refuses the whole
+            # send when one of them is not a URL it accepts — which is what an
+            # install without a public external_url produces for the #1898
+            # verdict links. Dropping the buttons is survivable; dropping the
+            # message the user is waiting for is not.
+            logger.warning("Telegram refused the message with inline buttons (%s); retrying without them", failure)
+            response = await _post(False)
+            failure = _failure(response)
+
+        if failure:
+            return False, failure
+        return True, "Message sent successfully"
 
     async def _send_email(
         self,

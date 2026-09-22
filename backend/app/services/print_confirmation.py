@@ -53,3 +53,25 @@ async def resolve_pending_confirmation_as_good(db: AsyncSession, printer_id: int
 
     logger.info("[#1898] Plate clear defaulted archive %s to 'good' (printer %s)", archive.id, printer_id)
     return archive.id
+
+
+async def confirm_outcome_for_new_queue_item(db: AsyncSession, *, started_outside_bambuddy: bool = False) -> bool:
+    """The ask-for-outcome flag for a queue item created without the print dialog.
+
+    The dialog seeds its own per-job toggle from ``default_confirm_outcome``.
+    Every other queue-creation path -- the virtual printer, the library bulk
+    add, the webhook, a pipeline run -- has no toggle to seed and used to leave
+    the column at its ``False`` default, so "Ask for Outcome" only ever reached
+    jobs queued by hand.
+
+    ``started_outside_bambuddy`` additionally honours
+    ``confirm_outcome_external_prints``: a plate sent from Bambu Studio to a
+    virtual printer is one of the prints that setting's description names, but
+    it arrives with a queue item, so ``on_print_start`` never sees it as
+    external and the setting could not otherwise reach it.
+    """
+    from backend.app.api.routes.settings import get_setting, setting_is_true
+
+    if setting_is_true(await get_setting(db, "default_confirm_outcome")):
+        return True
+    return started_outside_bambuddy and setting_is_true(await get_setting(db, "confirm_outcome_external_prints"))
