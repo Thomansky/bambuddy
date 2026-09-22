@@ -5033,6 +5033,10 @@ async def run_migrations(conn):
     )
     # Items a person started by hand bypass the maintenance holds (#3127).
     await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN user_started BOOLEAN DEFAULT FALSE NOT NULL")
+    # When a maintenance type was hidden, so the types tab can offer it back
+    # (#3127). Rows hidden before this column existed keep a NULL here and
+    # simply show no date.
+    await _safe_execute(conn, "ALTER TABLE maintenance_types ADD COLUMN deleted_at TIMESTAMP")
 
     # Migration: storage location sensor alerts (#2824), own column rather than
     # reusing on_ha_sensor_alert. That column can be scoped to one printer

@@ -45,6 +45,10 @@ logger = logging.getLogger(__name__)
 
 ACTION_CALIBRATION = "calibration"
 ACTION_MOTION_PRECISION = "motion_precision"
+# Actions a type may carry. A custom type can be created with one of these
+# so a second calibration item with its own interval and schedule can live
+# next to the seeded one (#3127); the action is fixed at creation.
+KNOWN_ACTIONS: tuple[str, ...] = (ACTION_CALIBRATION, ACTION_MOTION_PRECISION)
 
 # Keyword names of BambuMQTTClient.start_calibration, in bit order.
 CALIBRATION_FLAGS: tuple[str, ...] = (
@@ -172,6 +176,18 @@ def selected_calibration_flags(options: dict | None) -> list[str]:
 def has_options(action: str | None) -> bool:
     """Does this action carry a per-item option set?"""
     return action == ACTION_CALIBRATION
+
+
+def action_applies_to_printer(action: str | None, printer_model: str | None) -> bool:
+    """Can this printer perform the action at all?
+
+    The model gate a custom type with an action inherits from the seeded one
+    (#3127): only the H2 series has the vision encoder, every printer can be
+    told to level its bed. A reminder type (no action) applies everywhere.
+    """
+    if action == ACTION_MOTION_PRECISION:
+        return has_vision_encoder(printer_model)
+    return True
 
 
 def normalize_bed_temp_below(value: object) -> float | None:

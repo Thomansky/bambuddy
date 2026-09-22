@@ -23,6 +23,9 @@ class MaintenanceType(Base):
     wiki_url: Mapped[str | None] = mapped_column(String(500))  # Documentation link
     is_system: Mapped[bool] = mapped_column(Boolean, default=False)  # Pre-defined vs custom
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)  # Hidden/removed type
+    # When it was hidden, so the "Deleted types" list can say how long ago
+    # and the restore route can clear both together (#3127). Naive UTC.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # What Bambuddy can do itself for this type instead of only reminding
     # (#3127). "calibration" is the only value so far; None = reminder only.
     # System types only — custom types cannot carry an action.
