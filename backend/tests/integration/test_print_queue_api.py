@@ -333,12 +333,13 @@ class TestPrintQueueAPI:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_print_now_is_recorded_as_started_by_a_person(
+    async def test_queueing_at_the_top_is_not_a_person_starting_the_item(
         self, async_client: AsyncClient, printer_factory, archive_factory, db_session
     ):
-        """The print dialog's "Print now" queues at the top (insert_at_top) and
-        is not held back by the maintenance side (#3127): user_started is set
-        on creation, exactly as ▶ sets it on a staged item."""
+        """The print dialog's "ASAP" is a place in the queue, not a start: it
+        sends insert_at_top, and the scheduler dispatches the item like any
+        other. Nothing here sets user_started, which is what the maintenance
+        holds (#3127) yield to -- only ▶ on a staged item does."""
         printer = await printer_factory()
         archive = await archive_factory()
 
@@ -346,7 +347,7 @@ class TestPrintQueueAPI:
             "/api/v1/queue/", json={"printer_id": printer.id, "archive_id": archive.id, "insert_at_top": True}
         )
         assert response.status_code == 200
-        assert response.json()["user_started"] is True
+        assert response.json()["user_started"] is False
 
         response = await async_client.post("/api/v1/queue/", json={"printer_id": printer.id, "archive_id": archive.id})
         assert response.status_code == 200

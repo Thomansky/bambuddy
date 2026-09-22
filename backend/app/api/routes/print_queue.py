@@ -1169,9 +1169,6 @@ async def add_to_queue(
             auto_off_after=data.auto_off_after,
             manual_start=data.manual_start,
             skip_filament_check=data.skip_filament_check,
-            # "Print now" in the print dialog: queued at the top and, like ▶
-            # on a staged item, not held back by the maintenance side (#3127).
-            user_started=data.insert_at_top,
             ams_mapping=ams_mapping_json,
             nozzle_rack_choice=nozzle_rack_choice_json,
             plate_id=data.plate_id,
