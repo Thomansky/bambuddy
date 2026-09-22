@@ -1790,6 +1790,8 @@ export default {
       manual: 'Ручные',
     },
     noItemsForFilter: 'Нет элементов для этого фильтра',
+    switchedOffCount: 'Отключено: {{count}}',
+    allItemsSwitchedOff: 'Все пункты обслуживания этого принтера отключены',
     coverage: 'на {{used}} из {{total}} принтеров',
     printersButton: 'Принтеры',
     printersPanelTitle: 'Принтеры с этим типом',

@@ -1895,6 +1895,8 @@ export default {
       manual: 'Handmatig',
     },
     noItemsForFilter: 'Geen items voor dit filter',
+    switchedOffCount: '{{count}} uitgeschakeld',
+    allItemsSwitchedOff: 'Alle items van deze printer zijn uitgeschakeld',
     coverage: 'op {{used}} van {{total}} printers',
     printersButton: 'Printers',
     printersPanelTitle: 'Printers die dit type gebruiken',

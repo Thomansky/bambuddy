@@ -257,6 +257,49 @@ async def _type_coverage(db: AsyncSession, types: list[MaintenanceType]) -> dict
     return coverage
 
 
+async def _ensure_system_items(db: AsyncSession, types: list[MaintenanceType]) -> None:
+    """Create the items every system type is due on the printers it applies to.
+
+    The coverage the types tab shows is counted from the item rows, and those
+    rows used to be created by the overview alone (#3127): a printer added
+    since the last overview load read as "not covered", and ticking its box
+    then answered "already assigned" as soon as the overview caught up. Only
+    a missing row is created -- a printer whose item was deliberately
+    switched off keeps it off, exactly as the overview leaves it.
+    """
+    system_types = [t for t in types if t.is_system]
+    if not system_types:
+        return
+    result = await db.execute(select(Printer).where(Printer.is_active.is_(True)))
+    printers = list(result.scalars().all())
+    if not printers:
+        return
+
+    result = await db.execute(
+        select(PrinterMaintenance.maintenance_type_id, PrinterMaintenance.printer_id).where(
+            PrinterMaintenance.maintenance_type_id.in_([t.id for t in system_types])
+        )
+    )
+    existing = {(type_id, printer_id) for type_id, printer_id in result.all()}
+
+    created = False
+    for maint_type in system_types:
+        for printer in printers:
+            if (maint_type.id, printer.id) in existing or not _type_applies_to_printer(maint_type, printer.model):
+                continue
+            db.add(
+                PrinterMaintenance(
+                    printer_id=printer.id,
+                    maintenance_type_id=maint_type.id,
+                    enabled=True,
+                    last_performed_hours=0.0,
+                )
+            )
+            created = True
+    if created:
+        await db.commit()
+
+
 def _type_response(maint_type: MaintenanceType, coverage: _Coverage | None) -> MaintenanceTypeResponse:
     response = MaintenanceTypeResponse.model_validate(maint_type)
     if coverage is not None:
@@ -280,6 +323,7 @@ async def get_maintenance_types(
         .order_by(MaintenanceType.is_system.desc(), MaintenanceType.name)
     )
     types = list(result.scalars().all())
+    await _ensure_system_items(db, types)
     coverage = await _type_coverage(db, types)
     return [_type_response(t, coverage.get(t.id)) for t in types]
 
@@ -418,6 +462,10 @@ async def delete_maintenance_type(
 
     maint_type.is_deleted = True
     maint_type.deleted_at = utcnow_naive()
+    # The cards of a hidden type are gone from the maintenance page, and with
+    # them the Cancel button of anything they had queued (#3127).
+    result = await db.execute(select(PrinterMaintenance.id).where(PrinterMaintenance.maintenance_type_id == type_id))
+    await maintenance_actions.cancel_pending_runs_for_items(db, [item_id for (item_id,) in result.all()])
     await db.commit()
     return {"status": "deleted"}
 
@@ -720,6 +768,11 @@ async def update_printer_maintenance(
         item.action_options = maintenance_actions.stored_action_options(action, options)
     for key, value in update_data.items():
         setattr(item, key, value)
+
+    if update_data.get("enabled") is False:
+        # Same reason as hiding the type: the card the Cancel button lives on
+        # disappears from the printer section (#3127).
+        await maintenance_actions.cancel_pending_runs_for_items(db, [item.id])
 
     if action:
         # Cross-field rules against the merged state, so a PATCH that only

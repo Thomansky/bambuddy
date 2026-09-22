@@ -1877,6 +1877,8 @@ export default {
       manual: '手動',
     },
     noItemsForFilter: '沒有符合此篩選條件的項目',
+    switchedOffCount: '{{count}} 項已關閉',
+    allItemsSwitchedOff: '此印表機的所有項目均已關閉',
     coverage: '已用於 {{total}} 台印表機中的 {{used}} 台',
     printersButton: '印表機',
     printersPanelTitle: '使用此類型的印表機',

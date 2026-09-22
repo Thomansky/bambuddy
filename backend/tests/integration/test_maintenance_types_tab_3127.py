@@ -12,7 +12,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
-from backend.app.models.maintenance import MaintenanceHistory, MaintenanceType, PrinterMaintenance
+from backend.app.models.maintenance import MaintenanceHistory, MaintenanceRun, MaintenanceType, PrinterMaintenance
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
@@ -68,6 +68,36 @@ class TestCoverage:
         assert sorted(response.json()["available_actions"]) == ["calibration", "motion_precision"]
         response = await async_client.get(f"/api/v1/maintenance/printers/{x1c.id}")
         assert response.json()["available_actions"] == ["calibration"]
+
+    async def test_the_coverage_is_right_before_any_overview_load(self, async_client, printer_factory):
+        """A printer added since the last overview load is still covered.
+
+        The items of a system type used to be created by the overview alone,
+        so the tab read "on 0 of 2 printers" until it had run -- and ticking
+        the box then answered "already assigned" (#3127).
+        """
+        a = await printer_factory(name="Fresh A", model="X1C")
+        b = await printer_factory(name="Fresh B", model="X1C")
+
+        plate = (await _types(async_client))["Clean Build Plate"]
+        assert plate["eligible_count"] == 2
+        assert plate["printer_count"] == 2
+        assert sorted(plate["printer_ids"]) == sorted([a.id, b.id])
+
+        # ... and the items the tab just counted are the ones the overview uses.
+        assert (await _items(async_client, a.id))["Clean Build Plate"]["enabled"] is True
+
+    async def test_the_types_list_does_not_resurrect_a_switched_off_item(self, async_client, printer_factory):
+        printer = await printer_factory(name="Stays off", model="X1C")
+        item = (await _items(async_client, printer.id))["Clean Build Plate"]
+        assert (
+            await async_client.patch(f"/api/v1/maintenance/items/{item['id']}", json={"enabled": False})
+        ).status_code == 200
+
+        assert (await _types(async_client))["Clean Build Plate"]["printer_count"] == 0
+        again = (await _items(async_client, printer.id))["Clean Build Plate"]
+        assert again["id"] == item["id"]
+        assert again["enabled"] is False
 
     async def test_a_disabled_item_does_not_count_towards_the_coverage(self, async_client, printer_factory):
         a = await printer_factory(name="A", model="X1C")
@@ -165,6 +195,70 @@ class TestAssignAndUnassign:
         response = await async_client.post(f"/api/v1/maintenance/printers/{x1c.id}/assign/{vision_type_id}")
         assert response.status_code == 400
         assert "printer model" in response.json()["detail"]
+
+
+class TestRunsOfItemsSwitchedOff:
+    """Switching an item off takes its queued run with it (#3127).
+
+    The card is the only place a run can be cancelled from, and it leaves
+    the printer section the moment the item is off or its type is hidden.
+    A run left pending would go on holding the print queue and would still
+    be sent to the printer once its wait cleared.
+    """
+
+    async def _pending_calibration_run(self, async_client, printer_factory, name="Runs"):
+        printer = await printer_factory(name=name, model="X1C")
+        item = (await _items(async_client, printer.id))[CALIBRATION_TYPE]
+        queued = await async_client.post(f"/api/v1/maintenance/items/{item['id']}/run")
+        assert queued.status_code == 200, queued.text
+        assert queued.json()["status"] == "pending"
+        return printer, item, queued.json()
+
+    async def _run_status(self, async_client, item_id: int, run_id: int) -> str:
+        response = await async_client.get(f"/api/v1/maintenance/items/{item_id}/runs")
+        assert response.status_code == 200, response.text
+        return next(r["status"] for r in response.json() if r["id"] == run_id)
+
+    async def test_switching_the_item_off_cancels_its_pending_run(self, async_client, printer_factory):
+        printer, item, run = await self._pending_calibration_run(async_client, printer_factory, "Off")
+
+        response = await async_client.patch(f"/api/v1/maintenance/items/{item['id']}", json={"enabled": False})
+        assert response.status_code == 200, response.text
+
+        assert await self._run_status(async_client, item["id"], run["id"]) == "cancelled"
+        # Nothing is left for the scheduler to dispatch or to hold the queue with.
+        assert (await _items(async_client, printer.id))[CALIBRATION_TYPE]["current_run"] is None
+
+    async def test_unticking_the_printer_on_the_types_tab_cancels_it_too(self, async_client, printer_factory):
+        # The tab's untick is the same PATCH the card's toggle sends.
+        printer, item, run = await self._pending_calibration_run(async_client, printer_factory, "Unticked")
+        assert (
+            await async_client.patch(f"/api/v1/maintenance/items/{item['id']}", json={"enabled": False})
+        ).status_code == 200
+        assert await self._run_status(async_client, item["id"], run["id"]) == "cancelled"
+
+    async def test_hiding_the_type_cancels_the_pending_runs_of_its_items(self, async_client, printer_factory):
+        printer, item, run = await self._pending_calibration_run(async_client, printer_factory, "Hidden type")
+
+        response = await async_client.delete(f"/api/v1/maintenance/types/{item['maintenance_type_id']}")
+        assert response.status_code == 200, response.text
+
+        assert await self._run_status(async_client, item["id"], run["id"]) == "cancelled"
+        # The card is gone from the printer section, so there would be no way back.
+        assert CALIBRATION_TYPE not in await _items(async_client, printer.id)
+
+    async def test_a_run_already_on_the_printer_is_left_to_finish(self, async_client, printer_factory, db_session):
+        printer, item, run = await self._pending_calibration_run(async_client, printer_factory, "Running")
+        row = (await db_session.execute(select(MaintenanceRun).where(MaintenanceRun.id == run["id"]))).scalar_one()
+        row.status = "running"
+        await db_session.commit()
+
+        assert (
+            await async_client.patch(f"/api/v1/maintenance/items/{item['id']}", json={"enabled": False})
+        ).status_code == 200
+
+        # The command is on the printer; its own completion event closes it.
+        assert await self._run_status(async_client, item["id"], run["id"]) == "running"
 
 
 class TestDeletedTypes:

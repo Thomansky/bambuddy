@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import HTTPException
-from sqlalchemy import delete, false, func, or_, select, true, update
+from sqlalchemy import and_, delete, false, func, or_, select, true, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -4971,7 +4971,21 @@ class PrintScheduler:
         """
         result = await db.execute(
             select(MaintenanceRun)
+            .join(MaintenanceRun.printer_maintenance)
+            .join(PrinterMaintenance.maintenance_type)
             .where(MaintenanceRun.status.in_(maintenance_actions.RUN_ACTIVE_STATUSES))
+            # A run still pending for an item that has been switched off, or
+            # for a hidden type, holds nothing: its card is off the page and
+            # with it the only Cancel button, so the queue must not wait on
+            # it either (#3127). ``_check_maintenance_runs`` cancels the row
+            # on its pass. A *running* one keeps its printer reserved
+            # whatever the item says -- the calibration is on the machine.
+            .where(
+                or_(
+                    MaintenanceRun.status == "running",
+                    and_(PrinterMaintenance.enabled.is_(True), MaintenanceType.is_deleted.is_(False)),
+                )
+            )
             .options(
                 selectinload(MaintenanceRun.printer_maintenance).selectinload(PrinterMaintenance.maintenance_type),
             )
@@ -5034,6 +5048,9 @@ class PrintScheduler:
         # Runs this pass closes without the printer's say-so; told to the
         # providers once the commit below has made the outcome final.
         closed = await maintenance_actions.fail_stale_running_runs(db, now)
+        # Before anything is queued or dispatched: a run whose item was
+        # switched off, or whose type was hidden, is nobody's any more (#3127).
+        await maintenance_actions.cancel_orphaned_pending_runs(db, now)
         await maintenance_actions.queue_triggered_runs(db, now)
 
         result = await db.execute(

@@ -27,10 +27,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -734,6 +735,57 @@ async def fail_stale_running_runs(db: AsyncSession, now: datetime | None = None)
             "Maintenance run %d on printer %d never reported completion; marked failed", run.id, run.printer_id
         )
     return rows
+
+
+def _cancel_runs(runs: list[MaintenanceRun], now: datetime) -> list[MaintenanceRun]:
+    """Close ``runs`` as cancelled, exactly as the Cancel button would."""
+    for run in runs:
+        run.status = "cancelled"
+        set_waiting(run, None)
+        run.completed_at = now
+        logger.info("Maintenance run %d cancelled: its item is no longer active", run.id)
+    return runs
+
+
+async def cancel_pending_runs_for_items(
+    db: AsyncSession, item_ids: Sequence[int], *, now: datetime | None = None
+) -> list[MaintenanceRun]:
+    """Cancel the pending runs of items that have just been switched off (#3127).
+
+    Switching an item off -- on its card, by unticking its printer on the
+    types tab, or by hiding the whole type -- takes its card off the page,
+    and with it the only Cancel button there is. A run left pending would go
+    on holding the printer's print queue and would still be dispatched once
+    its wait cleared, for something the user has just turned off, so it goes
+    with the card. A run already *running* is left alone: the command is on
+    the printer and the printer's own completion event closes it. Flushed,
+    not committed.
+    """
+    if not item_ids:
+        return []
+    result = await db.execute(
+        select(MaintenanceRun)
+        .where(MaintenanceRun.printer_maintenance_id.in_(set(item_ids)))
+        .where(MaintenanceRun.status == "pending")
+    )
+    return _cancel_runs(list(result.scalars().all()), now or utcnow_naive())
+
+
+async def cancel_orphaned_pending_runs(db: AsyncSession, now: datetime | None = None) -> list[MaintenanceRun]:
+    """Cancel pending runs whose item is switched off or whose type is hidden.
+
+    The routes close these the moment the user switches the item off; this
+    sweep is what catches the rows an older version left behind and any a
+    concurrent request slipped past. Flushed, not committed.
+    """
+    result = await db.execute(
+        select(MaintenanceRun)
+        .join(MaintenanceRun.printer_maintenance)
+        .join(PrinterMaintenance.maintenance_type)
+        .where(MaintenanceRun.status == "pending")
+        .where(or_(PrinterMaintenance.enabled.is_(False), MaintenanceType.is_deleted.is_(True)))
+    )
+    return _cancel_runs(list(result.scalars().all()), now or utcnow_naive())
 
 
 # ============== Completion ==============

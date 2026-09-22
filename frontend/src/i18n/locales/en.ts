@@ -1895,6 +1895,8 @@ export default {
       manual: 'Manual',
     },
     noItemsForFilter: 'No items match this filter',
+    switchedOffCount: '{{count}} switched off',
+    allItemsSwitchedOff: 'Every item on this printer is switched off',
     coverage: 'on {{used}} of {{total}} printers',
     printersButton: 'Printers',
     printersPanelTitle: 'Printers using this type',
