@@ -1734,10 +1734,6 @@ export default {
     timeBasedInterval: "Интервал по времени",
     intervalOverrides: "Переопределение интервалов",
     intervalOverridesDescription: "Настройка отдельных интервалов для конкретных принтеров",
-    assignedToPrinters: "Назначено принтерам:",
-    noPrintersAssigned: "Не назначено ни одному принтеру",
-    addPrinterShort: "Добавить:",
-    printersAssignedClick: "Назначено принтерам: {{count}} — нажмите для управления",
     removeFromPrinter: "Убрать с этого принтера",
     types: {
       lubricateCarbonRods: "Смазать карбоновые валы",
@@ -1780,6 +1776,36 @@ export default {
     configureSettings: "Настроить виды обслуживания и интервалы",
     notificationsOn: "Уведомления включены",
     notificationsOff: "Уведомления выключены",
+    // Manual versus automated maintenance, coverage and deleted types (#3127)
+    kind: {
+      automatic: 'Автоматически',
+      onRequest: 'По запросу',
+      manual: 'Вручную',
+    },
+    kindCounts: 'автоматических: {{automatic}}, вручную: {{manual}}',
+    filterKind: 'Фильтр по виду',
+    filter: {
+      all: 'Все',
+      automatic: 'Автоматические',
+      manual: 'Ручные',
+    },
+    noItemsForFilter: 'Нет элементов для этого фильтра',
+    coverage: 'на {{used}} из {{total}} принтеров',
+    printersButton: 'Принтеры',
+    printersPanelTitle: 'Принтеры с этим типом',
+    noEligiblePrinters: 'Ни один принтер не может использовать этот тип',
+    action: 'Действие',
+    actionNone: 'Нет (только напоминание)',
+    actionCalibration: 'Калибровка принтера',
+    actionMotionPrecision: 'Калибровка оптического энкодера',
+    actionHint: 'Bambuddy выполняет эту задачу сам. Позже изменить нельзя.',
+    deletedTypes: 'Удалённые типы',
+    noDeletedTypes: 'Ничего не удалено',
+    deletedAt: 'Удалён {{date}}',
+    deletedAtUnknown: 'Удалён ранее',
+    deletedItemsTitle: 'Сохранённые записи принтеров',
+    restoreType: 'Восстановить',
+    typeRestored: 'Тип обслуживания восстановлен',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {

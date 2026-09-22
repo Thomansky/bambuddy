@@ -1833,10 +1833,6 @@ export default {
     intervalOverrides: "Перевизначення інтервалів",
     intervalOverridesDescription: "Налаштувати інтервали для конкретних принтерів",
     // Printer assignment
-    assignedToPrinters: "Призначено для принтерів:",
-    noPrintersAssigned: "Принтерів не призначено",
-    addPrinterShort: "Додати:",
-    printersAssignedClick: "Призначено принтерів: {{count}} — натисніть, щоб керувати",
     removeFromPrinter: "Видалити з цього принтера",
     // Types
     types: {
@@ -1884,6 +1880,36 @@ export default {
     configureSettings: "Налаштувати типи та інтервали технічного обслуговування",
     notificationsOn: "Сповіщення увімкнено",
     notificationsOff: "Сповіщення вимкнено",
+    // Manual versus automated maintenance, coverage and deleted types (#3127)
+    kind: {
+      automatic: 'Автоматично',
+      onRequest: 'На запит',
+      manual: 'Вручну',
+    },
+    kindCounts: 'автоматичних: {{automatic}}, вручну: {{manual}}',
+    filterKind: 'Фільтр за видом',
+    filter: {
+      all: 'Усі',
+      automatic: 'Автоматичні',
+      manual: 'Ручні',
+    },
+    noItemsForFilter: 'Немає елементів для цього фільтра',
+    coverage: 'на {{used}} з {{total}} принтерів',
+    printersButton: 'Принтери',
+    printersPanelTitle: 'Принтери з цим типом',
+    noEligiblePrinters: 'Жоден принтер не може використовувати цей тип',
+    action: 'Дія',
+    actionNone: 'Немає (лише нагадування)',
+    actionCalibration: 'Калібрування принтера',
+    actionMotionPrecision: 'Калібрування оптичного енкодера',
+    actionHint: 'Bambuddy виконує це завдання самостійно. Згодом змінити не можна.',
+    deletedTypes: 'Видалені типи',
+    noDeletedTypes: 'Нічого не видалено',
+    deletedAt: 'Видалено {{date}}',
+    deletedAtUnknown: 'Видалено раніше',
+    deletedItemsTitle: 'Збережені записи принтерів',
+    restoreType: 'Відновити',
+    typeRestored: 'Тип обслуговування відновлено',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {

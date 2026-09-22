@@ -1818,10 +1818,6 @@ export default {
     intervalOverrides: 'Aralık Geçersiz Kılmaları',
     intervalOverridesDescription: 'Belirli yazıcılar için aralıkları özelleştir',
     // Yazıcı ataması
-    assignedToPrinters: 'Atanan yazıcılar:',
-    noPrintersAssigned: 'Atanan yazıcı yok',
-    addPrinterShort: 'Ekle:',
-    printersAssignedClick: '{{count}} yazıcı atandı - yönetmek için tıklayın',
     removeFromPrinter: 'Bu yazıcıdan kaldır',
     // Türler
     types: {
@@ -1869,6 +1865,36 @@ export default {
     configureSettings: 'Bakım türlerini ve aralıklarını yapılandır',
     notificationsOn: 'Bildirimler açık',
     notificationsOff: 'Bildirimler kapalı',
+    // Manual versus automated maintenance, coverage and deleted types (#3127)
+    kind: {
+      automatic: 'Otomatik',
+      onRequest: 'İstek üzerine',
+      manual: 'Manuel',
+    },
+    kindCounts: '{{automatic}} otomatik, {{manual}} manuel',
+    filterKind: 'Türe göre filtrele',
+    filter: {
+      all: 'Tümü',
+      automatic: 'Otomatik',
+      manual: 'Manuel',
+    },
+    noItemsForFilter: 'Bu filtreye uyan öğe yok',
+    coverage: '{{total}} yazıcıdan {{used}} tanesinde',
+    printersButton: 'Yazıcılar',
+    printersPanelTitle: 'Bu türü kullanan yazıcılar',
+    noEligiblePrinters: 'Bu türü kullanabilecek yazıcı yok',
+    action: 'Eylem',
+    actionNone: 'Yok (yalnızca hatırlatma)',
+    actionCalibration: 'Yazıcı kalibrasyonu',
+    actionMotionPrecision: 'Görüş kodlayıcı kalibrasyonu',
+    actionHint: 'Bambuddy bu görevi kendisi yapar. Sonradan değiştirilemez.',
+    deletedTypes: 'Silinen türler',
+    noDeletedTypes: 'Silinen bir şey yok',
+    deletedAt: '{{date}} tarihinde silindi',
+    deletedAtUnknown: 'Daha önce silindi',
+    deletedItemsTitle: 'Korunan yazıcı kayıtları',
+    restoreType: 'Geri yükle',
+    typeRestored: 'Bakım türü geri yüklendi',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {

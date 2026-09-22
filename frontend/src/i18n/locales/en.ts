@@ -1834,10 +1834,6 @@ export default {
     intervalOverrides: 'Interval Overrides',
     intervalOverridesDescription: 'Customize intervals for specific printers',
     // Printer assignment
-    assignedToPrinters: 'Assigned to printers:',
-    noPrintersAssigned: 'No printers assigned',
-    addPrinterShort: 'Add:',
-    printersAssignedClick: '{{count}} printer(s) assigned - click to manage',
     removeFromPrinter: 'Remove from this printer',
     // Types
     types: {
@@ -1885,6 +1881,36 @@ export default {
     configureSettings: 'Configure maintenance types and intervals',
     notificationsOn: 'Notifications on',
     notificationsOff: 'Notifications off',
+    // Manual versus automated maintenance, coverage and deleted types (#3127)
+    kind: {
+      automatic: 'Automatic',
+      onRequest: 'Runs on request',
+      manual: 'Manual',
+    },
+    kindCounts: '{{automatic}} automatic, {{manual}} manual',
+    filterKind: 'Filter by kind',
+    filter: {
+      all: 'All',
+      automatic: 'Automatic',
+      manual: 'Manual',
+    },
+    noItemsForFilter: 'No items match this filter',
+    coverage: 'on {{used}} of {{total}} printers',
+    printersButton: 'Printers',
+    printersPanelTitle: 'Printers using this type',
+    noEligiblePrinters: 'No printer can use this type',
+    action: 'Action',
+    actionNone: 'None (reminder only)',
+    actionCalibration: 'Printer calibration',
+    actionMotionPrecision: 'Vision encoder calibration',
+    actionHint: 'Bambuddy performs this task itself. It cannot be changed later.',
+    deletedTypes: 'Deleted types',
+    noDeletedTypes: 'Nothing deleted',
+    deletedAt: 'Deleted {{date}}',
+    deletedAtUnknown: 'Deleted earlier',
+    deletedItemsTitle: 'Printer items kept',
+    restoreType: 'Restore',
+    typeRestored: 'Maintenance type restored',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {

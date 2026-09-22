@@ -1816,10 +1816,6 @@ export default {
     intervalOverrides: 'Substituições de Intervalo',
     intervalOverridesDescription: 'Personalize os intervalos para impressoras específicas',
     // Printer assignment
-    assignedToPrinters: 'Atribuído a impressoras:',
-    noPrintersAssigned: 'Nenhuma impressora atribuída',
-    addPrinterShort: 'Adicionar:',
-    printersAssignedClick: '{{count}} impressora(s) atribuída(s) - clique para gerenciar',
     removeFromPrinter: 'Remover desta impressora',
     // Types
     types: {
@@ -1867,6 +1863,36 @@ export default {
     configureSettings: 'Configure tipos de manutenção e intervalos',
     notificationsOn: 'Notificações ativadas',
     notificationsOff: 'Notificações desativadas',
+    // Manual versus automated maintenance, coverage and deleted types (#3127)
+    kind: {
+      automatic: 'Automático',
+      onRequest: 'Sob demanda',
+      manual: 'Manual',
+    },
+    kindCounts: '{{automatic}} automáticos, {{manual}} manuais',
+    filterKind: 'Filtrar por tipo',
+    filter: {
+      all: 'Todos',
+      automatic: 'Automáticos',
+      manual: 'Manuais',
+    },
+    noItemsForFilter: 'Nenhum item corresponde a este filtro',
+    coverage: 'em {{used}} de {{total}} impressoras',
+    printersButton: 'Impressoras',
+    printersPanelTitle: 'Impressoras que usam este tipo',
+    noEligiblePrinters: 'Nenhuma impressora pode usar este tipo',
+    action: 'Ação',
+    actionNone: 'Nenhuma (apenas lembrete)',
+    actionCalibration: 'Calibração da impressora',
+    actionMotionPrecision: 'Calibração do codificador de visão',
+    actionHint: 'O Bambuddy executa esta tarefa sozinho. Não pode ser alterado depois.',
+    deletedTypes: 'Tipos excluídos',
+    noDeletedTypes: 'Nada excluído',
+    deletedAt: 'Excluído em {{date}}',
+    deletedAtUnknown: 'Excluído anteriormente',
+    deletedItemsTitle: 'Itens de impressora mantidos',
+    restoreType: 'Restaurar',
+    typeRestored: 'Tipo de manutenção restaurado',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {

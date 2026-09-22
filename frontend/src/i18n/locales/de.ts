@@ -1816,10 +1816,6 @@ export default {
     intervalOverrides: 'Intervall-Überschreibungen',
     intervalOverridesDescription: 'Intervalle für bestimmte Drucker anpassen',
     // Printer assignment
-    assignedToPrinters: 'Druckern zugewiesen:',
-    noPrintersAssigned: 'Keine Drucker zugewiesen',
-    addPrinterShort: 'Hinzufügen:',
-    printersAssignedClick: '{{count}} Drucker zugewiesen - klicken zum Verwalten',
     removeFromPrinter: 'Von diesem Drucker entfernen',
     // Types
     types: {
@@ -1867,6 +1863,36 @@ export default {
     configureSettings: 'Wartungstypen und Intervalle konfigurieren',
     notificationsOn: 'Benachrichtigungen an',
     notificationsOff: 'Benachrichtigungen aus',
+    // Manual versus automated maintenance, coverage and deleted types (#3127)
+    kind: {
+      automatic: 'Automatisch',
+      onRequest: 'Auf Anfrage',
+      manual: 'Manuell',
+    },
+    kindCounts: '{{automatic}} automatisch, {{manual}} manuell',
+    filterKind: 'Nach Art filtern',
+    filter: {
+      all: 'Alle',
+      automatic: 'Automatisch',
+      manual: 'Manuell',
+    },
+    noItemsForFilter: 'Keine Einträge für diesen Filter',
+    coverage: 'auf {{used}} von {{total}} Druckern',
+    printersButton: 'Drucker',
+    printersPanelTitle: 'Drucker mit diesem Typ',
+    noEligiblePrinters: 'Kein Drucker kann diesen Typ verwenden',
+    action: 'Aktion',
+    actionNone: 'Keine (nur Erinnerung)',
+    actionCalibration: 'Druckerkalibrierung',
+    actionMotionPrecision: 'Vision-Encoder-Kalibrierung',
+    actionHint: 'Bambuddy führt diese Aufgabe selbst aus. Später nicht mehr änderbar.',
+    deletedTypes: 'Gelöschte Typen',
+    noDeletedTypes: 'Nichts gelöscht',
+    deletedAt: 'Gelöscht am {{date}}',
+    deletedAtUnknown: 'Früher gelöscht',
+    deletedItemsTitle: 'Erhaltene Druckereinträge',
+    restoreType: 'Wiederherstellen',
+    typeRestored: 'Wartungstyp wiederhergestellt',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {

@@ -3850,6 +3850,27 @@ export interface MaintenanceType {
   is_system: boolean;
   action: MaintenanceAction | null;  // set when Bambuddy performs the task itself (#3127)
   created_at: string;
+  // Coverage across the fleet (#3127): printers with an ENABLED item of this
+  // type, out of the printers the type applies to at all (model gate).
+  printer_count: number;
+  eligible_count: number;
+  printer_ids: number[];
+  // The printers behind eligible_count: one checkbox each in the types tab.
+  eligible_printer_ids: number[];
+}
+
+// A type hidden from the tab, as the "Deleted types" list shows it (#3127).
+// Restoring it brings its items -- and their history -- back.
+export interface DeletedMaintenanceType {
+  id: number;
+  name: string;
+  icon: string | null;
+  is_system: boolean;
+  action: MaintenanceAction | null;
+  default_interval_hours: number;
+  interval_type: 'hours' | 'days';
+  deleted_at: string | null;
+  item_count: number;
 }
 
 // Actionable maintenance (#3127): the bed-levelling calibration with its
@@ -3925,6 +3946,11 @@ export interface MaintenanceTypeCreate {
   interval_type?: 'hours' | 'days';
   icon?: string | null;
   wiki_url?: string | null;
+  // What Bambuddy performs itself for this type (#3127). Fixed at creation;
+  // the PATCH payload has no action.
+  action?: MaintenanceAction | null;
+  // Printers the type is put on right away; each must be able to run the action.
+  printer_ids?: number[];
 }
 
 export interface MaintenanceStatus {
@@ -3971,6 +3997,8 @@ export interface PrinterMaintenanceOverview {
   warning_count: number;
   // The plate-clear gate the automatic calibration triggers wait behind (#3127)
   require_plate_clear: boolean;
+  // Actions this printer model can perform (#3127)
+  available_actions: MaintenanceAction[];
 }
 
 export interface MaintenanceHistory {
@@ -6895,6 +6923,9 @@ export const api = {
     request<{ status: string }>(`/maintenance/types/${id}`, { method: 'DELETE' }),
   restoreDefaultMaintenanceTypes: () =>
     request<{ restored: number }>(`/maintenance/types/restore-defaults`, { method: 'POST' }),
+  getDeletedMaintenanceTypes: () => request<DeletedMaintenanceType[]>('/maintenance/types/deleted'),
+  restoreMaintenanceType: (id: number) =>
+    request<MaintenanceType>(`/maintenance/types/${id}/restore`, { method: 'POST' }),
   getMaintenanceOverview: () => request<PrinterMaintenanceOverview[]>('/maintenance/overview'),
   getPrinterMaintenance: (printerId: number) =>
     request<PrinterMaintenanceOverview>(`/maintenance/printers/${printerId}`),

@@ -1816,10 +1816,6 @@ export default {
     intervalOverrides: 'Exceptions d\'intervalle',
     intervalOverridesDescription: 'Intervalles spécifiques par imprimante',
     // Printer assignment
-    assignedToPrinters: 'Assigné aux imprimantes :',
-    noPrintersAssigned: 'Aucune imprimante assignée',
-    addPrinterShort: 'Ajouter :',
-    printersAssignedClick: '{{count}} imprimante(s) assignée(s) - gérer',
     removeFromPrinter: 'Retirer de cette imprimante',
     // Types
     types: {
@@ -1867,6 +1863,36 @@ export default {
     configureSettings: 'Configurer types et intervalles',
     notificationsOn: 'Notifications activées',
     notificationsOff: 'Notifications désactivées',
+    // Manual versus automated maintenance, coverage and deleted types (#3127)
+    kind: {
+      automatic: 'Automatique',
+      onRequest: 'Sur demande',
+      manual: 'Manuel',
+    },
+    kindCounts: '{{automatic}} automatiques, {{manual}} manuelles',
+    filterKind: 'Filtrer par type',
+    filter: {
+      all: 'Toutes',
+      automatic: 'Automatiques',
+      manual: 'Manuelles',
+    },
+    noItemsForFilter: 'Aucun élément ne correspond à ce filtre',
+    coverage: 'sur {{used}} des {{total}} imprimantes',
+    printersButton: 'Imprimantes',
+    printersPanelTitle: 'Imprimantes utilisant ce type',
+    noEligiblePrinters: 'Aucune imprimante ne peut utiliser ce type',
+    action: 'Action',
+    actionNone: 'Aucune (rappel uniquement)',
+    actionCalibration: 'Calibration de l\'imprimante',
+    actionMotionPrecision: 'Calibration de l\'encodeur de vision',
+    actionHint: 'Bambuddy effectue cette tâche lui-même. Non modifiable par la suite.',
+    deletedTypes: 'Types supprimés',
+    noDeletedTypes: 'Rien de supprimé',
+    deletedAt: 'Supprimé le {{date}}',
+    deletedAtUnknown: 'Supprimé auparavant',
+    deletedItemsTitle: 'Éléments d\'imprimante conservés',
+    restoreType: 'Restaurer',
+    typeRestored: 'Type de maintenance restauré',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {

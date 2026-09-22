@@ -1834,10 +1834,6 @@ export default {
     intervalOverrides: 'Intervaloverschrijvingen',
     intervalOverridesDescription: 'Intervallen aanpassen voor specifieke printers',
     // Printer assignment
-    assignedToPrinters: 'Toegewezen aan printers:',
-    noPrintersAssigned: 'Geen printers toegewezen',
-    addPrinterShort: 'Toevoegen:',
-    printersAssignedClick: '{{count}} printer(s) toegewezen - klik om te beheren',
     removeFromPrinter: 'Van deze printer verwijderen',
     // Types
     types: {
@@ -1885,6 +1881,36 @@ export default {
     configureSettings: 'Onderhoudstypen en intervallen configureren',
     notificationsOn: 'Meldingen aan',
     notificationsOff: 'Meldingen uit',
+    // Manual versus automated maintenance, coverage and deleted types (#3127)
+    kind: {
+      automatic: 'Automatisch',
+      onRequest: 'Op verzoek',
+      manual: 'Handmatig',
+    },
+    kindCounts: '{{automatic}} automatisch, {{manual}} handmatig',
+    filterKind: 'Filteren op soort',
+    filter: {
+      all: 'Alle',
+      automatic: 'Automatisch',
+      manual: 'Handmatig',
+    },
+    noItemsForFilter: 'Geen items voor dit filter',
+    coverage: 'op {{used}} van {{total}} printers',
+    printersButton: 'Printers',
+    printersPanelTitle: 'Printers die dit type gebruiken',
+    noEligiblePrinters: 'Geen printer kan dit type gebruiken',
+    action: 'Actie',
+    actionNone: 'Geen (alleen herinnering)',
+    actionCalibration: 'Printerkalibratie',
+    actionMotionPrecision: 'Vision-encoderkalibratie',
+    actionHint: 'Bambuddy voert deze taak zelf uit. Later niet meer te wijzigen.',
+    deletedTypes: 'Verwijderde typen',
+    noDeletedTypes: 'Niets verwijderd',
+    deletedAt: 'Verwijderd op {{date}}',
+    deletedAtUnknown: 'Eerder verwijderd',
+    deletedItemsTitle: 'Behouden printeritems',
+    restoreType: 'Herstellen',
+    typeRestored: 'Onderhoudstype hersteld',
     // Actionable maintenance: printer calibration (#3127)
     calibration: {
       option: {
