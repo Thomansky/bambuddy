@@ -106,11 +106,21 @@ function isStepType(fileType: string): boolean {
 }
 
 // Mirrors IMAGE_EXTENSIONS in routes/library.py — the types the server both
-// stores and renders a thumbnail for.
+// stores and renders a thumbnail for, and so the ones that get an image icon.
 const IMAGE_TYPES = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tiff', 'tif']);
+
+// The subset ImagePreviewModal can actually show: it hands the bytes to an
+// <img>, and outside Safari no browser decodes TIFF. Offering the preview
+// would download up to 50 MB only to report "cannot be previewed", so TIFF
+// keeps its server-rendered thumbnail and no preview (#2976).
+const PREVIEWABLE_IMAGE_TYPES = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp']);
 
 function isImageType(fileType: string): boolean {
   return IMAGE_TYPES.has(fileType.toLowerCase());
+}
+
+function isPreviewableImageType(fileType: string): boolean {
+  return PREVIEWABLE_IMAGE_TYPES.has(fileType.toLowerCase());
 }
 
 // Which files have a preview at all: what a double-click opens, and what the
@@ -125,9 +135,18 @@ function isPreviewableLibraryFile(file: LibraryFileListItem): boolean {
     isStepType(type) ||
     type === 'pdf' ||
     isSpreadsheetType(type) ||
-    isImageType(type)
+    isPreviewableImageType(type)
   );
 }
+
+// Spread onto a card/row subtree that is not "the row": its own controls must
+// neither toggle the selection nor open the preview. `dblclick` is a separate
+// native event from `click`, so stopping the click alone still lets the second
+// click of a double-click reach the row's onDoubleClick (#2976).
+const stopRowActivation = {
+  onClick: (e: React.MouseEvent) => e.stopPropagation(),
+  onDoubleClick: (e: React.MouseEvent) => e.stopPropagation(),
+};
 
 // Whether the preview is the 3D one, which has its own menu label.
 function isModelPreview(file: LibraryFileListItem): boolean {
@@ -1016,7 +1035,7 @@ function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, o
           </div>
         )}
         {(file.tags?.length ?? 0) > 0 && (
-          <div className="mt-2 flex flex-wrap gap-1" onClick={(e) => e.stopPropagation()}>
+          <div className="mt-2 flex flex-wrap gap-1" {...stopRowActivation}>
             {file.tags!.map((tg) => (
               <button
                 key={tg.id}
@@ -1034,7 +1053,7 @@ function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, o
       </div>
 
       {/* Actions - hover-revealed with a mouse, always there without one (#2865) */}
-      <div className="absolute bottom-2 right-2 transition-opacity can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100" onClick={(e) => e.stopPropagation()}>
+      <div className="absolute bottom-2 right-2 transition-opacity can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100" {...stopRowActivation}>
         <button
           onClick={(e) => {
             // No open/close toggle: the menu's own outside-mousedown handler
@@ -1668,7 +1687,7 @@ export function FileManagerPage() {
       setPdfPreviewFile(file);
     } else if (isSpreadsheetType(file.file_type)) {
       setSheetPreviewFile(file);
-    } else if (isImageType(file.file_type)) {
+    } else if (isPreviewableImageType(file.file_type)) {
       setImagePreviewFile(file);
     }
   }, [hasPermission, navigate]);
@@ -2721,7 +2740,7 @@ export function FileManagerPage() {
                         filter; minmax(0,200px) on the column lets the cell
                         shrink/wrap on narrow viewports without pushing the
                         Actions cell off-screen. */}
-                    <div className="min-w-0" onClick={(e) => e.stopPropagation()}>
+                    <div className="min-w-0" {...stopRowActivation}>
                       {!file.tags || file.tags.length === 0 ? (
                         <span className="text-xs text-bambu-gray/50">-</span>
                       ) : (
@@ -2742,7 +2761,7 @@ export function FileManagerPage() {
                       )}
                     </div>
                     {/* Actions */}
-                    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center gap-1" {...stopRowActivation}>
                       {isSlicedLibraryFile(file) && (
                         <>
                           <button

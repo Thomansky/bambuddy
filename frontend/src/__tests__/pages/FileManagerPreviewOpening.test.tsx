@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { render } from '../utils';
@@ -55,8 +55,9 @@ const mockFiles = [
   libraryFile({ id: 2, filename: 'bracket.stl', file_type: 'stl' }),
   libraryFile({ id: 3, filename: 'drawing.pdf', file_type: 'pdf' }),
   libraryFile({ id: 4, filename: 'parts.csv', file_type: 'csv' }),
-  libraryFile({ id: 5, filename: 'photo.png', file_type: 'png' }),
+  libraryFile({ id: 5, filename: 'photo.png', file_type: 'png', tags: [{ id: 21, name: 'reference', color: '#00ae42' }] }),
   libraryFile({ id: 6, filename: 'notes.md', file_type: 'md' }),
+  libraryFile({ id: 7, filename: 'scan.tif', file_type: 'tif' }),
 ];
 
 function card(name: string): HTMLElement {
@@ -136,6 +137,32 @@ describe('FileManagerPage preview opening', () => {
       expect(screen.queryByTestId('pdf-preview-modal')).not.toBeInTheDocument();
       expect(screen.queryByTestId('model-viewer-modal')).not.toBeInTheDocument();
     });
+
+    // The card's own controls are not "the row": stopping their click is not
+    // enough, because dblclick is a separate native event (#2976).
+    it('ignores a double-click on the card menu button', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await screen.findByText('photo.png');
+
+      const imageCard = card('photo.png');
+      const kebab = imageCard.querySelector('.lucide-ellipsis-vertical')?.closest('button') as HTMLButtonElement;
+      await user.dblClick(kebab);
+
+      expect(screen.queryByTestId('image-preview-modal')).not.toBeInTheDocument();
+    });
+
+    // The chip's own click toggles the tag filter and re-renders the list, so
+    // the dblclick is fired directly: what is under test is whether it bubbles
+    // to the card, not what the two clicks before it did.
+    it('ignores a double-click on a tag chip', async () => {
+      render(<FileManagerPage />);
+      await screen.findByText('photo.png');
+
+      fireEvent.doubleClick(within(card('photo.png')).getByTitle('reference'));
+
+      expect(screen.queryByTestId('image-preview-modal')).not.toBeInTheDocument();
+    });
   });
 
   describe('the list view', () => {
@@ -174,6 +201,26 @@ describe('FileManagerPage preview opening', () => {
 
       expect(await screen.findByTestId('image-preview-modal')).toHaveTextContent('photo.png');
     });
+
+    it('ignores a double-click on the row action strip', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await screen.findByText('photo.png');
+
+      // An impatient double-tap on Rename must not also open the preview.
+      await user.dblClick(within(row('photo.png')).getByTitle('Rename'));
+
+      expect(screen.queryByTestId('image-preview-modal')).not.toBeInTheDocument();
+    });
+
+    it('ignores a double-click on the row tag cell', async () => {
+      render(<FileManagerPage />);
+      await screen.findByText('photo.png');
+
+      fireEvent.doubleClick(within(row('photo.png')).getByTitle('reference'));
+
+      expect(screen.queryByTestId('image-preview-modal')).not.toBeInTheDocument();
+    });
   });
 
   describe('the toolbar Preview button', () => {
@@ -210,6 +257,35 @@ describe('FileManagerPage preview opening', () => {
 
       expect(await screen.findByText('1 selected')).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Preview' })).not.toBeInTheDocument();
+    });
+  });
+
+  // The server thumbnails TIFF (PIL), but an <img> only decodes it on Safari,
+  // so the preview is not offered rather than downloading 50 MB to fail (#2976).
+  describe('a TIFF file', () => {
+    it('gets no Preview entry in the card menu and no toolbar button', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await screen.findByText('scan.tif');
+
+      await user.click(card('scan.tif'));
+      expect(await screen.findByText('1 selected')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Preview' })).not.toBeInTheDocument();
+
+      const kebab = card('scan.tif').querySelector('.lucide-ellipsis-vertical')?.closest('button') as HTMLButtonElement;
+      await user.click(kebab);
+      expect(within(card('scan.tif')).queryByText('Preview')).not.toBeInTheDocument();
+    });
+
+    it('does nothing on double-click', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await screen.findByText('scan.tif');
+
+      await user.dblClick(card('scan.tif'));
+
+      expect(screen.queryByTestId('image-preview-modal')).not.toBeInTheDocument();
+      expect(mockNavigate).not.toHaveBeenCalled();
     });
   });
 

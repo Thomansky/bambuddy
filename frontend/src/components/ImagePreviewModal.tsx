@@ -196,10 +196,24 @@ export function ImagePreviewModal({ libraryFileId, filename, fileSize, onClose }
     }
   };
 
+  const handlePointerEnd = (e: React.PointerEvent<HTMLDivElement>) => {
+    pointersRef.current.delete(e.pointerId);
+    pinchDistanceRef.current = null;
+    if (pointersRef.current.size === 0) setDragging(false);
+  };
+
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const pointers = pointersRef.current;
     const previous = pointers.get(e.pointerId);
     if (!previous) return;
+    // A button released outside this container never reaches onPointerUp (no
+    // capture is taken below zoom 1), and the stale entry would then pan the
+    // image under a bare cursor — or count as a second finger on a hybrid
+    // device, turning the next one-finger drag into a pinch (#2976).
+    if (e.pointerType === 'mouse' && e.buttons === 0) {
+      handlePointerEnd(e);
+      return;
+    }
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
     if (pointers.size === 1) {
@@ -216,12 +230,6 @@ export function ImagePreviewModal({ libraryFileId, filename, fileSize, onClose }
     if (last != null && last > 0 && distance > 0) {
       zoomAt(distance / last, (a.x + b.x) / 2, (a.y + b.y) / 2);
     }
-  };
-
-  const handlePointerEnd = (e: React.PointerEvent<HTMLDivElement>) => {
-    pointersRef.current.delete(e.pointerId);
-    pinchDistanceRef.current = null;
-    if (pointersRef.current.size === 0) setDragging(false);
   };
 
   const canPan = zoom > 1;
@@ -267,6 +275,7 @@ export function ImagePreviewModal({ libraryFileId, filename, fileSize, onClose }
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerEnd}
         onPointerCancel={handlePointerEnd}
+        onPointerLeave={handlePointerEnd}
       >
         {error ? (
           <p className="text-bambu-gray text-center p-6">{error}</p>

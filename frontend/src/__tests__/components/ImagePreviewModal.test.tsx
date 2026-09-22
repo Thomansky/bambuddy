@@ -141,6 +141,91 @@ describe('ImagePreviewModal', () => {
     await waitFor(() => expect(content.className).toContain('cursor-grab'));
   });
 
+  describe('a pointer that never reports its release', () => {
+    // jsdom has no PointerEvent, and testing-library then falls back to a plain
+    // Event without pointerId / pointerType / buttons.
+    class FakePointerEvent extends MouseEvent {
+      pointerId: number;
+      pointerType: string;
+      constructor(type: string, init: PointerEventInit = {}) {
+        super(type, init);
+        this.pointerId = init.pointerId ?? 0;
+        this.pointerType = init.pointerType ?? '';
+      }
+    }
+
+    /** jsdom lays nothing out, so the pan clamp needs real box sizes. */
+    function giveBoxes(content: HTMLElement, image: HTMLImageElement) {
+      Object.defineProperty(content, 'clientWidth', { configurable: true, value: 200 });
+      Object.defineProperty(content, 'clientHeight', { configurable: true, value: 200 });
+      Object.defineProperty(image, 'offsetWidth', { configurable: true, value: 400 });
+      Object.defineProperty(image, 'offsetHeight', { configurable: true, value: 400 });
+      content.setPointerCapture = vi.fn();
+    }
+
+    function translateOf(image: HTMLImageElement): string {
+      return /translate\(([^)]*)\)/.exec(image.style.transform)?.[1] ?? '';
+    }
+
+    beforeEach(() => {
+      Object.defineProperty(window, 'PointerEvent', { configurable: true, value: FakePointerEvent });
+    });
+
+    afterEach(() => {
+      delete (window as { PointerEvent?: unknown }).PointerEvent;
+    });
+
+    it('drops it when it leaves the image area, instead of panning on hover', async () => {
+      const { image, content } = await renderLoadedModal();
+      giveBoxes(content, image);
+
+      // Press at zoom 1 — no pointer capture is taken — then release somewhere
+      // else, so only pointerleave arrives.
+      fireEvent.pointerDown(content, { pointerId: 1, pointerType: 'mouse', buttons: 1, clientX: 100, clientY: 100 });
+      fireEvent.pointerLeave(content, { pointerId: 1, pointerType: 'mouse' });
+
+      fireEvent.keyDown(window, { key: '+' });
+      await waitFor(() => expect(scaleOf(image)).toBeCloseTo(1.25, 5));
+
+      fireEvent.pointerMove(content, { pointerId: 1, pointerType: 'mouse', buttons: 0, clientX: 160, clientY: 140 });
+
+      expect(translateOf(image)).toBe('0px, 0px');
+    });
+
+    it('drops it on the first buttonless move, so a later touch is not read as a pinch', async () => {
+      const { image, content } = await renderLoadedModal();
+      giveBoxes(content, image);
+
+      fireEvent.pointerDown(content, { pointerId: 1, pointerType: 'mouse', buttons: 1, clientX: 100, clientY: 100 });
+      fireEvent.keyDown(window, { key: '+' });
+      await waitFor(() => expect(scaleOf(image)).toBeCloseTo(1.25, 5));
+
+      // The mouse moves back over the image with nothing held down.
+      fireEvent.pointerMove(content, { pointerId: 1, pointerType: 'mouse', buttons: 0, clientX: 160, clientY: 140 });
+      expect(translateOf(image)).toBe('0px, 0px');
+
+      // One finger now drags alone: it pans, it does not pinch-zoom.
+      fireEvent.pointerDown(content, { pointerId: 2, pointerType: 'touch', clientX: 100, clientY: 100 });
+      fireEvent.pointerMove(content, { pointerId: 2, pointerType: 'touch', clientX: 130, clientY: 100 });
+
+      expect(scaleOf(image)).toBeCloseTo(1.25, 5);
+      expect(translateOf(image)).toBe('30px, 0px');
+    });
+
+    it('still pans while the button is held', async () => {
+      const { image, content } = await renderLoadedModal();
+      giveBoxes(content, image);
+
+      fireEvent.keyDown(window, { key: '+' });
+      await waitFor(() => expect(scaleOf(image)).toBeCloseTo(1.25, 5));
+
+      fireEvent.pointerDown(content, { pointerId: 1, pointerType: 'mouse', buttons: 1, clientX: 100, clientY: 100 });
+      fireEvent.pointerMove(content, { pointerId: 1, pointerType: 'mouse', buttons: 1, clientX: 120, clientY: 110 });
+
+      expect(translateOf(image)).toBe('20px, 10px');
+    });
+  });
+
   it('closes on Escape', async () => {
     await renderLoadedModal();
 
