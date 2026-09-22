@@ -38,7 +38,7 @@ doomed, the unlink pass wants to know whether a spool was removed, and a state
 of 26 ("unloaded", mid-runout) answers those two questions differently.
 """
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import Any
 
 
@@ -80,15 +80,59 @@ def _int_id(unit: Mapping[str, Any]) -> int | None:
 def _looks_unread(tray: Mapping[str, Any]) -> bool:
     """The tray fields of a slot the AMS has not identified: nothing filled in.
 
-    The fallback for a payload without ``tray_read_done_bits``. A non-Bambu
-    spool the AMS has already looked at reads the same way, so on such
-    firmware it is re-read once per job too -- a wasted command, not a wrong
-    decision.
+    No tag, no preset, no type. Both the fallback for a payload without
+    ``tray_read_done_bits`` and, on firmware that does send the mask, the
+    check that catches a read-done bit set on a slot the AMS never actually
+    identified -- an attempt that finished having found nothing reads as
+    "done" too. A non-Bambu spool the AMS has already looked at reads the
+    same way, which is why the scheduler only ever acts on this once per
+    spool.
     """
     from backend.app.services.spool_tag_matcher import ZERO_TAG_UID
 
     tag_uid = tray.get("tag_uid") or ZERO_TAG_UID
     return tag_uid == ZERO_TAG_UID and not tray.get("tray_info_idx") and not tray.get("tray_type")
+
+
+def _ams_slots(state: Any) -> Iterator[tuple[int, int, Mapping[str, Any], int]]:
+    """Every real AMS slot in the report, as ``(ams_id, tray_id, tray, bit)``.
+
+    The external spool (254) and the virtual trays never come out of here:
+    there is no tag to read and no bit in any mask for them. Neither does a
+    unit whose id has no known bit layout.
+    """
+    from backend.app.services.bambu_mqtt import tray_bit_position
+
+    raw = getattr(state, "raw_data", None) or {}
+    units = raw.get("ams") if isinstance(raw, Mapping) else None
+    if not isinstance(units, list):
+        return
+    for unit in units:
+        if not isinstance(unit, Mapping):
+            continue
+        ams_id = _int_id(unit)
+        if ams_id is None or ams_id == _EXTERNAL_AMS_ID:
+            continue
+        for tray in unit.get("tray") or []:
+            if not isinstance(tray, Mapping):
+                continue
+            tray_id = _int_id(tray)
+            if tray_id is None:
+                continue
+            bit = tray_bit_position(ams_id, tray_id)
+            if bit is None:
+                continue
+            yield ams_id, tray_id, tray, bit
+
+
+def _slot_present(tray: Mapping[str, Any], bit: int, exist_mask: int | None) -> bool:
+    """Is there a spool in this slot, by the best signal the payload carries?"""
+    if exist_mask is not None:
+        return bool((exist_mask >> bit) & 1)
+    present = spool_present(tray)
+    if present is None:
+        present = tray.get("state") not in _EMPTY_TRAY_STATES
+    return bool(present)
 
 
 def slot_read_done(state: Any, ams_id: int, tray_id: int) -> bool | None:
@@ -111,58 +155,58 @@ def slot_read_done(state: Any, ams_id: int, tray_id: int) -> bool | None:
 def unread_ams_slots(state: Any) -> list[tuple[int, int]]:
     """Slots holding a spool the AMS has not read: ``[(ams_id, tray_id), ...]``.
 
-    Present per ``tray_exist_bits`` and not done per ``tray_read_done_bits``.
-    A spool inserted while the printer is busy lands exactly there: the AMS
-    notices it (the exist bit flips) but cannot move filament to read its
-    tag during a print, and does not come back to it afterwards. The queue
-    asks for that read before a job is mapped, so the mapping sees what is
-    actually loaded.
+    A slot qualifies when it holds a spool -- ``tray_exist_bits`` where the
+    firmware sends it, the tray's own presence annotation or firmware's 9/10
+    "no spool" states otherwise -- and either
 
-    Without ``tray_read_done_bits`` the decision falls back to the tray's own
-    fields (``_looks_unread``); without ``tray_exist_bits`` presence falls
-    back to firmware's 9/10 "no spool" states. The external spool (254) and
-    the virtual trays never appear: there is nothing to read there.
+    * its ``tray_read_done_bits`` bit is clear, the case of a spool inserted
+      while the printer was busy: the AMS notices it (the exist bit flips) but
+      cannot move filament to read its tag during a print, and does not come
+      back to it afterwards; or
+    * the AMS has put no identity on it at all (``_looks_unread``), **whatever
+      the read-done bit says**. Firmware sets that bit for an attempt that
+      finished, including one that found nothing, so trusting it alone leaves
+      exactly the slot this feature exists for looking read. It is also the
+      only signal on firmware that sends no mask.
+
+    The queue asks for the read before a job is mapped, so the mapping sees
+    what is actually loaded. The external spool (254) and the virtual trays
+    never appear: there is nothing to read there.
     """
-    from backend.app.services.bambu_mqtt import parse_tray_bits, tray_bit_position
+    from backend.app.services.bambu_mqtt import parse_tray_bits
 
-    raw = getattr(state, "raw_data", None) or {}
-    units = raw.get("ams") if isinstance(raw, Mapping) else None
-    if not isinstance(units, list):
-        return []
     exist_mask = parse_tray_bits(getattr(state, "tray_exist_bits", None))
     done_mask = parse_tray_bits(getattr(state, "tray_read_done_bits", None))
 
     unread: list[tuple[int, int]] = []
-    for unit in units:
-        if not isinstance(unit, Mapping):
+    for ams_id, tray_id, tray, bit in _ams_slots(state):
+        if not _slot_present(tray, bit, exist_mask):
             continue
-        ams_id = _int_id(unit)
-        if ams_id is None or ams_id == _EXTERNAL_AMS_ID:
-            continue
-        for tray in unit.get("tray") or []:
-            if not isinstance(tray, Mapping):
-                continue
-            tray_id = _int_id(tray)
-            if tray_id is None:
-                continue
-            bit = tray_bit_position(ams_id, tray_id)
-            if bit is None:
-                continue
-            if exist_mask is not None:
-                present = bool((exist_mask >> bit) & 1)
-            else:
-                present = spool_present(tray)
-                if present is None:
-                    present = tray.get("state") not in _EMPTY_TRAY_STATES
-            if not present:
-                continue
-            if done_mask is not None:
-                if (done_mask >> bit) & 1:
-                    continue
-            elif not _looks_unread(tray):
-                continue
+        if _looks_unread(tray):
             unread.append((ams_id, tray_id))
+            continue
+        if done_mask is None or (done_mask >> bit) & 1:
+            continue
+        unread.append((ams_id, tray_id))
     return unread
+
+
+def unidentified_slots(state: Any) -> set[tuple[int, int]]:
+    """Occupied slots the AMS has put no identity on: ``{(ams_id, tray_id)}``.
+
+    The scheduler remembers the slots a pre-read left like this so it stops
+    asking about a spool nothing can read, and needs to know when to forget
+    again: an entry that is no longer in this set has either lost its spool
+    or gained an identity, and the next spool gets its chance.
+    """
+    from backend.app.services.bambu_mqtt import parse_tray_bits
+
+    exist_mask = parse_tray_bits(getattr(state, "tray_exist_bits", None))
+    return {
+        (ams_id, tray_id)
+        for ams_id, tray_id, tray, bit in _ams_slots(state)
+        if _slot_present(tray, bit, exist_mask) and _looks_unread(tray)
+    }
 
 
 def slot_identity(state: Any, ams_id: int, tray_id: int) -> tuple[Any, Any, Any] | None:

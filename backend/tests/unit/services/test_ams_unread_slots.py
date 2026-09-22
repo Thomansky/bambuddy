@@ -14,7 +14,12 @@ the same bit layout ``apply_tray_exist_bits`` decodes.
 
 from types import SimpleNamespace
 
-from backend.app.services.ams_slot_presence import slot_identity, slot_read_done, unread_ams_slots
+from backend.app.services.ams_slot_presence import (
+    slot_identity,
+    slot_read_done,
+    unidentified_slots,
+    unread_ams_slots,
+)
 from backend.app.services.bambu_mqtt import apply_tray_exist_bits, tray_bit_position
 from backend.app.services.spool_tag_matcher import ZERO_TAG_UID
 
@@ -77,6 +82,52 @@ class TestTheCapturedShapes:
         assert unread_ams_slots(_state(units)) == [(0, 1)]
 
 
+class TestTheBitSaysDoneButNobodyKnowsWhatIsInThere:
+    """Firmware sets the read-done bit for an attempt that *finished*, which
+    includes one that finished having found nothing. A slot left like that --
+    occupied, no tag, no preset, no type -- is precisely the one this feature
+    exists for, and trusting the bit alone makes it invisible."""
+
+    def test_done_but_empty_identity_is_unread(self):
+        units = [{"id": "0", "tray": [_tray(0), _tray(1), _tray(2), _tray(3, read=False)]}]
+        assert unread_ams_slots(_state(units, exist="f", read_done="f")) == [(0, 3)]
+
+    def test_done_and_identified_is_not_unread(self):
+        units = [{"id": "0", "tray": [_tray(i) for i in range(4)]}]
+        assert unread_ams_slots(_state(units, exist="f", read_done="f")) == []
+
+    def test_a_tag_alone_is_an_identity(self):
+        """Any one of the three fields filled in means the AMS got something."""
+        units = [{"id": "0", "tray": [{"id": "0", "tray_type": "", "tray_info_idx": "", "tag_uid": "3CA4E7DF"}]}]
+        assert unread_ams_slots(_state(units, exist="1", read_done="1")) == []
+
+    def test_an_empty_slot_is_never_unread_whatever_the_bits_say(self):
+        units = [{"id": "0", "tray": [_tray(0, read=False, state=9)]}]
+        assert unread_ams_slots(_state(units, exist="0", read_done="1")) == []
+
+
+class TestUnidentifiedSlots:
+    """What the scheduler's per-slot memory is pruned against: still occupied,
+    still nameless. Anything else means the spool changed or the AMS finally
+    read it, and the slot has earned another attempt."""
+
+    def test_names_the_occupied_nameless_slots(self):
+        units = [{"id": "0", "tray": [_tray(0), _tray(1, read=False), _tray(2, read=False, state=9)]}]
+        assert unidentified_slots(_state(units, exist="3", read_done="f")) == {(0, 1)}
+
+    def test_an_identified_slot_is_not_in_it(self):
+        units = [{"id": "0", "tray": [_tray(0)]}]
+        assert unidentified_slots(_state(units, exist="1", read_done="0")) == set()
+
+    def test_a_slot_whose_spool_was_pulled_is_not_in_it(self):
+        units = [{"id": "0", "tray": [_tray(0, read=False)]}]
+        assert unidentified_slots(_state(units, exist="0", read_done="0")) == set()
+
+    def test_it_works_without_any_mask(self):
+        units = [{"id": "0", "tray": [_tray(0, read=False), _tray(1, read=False, state=9)]}]
+        assert unidentified_slots(_state(units)) == {(0, 0)}
+
+
 class TestWhatIsNeverIncluded:
     def test_the_external_spool_unit(self):
         units = [{"id": "254", "tray": [_tray(0, read=False)]}]
@@ -95,7 +146,8 @@ class TestWhatIsNeverIncluded:
         presence decoder uses."""
         units = [{"id": 128, "tray": [_tray(0, read=False)]}]
         assert unread_ams_slots(_state(units, exist=format(1 << 16, "x"), read_done="0")) == [(128, 0)]
-        assert unread_ams_slots(_state(units, exist=format(1 << 16, "x"), read_done=format(1 << 16, "x"))) == []
+        identified = [{"id": 128, "tray": [_tray(0)]}]
+        assert unread_ams_slots(_state(identified, exist=format(1 << 16, "x"), read_done=format(1 << 16, "x"))) == []
 
     def test_a_unit_with_no_known_bit_layout_is_skipped(self):
         units = [{"id": 40, "tray": [_tray(0, read=False)]}]
