@@ -4000,6 +4000,7 @@ export default {
       nextPage: 'Sonraki sayfa',
       zoomIn: 'Yakınlaştır',
       zoomOut: 'Uzaklaştır',
+      resetZoom: 'Yakınlaştırmayı sıfırla',
       fullscreen: 'Tam ekran',
       exitFullscreen: 'Tam ekrandan çık',
       emptySheet: 'Bu sayfa boş',

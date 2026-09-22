@@ -3993,6 +3993,7 @@ export default {
       nextPage: '下一页',
       zoomIn: '放大',
       zoomOut: '缩小',
+      resetZoom: '重置缩放',
       fullscreen: '全屏',
       exitFullscreen: '退出全屏',
       emptySheet: '此工作表为空',

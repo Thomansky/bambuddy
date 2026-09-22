@@ -3815,6 +3815,7 @@ export default {
       nextPage: '다음 페이지',
       zoomIn: '확대',
       zoomOut: '축소',
+      resetZoom: '확대/축소 초기화',
       fullscreen: '전체 화면',
       exitFullscreen: '전체 화면 종료',
       emptySheet: '이 시트는 비어 있습니다',

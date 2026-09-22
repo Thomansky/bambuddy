@@ -4035,6 +4035,7 @@ export default {
       nextPage: 'Volgende pagina',
       zoomIn: 'Inzoomen',
       zoomOut: 'Uitzoomen',
+      resetZoom: 'Zoom herstellen',
       fullscreen: 'Volledig scherm',
       exitFullscreen: 'Volledig scherm afsluiten',
       emptySheet: 'Dit werkblad is leeg',

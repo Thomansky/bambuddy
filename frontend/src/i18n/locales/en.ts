@@ -4035,6 +4035,7 @@ export default {
       nextPage: 'Next page',
       zoomIn: 'Zoom in',
       zoomOut: 'Zoom out',
+      resetZoom: 'Reset zoom',
       fullscreen: 'Fullscreen',
       exitFullscreen: 'Exit fullscreen',
       emptySheet: 'This sheet is empty',
