@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronLeft, ChevronRight, FileText, Loader2, Maximize2, Minimize2, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { ChevronLeft, ChevronRight, FileText, Loader2, ZoomIn, ZoomOut } from 'lucide-react';
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from 'pdfjs-dist';
 import { api, getAuthToken } from '../api/client';
 import { formatFileSize } from '../utils/file';
-import { useElementFullscreen } from '../hooks/useElementFullscreen';
+import { PreviewModalShell, previewIconButtonClass } from './PreviewModalShell';
+import { usePreviewFullscreen } from '../hooks/usePreviewFullscreen';
 
 // Fetching and parsing happen fully in the browser; beyond this size the
 // preview shows a notice instead of stalling the tab on a giant download.
@@ -83,7 +84,8 @@ function wheelDeltaPixels(e: WheelEvent): number {
 
 export function PdfPreviewModal({ libraryFileId, filename, fileSize, onClose, onSnapshot }: PdfPreviewModalProps) {
   const { t } = useTranslation();
-  const panelRef = useRef<HTMLDivElement>(null);
+  const fullscreen = usePreviewFullscreen();
+  const { panelRef, isFullscreen, toggleFullscreen } = fullscreen;
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const renderTaskRef = useRef<RenderTask | null>(null);
@@ -92,7 +94,6 @@ export function PdfPreviewModal({ libraryFileId, filename, fileSize, onClose, on
   useEffect(() => {
     onSnapshotRef.current = onSnapshot;
   });
-  const { isFullscreen, toggleFullscreen } = useElementFullscreen(panelRef);
 
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
   const [pageNum, setPageNum] = useState(1);
@@ -135,12 +136,6 @@ export function PdfPreviewModal({ libraryFileId, filename, fileSize, onClose, on
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        // In fullscreen Esc belongs to the browser, which leaves fullscreen;
-        // the modal stays open.
-        if (!document.fullscreenElement) onClose();
-        return;
-      }
       // Ctrl/⌘ combinations are the browser's own zoom; leave them alone.
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key === '+' || e.key === '=') {
@@ -157,7 +152,7 @@ export function PdfPreviewModal({ libraryFileId, filename, fileSize, onClose, on
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, zoomAt]);
+  }, [zoomAt]);
 
   // Wheel: Ctrl/⌘ (which is also how a trackpad pinch arrives) always zooms;
   // a plain wheel zooms only while the page fits the viewport, because then
@@ -255,7 +250,7 @@ export function PdfPreviewModal({ libraryFileId, filename, fileSize, onClose, on
     const observer = new ResizeObserver(() => setLayoutVersion((v) => v + 1));
     observer.observe(panel);
     return () => observer.disconnect();
-  }, []);
+  }, [panelRef]);
 
   // Load the document. pdf.js is imported on demand so the viewer and its
   // worker stay out of the main bundle.
@@ -380,106 +375,87 @@ export function PdfPreviewModal({ libraryFileId, filename, fileSize, onClose, on
   }, [doc, pageNum, renderZoom, layoutVersion, t]);
 
   const pageCount = doc?.numPages ?? 0;
-  const iconButtonClass = 'p-1.5 rounded hover:bg-bambu-dark text-bambu-gray hover:text-white transition-colors';
+  const iconButtonClass = previewIconButtonClass;
 
   return (
-    <div className={`fixed inset-0 bg-black/70 flex items-center justify-center z-50 ${isFullscreen ? 'p-0' : 'p-4'}`}>
+    <PreviewModalShell
+      title={filename}
+      fullscreen={fullscreen}
+      onClose={onClose}
+      icon={<FileText className="w-5 h-5 text-bambu-green flex-shrink-0" />}
+      actions={
+        <>
+          {doc && pageCount > 1 && (
+            <div className="flex items-center gap-1 mr-2">
+              <button
+                onClick={() => setPageNum((p) => Math.max(1, p - 1))}
+                disabled={pageNum <= 1}
+                className={`${iconButtonClass} disabled:opacity-40 disabled:cursor-not-allowed`}
+                aria-label={t('fileManager.preview.prevPage')}
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <span className="text-sm text-bambu-gray whitespace-nowrap">
+                {t('fileManager.preview.page', { current: pageNum, total: pageCount })}
+              </span>
+              <button
+                onClick={() => setPageNum((p) => Math.min(pageCount, p + 1))}
+                disabled={pageNum >= pageCount}
+                className={`${iconButtonClass} disabled:opacity-40 disabled:cursor-not-allowed`}
+                aria-label={t('fileManager.preview.nextPage')}
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+          {doc && (
+            <>
+              <button
+                onClick={() => zoomAt(1 / ZOOM_STEP)}
+                className={iconButtonClass}
+                aria-label={t('fileManager.preview.zoomOut')}
+              >
+                <ZoomOut className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => zoomAt(ZOOM_STEP)}
+                className={iconButtonClass}
+                aria-label={t('fileManager.preview.zoomIn')}
+              >
+                <ZoomIn className="w-4 h-4" />
+              </button>
+            </>
+          )}
+        </>
+      }
+    >
+      {/* Page */}
       <div
-        ref={panelRef}
-        className={`bg-bambu-dark-secondary w-full border border-bambu-dark-tertiary flex flex-col ${
-          isFullscreen ? 'h-full max-w-none rounded-none' : 'max-w-5xl h-[85vh] rounded-lg'
-        }`}
+        ref={containerRef}
+        data-testid="pdf-preview-page"
+        className={`relative flex-1 min-h-0 overflow-auto bg-bambu-dark p-4 touch-none ${isFullscreen ? '' : 'rounded-b-lg'}`}
+        onDoubleClick={toggleFullscreen}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerEnd}
+        onPointerCancel={handlePointerEnd}
+        onPointerLeave={handlePointerEnd}
       >
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-bambu-dark-tertiary">
-          <div className="flex items-center gap-2 min-w-0">
-            <FileText className="w-5 h-5 text-bambu-green flex-shrink-0" />
-            <h2 className="text-lg font-semibold text-white truncate">{filename}</h2>
+        {error ? (
+          <div className="h-full flex items-center justify-center">
+            <p className="text-bambu-gray text-center">{error}</p>
           </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            {doc && pageCount > 1 && (
-              <div className="flex items-center gap-1 mr-2">
-                <button
-                  onClick={() => setPageNum((p) => Math.max(1, p - 1))}
-                  disabled={pageNum <= 1}
-                  className={`${iconButtonClass} disabled:opacity-40 disabled:cursor-not-allowed`}
-                  aria-label={t('fileManager.preview.prevPage')}
-                >
-                  <ChevronLeft className="w-4 h-4" />
-                </button>
-                <span className="text-sm text-bambu-gray whitespace-nowrap">
-                  {t('fileManager.preview.page', { current: pageNum, total: pageCount })}
-                </span>
-                <button
-                  onClick={() => setPageNum((p) => Math.min(pageCount, p + 1))}
-                  disabled={pageNum >= pageCount}
-                  className={`${iconButtonClass} disabled:opacity-40 disabled:cursor-not-allowed`}
-                  aria-label={t('fileManager.preview.nextPage')}
-                >
-                  <ChevronRight className="w-4 h-4" />
-                </button>
-              </div>
-            )}
-            {doc && (
-              <>
-                <button
-                  onClick={() => zoomAt(1 / ZOOM_STEP)}
-                  className={iconButtonClass}
-                  aria-label={t('fileManager.preview.zoomOut')}
-                >
-                  <ZoomOut className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={() => zoomAt(ZOOM_STEP)}
-                  className={iconButtonClass}
-                  aria-label={t('fileManager.preview.zoomIn')}
-                >
-                  <ZoomIn className="w-4 h-4" />
-                </button>
-              </>
-            )}
-            <button
-              onClick={toggleFullscreen}
-              className={iconButtonClass}
-              aria-label={isFullscreen ? t('fileManager.preview.exitFullscreen') : t('fileManager.preview.fullscreen')}
-              title={isFullscreen ? t('fileManager.preview.exitFullscreen') : t('fileManager.preview.fullscreen')}
-            >
-              {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
-            </button>
-            <button onClick={onClose} className={iconButtonClass} aria-label={t('common.close')}>
-              <X className="w-5 h-5" />
-            </button>
+        ) : (
+          <div className="flex justify-center min-w-fit">
+            <canvas ref={canvasRef} className="shadow-lg" />
           </div>
-        </div>
-
-        {/* Page */}
-        <div
-          ref={containerRef}
-          data-testid="pdf-preview-page"
-          className={`relative flex-1 min-h-0 overflow-auto bg-bambu-dark p-4 touch-none ${isFullscreen ? '' : 'rounded-b-lg'}`}
-          onDoubleClick={toggleFullscreen}
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerEnd}
-          onPointerCancel={handlePointerEnd}
-          onPointerLeave={handlePointerEnd}
-        >
-          {error ? (
-            <div className="h-full flex items-center justify-center">
-              <p className="text-bambu-gray text-center">{error}</p>
-            </div>
-          ) : (
-            <div className="flex justify-center min-w-fit">
-              <canvas ref={canvasRef} className="shadow-lg" />
-            </div>
-          )}
-          {!error && rendering && (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <Loader2 className="w-8 h-8 text-bambu-green animate-spin" />
-            </div>
-          )}
-        </div>
+        )}
+        {!error && rendering && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <Loader2 className="w-8 h-8 text-bambu-green animate-spin" />
+          </div>
+        )}
       </div>
-    </div>
+    </PreviewModalShell>
   );
 }

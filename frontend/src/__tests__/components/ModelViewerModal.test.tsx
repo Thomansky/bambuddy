@@ -243,7 +243,8 @@ describe('ModelViewerModal', () => {
       );
       const viewer = await screen.findByTestId('model-viewer-area');
       const panel = screen.getByText('Test Model').closest('.flex-col') as HTMLElement;
-      expect(panel.className).toContain('max-w-4xl');
+      // Windowed: the size every preview shares (#2976), not a per-modal max-w.
+      expect(panel.className).toContain('w-[min(1800px,96vw)]');
 
       fireEvent.doubleClick(viewer);
 

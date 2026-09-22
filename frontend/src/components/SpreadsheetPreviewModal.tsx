@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { FileSpreadsheet, Loader2, Maximize2, Minimize2, X } from 'lucide-react';
+import { FileSpreadsheet, Loader2 } from 'lucide-react';
 import { api, getAuthToken } from '../api/client';
 import { formatFileSize } from '../utils/file';
-import { useElementFullscreen } from '../hooks/useElementFullscreen';
+import { PreviewModalShell } from './PreviewModalShell';
+import { usePreviewFullscreen } from '../hooks/usePreviewFullscreen';
 
 // Parsing an arbitrarily large workbook would freeze the tab — anything over
 // this size (or beyond the row/column caps) falls back to a truncation notice.
@@ -102,18 +103,8 @@ export function SpreadsheetPreviewModal({
   useEffect(() => {
     onSnapshotRef.current = onSnapshot;
   });
-  const panelRef = useRef<HTMLDivElement>(null);
-  const { isFullscreen, toggleFullscreen } = useElementFullscreen(panelRef);
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // In fullscreen Esc belongs to the browser, which leaves fullscreen;
-      // the modal stays open.
-      if (e.key === 'Escape' && !document.fullscreenElement) onClose();
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+  const fullscreen = usePreviewFullscreen();
+  const { isFullscreen, toggleFullscreen } = fullscreen;
 
   useEffect(() => {
     let cancelled = false;
@@ -224,123 +215,100 @@ export function SpreadsheetPreviewModal({
   const colsTruncated = sheet != null && sheet.totalCols > MAX_COLS;
   const shownCols = sheet == null ? 0 : Math.min(sheet.totalCols, MAX_COLS);
 
-  const iconButtonClass = 'p-1.5 rounded hover:bg-bambu-dark text-bambu-gray hover:text-white transition-colors';
-
   return (
-    <div className={`fixed inset-0 bg-black/70 flex items-center justify-center z-50 ${isFullscreen ? 'p-0' : 'p-4'}`}>
-      <div
-        ref={panelRef}
-        className={`bg-bambu-dark-secondary w-full border border-bambu-dark-tertiary flex flex-col ${
-          isFullscreen ? 'h-full max-w-none rounded-none' : 'max-w-6xl h-[85vh] rounded-lg'
-        }`}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-bambu-dark-tertiary">
-          <div className="flex items-center gap-2 min-w-0">
-            <FileSpreadsheet className="w-5 h-5 text-bambu-green flex-shrink-0" />
-            <h2 className="text-lg font-semibold text-white truncate">{filename}</h2>
-          </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
+    <PreviewModalShell
+      title={filename}
+      fullscreen={fullscreen}
+      onClose={onClose}
+      icon={<FileSpreadsheet className="w-5 h-5 text-bambu-green flex-shrink-0" />}
+    >
+      {/* Sheet tabs */}
+      {sheets && sheets.length > 1 && (
+        <div className="flex gap-1 px-4 pt-2 overflow-x-auto flex-shrink-0">
+          {sheets.map((s, index) => (
             <button
-              onClick={toggleFullscreen}
-              className={iconButtonClass}
-              aria-label={isFullscreen ? t('fileManager.preview.exitFullscreen') : t('fileManager.preview.fullscreen')}
-              title={isFullscreen ? t('fileManager.preview.exitFullscreen') : t('fileManager.preview.fullscreen')}
+              key={`${s.name}-${index}`}
+              onClick={() => setActiveSheet(index)}
+              className={`px-3 py-1.5 text-sm rounded-t whitespace-nowrap transition-colors ${
+                index === activeSheet
+                  ? 'bg-bambu-dark text-white border border-b-0 border-bambu-dark-tertiary'
+                  : 'text-bambu-gray hover:text-white hover:bg-bambu-dark/50'
+              }`}
             >
-              {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+              {s.name}
             </button>
-            <button onClick={onClose} className={iconButtonClass} aria-label={t('common.close')}>
-              <X className="w-5 h-5" />
-            </button>
-          </div>
+          ))}
         </div>
+      )}
 
-        {/* Sheet tabs */}
-        {sheets && sheets.length > 1 && (
-          <div className="flex gap-1 px-4 pt-2 overflow-x-auto flex-shrink-0">
-            {sheets.map((s, index) => (
-              <button
-                key={`${s.name}-${index}`}
-                onClick={() => setActiveSheet(index)}
-                className={`px-3 py-1.5 text-sm rounded-t whitespace-nowrap transition-colors ${
-                  index === activeSheet
-                    ? 'bg-bambu-dark text-white border border-b-0 border-bambu-dark-tertiary'
-                    : 'text-bambu-gray hover:text-white hover:bg-bambu-dark/50'
-                }`}
-              >
-                {s.name}
-              </button>
-            ))}
+      {/* Content */}
+      <div
+        data-testid="spreadsheet-preview-content"
+        className={`flex-1 min-h-0 overflow-auto bg-bambu-dark ${isFullscreen ? '' : 'rounded-b-lg'}`}
+        onDoubleClick={toggleFullscreen}
+      >
+        {error ? (
+          <div className="h-full flex items-center justify-center p-6">
+            <p className="text-bambu-gray text-center">{error}</p>
           </div>
-        )}
-
-        {/* Content */}
-        <div
-          data-testid="spreadsheet-preview-content"
-          className={`flex-1 min-h-0 overflow-auto bg-bambu-dark ${isFullscreen ? '' : 'rounded-b-lg'}`}
-          onDoubleClick={toggleFullscreen}
-        >
-          {error ? (
-            <div className="h-full flex items-center justify-center p-6">
-              <p className="text-bambu-gray text-center">{error}</p>
-            </div>
-          ) : !sheets ? (
-            <div className="h-full flex items-center justify-center">
-              <Loader2 className="w-8 h-8 text-bambu-green animate-spin" />
-            </div>
-          ) : !sheet || sheet.rows.length === 0 ? (
-            <div className="h-full flex items-center justify-center p-6">
-              <p className="text-bambu-gray">{t('fileManager.preview.emptySheet')}</p>
-            </div>
-          ) : (
-            <table className="border-collapse text-xs">
-              <thead>
-                <tr>
-                  <th className="sticky top-0 bg-bambu-dark-secondary border border-bambu-dark-tertiary px-2 py-1 text-bambu-gray font-medium w-10" />
+        ) : !sheets ? (
+          <div className="h-full flex items-center justify-center">
+            <Loader2 className="w-8 h-8 text-bambu-green animate-spin" />
+          </div>
+        ) : !sheet || sheet.rows.length === 0 ? (
+          <div className="h-full flex items-center justify-center p-6">
+            <p className="text-bambu-gray">{t('fileManager.preview.emptySheet')}</p>
+          </div>
+        ) : (
+          // min-w-full so a narrow sheet spreads across the wider panel
+          // instead of huddling in its top-left corner (#2976).
+          <table className="border-collapse text-xs min-w-full">
+            <thead>
+              <tr>
+                <th className="sticky top-0 bg-bambu-dark-secondary border border-bambu-dark-tertiary px-2 py-1 text-bambu-gray font-medium w-10" />
+                {Array.from({ length: shownCols }, (_, c) => (
+                  <th
+                    key={c}
+                    className="sticky top-0 bg-bambu-dark-secondary border border-bambu-dark-tertiary px-2 py-1 text-bambu-gray font-medium text-left min-w-[80px]"
+                  >
+                    {columnLabel(c)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {sheet.rows.map((row, r) => (
+                <tr key={r}>
+                  <td className="border border-bambu-dark-tertiary px-2 py-1 text-bambu-gray text-right bg-bambu-dark-secondary/50">
+                    {r + 1}
+                  </td>
                   {Array.from({ length: shownCols }, (_, c) => (
-                    <th
+                    <td
                       key={c}
-                      className="sticky top-0 bg-bambu-dark-secondary border border-bambu-dark-tertiary px-2 py-1 text-bambu-gray font-medium text-left min-w-[80px]"
+                      className="border border-bambu-dark-tertiary px-2 py-1 text-bambu-gray-light whitespace-nowrap max-w-[280px] overflow-hidden text-ellipsis"
+                      title={row[c] || undefined}
                     >
-                      {columnLabel(c)}
-                    </th>
+                      {row[c] ?? ''}
+                    </td>
                   ))}
                 </tr>
-              </thead>
-              <tbody>
-                {sheet.rows.map((row, r) => (
-                  <tr key={r}>
-                    <td className="border border-bambu-dark-tertiary px-2 py-1 text-bambu-gray text-right bg-bambu-dark-secondary/50">
-                      {r + 1}
-                    </td>
-                    {Array.from({ length: shownCols }, (_, c) => (
-                      <td
-                        key={c}
-                        className="border border-bambu-dark-tertiary px-2 py-1 text-bambu-gray-light whitespace-nowrap max-w-[280px] overflow-hidden text-ellipsis"
-                        title={row[c] || undefined}
-                      >
-                        {row[c] ?? ''}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-
-        {/* Truncation notices */}
-        {(rowsTruncated || colsTruncated) && sheet && (
-          <div className="px-4 py-2 border-t border-bambu-dark-tertiary text-xs text-bambu-gray flex gap-4 flex-shrink-0">
-            {rowsTruncated && (
-              <span>{t('fileManager.preview.truncatedRows', { shown: sheet.rows.length, total: sheet.totalRows })}</span>
-            )}
-            {colsTruncated && (
-              <span>{t('fileManager.preview.truncatedCols', { shown: shownCols, total: sheet.totalCols })}</span>
-            )}
-          </div>
+              ))}
+            </tbody>
+          </table>
         )}
       </div>
-    </div>
+
+      {/* Truncation notices */}
+      {(rowsTruncated || colsTruncated) && sheet && (
+        <div className="px-4 py-2 border-t border-bambu-dark-tertiary text-xs text-bambu-gray flex gap-4 flex-shrink-0">
+          {rowsTruncated && (
+            <span>{t('fileManager.preview.truncatedRows', { shown: sheet.rows.length, total: sheet.totalRows })}</span>
+          )}
+          {colsTruncated && (
+            <span>{t('fileManager.preview.truncatedCols', { shown: shownCols, total: sheet.totalCols })}</span>
+          )}
+        </div>
+      )}
+    </PreviewModalShell>
   );
 }
