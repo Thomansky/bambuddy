@@ -47,6 +47,7 @@ import {
   Tag as TagIcon,
   FileText,
   FileSpreadsheet,
+  Eye,
 } from 'lucide-react';
 import { api } from '../api/client';
 import type {
@@ -92,6 +93,9 @@ const PdfPreviewModal = lazy(() =>
 const SpreadsheetPreviewModal = lazy(() =>
   import('../components/SpreadsheetPreviewModal').then((m) => ({ default: m.SpreadsheetPreviewModal }))
 );
+const ImagePreviewModal = lazy(() =>
+  import('../components/ImagePreviewModal').then((m) => ({ default: m.ImagePreviewModal }))
+);
 
 function isSpreadsheetType(fileType: string): boolean {
   return fileType === 'csv' || fileType === 'xlsx' || fileType === 'ods';
@@ -99,6 +103,41 @@ function isSpreadsheetType(fileType: string): boolean {
 
 function isStepType(fileType: string): boolean {
   return fileType === 'step' || fileType === 'stp';
+}
+
+// Mirrors IMAGE_EXTENSIONS in routes/library.py — the types the server both
+// stores and renders a thumbnail for.
+const IMAGE_TYPES = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tiff', 'tif']);
+
+function isImageType(fileType: string): boolean {
+  return IMAGE_TYPES.has(fileType.toLowerCase());
+}
+
+// Which files have a preview at all: what a double-click opens, and what the
+// toolbar's Preview button appears for (#2976). Sliced files go to the
+// full-page gcode viewer, everything else to a modal.
+function isPreviewableLibraryFile(file: LibraryFileListItem): boolean {
+  const type = file.file_type;
+  return (
+    isSlicedLibraryFile(file) ||
+    type === '3mf' ||
+    type === 'stl' ||
+    isStepType(type) ||
+    type === 'pdf' ||
+    isSpreadsheetType(type) ||
+    isImageType(type)
+  );
+}
+
+// Whether the preview is the 3D one, which has its own menu label.
+function isModelPreview(file: LibraryFileListItem): boolean {
+  return isSlicedLibraryFile(file) || file.file_type === '3mf' || file.file_type === 'stl' || isStepType(file.file_type);
+}
+
+function documentPreviewIcon(fileType: string) {
+  if (fileType === 'pdf') return <FileText className="w-4 h-4" />;
+  if (isSpreadsheetType(fileType)) return <FileSpreadsheet className="w-4 h-4" />;
+  return <Image className="w-4 h-4" />;
 }
 
 // Types the server renders thumbnails for itself, so the batch button and the
@@ -786,8 +825,7 @@ interface FileCardProps {
   // (#3029), so offering one there would only ever fail.
   desktopSlicer: SlicerType;
   canSlice?: boolean;
-  onPreview3d?: (file: LibraryFileListItem) => void;
-  onPreviewDocument?: (file: LibraryFileListItem) => void;
+  onPreview?: (file: LibraryFileListItem) => void;
   onRename?: (file: LibraryFileListItem) => void;
   onGenerateThumbnail?: (file: LibraryFileListItem) => void;
   onTagClick?: (tagId: number) => void;
@@ -799,7 +837,7 @@ interface FileCardProps {
   t: TFunction;
 }
 
-function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, onSlice, onOpenInSlicer, onRunPipeline, useSlicerApi, desktopSlicer, canSlice, onPreview3d, onPreviewDocument, onRename, onGenerateThumbnail, onTagClick, thumbnailVersion, hasPermission, canModify, authEnabled, showModified, t }: FileCardProps) {
+function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, onSlice, onOpenInSlicer, onRunPipeline, useSlicerApi, desktopSlicer, canSlice, onPreview, onRename, onGenerateThumbnail, onTagClick, thumbnailVersion, hasPermission, canModify, authEnabled, showModified, t }: FileCardProps) {
   // Viewport coordinates rather than a flag, because the menu is rendered by
   // `ContextMenu` at `position: fixed` and anchored to the button (#2846). The
   // card it belongs to is only ~270px tall for a bare STL, which is shorter
@@ -841,20 +879,12 @@ function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, o
       title: !hasPermission('pipelines:run') ? t('library.runWithPipeline.noPermission') : undefined,
     });
   }
-  if (onPreview3d && (file.file_type === '3mf' || file.file_type === 'gcode' || file.file_type === 'stl' || file.file_type === 'gcode.3mf' || isStepType(file.file_type))) {
+  if (onPreview && isPreviewableLibraryFile(file)) {
+    const modelPreview = isModelPreview(file);
     menuItems.push({
-      label: t('fileManager.preview3d'),
-      icon: <Box className="w-4 h-4" />,
-      onClick: () => onPreview3d(file),
-      disabled: !canPreview3d,
-      title: !canPreview3d ? t('fileManager.noPermissionPreview') : undefined,
-    });
-  }
-  if (onPreviewDocument && (file.file_type === 'pdf' || isSpreadsheetType(file.file_type))) {
-    menuItems.push({
-      label: t('fileManager.preview.open'),
-      icon: file.file_type === 'pdf' ? <FileText className="w-4 h-4" /> : <FileSpreadsheet className="w-4 h-4" />,
-      onClick: () => onPreviewDocument(file),
+      label: modelPreview ? t('fileManager.preview3d') : t('fileManager.preview.open'),
+      icon: modelPreview ? <Box className="w-4 h-4" /> : documentPreviewIcon(file.file_type),
+      onClick: () => onPreview(file),
       disabled: !canPreview3d,
       title: !canPreview3d ? t('fileManager.noPermissionPreview') : undefined,
     });
@@ -901,6 +931,9 @@ function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, o
           : 'border-bambu-dark-tertiary hover:border-bambu-green/50'
       }`}
       onClick={() => onSelect(file.id)}
+      // Double-click opens the preview (#2976). The two clicks that precede it
+      // toggle the selection twice, so the selection is left as it was.
+      onDoubleClick={() => onPreview?.(file)}
     >
       {/* Thumbnail */}
       <div className="aspect-square bg-bambu-dark flex items-center justify-center overflow-hidden rounded-t-lg">
@@ -914,6 +947,8 @@ function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, o
           <FileText className="w-12 h-12 text-bambu-gray/30" />
         ) : isSpreadsheetType(file.file_type) ? (
           <FileSpreadsheet className="w-12 h-12 text-bambu-gray/30" />
+        ) : isImageType(file.file_type) ? (
+          <Image className="w-12 h-12 text-bambu-gray/30" />
         ) : (
           <FileBox className="w-12 h-12 text-bambu-gray/30" />
         )}
@@ -1071,6 +1106,7 @@ export function FileManagerPage() {
   const [viewerFile, setViewerFile] = useState<LibraryFileListItem | null>(null);
   const [pdfPreviewFile, setPdfPreviewFile] = useState<LibraryFileListItem | null>(null);
   const [sheetPreviewFile, setSheetPreviewFile] = useState<LibraryFileListItem | null>(null);
+  const [imagePreviewFile, setImagePreviewFile] = useState<LibraryFileListItem | null>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>(() => {
     return (localStorage.getItem('library-view-mode') as 'grid' | 'list') || 'grid';
   });
@@ -1616,6 +1652,34 @@ export function FileManagerPage() {
     },
     onError: (error: Error) => showToast(error.message, 'error'),
   });
+
+  // The one way into a preview (#2976): the kebab entry, the action-strip
+  // icon, a double-click on the card or row, and the toolbar button all end
+  // up here. Sliced files open the full-page gcode viewer the archive card
+  // uses; everything else opens the modal for its type. A file with no
+  // preview does nothing.
+  const openPreview = useCallback((file: LibraryFileListItem) => {
+    if (!hasPermission('library:read')) return;
+    if (isSlicedLibraryFile(file)) {
+      navigate(`/gcode-viewer?library_file=${file.id}`);
+    } else if (file.file_type === '3mf' || file.file_type === 'stl' || isStepType(file.file_type)) {
+      setViewerFile(file);
+    } else if (file.file_type === 'pdf') {
+      setPdfPreviewFile(file);
+    } else if (isSpreadsheetType(file.file_type)) {
+      setSheetPreviewFile(file);
+    } else if (isImageType(file.file_type)) {
+      setImagePreviewFile(file);
+    }
+  }, [hasPermission, navigate]);
+
+  // The toolbar's Preview button acts on one file, so it is offered only for
+  // a single previewable selection.
+  const previewSelection = useMemo(() => {
+    if (!files || selectedFiles.length !== 1) return null;
+    const file = files.find((f) => f.id === selectedFiles[0]);
+    return file && isPreviewableLibraryFile(file) ? file : null;
+  }, [files, selectedFiles]);
 
   // Get sliced files from selection
   const selectedSlicedFiles = useMemo(() => {
@@ -2352,6 +2416,18 @@ export function FileManagerPage() {
                   </span>
                   <div className="hidden sm:block flex-1" />
                   <div className="w-full sm:w-auto flex flex-wrap items-center gap-2 mt-2 sm:mt-0">
+                    {previewSelection && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => openPreview(previewSelection)}
+                        disabled={!hasPermission('library:read')}
+                        title={!hasPermission('library:read') ? t('fileManager.noPermissionPreview') : undefined}
+                      >
+                        <Eye className="w-4 h-4 sm:mr-1" />
+                        <span className="hidden sm:inline">{t('fileManager.preview.open')}</span>
+                      </Button>
+                    )}
                     {/* Print used to disappear the moment a second sliced file was
                         selected. Selecting several is now how you say "same job,
                         different printers" (#671) — one queue item, whichever
@@ -2505,21 +2581,7 @@ export function FileManagerPage() {
                     onRunPipeline={setRunPipelineFile}
                     useSlicerApi={settings?.use_slicer_api ?? false}
                     canSlice={canSlice()}
-                    onPreview3d={(f) => {
-                      // Sliced files (.gcode / .gcode.3mf) open the same
-                      // full-page gcode viewer the archive card uses, so
-                      // the two paths feel consistent. STL / source 3MF
-                      // continue to use the in-app 3D model viewer modal.
-                      if (isSlicedLibraryFile(f)) {
-                        navigate(`/gcode-viewer?library_file=${f.id}`);
-                      } else {
-                        setViewerFile(f);
-                      }
-                    }}
-                    onPreviewDocument={(f) => {
-                      if (f.file_type === 'pdf') setPdfPreviewFile(f);
-                      else setSheetPreviewFile(f);
-                    }}
+                    onPreview={openPreview}
                     onRename={(f) => setRenameItem({ type: 'file', id: f.id, name: f.filename })}
                     onGenerateThumbnail={(f) => singleThumbnailMutation.mutate(f.id)}
                     onTagClick={toggleTagFilter}
@@ -2564,6 +2626,8 @@ export function FileManagerPage() {
                       selectedFiles.includes(file.id) ? 'bg-bambu-green/10' : ''
                     }`}
                     onClick={() => handleFileSelect(file.id)}
+                    // Double-click opens the preview (#2976), as in the grid.
+                    onDoubleClick={() => openPreview(file)}
                   >
                     {/* Checkbox */}
                     <div className={`w-5 h-5 rounded border-2 flex items-center justify-center ${
@@ -2589,6 +2653,8 @@ export function FileManagerPage() {
                                 <FileText className="w-5 h-5 text-bambu-gray/50" />
                               ) : isSpreadsheetType(file.file_type) ? (
                                 <FileSpreadsheet className="w-5 h-5 text-bambu-gray/50" />
+                              ) : isImageType(file.file_type) ? (
+                                <Image className="w-5 h-5 text-bambu-gray/50" />
                               ) : (
                                 <FileBox className="w-5 h-5 text-bambu-gray/50" />
                               )}
@@ -2724,16 +2790,9 @@ export function FileManagerPage() {
                           <Play className="w-4 h-4" />
                         </button>
                       )}
-                      {(file.file_type === '3mf' || file.file_type === 'gcode' || file.file_type === 'gcode.3mf' || file.file_type === 'stl' || isStepType(file.file_type)) && (
+                      {isModelPreview(file) && (
                         <button
-                          onClick={() => {
-                            if (!hasPermission('library:read')) return;
-                            if (isSlicedLibraryFile(file)) {
-                              navigate(`/gcode-viewer?library_file=${file.id}`);
-                            } else {
-                              setViewerFile(file);
-                            }
-                          }}
+                          onClick={() => openPreview(file)}
                           className={`p-1.5 rounded transition-colors ${
                             hasPermission('library:read')
                               ? 'hover:bg-bambu-dark text-bambu-gray hover:text-bambu-green'
@@ -2745,13 +2804,9 @@ export function FileManagerPage() {
                           <Box className="w-4 h-4" />
                         </button>
                       )}
-                      {(file.file_type === 'pdf' || isSpreadsheetType(file.file_type)) && (
+                      {!isModelPreview(file) && isPreviewableLibraryFile(file) && (
                         <button
-                          onClick={() => {
-                            if (!hasPermission('library:read')) return;
-                            if (file.file_type === 'pdf') setPdfPreviewFile(file);
-                            else setSheetPreviewFile(file);
-                          }}
+                          onClick={() => openPreview(file)}
                           className={`p-1.5 rounded transition-colors ${
                             hasPermission('library:read')
                               ? 'hover:bg-bambu-dark text-bambu-gray hover:text-bambu-green'
@@ -2760,7 +2815,7 @@ export function FileManagerPage() {
                           title={hasPermission('library:read') ? t('fileManager.preview.open') : t('fileManager.noPermissionPreview')}
                           disabled={!hasPermission('library:read')}
                         >
-                          {file.file_type === 'pdf' ? <FileText className="w-4 h-4" /> : <FileSpreadsheet className="w-4 h-4" />}
+                          {documentPreviewIcon(file.file_type)}
                         </button>
                       )}
                       <button
@@ -2988,7 +3043,7 @@ export function FileManagerPage() {
         />
       )}
 
-      {(pdfPreviewFile || sheetPreviewFile) && (
+      {(pdfPreviewFile || sheetPreviewFile || imagePreviewFile) && (
         <Suspense fallback={null}>
           {pdfPreviewFile && (
             <PdfPreviewModal
@@ -3007,6 +3062,14 @@ export function FileManagerPage() {
               fileSize={sheetPreviewFile.file_size}
               onClose={() => setSheetPreviewFile(null)}
               onSnapshot={previewSnapshotHandler(sheetPreviewFile)}
+            />
+          )}
+          {imagePreviewFile && (
+            <ImagePreviewModal
+              libraryFileId={imagePreviewFile.id}
+              filename={imagePreviewFile.print_name || imagePreviewFile.filename}
+              fileSize={imagePreviewFile.file_size}
+              onClose={() => setImagePreviewFile(null)}
             />
           )}
         </Suspense>
