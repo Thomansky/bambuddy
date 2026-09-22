@@ -22,6 +22,15 @@ const WHEEL_ZOOM_RATE = Math.log(ZOOM_STEP) / WHEEL_DELTA_CLAMP;
 // Wheel zoom changes the displayed size at once (CSS) and re-rasterises after
 // the gesture settles, so a scroll burst costs one pdf.js render, not twenty.
 const RERENDER_DEBOUNCE_MS = 150;
+// iOS Safari refuses to back a canvas past roughly 16.7M pixels and hands back
+// a blank one instead of failing; zoom 4 on a dpr-2 screen crosses that on any
+// ordinary page. Past the cap the raster stops getting sharper, which costs
+// detail rather than the whole page.
+const MAX_CANVAS_PIXELS = 16 * 1024 * 1024;
+// pdf.js fetches its CMaps, ICC profiles, standard fonts and wasm decoders at
+// runtime instead of bundling them; vite.config.ts publishes them here. Left
+// unset, CJK text, JPEG2000/JBIG2 images and ICC colour silently fail (#2976).
+const PDFJS_ASSET_BASE = `${import.meta.env.BASE_URL}assets/pdfjs/`;
 
 const clampZoom = (zoom: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom));
 
@@ -276,10 +285,24 @@ export function PdfPreviewModal({ libraryFileId, filename, fileSize, onClose, on
       if (!pdfjs.GlobalWorkerOptions.workerSrc) {
         pdfjs.GlobalWorkerOptions.workerSrc = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default;
       }
-      loadingTask = pdfjs.getDocument({ data: new Uint8Array(buffer) });
+      loadingTask = pdfjs.getDocument({
+        data: new Uint8Array(buffer),
+        cMapUrl: `${PDFJS_ASSET_BASE}cmaps/`,
+        iccUrl: `${PDFJS_ASSET_BASE}iccs/`,
+        standardFontDataUrl: `${PDFJS_ASSET_BASE}standard_fonts/`,
+        wasmUrl: `${PDFJS_ASSET_BASE}wasm/`,
+      });
+      if (cancelled) {
+        // The modal closed during the fetch/import above, so cleanup ran while
+        // `loadingTask` was still null and left this task — and its worker —
+        // running. Nothing else will destroy it.
+        loadingTask.destroy();
+        return;
+      }
       const loaded = await loadingTask.promise;
       if (cancelled) {
-        // Cleanup below already ran; destroying the task tears down the doc.
+        // Cleanup ran after the assignment above, so it destroyed the task
+        // already — and with it the document.
         return;
       }
       setDoc(loaded);
@@ -319,7 +342,10 @@ export function PdfPreviewModal({ libraryFileId, filename, fileSize, onClose, on
       // Fit the page width to the panel at zoom 1; render at device pixels.
       const fitScale = Math.max((container.clientWidth - 32) / baseViewport.width, 0.1);
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const viewport = page.getViewport({ scale: fitScale * renderZoom * dpr });
+      const wanted = fitScale * renderZoom * dpr;
+      const pixels = baseViewport.width * wanted * (baseViewport.height * wanted);
+      const scale = pixels > MAX_CANVAS_PIXELS ? wanted * Math.sqrt(MAX_CANVAS_PIXELS / pixels) : wanted;
+      const viewport = page.getViewport({ scale });
       canvas.width = viewport.width;
       canvas.height = viewport.height;
       baseCssSizeRef.current = { width: baseViewport.width * fitScale, height: baseViewport.height * fitScale };

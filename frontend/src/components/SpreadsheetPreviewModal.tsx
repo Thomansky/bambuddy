@@ -140,15 +140,33 @@ export function SpreadsheetPreviewModal({
         // papaparse is loaded on demand so it stays out of the main bundle.
         const Papa = (await import('papaparse')).default;
         const text = new TextDecoder().decode(buffer);
-        const result = Papa.parse<string[]>(text, { skipEmptyLines: false });
-        const all = result.data.filter((row) => Array.isArray(row));
-        // A trailing newline parses as one empty row — drop trailing blanks.
-        while (all.length > 0 && all[all.length - 1].every((cell) => !cell)) {
-          all.pop();
-        }
-        const totalRows = all.length;
-        const totalCols = all.reduce((max, row) => Math.max(max, row.length), 0);
-        const rows = all.slice(0, MAX_ROWS).map((row) => row.slice(0, MAX_COLS).map((cell) => cell ?? ''));
+        const rows: string[][] = [];
+        let totalRows = 0;
+        let totalCols = 0;
+        // A trailing newline parses as one empty row, and only a *trailing*
+        // run of blanks is dropped — so blanks are held back until a later
+        // row proves they were interior.
+        let pendingBlanks: string[][] = [];
+        // Counted and capped row by row, so the whole file is never
+        // materialised as rows the preview then throws away.
+        const take = (row: string[]) => {
+          totalRows += 1;
+          totalCols = Math.max(totalCols, row.length);
+          if (rows.length < MAX_ROWS) rows.push(row.slice(0, MAX_COLS).map((cell) => cell ?? ''));
+        };
+        Papa.parse<string[]>(text, {
+          skipEmptyLines: false,
+          step: ({ data }) => {
+            if (!Array.isArray(data)) return;
+            if (data.every((cell) => !cell)) {
+              pendingBlanks.push(data);
+              return;
+            }
+            pendingBlanks.forEach(take);
+            pendingBlanks = [];
+            take(data);
+          },
+        });
         parsed = [{ name: filename, rows, totalRows, totalCols }];
       } else {
         // SheetJS handles both XLSX and ODS; loaded on demand like papaparse.

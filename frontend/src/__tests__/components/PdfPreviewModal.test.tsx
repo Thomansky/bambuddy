@@ -13,13 +13,14 @@ import { PdfPreviewModal } from '../../components/PdfPreviewModal';
 
 const pdfjsMocks = vi.hoisted(() => {
   const render = vi.fn(() => ({ promise: Promise.resolve(), cancel: vi.fn() }));
-  const getViewport = vi.fn(({ scale }: { scale: number }) => ({ width: 600 * scale, height: 800 * scale }));
+  const defaultViewport = ({ scale }: { scale: number }) => ({ width: 600 * scale, height: 800 * scale });
+  const getViewport = vi.fn(defaultViewport);
   const getPage = vi.fn(async () => ({ getViewport, render }));
   const getDocument = vi.fn(() => ({
     promise: Promise.resolve({ numPages: 3, getPage }),
     destroy: vi.fn(),
   }));
-  return { render, getViewport, getPage, getDocument };
+  return { render, defaultViewport, getViewport, getPage, getDocument };
 });
 
 vi.mock('pdfjs-dist', () => ({
@@ -77,6 +78,9 @@ function wheelWithCtrl(target: Element, deltaY: number) {
 describe('PdfPreviewModal', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // clearAllMocks keeps implementations, but a test that swaps the page
+    // geometry would otherwise leak it into every test after it.
+    pdfjsMocks.getViewport.mockImplementation(pdfjsMocks.defaultViewport);
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => new Response(new Uint8Array([1, 2, 3]), { status: 200 })),
@@ -119,6 +123,40 @@ describe('PdfPreviewModal', () => {
     pdfjsMocks.getDocument.mockReturnValueOnce({ promise: Promise.reject(new Error('bad pdf')), destroy: vi.fn() } as never);
     renderModal();
     expect(await screen.findByText('This file cannot be previewed.')).toBeInTheDocument();
+  });
+
+  it('points pdf.js at the resources it fetches at runtime', async () => {
+    renderModal();
+    await screen.findByText('Page 1 of 3');
+
+    // Unset, CJK text has no CMaps, non-embedded fonts no font data, and the
+    // JPEG2000/JBIG2/ICC decoders no wasm — all of which fail silently.
+    expect(pdfjsMocks.getDocument).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cMapUrl: '/assets/pdfjs/cmaps/',
+        iccUrl: '/assets/pdfjs/iccs/',
+        standardFontDataUrl: '/assets/pdfjs/standard_fonts/',
+        wasmUrl: '/assets/pdfjs/wasm/',
+      }),
+    );
+  });
+
+  it('destroys a loading task that resolved after the modal closed', async () => {
+    // Closing during the fetch/import window used to leave cleanup holding a
+    // null task, and the pdf.js worker it later started ran on forever.
+    let deliver: (response: Response) => void = () => {};
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>((resolve) => (deliver = resolve))),
+    );
+    const destroy = vi.fn();
+    pdfjsMocks.getDocument.mockReturnValueOnce({ promise: new Promise(() => {}), destroy } as never);
+
+    const { unmount } = renderModal();
+    unmount();
+    deliver(new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
+
+    await waitFor(() => expect(destroy).toHaveBeenCalledTimes(1));
   });
 
   it('refuses oversized files without fetching them', async () => {
@@ -327,5 +365,77 @@ describe('PdfPreviewModal', () => {
       fireEvent.keyDown(window, { key: 'Escape' });
       expect(mockOnClose).toHaveBeenCalledTimes(1);
     });
+  });
+
+  describe('grid thumbnail snapshot', () => {
+    // jsdom has no 2D backend: the snapshot helper draws into an offscreen
+    // canvas and hands the result to toBlob, so both have to be stood in for.
+    function stubCanvas2d(blob: Blob | null = new Blob(['png'], { type: 'image/png' })) {
+      const context = { fillStyle: '', fillRect: vi.fn(), drawImage: vi.fn() };
+      vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(
+        context as unknown as CanvasRenderingContext2D,
+      );
+      vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation((callback) => callback(blob));
+      return context;
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('hands the first page to onSnapshot as a PNG', async () => {
+      stubCanvas2d();
+      const onSnapshot = vi.fn();
+
+      await renderLoadedModal({ onSnapshot });
+
+      await waitFor(() => expect(onSnapshot).toHaveBeenCalledTimes(1));
+      const blob = onSnapshot.mock.calls[0][0] as Blob;
+      expect(blob.type).toBe('image/png');
+    });
+
+    it('sends it once, not on every re-render of page 1', async () => {
+      stubCanvas2d();
+      const user = userEvent.setup();
+      const onSnapshot = vi.fn();
+      await renderLoadedModal({ onSnapshot });
+      await waitFor(() => expect(onSnapshot).toHaveBeenCalledTimes(1));
+
+      await user.click(screen.getByRole('button', { name: 'Next page' }));
+      await screen.findByText('Page 2 of 3');
+      await user.click(screen.getByRole('button', { name: 'Previous page' }));
+      await screen.findByText('Page 1 of 3');
+
+      expect(onSnapshot).toHaveBeenCalledTimes(1);
+    });
+
+    it('stays quiet when the canvas yields no blob', async () => {
+      stubCanvas2d(null);
+      const onSnapshot = vi.fn();
+
+      await renderLoadedModal({ onSnapshot });
+      await waitFor(() => expect(pdfjsMocks.render).toHaveBeenCalled());
+
+      expect(onSnapshot).not.toHaveBeenCalled();
+    });
+  });
+
+  it('keeps the raster inside the canvas area iOS Safari will back', async () => {
+    // Past roughly 16.7M pixels iOS Safari hands back a blank canvas instead
+    // of failing, so resolution is what gives way, not the page.
+    vi.stubGlobal('devicePixelRatio', 2);
+    pdfjsMocks.getViewport.mockImplementation(({ scale }: { scale: number }) => ({
+      width: 30000 * scale,
+      height: 30000 * scale,
+    }));
+
+    renderModal();
+    await screen.findByText('Page 1 of 3');
+    await waitFor(() => expect(pdfjsMocks.render).toHaveBeenCalled());
+
+    // Unclamped this would be 0.1 (fit floor) x 2 (dpr) = 6000 x 6000 px.
+    const scale = lastRenderScale();
+    expect(scale).toBeLessThan(0.2);
+    expect(30000 * scale * (30000 * scale)).toBeLessThanOrEqual(16 * 1024 * 1024);
   });
 });
