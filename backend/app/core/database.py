@@ -310,6 +310,7 @@ async def init_db():
         notification_template,
         oidc_provider,
         orca_base_cache,
+        pa_calibration,
         pending_upload,
         pipeline_run,
         print_batch,
@@ -4953,6 +4954,112 @@ async def run_migrations(conn):
     # drying" and is exactly how the reporter lost two days to a re-arm loop.
     await _safe_execute(
         conn, "ALTER TABLE notification_providers ADD COLUMN on_ams_drying_suspended BOOLEAN DEFAULT TRUE"
+    )
+
+    # Migration: flow-dynamics calibration notifications. Defaults ON for the
+    # same reason auto-drying-suspended does: the event that matters most is the
+    # one where Bambuddy has stopped and is waiting to be told whether to write
+    # the measured K value to the printer.
+    await _safe_execute(conn, "ALTER TABLE notification_providers ADD COLUMN on_pa_calibration BOOLEAN DEFAULT TRUE")
+
+    # Imported here rather than at module scope: the models package imports
+    # Base from this module, so a top-level import would be circular. init_db
+    # has already imported every model by the time run_migrations is called.
+    from backend.app.models.pa_calibration import ACTIVE_STATUS_SQL as _PA_ACTIVE_STATUS_SQL
+
+    # Migration: flow-dynamics (pressure advance) calibration runs. The table is
+    # new, so create_all() builds it on a fresh install; this covers databases
+    # that predate it. The partial unique index is what actually enforces "one
+    # live run per printer" — the route's read-then-insert cannot, and two runs
+    # racing would upload over each other's file and dispatch the printer twice.
+    await _safe_execute(
+        conn,
+        """
+        CREATE TABLE IF NOT EXISTS pa_calibration_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            printer_id INTEGER NOT NULL REFERENCES printers(id) ON DELETE CASCADE,
+            ams_id INTEGER NOT NULL,
+            slot_id INTEGER NOT NULL,
+            tray_id INTEGER NOT NULL,
+            extruder_id INTEGER NOT NULL DEFAULT 0,
+            filament_id VARCHAR(64) NOT NULL DEFAULT '',
+            setting_id VARCHAR(64) NOT NULL DEFAULT '',
+            filament_name VARCHAR(255) NOT NULL DEFAULT '',
+            nozzle_diameter VARCHAR(16) NOT NULL DEFAULT '0.4',
+            nozzle_id VARCHAR(32),
+            plate_type VARCHAR(32) NOT NULL DEFAULT 'textured_plate',
+            plate_confirmed BOOLEAN DEFAULT FALSE,
+            presets JSON,
+            method VARCHAR(32) NOT NULL DEFAULT 'sliced_print',
+            status VARCHAR(32) NOT NULL DEFAULT 'queued',
+            stage VARCHAR(32) NOT NULL DEFAULT 'queued',
+            waiting_reason VARCHAR(64),
+            waiting_detail JSON,
+            progress FLOAT NOT NULL DEFAULT 0,
+            remote_filename VARCHAR(255),
+            dispatched_subtask_id VARCHAR(64),
+            k_before FLOAT,
+            k_value FLOAT,
+            n_coef VARCHAR(32),
+            confidence INTEGER,
+            result_raw JSON,
+            error_message TEXT,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            started_at DATETIME,
+            completed_at DATETIME,
+            created_by_id INTEGER REFERENCES users(id) ON DELETE SET NULL
+        )
+        """
+        if is_sqlite()
+        else """
+        CREATE TABLE IF NOT EXISTS pa_calibration_runs (
+            id SERIAL PRIMARY KEY,
+            printer_id INTEGER NOT NULL REFERENCES printers(id) ON DELETE CASCADE,
+            ams_id INTEGER NOT NULL,
+            slot_id INTEGER NOT NULL,
+            tray_id INTEGER NOT NULL,
+            extruder_id INTEGER NOT NULL DEFAULT 0,
+            filament_id VARCHAR(64) NOT NULL DEFAULT '',
+            setting_id VARCHAR(64) NOT NULL DEFAULT '',
+            filament_name VARCHAR(255) NOT NULL DEFAULT '',
+            nozzle_diameter VARCHAR(16) NOT NULL DEFAULT '0.4',
+            nozzle_id VARCHAR(32),
+            plate_type VARCHAR(32) NOT NULL DEFAULT 'textured_plate',
+            plate_confirmed BOOLEAN DEFAULT FALSE,
+            presets JSON,
+            method VARCHAR(32) NOT NULL DEFAULT 'sliced_print',
+            status VARCHAR(32) NOT NULL DEFAULT 'queued',
+            stage VARCHAR(32) NOT NULL DEFAULT 'queued',
+            waiting_reason VARCHAR(64),
+            waiting_detail JSON,
+            progress DOUBLE PRECISION NOT NULL DEFAULT 0,
+            remote_filename VARCHAR(255),
+            dispatched_subtask_id VARCHAR(64),
+            k_before DOUBLE PRECISION,
+            k_value DOUBLE PRECISION,
+            n_coef VARCHAR(32),
+            confidence INTEGER,
+            result_raw JSON,
+            error_message TEXT,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            started_at TIMESTAMP,
+            completed_at TIMESTAMP,
+            created_by_id INTEGER REFERENCES users(id) ON DELETE SET NULL
+        )
+        """,
+    )
+    await _safe_execute(
+        conn,
+        "CREATE INDEX IF NOT EXISTS ix_pa_calibration_runs_printer_id ON pa_calibration_runs (printer_id)",
+    )
+    await _safe_execute(
+        conn,
+        "CREATE INDEX IF NOT EXISTS ix_pa_calibration_runs_status ON pa_calibration_runs (status)",
+    )
+    await _safe_execute(
+        conn,
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_pa_calibration_runs_active "
+        "ON pa_calibration_runs (printer_id) WHERE " + _PA_ACTIVE_STATUS_SQL,
     )
 
     # Migration: storage location sensor alerts (#2824), own column rather than

@@ -81,6 +81,11 @@ class NotificationProvider(Base):
     # Auto-drying gave up on a unit (#2770). Defaults True: it reports that
     # Bambuddy has stopped acting, which nothing else in the UI would say.
     on_ams_drying_suspended = Column(Boolean, default=True)
+    # Flow-dynamics calibration reached a result or ended. Defaults ON: the
+    # run takes about seven minutes and then STOPS to ask whether to save the
+    # measured K value, so silence there means an unanswered question rather
+    # than a finished job.
+    on_pa_calibration = Column(Boolean, default=True)
 
     # Event triggers - AMS-HT environmental alarms (single slot heated AMS)
     on_ams_ht_humidity_high = Column(Boolean, default=False)  # AMS-HT humidity above threshold

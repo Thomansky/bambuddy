@@ -29,7 +29,7 @@ from backend.app.models.settings import Settings
 from backend.app.models.smart_plug import SmartPlug
 from backend.app.models.spool_assignment import SpoolAssignment
 from backend.app.models.spoolman_slot_assignment import SpoolmanSlotAssignment
-from backend.app.services import drying_preflight, print_dispatch_context
+from backend.app.services import drying_preflight, pa_calibration, print_dispatch_context
 from backend.app.services.bambu_ftp import (
     FtpFailureReport,
     UploadCancelled,
@@ -908,6 +908,10 @@ class PrintScheduler:
         # Auto-drying's stop-all branches must not stop or untrack these printers;
         # both features share _drying_in_progress.
         self._scheduled_drying_printer_ids: set[int] = set()
+        # Printers held by a live flow-dynamics calibration run. Rebuilt from
+        # the DB on every pass, like the drying set, so a cancel through the
+        # route shows up without waiting for anything to time out.
+        self._pa_calibrating_printer_ids: set[int] = set()
         # Monotonic stamp of the last scheduled-drying prune. None = never, so
         # the first pass after a restart reaps anything left behind.
         self._last_scheduled_drying_prune: float | None = None
@@ -1218,6 +1222,13 @@ class PrintScheduler:
 
             # Dispatch and track scheduled drying runs (#2638)
             await self._check_scheduled_dryings(db)
+
+            # Dispatch and track flow-dynamics calibration runs. Runs before
+            # the queue selection below so `_pa_calibrating_printer_ids` is
+            # current for this pass: a calibration print owns its printer for
+            # about seven minutes, and a queued job dispatched into that window
+            # would be refused by the firmware's busy guard at best.
+            await self._check_pa_calibration_runs(db, require_plate_clear)
 
             if not items:
                 # No dispatchable pending items — still check auto-drying on idle
@@ -1615,6 +1626,19 @@ class PrintScheduler:
                             self._pinned_hold_reason(
                                 item.printer_id, printer_label(item.printer_id), require_plate_clear
                             ),
+                        )
+                        continue
+
+                    # A flow-dynamics calibration owns the printer for the
+                    # length of its print. Unconditional, unlike the drying
+                    # hold: there is no setting to opt out of, because the
+                    # printer is physically running a job.
+                    if item.printer_id in self._pa_calibrating_printer_ids:
+                        await hold_for_printer(
+                            item,
+                            item.printer_id,
+                            "running a flow-dynamics calibration",
+                            f"Busy: {printer_label(item.printer_id)} (flow-dynamics calibration)",
                         )
                         continue
 
@@ -4661,6 +4685,32 @@ class PrintScheduler:
     SCHEDULED_DRYING_GRACE_SECONDS = 120  # firmware needs time to report dry_time
     SCHEDULED_DRYING_COMPLETE_FRACTION = 0.9  # dry_time==0 earlier than this = interrupted
 
+    async def _check_pa_calibration_runs(self, db: AsyncSession, require_plate_clear: bool) -> None:
+        """Advance flow-dynamics calibration runs and record which printers they hold.
+
+        A thin wrapper on purpose: the state machine lives in
+        ``services.pa_calibration`` so it can be driven directly by tests
+        without standing up a scheduler, and this is the one place that knows
+        the scheduler's own vocabulary — the plate-clear setting on the way in,
+        and the reservation set on the way out.
+
+        ``_queue_printers_taken_for_pa`` is the printers this pass must not
+        dispatch to. It is deliberately NOT the whole set of live runs: a run
+        still waiting for the printer has claimed nothing, and reserving there
+        would deadlock it against the very queue it is waiting behind.
+        """
+        try:
+            self._pa_calibrating_printer_ids = await pa_calibration.tick(
+                db,
+                require_plate_clear=require_plate_clear,
+                printer_busy_ids=set(self._drying_in_progress) | self._scheduled_drying_printer_ids,
+            )
+        except Exception:
+            # One bad row must not cost the whole queue pass -- print dispatch
+            # runs after this call. Leave the previous reservation set in place
+            # rather than releasing printers a live run may still be using.
+            logger.exception("Flow-dynamics calibration pass failed")
+
     async def _check_scheduled_dryings(self, db: AsyncSession):
         """Dispatch due scheduled drying runs and track running ones."""
         now = utcnow_naive()
@@ -4733,6 +4783,11 @@ class PrintScheduler:
                 logger.warning("Scheduled drying %d: %s", row.id, unsupported)
                 continue
 
+            if row.printer_id in self._pa_calibrating_printer_ids:
+                # Named, not "printer_busy": the card should say what the
+                # printer is doing, and this ends on its own.
+                row.waiting_reason = "pa_calibration_hold"
+                continue
             if self._drying_in_progress.get(row.printer_id) or row.printer_id in running_printer_ids:
                 row.waiting_reason = "already_drying"
                 continue

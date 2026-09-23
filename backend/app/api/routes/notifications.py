@@ -60,6 +60,7 @@ def _provider_to_dict(provider: NotificationProvider) -> dict:
         "on_ams_humidity_high": provider.on_ams_humidity_high,
         "on_ams_temperature_high": provider.on_ams_temperature_high,
         "on_ams_drying_suspended": provider.on_ams_drying_suspended,
+        "on_pa_calibration": provider.on_pa_calibration,
         # AMS-HT environmental alarms
         "on_ams_ht_humidity_high": provider.on_ams_ht_humidity_high,
         "on_ams_ht_temperature_high": provider.on_ams_ht_temperature_high,
@@ -152,6 +153,7 @@ async def create_notification_provider(
         on_ams_humidity_high=provider_data.on_ams_humidity_high,
         on_ams_temperature_high=provider_data.on_ams_temperature_high,
         on_ams_drying_suspended=provider_data.on_ams_drying_suspended,
+        on_pa_calibration=provider_data.on_pa_calibration,
         # AMS-HT environmental alarms
         on_ams_ht_humidity_high=provider_data.on_ams_ht_humidity_high,
         on_ams_ht_temperature_high=provider_data.on_ams_ht_temperature_high,

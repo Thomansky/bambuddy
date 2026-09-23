@@ -1806,6 +1806,50 @@ class NotificationService:
             variables=variables,
         )
 
+    async def on_pa_calibration(
+        self,
+        printer_id: int,
+        printer_name: str,
+        event: str,
+        filament: str,
+        db: AsyncSession,
+        k_value: float | None = None,
+        detail: str = "",
+    ):
+        """A flow-dynamics calibration reached a result, or ended.
+
+        Sent immediately rather than folded into a digest, and for the same
+        reason auto-drying-suspended is: the ``awaiting_confirmation`` case is
+        Bambuddy having STOPPED with a question, and a question that arrives
+        with tomorrow's summary has already cost the user the run.
+        """
+        providers = await self._get_providers_for_event(db, "on_pa_calibration", printer_id)
+        if not providers:
+            return
+
+        variables = {
+            "printer": printer_name,
+            "filament": filament or "filament",
+            "event": event,
+            # Three decimals, because that is the precision the printer stores:
+            # the measured value is rounded to 3 dp before it is written.
+            "k_value": "" if k_value is None else f"{k_value:.3f}",
+            "detail": detail or "",
+        }
+
+        title, message = await self._build_message_from_template(db, "pa_calibration", variables)
+        await self._send_to_providers(
+            providers,
+            title,
+            message,
+            db,
+            "pa_calibration",
+            printer_id,
+            printer_name,
+            force_immediate=True,
+            variables=variables,
+        )
+
     async def on_bed_cooled(
         self,
         printer_id: int,
