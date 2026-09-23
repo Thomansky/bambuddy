@@ -120,6 +120,7 @@ class ArchiveResponse(BaseModel):
     # Post-print outcome confirmation (#1898)
     user_verdict: str | None = None
     user_verdict_source: str | None = None
+    user_verdict_at: datetime | None = None
     confirm_requested: bool = False
 
     # Energy tracking

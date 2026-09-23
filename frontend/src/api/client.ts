@@ -825,6 +825,7 @@ export interface Archive {
   // How the verdict arrived; 'reaction' is written by the Telegram reaction
   // handler (#3046) and is labelled here so it reads correctly once that lands.
   user_verdict_source: VerdictSource | null;
+  user_verdict_at: string | null;
   confirm_requested: boolean;
   quantity: number;
   energy_kwh: number | null;

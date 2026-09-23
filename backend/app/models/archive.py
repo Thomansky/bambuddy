@@ -122,6 +122,11 @@ class PrintArchive(Base):
     # a verdict nobody remembers giving.
     user_verdict: Mapped[str | None] = mapped_column(String(10), nullable=True)
     user_verdict_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # When the verdict on file was recorded (#1898). Written with every verdict,
+    # unlike `confirm_token_used_at`, which marks the one moment the one-tap
+    # capability was spent — a verdict changed later in the app must not be
+    # dated by that older event.
+    user_verdict_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     confirm_requested: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     confirm_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
     confirm_token_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=None)

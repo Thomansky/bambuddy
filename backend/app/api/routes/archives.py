@@ -40,7 +40,7 @@ from backend.app.services.archive import ArchiveService
 from backend.app.services.bambu_ftp import ftps_handshake_blocked, list_files_result_async
 from backend.app.services.design_settings import overrides_from_config
 from backend.app.services.filament_requirements import annotate_rack_groups
-from backend.app.services.print_confirmation import retire_confirm_token
+from backend.app.services.print_confirmation import retire_confirm_token, stamp_verdict
 from backend.app.services.print_storage import (
     REASON_FTP_TRANSFER_FAILED,
     REASON_FTPS_COOLOFF,
@@ -372,6 +372,7 @@ def archive_to_response(
         # server-side — it is a capability and never belongs in a response.
         "user_verdict": archive.user_verdict,
         "user_verdict_source": archive.user_verdict_source,
+        "user_verdict_at": archive.user_verdict_at,
         "confirm_requested": archive.confirm_requested,
         "quantity": archive.quantity,
         "energy_kwh": archive.energy_kwh,
@@ -1781,8 +1782,9 @@ async def update_archive(
     if "user_verdict" in update_payload:
         if update_payload["user_verdict"] is None:
             archive.user_verdict_source = None
+            archive.user_verdict_at = None
         else:
-            archive.user_verdict_source = verdict_source or "api"
+            stamp_verdict(archive, verdict_source or "api")
             retire_confirm_token(archive)
 
     # #1444: Mirror per-run classification fields to the most recent
@@ -3454,7 +3456,10 @@ async def _render_already_answered_page(db: AsyncSession, archive: PrintArchive)
     from backend.app.api.routes.settings import get_external_base_url
 
     name = html_escape(archive.print_name or archive.filename or "")
-    used_at = archive.confirm_token_used_at
+    # The verdict's own timestamp, not the moment the token was spent: a
+    # verdict changed later in the app would otherwise be dated by the older
+    # event. Pre-#1898 rows have neither, and then the page omits the date.
+    used_at = archive.user_verdict_at or archive.confirm_token_used_at
     if used_at is not None and used_at.tzinfo is not None:
         used_at = used_at.astimezone(timezone.utc)
     when = used_at.strftime("%Y-%m-%d %H:%M UTC") if used_at else None
@@ -3519,7 +3524,7 @@ async def confirm_outcome_by_token(
         return HTMLResponse(await _render_already_answered_page(db, archive))
 
     archive.user_verdict = verdict
-    archive.user_verdict_source = "link"
+    stamp_verdict(archive, "link")
     retire_confirm_token(archive)
 
     # Same mirror as the PATCH route (#1444): verdict-aware statistics read

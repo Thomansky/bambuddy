@@ -311,6 +311,80 @@ class TestVerdictSource:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    async def test_the_page_dates_the_verdict_on_file_not_the_spent_token(
+        self, async_client: AsyncClient, archive_factory, printer_factory, db_session
+    ):
+        """A verdict changed later must not be reported with the older decision's time.
+
+        The live case: the plate-clear default answers a print, the operator
+        changes the verdict in the app an hour later, then the old Telegram link
+        is tapped. Reporting the new verdict with the old timestamp would
+        describe two different events as one.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        printer = await printer_factory()
+        archive = await archive_factory(printer.id, confirm_requested=True, confirm_token="dates-token")
+
+        await async_client.patch(
+            f"/api/v1/archives/{archive.id}", json={"user_verdict": "good", "user_verdict_source": "dialog"}
+        )
+        await db_session.refresh(archive)
+        first_at = archive.user_verdict_at
+        assert first_at is not None
+        # Age the first decision so the two timestamps cannot coincide.
+        archive.user_verdict_at = first_at - timedelta(hours=1)
+        archive.confirm_token_used_at = first_at - timedelta(hours=1)
+        await db_session.commit()
+
+        await async_client.patch(
+            f"/api/v1/archives/{archive.id}", json={"user_verdict": "reject", "user_verdict_source": "dialog"}
+        )
+        await db_session.refresh(archive)
+        assert archive.user_verdict == "reject"
+        assert archive.user_verdict_at > archive.confirm_token_used_at
+
+        page = await async_client.get(f"/api/v1/archives/confirm/{archive.confirm_token}/good")
+        assert page.status_code == 200
+
+        # SQLite hands back naive datetimes; they are already UTC, which is how
+        # the route formats them too.
+        def _as_shown(value):
+            if value.tzinfo is not None:
+                value = value.astimezone(timezone.utc)
+            return value.strftime("%Y-%m-%d %H:%M UTC")
+
+        shown = _as_shown(archive.user_verdict_at)
+        stale = _as_shown(archive.confirm_token_used_at)
+        assert shown in page.text
+        assert stale not in page.text
+        # And the link still changed nothing.
+        await db_session.refresh(archive)
+        assert archive.user_verdict == "reject"
+
+    async def test_a_re_sent_prompt_carries_a_live_token(self, archive_factory, printer_factory, db_session):
+        """A spent token must never be re-used for a new prompt.
+
+        Since a verdict keeps the token value on the row, "has a token" stopped
+        meaning "answerable": without minting a fresh one, every button in the
+        new message would land on the already-answered page.
+        """
+        from backend.app.main import dispatch_outcome_confirmation
+
+        printer = await printer_factory()
+        archive = await archive_factory(printer.id, confirm_requested=True, confirm_token="spent-token")
+        from backend.app.services.print_confirmation import retire_confirm_token
+
+        retire_confirm_token(archive)
+        await db_session.commit()
+        assert archive.confirm_token_used_at is not None
+
+        await dispatch_outcome_confirmation(db_session, printer.id, printer.name, {}, archive.id, None)
+
+        await db_session.refresh(archive)
+        assert archive.confirm_token != "spent-token"
+        assert archive.confirm_token_used_at is None
+
     async def test_clearing_the_verdict_drops_the_source(
         self, async_client: AsyncClient, archive_factory, printer_factory, db_session
     ):

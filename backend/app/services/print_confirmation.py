@@ -17,6 +17,18 @@ logger = logging.getLogger(__name__)
 VERDICT_SOURCES = ("dialog", "link", "plate_clear", "printer_card", "api", "reaction")
 
 
+def stamp_verdict(archive: PrintArchive, source: str) -> None:
+    """Record a verdict's provenance and the moment it landed (#1898).
+
+    Both fields move together on every verdict write, which is what keeps the
+    "already answered" page from pairing a new source with the timestamp of an
+    older decision. `retire_confirm_token` is separate on purpose: spending the
+    one-tap capability happens once, recording a verdict can happen again.
+    """
+    archive.user_verdict_source = source
+    archive.user_verdict_at = datetime.now(timezone.utc)
+
+
 def retire_confirm_token(archive: PrintArchive) -> None:
     """Spend the one-tap capability token without destroying it.
 
@@ -63,7 +75,7 @@ async def resolve_pending_confirmation_as_good(db: AsyncSession, printer_id: int
         return None
 
     archive.user_verdict = "good"
-    archive.user_verdict_source = "plate_clear"
+    stamp_verdict(archive, "plate_clear")
     retire_confirm_token(archive)
 
     latest_entry = await db.scalar(
