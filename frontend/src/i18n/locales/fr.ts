@@ -3898,6 +3898,11 @@ export default {
     folderSortByName: 'Par nom',
     folderSortByActivity: 'Par activité récente',
     dragToResizeTooltip: 'Glisser pour redimensionner, double-clic reset',
+    sidebarToggle: {
+      hide: 'Masquer le volet des dossiers',
+      show: 'Afficher le volet des dossiers',
+      columnsDisabled: 'La vue en colonnes remplace déjà le volet des dossiers',
+    },
     searchFiles: 'Chercher fichiers...',
     searchSubfoldersHint: 'Sous-dossiers inclus',
     pathBar: {

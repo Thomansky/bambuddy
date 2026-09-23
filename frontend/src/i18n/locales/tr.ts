@@ -3904,6 +3904,11 @@ export default {
     folderSortByName: 'Ada göre',
     folderSortByActivity: 'Son etkinliğe göre',
     dragToResizeTooltip: 'Yeniden boyutlandırmak için sürükleyin, sıfırlamak için çift tıklayın',
+    sidebarToggle: {
+      hide: 'Klasör çubuğunu gizle',
+      show: 'Klasör çubuğunu göster',
+      columnsDisabled: 'Sütun görünümü klasör çubuğunun yerini zaten alıyor',
+    },
     searchFiles: 'Dosyalarda ara...',
     searchSubfoldersHint: 'Alt klasörler dahil',
     pathBar: {

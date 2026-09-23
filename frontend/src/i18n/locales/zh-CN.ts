@@ -3897,6 +3897,11 @@ export default {
     folderSortByName: '按名称',
     folderSortByActivity: '按最近活动',
     dragToResizeTooltip: '拖动调整大小，双击重置',
+    sidebarToggle: {
+      hide: '隐藏文件夹侧栏',
+      show: '显示文件夹侧栏',
+      columnsDisabled: '分栏视图已经取代了文件夹侧栏',
+    },
     searchFiles: '搜索文件...',
     searchSubfoldersHint: '包含子文件夹',
     pathBar: {

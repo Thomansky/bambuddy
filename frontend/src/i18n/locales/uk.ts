@@ -3937,6 +3937,11 @@ export default {
     folderSortByName: "За назвою",
     folderSortByActivity: "За останніми діями",
     dragToResizeTooltip: "Перетягніть, щоб змінити розмір, двічі клацніть, щоб скинути",
+    sidebarToggle: {
+      hide: "Сховати панель папок",
+      show: "Показати панель папок",
+      columnsDisabled: "Вигляд колонок уже замінює панель папок",
+    },
     searchFiles: "Пошук файлів...",
     searchSubfoldersHint: "Включаючи вкладені папки",
     pathBar: {

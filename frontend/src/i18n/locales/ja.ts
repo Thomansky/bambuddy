@@ -3909,6 +3909,11 @@ export default {
     folderSortByName: '名前順',
     folderSortByActivity: '最終更新順',
     dragToResizeTooltip: 'ドラッグしてリサイズ、ダブルクリックでリセット',
+    sidebarToggle: {
+      hide: 'フォルダサイドバーを隠す',
+      show: 'フォルダサイドバーを表示',
+      columnsDisabled: 'カラム表示はすでにフォルダサイドバーの代わりになっています',
+    },
     searchFiles: 'ファイルを検索...',
     searchSubfoldersHint: 'サブフォルダーを含む',
     pathBar: {

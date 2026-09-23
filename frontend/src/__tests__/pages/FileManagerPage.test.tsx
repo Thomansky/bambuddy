@@ -1230,6 +1230,81 @@ describe('FileManagerPage', () => {
     });
   });
 
+  describe('folder sidebar toggle', () => {
+    const toggle = () => screen.getByTestId('toggle-folder-sidebar');
+    // localStorage is globally mocked in setup.ts and stores nothing, so the
+    // stored preference is programmed per test.
+    const getItemMock = localStorage.getItem as ReturnType<typeof vi.fn>;
+    const setItemMock = localStorage.setItem as ReturnType<typeof vi.fn>;
+    const storedHidden = (key: string) => (key === 'library-sidebar-hidden' ? 'true' : null);
+
+    beforeEach(() => {
+      getItemMock.mockReset();
+      setItemMock.mockReset();
+      getItemMock.mockReturnValue(null);
+    });
+
+    afterEach(() => {
+      getItemMock.mockReset();
+      setItemMock.mockReset();
+    });
+
+    it('hides the tree and leaves the content area working', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      expect(screen.getByTestId('folder-sidebar')).toBeInTheDocument();
+      expect(toggle()).toHaveAttribute('aria-pressed', 'false');
+
+      await user.click(toggle());
+
+      expect(screen.queryByTestId('folder-sidebar')).not.toBeInTheDocument();
+      expect(toggle()).toHaveAttribute('aria-pressed', 'true');
+      // Navigation carries on without the tree: files and the path bar stay.
+      expect(screen.getByText('Benchy')).toBeInTheDocument();
+      expect(currentCrumb()).toHaveTextContent('All Files');
+
+      await user.click(toggle());
+      expect(screen.getByTestId('folder-sidebar')).toBeInTheDocument();
+    });
+
+    it('remembers the choice across a remount', async () => {
+      const user = userEvent.setup();
+      const { unmount } = render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await user.click(toggle());
+      expect(setItemMock).toHaveBeenCalledWith('library-sidebar-hidden', 'true');
+      unmount();
+
+      // What was written is what a fresh mount reads back.
+      getItemMock.mockImplementation(storedHidden);
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+      expect(screen.queryByTestId('folder-sidebar')).not.toBeInTheDocument();
+      expect(toggle()).toHaveAttribute('aria-pressed', 'true');
+    });
+
+    it('is disabled in the columns view, which keeps its own layout', async () => {
+      const user = userEvent.setup();
+      getItemMock.mockImplementation(storedHidden);
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+      expect(screen.queryByTestId('folder-sidebar')).not.toBeInTheDocument();
+
+      await user.click(screen.getByTitle('Column view'));
+
+      expect(toggle()).toBeDisabled();
+      expect(toggle()).toHaveAttribute(
+        'title',
+        'The columns view already replaces the folder sidebar'
+      );
+      // The preference does not reach the columns view's own layout.
+      expect(screen.getByTestId('folder-sidebar')).toBeInTheDocument();
+    });
+  });
+
   describe('folder search results', () => {
     const typeSearch = async (user: ReturnType<typeof userEvent.setup>, query: string) => {
       await user.type(screen.getByPlaceholderText('Search files...'), query);

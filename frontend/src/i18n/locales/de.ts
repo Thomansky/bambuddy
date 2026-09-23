@@ -3909,6 +3909,11 @@ export default {
     folderSortByName: 'Nach Name',
     folderSortByActivity: 'Nach letzter Aktivität',
     dragToResizeTooltip: 'Ziehen zum Ändern der Größe, Doppelklick zum Zurücksetzen',
+    sidebarToggle: {
+      hide: 'Ordnerleiste ausblenden',
+      show: 'Ordnerleiste einblenden',
+      columnsDisabled: 'Die Spaltenansicht ersetzt die Ordnerleiste bereits',
+    },
     searchFiles: 'Dateien suchen...',
     searchSubfoldersHint: 'Inklusive Unterordner',
     pathBar: {

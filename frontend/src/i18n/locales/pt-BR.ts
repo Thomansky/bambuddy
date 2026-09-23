@@ -3897,6 +3897,11 @@ export default {
     folderSortByName: 'Por nome',
     folderSortByActivity: 'Por atividade recente',
     dragToResizeTooltip: 'Arraste para redimensionar, clique duas vezes para redefinir',
+    sidebarToggle: {
+      hide: 'Ocultar a barra de pastas',
+      show: 'Mostrar a barra de pastas',
+      columnsDisabled: 'A visualização em colunas já substitui a barra de pastas',
+    },
     searchFiles: 'Pesquisar arquivos...',
     searchSubfoldersHint: 'Incluindo subpastas',
     pathBar: {

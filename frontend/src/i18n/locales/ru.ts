@@ -3711,6 +3711,11 @@ export default {
     folderSortByName: "По имени",
     folderSortByActivity: "По последней активности",
     dragToResizeTooltip: "Перетащите для изменения размера, двойной щелчок — сброс",
+    sidebarToggle: {
+      hide: "Скрыть панель папок",
+      show: "Показать панель папок",
+      columnsDisabled: "Режим колонок уже заменяет панель папок",
+    },
     searchFiles: "Поиск файлов...",
     searchSubfoldersHint: "С учётом вложенных папок",
     pathBar: {

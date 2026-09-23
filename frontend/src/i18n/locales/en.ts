@@ -3939,6 +3939,11 @@ export default {
     folderSortByName: 'By name',
     folderSortByActivity: 'By recent activity',
     dragToResizeTooltip: 'Drag to resize, double-click to reset',
+    sidebarToggle: {
+      hide: 'Hide folder sidebar',
+      show: 'Show folder sidebar',
+      columnsDisabled: 'The columns view already replaces the folder sidebar',
+    },
     searchFiles: 'Search files...',
     searchSubfoldersHint: 'Including subfolders',
     pathBar: {

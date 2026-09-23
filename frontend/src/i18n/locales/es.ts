@@ -3911,6 +3911,11 @@ export default {
     folderSortByName: 'Por nombre',
     folderSortByActivity: 'Por actividad reciente',
     dragToResizeTooltip: 'Arrastre para redimensionar, doble clic para restablecer',
+    sidebarToggle: {
+      hide: 'Ocultar la barra de carpetas',
+      show: 'Mostrar la barra de carpetas',
+      columnsDisabled: 'La vista de columnas ya sustituye a la barra de carpetas',
+    },
     searchFiles: 'Buscar archivos...',
     searchSubfoldersHint: 'Incluyendo subcarpetas',
     pathBar: {

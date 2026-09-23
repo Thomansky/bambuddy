@@ -48,6 +48,8 @@ import {
   Columns,
   ChevronRight as ChevronRightIcon,
   MoreHorizontal,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from 'lucide-react';
 import { api } from '../api/client';
 import type {
@@ -1561,6 +1563,13 @@ export function FileManagerPage() {
   const [isResizing, setIsResizing] = useState(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
 
+  // The tree can be switched off entirely. In a deep customer/job tree it
+  // repeats the folders the tiles already show, one nesting level apart, and
+  // the path bar now covers getting back up. Defaults to shown.
+  const [sidebarHidden, setSidebarHidden] = useState(() => {
+    return localStorage.getItem('library-sidebar-hidden') === 'true';
+  });
+
   // Handle sidebar resize
   useEffect(() => {
     if (!isResizing) return;
@@ -2130,6 +2139,18 @@ export function FileManagerPage() {
     localStorage.setItem('library-view-mode', mode);
   };
 
+  const handleToggleSidebar = useCallback(() => {
+    setSidebarHidden((prev) => {
+      const next = !prev;
+      localStorage.setItem('library-sidebar-hidden', String(next));
+      return next;
+    });
+  }, []);
+
+  // The columns view already replaces the tree with its own panes, so it keeps
+  // its layout and the toggle is inert (and disabled) while it is active.
+  const folderSidebarVisible = !sidebarHidden || viewMode === 'columns';
+
   // Sliced files (.gcode / .gcode.3mf) open the same full-page gcode viewer
   // the archive card uses, so the two paths feel consistent. STL / source
   // 3MF continue to use the in-app 3D model viewer modal.
@@ -2594,6 +2615,26 @@ export function FileManagerPage() {
               <Columns className="w-4 h-4" />
             </button>
           </div>
+          {/* Sidebar toggle. Only offered from lg upwards, which is where the
+              tree exists at all — below it the folders are a <select>. */}
+          <button
+            type="button"
+            onClick={handleToggleSidebar}
+            disabled={viewMode === 'columns'}
+            aria-pressed={sidebarHidden}
+            aria-label={sidebarHidden ? t('fileManager.sidebarToggle.show') : t('fileManager.sidebarToggle.hide')}
+            title={
+              viewMode === 'columns'
+                ? t('fileManager.sidebarToggle.columnsDisabled')
+                : sidebarHidden
+                ? t('fileManager.sidebarToggle.show')
+                : t('fileManager.sidebarToggle.hide')
+            }
+            data-testid="toggle-folder-sidebar"
+            className="hidden lg:flex items-center p-2 rounded-lg bg-bambu-dark text-bambu-gray hover:text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-bambu-gray"
+          >
+            {sidebarHidden ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
+          </button>
           <Button
             variant="secondary"
             onClick={() => batchThumbnailMutation.mutate()}
@@ -2751,7 +2792,10 @@ export function FileManagerPage() {
           </select>
         </div>
 
-        {/* Folder sidebar - resizable, hidden on mobile */}
+        {/* Folder sidebar - resizable, hidden on mobile, and switchable off
+            from the toolbar. Body left at its original indentation so the
+            toggle stays a two-line diff in a file several branches touch. */}
+        {folderSidebarVisible && (
         <div
           ref={sidebarRef}
           data-testid="folder-sidebar"
@@ -2904,6 +2948,7 @@ export function FileManagerPage() {
             ))}
           </div>
         </div>
+        )}
 
         {/* Files area + README rail (#2520 item 2). On wide screens the
             README docks as a collapsible right-hand column (rendered after
