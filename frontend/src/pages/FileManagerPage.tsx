@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
   FolderOpen,
@@ -92,6 +92,70 @@ function fileTypeBadgeClass(fileType: string): string {
   if (fileType === 'gcode' || fileType === 'gcode.3mf') return 'bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-400';
   if (fileType === 'stl') return 'bg-purple-100 dark:bg-purple-500/20 text-purple-700 dark:text-purple-400';
   return 'bg-bambu-gray/20 text-bambu-gray';
+}
+
+// Search / type / user filtering plus the sort, shared by the main listing and
+// by each Miller column's file list so a column never sorts differently from
+// the pane beside it. `query` matches the filename and the embedded print name.
+function filterAndSortFiles(
+  files: LibraryFileListItem[],
+  opts: {
+    query?: string;
+    filterType: string;
+    filterUsername: string;
+    sortField: SortField;
+    sortDirection: SortDirection;
+  },
+): LibraryFileListItem[] {
+  let result = [...files];
+
+  const query = opts.query?.trim().toLowerCase();
+  if (query) {
+    result = result.filter(
+      (f) =>
+        f.filename.toLowerCase().includes(query) ||
+        (f.print_name && f.print_name.toLowerCase().includes(query))
+    );
+  }
+
+  if (opts.filterType !== 'all') {
+    result = result.filter((f) => f.file_type === opts.filterType);
+  }
+
+  const userQuery = opts.filterUsername.trim().toLowerCase();
+  if (userQuery) {
+    result = result.filter(
+      (f) => f.created_by_username && f.created_by_username.toLowerCase().includes(userQuery)
+    );
+  }
+
+  result.sort((a, b) => {
+    let comparison = 0;
+    switch (opts.sortField) {
+      case 'name':
+        comparison = (a.print_name || a.filename).localeCompare(b.print_name || b.filename);
+        break;
+      case 'date':
+        // #2680: sort by real on-disk mtime (matches `ls -t`), falling back to
+        // the DB created_at for managed uploads that have no filesystem mtime.
+        comparison =
+          (parseUTCDate(a.fs_modified_at ?? a.created_at)?.getTime() ?? 0) -
+          (parseUTCDate(b.fs_modified_at ?? b.created_at)?.getTime() ?? 0);
+        break;
+      case 'size':
+        comparison = a.file_size - b.file_size;
+        break;
+      case 'type':
+        comparison = a.file_type.localeCompare(b.file_type);
+        break;
+      case 'prints':
+        comparison = a.print_count - b.print_count;
+        break;
+    }
+    return opts.sortDirection === 'asc' ? comparison : -comparison;
+  });
+
+  return result;
 }
 
 // New Folder Modal
@@ -1213,6 +1277,79 @@ function FileActionStrip({ file, onPrint, onSlice, onOpenInSlicer, onRunPipeline
   );
 }
 
+// One row of a Miller column's file list. Extracted so every column renders
+// its files with the same markup, action strip and double-click behaviour the
+// selected folder's pane has always used.
+interface ColumnFileRowProps {
+  file: LibraryFileListItem;
+  isSelected: boolean;
+  isFocused: boolean;
+  showModified: boolean;
+  thumbnailVersion?: number;
+  onSelect: (file: LibraryFileListItem) => void;
+  onOpen: (file: LibraryFileListItem) => void;
+  actionProps: Omit<FileActionStripProps, 'file' | 'tabIndex'>;
+  t: TFunction;
+}
+
+function ColumnFileRow({ file, isSelected, isFocused, showModified, thumbnailVersion, onSelect, onOpen, actionProps, t }: ColumnFileRowProps) {
+  const thumbnailUrl = api.getLibraryFileThumbnailUrl(file.id);
+  return (
+    <div
+      data-file-id={file.id}
+      onClick={() => onSelect(file)}
+      onDoubleClick={() => onOpen(file)}
+      className={`group flex items-center gap-3 px-3 py-2 cursor-pointer transition-colors ${
+        isSelected ? 'bg-bambu-green/10' : 'hover:bg-bambu-dark'
+      } ${isFocused ? 'ring-1 ring-inset ring-bambu-green/60' : ''}`}
+      title={file.print_name || file.filename}
+    >
+      <div className={`w-4 h-4 rounded border-2 flex-shrink-0 flex items-center justify-center ${
+        isSelected ? 'bg-bambu-green border-bambu-green' : 'border-bambu-gray/50'
+      }`}>
+        {isSelected && <div className="w-1.5 h-1.5 bg-white rounded-sm" />}
+      </div>
+      <div className="w-10 h-10 rounded bg-bambu-dark flex-shrink-0 overflow-hidden flex items-center justify-center">
+        {file.thumbnail_path ? (
+          <img
+            src={`${thumbnailUrl}${thumbnailVersion ? ((thumbnailUrl.includes('?') ? '&' : '?') + `v=${thumbnailVersion}`) : ''}`}
+            alt=""
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <FileBox className="w-5 h-5 text-bambu-gray/50" />
+        )}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-sm text-white truncate">{file.print_name || file.filename}</div>
+        <div className="mt-0.5 flex items-center gap-2 text-xs text-bambu-gray">
+          <span className={`px-1.5 py-px rounded font-medium ${fileTypeBadgeClass(file.file_type)}`}>
+            {file.file_type.toUpperCase()}
+          </span>
+          <span>{formatFileSize(file.file_size)}</span>
+          {file.print_count > 0 && <span>{file.print_count}x</span>}
+          {showModified && (
+            <span className="flex items-center gap-1 truncate" title={t('fileManager.lastModified')}>
+              <CalendarClock className="w-3 h-3 flex-shrink-0" />
+              {formatDate(file.fs_modified_at ?? file.created_at)}
+            </span>
+          )}
+        </div>
+      </div>
+      {/* Same strip as the list row. Hover-revealed with a mouse, always there
+          without one (#2865) and on the focused / selected row so the keyboard
+          can reach it. */}
+      <div
+        className={`flex-shrink-0 transition-opacity ${
+          isFocused || isSelected ? '' : 'can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+        }`}
+      >
+        <FileActionStrip file={file} {...actionProps} tabIndex={isFocused ? 0 : -1} />
+      </div>
+    </div>
+  );
+}
+
 export function FileManagerPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -1531,63 +1668,17 @@ export function FileManagerPage() {
   }, [files]);
 
   // Filter and sort files
-  const filteredAndSortedFiles = useMemo(() => {
-    if (!files) return [];
-
-    let result = [...files];
-
-    // Apply search filter
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      result = result.filter(
-        (f) =>
-          f.filename.toLowerCase().includes(query) ||
-          (f.print_name && f.print_name.toLowerCase().includes(query))
-      );
-    }
-
-    // Apply type filter
-    if (filterType !== 'all') {
-      result = result.filter((f) => f.file_type === filterType);
-    }
-
-    // Apply username filter
-    if (filterUsername.trim()) {
-      const query = filterUsername.toLowerCase();
-      result = result.filter(
-        (f) => f.created_by_username && f.created_by_username.toLowerCase().includes(query)
-      );
-    }
-
-    // Apply sorting
-    result.sort((a, b) => {
-      let comparison = 0;
-      switch (sortField) {
-        case 'name':
-          comparison = (a.print_name || a.filename).localeCompare(b.print_name || b.filename);
-          break;
-        case 'date':
-          // #2680: sort by real on-disk mtime (matches `ls -t`), falling back to
-          // the DB created_at for managed uploads that have no filesystem mtime.
-          comparison =
-            (parseUTCDate(a.fs_modified_at ?? a.created_at)?.getTime() ?? 0) -
-            (parseUTCDate(b.fs_modified_at ?? b.created_at)?.getTime() ?? 0);
-          break;
-        case 'size':
-          comparison = a.file_size - b.file_size;
-          break;
-        case 'type':
-          comparison = a.file_type.localeCompare(b.file_type);
-          break;
-        case 'prints':
-          comparison = a.print_count - b.print_count;
-          break;
-      }
-      return sortDirection === 'asc' ? comparison : -comparison;
-    });
-
-    return result;
-  }, [files, searchQuery, filterType, filterUsername, sortField, sortDirection]);
+  const filteredAndSortedFiles = useMemo(
+    () =>
+      filterAndSortFiles(files ?? [], {
+        query: searchQuery,
+        filterType,
+        filterUsername,
+        sortField,
+        sortDirection,
+      }),
+    [files, searchQuery, filterType, filterUsername, sortField, sortDirection],
+  );
 
   // Check if disk space is low
   const isDiskSpaceLow = useMemo(() => {
@@ -1951,11 +2042,11 @@ export function FileManagerPage() {
     return findFolder(folders);
   }, [selectedFolderId, folders]);
 
-  // Miller-columns view: the chain of folders from a top-level folder down to
-  // the selected one. Selection is the single source of truth — clicking a
-  // folder in any column just moves selectedFolderId, and the path (and with
-  // it the set of visible columns) is re-derived from the sorted tree.
-  const columnsPath = useMemo(() => {
+  // The chain of folders from a top-level folder down to the selected one.
+  // Selection is the single source of truth — clicking a folder anywhere just
+  // moves selectedFolderId, and the path (and with it the path bar and the set
+  // of visible columns) is re-derived from the sorted tree.
+  const folderPath = useMemo(() => {
     if (!sortedFolders || selectedFolderId === null) return [] as LibraryFolderTree[];
     const path: LibraryFolderTree[] = [];
     const walk = (items: LibraryFolderTree[]): boolean => {
@@ -1971,28 +2062,101 @@ export function FileManagerPage() {
     return path;
   }, [sortedFolders, selectedFolderId]);
 
-  // One column per level: the top-level bucket (internal vs. external mirrors
-  // the tree's split, following the selected path's bucket when one is set),
-  // then the children of each folder along the path. Leaf folders contribute
-  // no column — the files pane to the right is their content.
+  // Which half of the tree the current location lives in: the selected path's
+  // bucket when there is one, otherwise the sidebar's top-level choice. Drives
+  // both the path bar's root crumb and the columns view's first column.
+  const currentBucketIsExternal =
+    folderPath.length > 0 ? Boolean(folderPath[0].is_external) : topLevelView === 'external';
+
+  // One column per level: the top-level bucket, then the children of each
+  // folder along the path. `folderId` is the folder the column is the inside
+  // of (null = the library root), which is what its file list is keyed on.
+  // Leaf folders contribute no column — the files pane to the right is their
+  // content.
   const folderColumns = useMemo(() => {
-    const externalBucket = columnsPath.length > 0 ? Boolean(columnsPath[0].is_external) : topLevelView === 'external';
-    const rootItems = (sortedFolders ?? []).filter((f) => Boolean(f.is_external) === externalBucket);
-    const cols: { key: string; items: LibraryFolderTree[]; activeId: number | null }[] = [
-      { key: 'root', items: rootItems, activeId: columnsPath[0]?.id ?? null },
+    const rootItems = (sortedFolders ?? []).filter((f) => Boolean(f.is_external) === currentBucketIsExternal);
+    const cols: { key: string; folderId: number | null; items: LibraryFolderTree[]; activeId: number | null }[] = [
+      { key: 'root', folderId: null, items: rootItems, activeId: folderPath[0]?.id ?? null },
     ];
-    columnsPath.forEach((node, i) => {
+    folderPath.forEach((node, i) => {
       if (node.children.length > 0) {
-        cols.push({ key: `folder-${node.id}`, items: node.children, activeId: columnsPath[i + 1]?.id ?? null });
+        cols.push({
+          key: `folder-${node.id}`,
+          folderId: node.id,
+          items: node.children,
+          activeId: folderPath[i + 1]?.id ?? null,
+        });
       }
     });
     return cols;
-  }, [sortedFolders, columnsPath, topLevelView]);
+  }, [sortedFolders, folderPath, currentBucketIsExternal]);
 
   // While a search or tag filter is active the file list spans every matching
   // descendant folder, so per-level folder columns would lie about scope —
   // hide them and let the files pane take the full width.
   const columnsFilterActive = searchQuery.trim().length > 0 || selectedTagIds.length > 0;
+
+  // Every column lists its own level's files, not just the rightmost pane: a
+  // folder that holds files and no subfolders used to look empty until it was
+  // the selection. One query per rendered level, keyed on that level's folder
+  // id so walking back up a path is instant. Only levels the view actually
+  // renders are fetched, and the level that IS the current selection is
+  // skipped — the pane on the right already lists exactly those files.
+  const columnFileLevels = useMemo(() => {
+    if (viewMode !== 'columns' || columnsFilterActive) return [];
+    return folderColumns
+      .filter((col) => col.folderId !== selectedFolderId)
+      .map((col) => ({
+        key: col.key,
+        folderId: col.folderId,
+        scope:
+          col.folderId === null
+            ? currentBucketIsExternal
+              ? ('external' as const)
+              : ('internal' as const)
+            : undefined,
+      }));
+  }, [viewMode, columnsFilterActive, folderColumns, selectedFolderId, currentBucketIsExternal]);
+
+  const columnFileQueries = useQueries({
+    queries: columnFileLevels.map((level) => ({
+      queryKey: ['library-files', 'column', level.folderId, level.scope ?? null],
+      // include_root only means anything for the root column, where "this
+      // level's files" are the ones that sit in no folder at all. Under a
+      // folder id the server already answers with that folder's own files.
+      queryFn: () =>
+        api.getLibraryFiles(level.folderId, level.folderId === null, undefined, level.scope, false, []),
+    })),
+  });
+
+  // Keyed by column so the render stays a lookup. Deliberately not memoised:
+  // useQueries hands back a fresh array every render, so a memo would recompute
+  // anyway.
+  const columnFiles = new Map<string, { files: LibraryFileListItem[]; loading: boolean }>();
+  columnFileLevels.forEach((level, i) => {
+    const query = columnFileQueries[i];
+    columnFiles.set(level.key, {
+      files: filterAndSortFiles(query?.data ?? [], { filterType, filterUsername, sortField, sortDirection }),
+      loading: Boolean(query?.isPending),
+    });
+  });
+
+  // The list the arrow keys walk: the one that actually holds the focused
+  // file, which may be an intermediate column rather than the selected
+  // folder's pane.
+  const focusedFileList =
+    (columnsFocusedFileId !== null &&
+      columnFileLevels
+        .map((level) => columnFiles.get(level.key)?.files)
+        .find((list) => list?.some((f) => f.id === columnsFocusedFileId))) ||
+    filteredAndSortedFiles;
+
+  // Double-click / Enter on a file row: sliced output opens in the gcode
+  // viewer, model files in the 3D viewer, anything else has no preview.
+  const openColumnFile = (file: LibraryFileListItem) => {
+    if (isSlicedLibraryFile(file)) navigate(`/gcode-viewer?library_file=${file.id}`);
+    else if (file.file_type === '3mf' || file.file_type === 'stl') setViewerFile(file);
+  };
 
   // Focus the columns pane when the view opens so arrow keys work right away,
   // and drop the file focus whenever the folder (and with it the file list)
@@ -2081,7 +2245,7 @@ export function FileManagerPage() {
       return;
     }
     const inFiles = columnsFocusedFileId !== null;
-    const selectedNode = columnsPath[columnsPath.length - 1];
+    const selectedNode = folderPath[folderPath.length - 1];
     switch (e.key) {
       case 'ArrowDown':
       case 'ArrowUp': {
@@ -2090,15 +2254,15 @@ export function FileManagerPage() {
         if (inFiles || columnsFilterActive) {
           // findIndex yields -1 for a vanished focus id — ArrowDown then
           // lands on index 0, ArrowUp on -2 → no-op, both intended.
-          const idx = filteredAndSortedFiles.findIndex((f) => f.id === columnsFocusedFileId);
-          const next = filteredAndSortedFiles[idx + dir];
+          const idx = focusedFileList.findIndex((f) => f.id === columnsFocusedFileId);
+          const next = focusedFileList[idx + dir];
           if (next) setColumnsFocusedFileId(next.id);
         } else if (selectedFolderId === null) {
           if (dir === 1 && folderColumns[0].items.length > 0) {
             setSelectedFolderId(folderColumns[0].items[0].id);
           }
         } else {
-          const col = folderColumns[columnsPath.length - 1];
+          const col = folderColumns[folderPath.length - 1];
           const idx = col ? col.items.findIndex((f) => f.id === selectedFolderId) : -1;
           const next = idx === -1 ? undefined : col.items[idx + dir];
           if (next) setSelectedFolderId(next.id);
@@ -2124,14 +2288,14 @@ export function FileManagerPage() {
         // With a filter active the folder columns are hidden — don't move a
         // selection the user can't see.
         if (columnsFilterActive) break;
-        if (columnsPath.length > 1) {
-          setSelectedFolderId(columnsPath[columnsPath.length - 2].id);
-        } else if (columnsPath.length === 1) {
+        if (folderPath.length > 1) {
+          setSelectedFolderId(folderPath[folderPath.length - 2].id);
+        } else if (folderPath.length === 1) {
           // Ascending past the top level: keep the bucket the user was
           // navigating — the tree can select a folder from either bucket
           // without touching topLevelView, and falling back to a stale one
           // would teleport the root column to the other folder set.
-          setTopLevelView(columnsPath[0].is_external ? 'external' : 'internal');
+          setTopLevelView(folderPath[0].is_external ? 'external' : 'internal');
           setSelectedFolderId(null);
         } else if (selectedFolderId !== null) {
           // Selection not in the tree (e.g. a deep link to a deleted
@@ -2156,10 +2320,8 @@ export function FileManagerPage() {
           }
           break;
         }
-        const file = filteredAndSortedFiles.find((f) => f.id === columnsFocusedFileId);
-        if (!file) break;
-        if (isSlicedLibraryFile(file)) navigate(`/gcode-viewer?library_file=${file.id}`);
-        else if (file.file_type === '3mf' || file.file_type === 'stl') setViewerFile(file);
+        const file = focusedFileList.find((f) => f.id === columnsFocusedFileId);
+        if (file) openColumnFile(file);
         break;
       }
       case ' ': {
@@ -2891,8 +3053,19 @@ export function FileManagerPage() {
               data-testid="columns-view"
             >
               <div className="h-full min-h-[16rem] flex divide-x divide-bambu-dark-tertiary">
-                {!columnsFilterActive && folderColumns.map((col) => (
-                  <div key={col.key} className="w-64 flex-shrink-0 overflow-y-auto py-1">
+                {!columnsFilterActive && folderColumns.map((col) => {
+                  const level = columnFiles.get(col.key);
+                  // A column carrying file rows needs the room the files pane
+                  // has: checkbox, thumbnail and the seven-icon action strip
+                  // leave nothing for the name at the folder-only width. A
+                  // column that only lists folders keeps that narrow width.
+                  const wide = Boolean(level && (level.loading || level.files.length > 0));
+                  return (
+                  <div
+                    key={col.key}
+                    data-testid={`columns-level-${col.key}`}
+                    className={`${wide ? 'w-[26rem]' : 'w-64'} flex-shrink-0 overflow-y-auto py-1`}
+                  >
                     {col.items.map((folder) => {
                       const isSelectedFolder = selectedFolderId === folder.id;
                       return (
@@ -2961,10 +3134,34 @@ export function FileManagerPage() {
                         </div>
                       );
                     })}
+                    {level?.loading && (
+                      <div className="px-3 py-2 text-sm text-bambu-gray" aria-hidden="true">…</div>
+                    )}
+                    {level && !level.loading && level.files.map((file) => (
+                      <ColumnFileRow
+                        key={file.id}
+                        file={file}
+                        isSelected={selectedFiles.includes(file.id)}
+                        isFocused={columnsFocusedFileId === file.id}
+                        showModified={showModified}
+                        thumbnailVersion={thumbnailVersions[file.id]}
+                        onSelect={(f) => {
+                          // Focusing a file in an intermediate column must not
+                          // move the folder selection out from under it.
+                          setColumnsFocusedFileId(f.id);
+                          handleFileSelect(f.id);
+                        }}
+                        onOpen={openColumnFile}
+                        actionProps={fileActionProps}
+                        t={t}
+                      />
+                    ))}
                   </div>
-                ))}
-                {/* Files pane */}
-                <div className="flex-1 min-w-[28rem] overflow-y-auto py-1">
+                  );
+                })}
+                {/* Files pane — still the selected folder's contents, so a
+                    leaf folder's column layout is exactly what it was. */}
+                <div className="flex-1 min-w-[28rem] overflow-y-auto py-1" data-testid="columns-files-pane">
                   {filesLoading ? (
                     <div className="h-full flex items-center justify-center">
                       <Loader2 className="w-5 h-5 animate-spin text-bambu-green" />
@@ -2980,74 +3177,23 @@ export function FileManagerPage() {
                             : t('fileManager.noFilesYet')}
                     </div>
                   ) : (
-                    filteredAndSortedFiles.map((file) => {
-                      const isSelected = selectedFiles.includes(file.id);
-                      const isFocused = columnsFocusedFileId === file.id;
-                      return (
-                        <div
-                          key={file.id}
-                          data-file-id={file.id}
-                          onClick={() => {
-                            setColumnsFocusedFileId(file.id);
-                            handleFileSelect(file.id);
-                          }}
-                          onDoubleClick={() => {
-                            if (isSlicedLibraryFile(file)) {
-                              navigate(`/gcode-viewer?library_file=${file.id}`);
-                            } else if (file.file_type === '3mf' || file.file_type === 'stl') {
-                              setViewerFile(file);
-                            }
-                          }}
-                          className={`group flex items-center gap-3 px-3 py-2 cursor-pointer transition-colors ${
-                            isSelected ? 'bg-bambu-green/10' : 'hover:bg-bambu-dark'
-                          } ${isFocused ? 'ring-1 ring-inset ring-bambu-green/60' : ''}`}
-                          title={file.print_name || file.filename}
-                        >
-                          <div className={`w-4 h-4 rounded border-2 flex-shrink-0 flex items-center justify-center ${
-                            isSelected ? 'bg-bambu-green border-bambu-green' : 'border-bambu-gray/50'
-                          }`}>
-                            {isSelected && <div className="w-1.5 h-1.5 bg-white rounded-sm" />}
-                          </div>
-                          <div className="w-10 h-10 rounded bg-bambu-dark flex-shrink-0 overflow-hidden flex items-center justify-center">
-                            {file.thumbnail_path ? (
-                              <img
-                                src={`${api.getLibraryFileThumbnailUrl(file.id)}${thumbnailVersions[file.id] ? ((api.getLibraryFileThumbnailUrl(file.id).includes('?') ? '&' : '?') + `v=${thumbnailVersions[file.id]}`) : ''}`}
-                                alt=""
-                                className="w-full h-full object-cover"
-                              />
-                            ) : (
-                              <FileBox className="w-5 h-5 text-bambu-gray/50" />
-                            )}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="text-sm text-white truncate">{file.print_name || file.filename}</div>
-                            <div className="mt-0.5 flex items-center gap-2 text-xs text-bambu-gray">
-                              <span className={`px-1.5 py-px rounded font-medium ${fileTypeBadgeClass(file.file_type)}`}>
-                                {file.file_type.toUpperCase()}
-                              </span>
-                              <span>{formatFileSize(file.file_size)}</span>
-                              {file.print_count > 0 && <span>{file.print_count}x</span>}
-                              {showModified && (
-                                <span className="flex items-center gap-1 truncate" title={t('fileManager.lastModified')}>
-                                  <CalendarClock className="w-3 h-3 flex-shrink-0" />
-                                  {formatDate(file.fs_modified_at ?? file.created_at)}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                          {/* Same strip as the list row. Hover-revealed with a
-                              mouse, always there without one (#2865) and on the
-                              focused / selected row so the keyboard can reach it. */}
-                          <div
-                            className={`flex-shrink-0 transition-opacity ${
-                              isFocused || isSelected ? '' : 'can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
-                            }`}
-                          >
-                            <FileActionStrip file={file} {...fileActionProps} tabIndex={isFocused ? 0 : -1} />
-                          </div>
-                        </div>
-                      );
-                    })
+                    filteredAndSortedFiles.map((file) => (
+                      <ColumnFileRow
+                        key={file.id}
+                        file={file}
+                        isSelected={selectedFiles.includes(file.id)}
+                        isFocused={columnsFocusedFileId === file.id}
+                        showModified={showModified}
+                        thumbnailVersion={thumbnailVersions[file.id]}
+                        onSelect={(f) => {
+                          setColumnsFocusedFileId(f.id);
+                          handleFileSelect(f.id);
+                        }}
+                        onOpen={openColumnFile}
+                        actionProps={fileActionProps}
+                        t={t}
+                      />
+                    ))
                   )}
                 </div>
               </div>

@@ -125,6 +125,81 @@ const mockFiles = [
   },
 ];
 
+// Per-folder contents. The columns view lists every level's files, so each
+// folder needs its own set — otherwise the same name shows up in two columns
+// and the queries below cannot tell them apart.
+const mockFolderFiles: Record<string, Record<string, unknown>[]> = {
+  '1': [
+    {
+      id: 11,
+      filename: 'spacer.3mf',
+      file_path: '/library/functional/spacer.3mf',
+      file_size: 131072,
+      file_type: '3mf',
+      folder_id: 1,
+      thumbnail_path: null,
+      print_name: 'Spacer',
+      print_time_seconds: 900,
+      print_count: 0,
+      duplicate_count: 0,
+      created_at: '2024-02-01T00:00:00Z',
+    },
+  ],
+  '2': [
+    {
+      id: 12,
+      filename: 'clamp.stl',
+      file_path: '/library/functional/brackets/clamp.stl',
+      file_size: 65536,
+      file_type: 'stl',
+      folder_id: 2,
+      thumbnail_path: null,
+      print_name: null,
+      print_time_seconds: null,
+      print_count: 0,
+      duplicate_count: 0,
+      created_at: '2024-02-02T00:00:00Z',
+    },
+    {
+      id: 13,
+      filename: 'hinge.3mf',
+      file_path: '/library/functional/brackets/hinge.3mf',
+      file_size: 98304,
+      file_type: '3mf',
+      folder_id: 2,
+      thumbnail_path: null,
+      print_name: 'Hinge',
+      print_time_seconds: 1200,
+      print_count: 1,
+      duplicate_count: 0,
+      created_at: '2024-02-03T00:00:00Z',
+    },
+  ],
+  '3': [
+    {
+      id: 14,
+      filename: 'vase.3mf',
+      file_path: '/library/art/vase.3mf',
+      file_size: 262144,
+      file_type: '3mf',
+      folder_id: 3,
+      thumbnail_path: null,
+      print_name: 'Vase',
+      print_time_seconds: 5400,
+      print_count: 0,
+      duplicate_count: 0,
+      created_at: '2024-02-04T00:00:00Z',
+    },
+  ],
+};
+
+// A request carrying folder_id wants that folder's own files; without one it
+// is the root level (columns view) or the whole library ("All Files").
+const filesForRequest = (request: Request) => {
+  const folderId = new URL(request.url).searchParams.get('folder_id');
+  return folderId ? (mockFolderFiles[folderId] ?? []) : mockFiles;
+};
+
 const mockStats = {
   total_files: 10,
   total_folders: 3,
@@ -142,8 +217,8 @@ describe('FileManagerPage', () => {
       http.get('/api/v1/library/folders', () => {
         return HttpResponse.json(mockFolders);
       }),
-      http.get('/api/v1/library/files', () => {
-        return HttpResponse.json(mockFiles);
+      http.get('/api/v1/library/files', ({ request }) => {
+        return HttpResponse.json(filesForRequest(request));
       }),
       http.get('/api/v1/library/stats', () => {
         return HttpResponse.json(mockStats);
@@ -389,16 +464,22 @@ describe('FileManagerPage', () => {
       // Root files render in the files pane.
       expect(columns.getByText('Benchy')).toBeInTheDocument();
 
-      // Descend: clicking a folder opens its child column.
+      // Descend: clicking a folder opens its child column, and the level the
+      // user just left keeps listing its own files.
       await user.click(columns.getByText('Functional Parts'));
       await waitFor(() => {
         expect(columns.getByText('Brackets')).toBeInTheDocument();
       });
-
-      // Leaf folder: selecting it adds no further column and keeps the pane.
-      await user.click(columns.getByText('Brackets'));
       await waitFor(() => {
         expect(columns.getByText('Benchy')).toBeInTheDocument();
+      });
+      expect(within(screen.getByTestId('columns-files-pane')).getByText('Spacer')).toBeInTheDocument();
+
+      // Leaf folder: selecting it adds no further column and the pane swaps to
+      // its contents.
+      await user.click(columns.getByText('Brackets'));
+      await waitFor(() => {
+        expect(within(screen.getByTestId('columns-files-pane')).getByText('clamp.stl')).toBeInTheDocument();
       });
     });
 
@@ -469,20 +550,20 @@ describe('FileManagerPage', () => {
       await user.keyboard('{ArrowRight}');
       await waitFor(() => {
         expect(activeClassOf('Brackets')).toContain('bg-bambu-green/20');
-        expect(columns.getByText('Benchy')).toBeInTheDocument();
+        expect(columns.getByText('clamp.stl')).toBeInTheDocument();
       });
       await user.keyboard('{ArrowRight}');
       await waitFor(() => {
-        expect(columns.getByText('Benchy').closest('[title="Benchy"]')?.className).toContain('ring-1');
+        expect(columns.getByText('clamp.stl').closest('[title="clamp.stl"]')?.className).toContain('ring-1');
       });
       await user.keyboard('{ArrowDown}');
       await waitFor(() => {
-        expect(columns.getByText('bracket.stl').closest('[title="bracket.stl"]')?.className).toContain('ring-1');
+        expect(columns.getByText('Hinge').closest('[title="Hinge"]')?.className).toContain('ring-1');
       });
       // Left leaves the files pane again.
       await user.keyboard('{ArrowLeft}');
       await waitFor(() => {
-        expect(columns.getByText('bracket.stl').closest('[title="bracket.stl"]')?.className).not.toContain('ring-1');
+        expect(columns.getByText('Hinge').closest('[title="Hinge"]')?.className).not.toContain('ring-1');
       });
     });
 
@@ -492,10 +573,10 @@ describe('FileManagerPage', () => {
       // (the refetch a keyboard descent triggers) stay pending briefly.
       let filesCalls = 0;
       server.use(
-        http.get('/api/v1/library/files', async () => {
+        http.get('/api/v1/library/files', async ({ request }) => {
           filesCalls += 1;
           if (filesCalls > 1) await new Promise((resolve) => setTimeout(resolve, 150));
-          return HttpResponse.json(mockFiles);
+          return HttpResponse.json(filesForRequest(request));
         })
       );
       render(<FileManagerPage />);
@@ -513,7 +594,7 @@ describe('FileManagerPage', () => {
       expect(screen.getByTestId('columns-view')).toBeInTheDocument();
 
       await waitFor(() => {
-        expect(within(screen.getByTestId('columns-view')).getByText('Benchy')).toBeInTheDocument();
+        expect(within(screen.getByTestId('columns-files-pane')).getByText('Vase')).toBeInTheDocument();
       });
     });
 
@@ -752,6 +833,102 @@ describe('FileManagerPage', () => {
       await user.click(screen.getByText('Cancel'));
       await user.dblClick(columns.getByText('bracket.stl'));
       expect(await screen.findByTestId('model-viewer-modal')).toBeInTheDocument();
+    });
+
+    // Every column is that level's contents, folders AND files. Before this a
+    // folder holding files but no subfolders looked empty until it was the
+    // selection.
+    const descendToBrackets = async (user: ReturnType<typeof userEvent.setup>) => {
+      await user.click(screen.getByTitle('Column view'));
+      const columns = within(screen.getByTestId('columns-view'));
+      await user.click(columns.getByText('Functional Parts'));
+      await user.click(await columns.findByText('Brackets'));
+      return columns;
+    };
+
+    it('lists an intermediate level\'s folders and its files in the same column', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await descendToBrackets(user);
+
+      const level = within(screen.getByTestId('columns-level-folder-1'));
+      expect(level.getByText('Brackets')).toBeInTheDocument();
+      await waitFor(() => expect(level.getByText('Spacer')).toBeInTheDocument());
+
+      // The root column lists the files that sit in no folder at all.
+      const root = within(screen.getByTestId('columns-level-root'));
+      await waitFor(() => expect(root.getByText('Benchy')).toBeInTheDocument());
+      expect(root.getByText('Functional Parts')).toBeInTheDocument();
+    });
+
+    it('focuses a file in an intermediate column without moving the folder selection', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await descendToBrackets(user);
+      const pane = within(screen.getByTestId('columns-files-pane'));
+      await waitFor(() => expect(pane.getByText('clamp.stl')).toBeInTheDocument());
+
+      const level = within(screen.getByTestId('columns-level-folder-1'));
+      await user.click(await level.findByText('Spacer'));
+
+      expect(level.getByText('Spacer').closest('[data-file-id]')?.className).toContain('ring-1');
+      // Brackets is still the selection: its own files still fill the pane.
+      expect(pane.getByText('clamp.stl')).toBeInTheDocument();
+      expect(level.getByText('Brackets').closest('[data-folder-id]')?.className).toContain('bg-bambu-green/20');
+    });
+
+    it('opens the preview on double-click from an intermediate column', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await descendToBrackets(user);
+      const level = within(screen.getByTestId('columns-level-folder-1'));
+      await user.dblClick(await level.findByText('Spacer'));
+
+      expect(await screen.findByTestId('model-viewer-modal')).toBeInTheDocument();
+    });
+
+    it('keeps a level\'s folders visible while its files are still loading', async () => {
+      const user = userEvent.setup();
+      server.use(
+        http.get('/api/v1/library/files', async ({ request }) => {
+          if (new URL(request.url).searchParams.get('folder_id') === '1') {
+            await new Promise((resolve) => setTimeout(resolve, 200));
+          }
+          return HttpResponse.json(filesForRequest(request));
+        })
+      );
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await descendToBrackets(user);
+
+      // The column paints its folders straight away and marks the pending file
+      // list instead of blocking.
+      const level = within(screen.getByTestId('columns-level-folder-1'));
+      expect(level.getByText('Brackets')).toBeInTheDocument();
+      expect(level.getByText('…')).toBeInTheDocument();
+      await waitFor(() => expect(level.getByText('Spacer')).toBeInTheDocument());
+    });
+
+    it('leaves the rightmost pane as a leaf folder\'s contents', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await user.click(screen.getByTitle('Column view'));
+      const columns = within(screen.getByTestId('columns-view'));
+      await user.click(columns.getByText('Art Projects'));
+
+      const pane = within(screen.getByTestId('columns-files-pane'));
+      await waitFor(() => expect(pane.getByText('Vase')).toBeInTheDocument());
+      // A leaf contributes no column of its own.
+      expect(screen.queryByTestId('columns-level-folder-3')).not.toBeInTheDocument();
     });
   });
 
