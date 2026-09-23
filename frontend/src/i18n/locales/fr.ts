@@ -3900,6 +3900,17 @@ export default {
     dragToResizeTooltip: 'Glisser pour redimensionner, double-clic reset',
     searchFiles: 'Chercher fichiers...',
     searchSubfoldersHint: 'Sous-dossiers inclus',
+    pathBar: {
+      label: 'Emplacement',
+      showHidden: 'Afficher les dossiers masqués',
+    },
+    search: {
+      foldersHeading: 'Dossiers ({{count}})',
+      filesHeading: 'Fichiers ({{count}})',
+      resultsCount: 'Dossiers : {{folders}} · Fichiers : {{showing}} sur {{total}}',
+      noMatches: 'Aucun fichier ni dossier correspondant',
+      noMatchesDescription: 'Aucun fichier ni dossier ne correspond à votre recherche ou à vos filtres actuels.',
+    },
     readme: {
       truncated: 'Tronqué',
       show: 'Afficher le README',

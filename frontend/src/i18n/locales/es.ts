@@ -3913,6 +3913,17 @@ export default {
     dragToResizeTooltip: 'Arrastre para redimensionar, doble clic para restablecer',
     searchFiles: 'Buscar archivos...',
     searchSubfoldersHint: 'Incluyendo subcarpetas',
+    pathBar: {
+      label: 'Ubicación',
+      showHidden: 'Mostrar carpetas ocultas',
+    },
+    search: {
+      foldersHeading: 'Carpetas ({{count}})',
+      filesHeading: 'Archivos ({{count}})',
+      resultsCount: 'Carpetas: {{folders}} · Archivos: {{showing}} de {{total}}',
+      noMatches: 'No hay archivos ni carpetas coincidentes',
+      noMatchesDescription: 'Ningún archivo ni carpeta coincide con su búsqueda o los criterios de filtro actuales.',
+    },
     readme: {
       truncated: 'Truncado',
       show: 'Mostrar README',

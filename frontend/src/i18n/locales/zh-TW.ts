@@ -3899,6 +3899,17 @@ export default {
     dragToResizeTooltip: '拖曳調整大小，雙擊重設',
     searchFiles: '搜尋檔案...',
     searchSubfoldersHint: '包含子資料夾',
+    pathBar: {
+      label: '位置',
+      showHidden: '顯示摺疊的資料夾',
+    },
+    search: {
+      foldersHeading: '資料夾 ({{count}})',
+      filesHeading: '檔案 ({{count}})',
+      resultsCount: '資料夾：{{folders}} · 檔案：{{showing}} / {{total}}',
+      noMatches: '沒有匹配的檔案或資料夾',
+      noMatchesDescription: '沒有檔案或資料夾匹配您目前的搜尋或篩選條件。',
+    },
     readme: {
       truncated: '已截斷',
       show: '顯示 README',

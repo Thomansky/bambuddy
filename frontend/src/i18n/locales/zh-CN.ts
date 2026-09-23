@@ -3899,6 +3899,17 @@ export default {
     dragToResizeTooltip: '拖动调整大小，双击重置',
     searchFiles: '搜索文件...',
     searchSubfoldersHint: '包含子文件夹',
+    pathBar: {
+      label: '位置',
+      showHidden: '显示折叠的文件夹',
+    },
+    search: {
+      foldersHeading: '文件夹 ({{count}})',
+      filesHeading: '文件 ({{count}})',
+      resultsCount: '文件夹：{{folders}} · 文件：{{showing}} / {{total}}',
+      noMatches: '没有匹配的文件或文件夹',
+      noMatchesDescription: '没有文件或文件夹匹配您当前的搜索或筛选条件。',
+    },
     readme: {
       truncated: '已截断',
       show: '显示 README',

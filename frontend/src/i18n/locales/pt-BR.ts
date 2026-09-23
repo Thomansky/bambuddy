@@ -3899,6 +3899,17 @@ export default {
     dragToResizeTooltip: 'Arraste para redimensionar, clique duas vezes para redefinir',
     searchFiles: 'Pesquisar arquivos...',
     searchSubfoldersHint: 'Incluindo subpastas',
+    pathBar: {
+      label: 'Local',
+      showHidden: 'Mostrar pastas ocultas',
+    },
+    search: {
+      foldersHeading: 'Pastas ({{count}})',
+      filesHeading: 'Arquivos ({{count}})',
+      resultsCount: 'Pastas: {{folders}} · Arquivos: {{showing}} de {{total}}',
+      noMatches: 'Nenhum arquivo ou pasta correspondente',
+      noMatchesDescription: 'Nenhum arquivo ou pasta corresponde aos seus critérios de pesquisa ou filtro.',
+    },
     readme: {
       truncated: 'Truncado',
       show: 'Mostrar README',

@@ -3713,6 +3713,17 @@ export default {
     dragToResizeTooltip: "Перетащите для изменения размера, двойной щелчок — сброс",
     searchFiles: "Поиск файлов...",
     searchSubfoldersHint: "С учётом вложенных папок",
+    pathBar: {
+      label: "Расположение",
+      showHidden: "Показать скрытые папки",
+    },
+    search: {
+      foldersHeading: "Папки ({{count}})",
+      filesHeading: "Файлы ({{count}})",
+      resultsCount: "Папки: {{folders}} · Файлы: {{showing}} из {{total}}",
+      noMatches: "Подходящие файлы и папки не найдены",
+      noMatchesDescription: "Нет файлов и папок, соответствующих текущему поиску или фильтрам.",
+    },
     readme: {
       truncated: "Показано не полностью",
       show: "Показать README",

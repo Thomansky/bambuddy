@@ -47,6 +47,7 @@ import {
   Tag as TagIcon,
   Columns,
   ChevronRight as ChevronRightIcon,
+  MoreHorizontal,
 } from 'lucide-react';
 import { api } from '../api/client';
 import type {
@@ -1350,6 +1351,138 @@ function ColumnFileRow({ file, isSelected, isFocused, showModified, thumbnailVer
   );
 }
 
+// Explorer-style path bar: the chain from the library root down to the
+// selected folder, above the file list in every view mode. Every ancestor is
+// a button that selects it; the current folder is plain text. The bar must
+// never wrap or push the pane wider, so a long chain keeps the root and the
+// last two crumbs and folds the rest into a menu.
+interface PathBarProps {
+  rootLabel: string;
+  rootIsExternal: boolean;
+  path: LibraryFolderTree[];
+  onSelectRoot: () => void;
+  onSelectFolder: (id: number) => void;
+  t: TFunction;
+}
+
+function PathBar({ rootLabel, rootIsExternal, path, onSelectRoot, onSelectFolder, t }: PathBarProps) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handlePointerDown = (e: MouseEvent) => {
+      if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [menuOpen]);
+
+  // Keep the first element and the last two; everything between them moves
+  // into the ellipsis menu.
+  const collapsed = path.length > 2;
+  const hidden = collapsed ? path.slice(0, path.length - 2) : [];
+  const visible = collapsed ? path.slice(path.length - 2) : path;
+  const separator = <ChevronRightIcon className="w-3.5 h-3.5 flex-shrink-0 text-bambu-gray/60" aria-hidden="true" />;
+  const crumbClass = 'flex items-center gap-1.5 min-w-0 px-1.5 py-1 rounded transition-colors';
+  const rootIcon = rootIsExternal ? (
+    <FolderSymlink className="w-4 h-4 flex-shrink-0 text-purple-600 dark:text-purple-400" />
+  ) : (
+    <FileBox className="w-4 h-4 flex-shrink-0 text-bambu-green" />
+  );
+
+  return (
+    <nav
+      aria-label={t('fileManager.pathBar.label')}
+      data-testid="library-path-bar"
+      className="flex items-center gap-0.5 mb-3 min-w-0 overflow-hidden whitespace-nowrap text-sm"
+    >
+      {path.length === 0 ? (
+        <span aria-current="page" className={`${crumbClass} text-white font-medium`}>
+          {rootIcon}
+          <span className="truncate">{rootLabel}</span>
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={onSelectRoot}
+          aria-label={rootLabel}
+          title={rootLabel}
+          className={`${crumbClass} text-bambu-gray hover:text-white hover:bg-bambu-dark`}
+        >
+          {rootIcon}
+          <span className="truncate">{rootLabel}</span>
+        </button>
+      )}
+      {collapsed && (
+        <>
+          {separator}
+          <div ref={menuRef} className="relative flex-shrink-0">
+            <button
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              aria-label={t('fileManager.pathBar.showHidden')}
+              title={t('fileManager.pathBar.showHidden')}
+              onClick={() => setMenuOpen((open) => !open)}
+              className="flex items-center px-1.5 py-1 rounded text-bambu-gray hover:text-white hover:bg-bambu-dark transition-colors"
+            >
+              <MoreHorizontal className="w-4 h-4" />
+            </button>
+            {menuOpen && (
+              <div
+                role="menu"
+                className="absolute left-0 top-full mt-1 z-30 min-w-[10rem] max-w-[18rem] py-1 rounded-lg bg-bambu-dark-secondary border border-bambu-dark-tertiary shadow-xl"
+              >
+                {hidden.map((folder) => (
+                  <button
+                    key={folder.id}
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onSelectFolder(folder.id);
+                    }}
+                    aria-label={folder.name}
+                    title={folder.name}
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm text-white hover:bg-bambu-dark transition-colors"
+                  >
+                    <FolderOpen className="w-3.5 h-3.5 flex-shrink-0 text-bambu-green" />
+                    <span className="truncate">{folder.name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+      {visible.map((folder, i) => {
+        const isCurrent = i === visible.length - 1;
+        return (
+          <span key={folder.id} className="flex items-center gap-0.5 min-w-0">
+            {separator}
+            {isCurrent ? (
+              <span aria-current="page" title={folder.name} className={`${crumbClass} text-white font-medium`}>
+                <span className="truncate">{folder.name}</span>
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => onSelectFolder(folder.id)}
+                aria-label={folder.name}
+                title={folder.name}
+                className={`${crumbClass} text-bambu-gray hover:text-white hover:bg-bambu-dark`}
+              >
+                <span className="truncate">{folder.name}</span>
+              </button>
+            )}
+          </span>
+        );
+      })}
+    </nav>
+  );
+}
+
 export function FileManagerPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -2151,6 +2284,43 @@ export function FileManagerPage() {
         .find((list) => list?.some((f) => f.id === columnsFocusedFileId))) ||
     filteredAndSortedFiles;
 
+  // Folder name matches for the active search. The tree is already in memory,
+  // so this needs no endpoint; a tree that has not loaded simply matches
+  // nothing. `path` is the ancestor chain, shown under the name.
+  const folderSearchMatches = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query || !sortedFolders) return [];
+    const matches: { folder: LibraryFolderTree; path: string[] }[] = [];
+    const walk = (items: LibraryFolderTree[], ancestors: string[]) => {
+      for (const item of items) {
+        if (item.name.toLowerCase().includes(query)) matches.push({ folder: item, path: ancestors });
+        walk(item.children, [...ancestors, item.name]);
+      }
+    };
+    walk(sortedFolders, []);
+    return matches;
+  }, [sortedFolders, searchQuery]);
+
+  const rootCrumbLabel = currentBucketIsExternal ? t('fileManager.allExternal') : t('fileManager.allFiles');
+
+  const selectFolderFromChrome = (folderId: number) => {
+    setColumnsFocusedFileId(null);
+    setSelectedFolderId(folderId);
+  };
+
+  const selectPathRoot = () => {
+    setColumnsFocusedFileId(null);
+    setTopLevelView(currentBucketIsExternal ? 'external' : 'internal');
+    setSelectedFolderId(null);
+  };
+
+  // A folder hit jumps to the folder and drops the query — the user was
+  // looking for the folder itself, not for a filtered view of it.
+  const selectSearchedFolder = (folderId: number) => {
+    setSearchQuery('');
+    selectFolderFromChrome(folderId);
+  };
+
   // Double-click / Enter on a file row: sliced output opens in the gcode
   // viewer, model files in the 3D viewer, anything else has no preview.
   const openColumnFile = (file: LibraryFileListItem) => {
@@ -2903,7 +3073,13 @@ export function FileManagerPage() {
               {/* Results count */}
               {(searchQuery || filterType !== 'all' || filterUsername) && (
                 <span className="text-sm text-bambu-gray hidden sm:inline">
-                  {t('fileManager.resultsCount', { showing: filteredAndSortedFiles.length, total: files.length })}
+                  {searchQuery.trim()
+                    ? t('fileManager.search.resultsCount', {
+                        showing: filteredAndSortedFiles.length,
+                        total: files.length,
+                        folders: folderSearchMatches.length,
+                      })
+                    : t('fileManager.resultsCount', { showing: filteredAndSortedFiles.length, total: files.length })}
                 </span>
               )}
             </div>
@@ -3021,6 +3197,64 @@ export function FileManagerPage() {
                     </Button>
                   </div>
                 </>
+              )}
+            </div>
+          )}
+
+          {/* Path bar: where you are, and one click back to any ancestor.
+              Rendered in every view mode, driven by the same selection the
+              sidebar, the tiles and the columns all write to. */}
+          <PathBar
+            rootLabel={rootCrumbLabel}
+            rootIsExternal={currentBucketIsExternal}
+            path={folderPath}
+            onSelectRoot={selectPathRoot}
+            onSelectFolder={selectFolderFromChrome}
+            t={t}
+          />
+
+          {/* Folder hits for the active search, above the file results. A
+              folder whose name matched used to be invisible, which is exactly
+              wrong when the thing you are looking for IS a folder. */}
+          {folderSearchMatches.length > 0 && (
+            <div className="mb-4" data-testid="folder-search-results">
+              <h3 className="mb-2 text-sm font-medium text-white">
+                {t('fileManager.search.foldersHeading', { count: folderSearchMatches.length })}
+              </h3>
+              <div className="bg-bambu-dark-secondary rounded-lg border border-bambu-dark-tertiary divide-y divide-bambu-dark-tertiary overflow-hidden">
+                {folderSearchMatches.map(({ folder, path }) => (
+                  <button
+                    key={folder.id}
+                    type="button"
+                    onClick={() => selectSearchedFolder(folder.id)}
+                    className="w-full flex items-center gap-3 px-3 py-2 text-left hover:bg-bambu-dark transition-colors"
+                  >
+                    {folder.is_external ? (
+                      <FolderSymlink className="w-5 h-5 flex-shrink-0 text-purple-600 dark:text-purple-400" />
+                    ) : (
+                      <FolderOpen className="w-5 h-5 flex-shrink-0 text-bambu-green" />
+                    )}
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm text-white truncate">{folder.name}</span>
+                      <span className="block text-xs text-bambu-gray truncate">
+                        {path.length > 0
+                          ? path.join(' › ')
+                          : folder.is_external
+                            ? t('fileManager.allExternal')
+                            : t('fileManager.allFiles')}
+                      </span>
+                    </span>
+                    {folder.file_count > 0 && (
+                      <span className="text-xs text-bambu-gray flex-shrink-0">{folder.file_count}</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+              <h3 className="mt-4 mb-2 text-sm font-medium text-white">
+                {t('fileManager.search.filesHeading', { count: filteredAndSortedFiles.length })}
+              </h3>
+              {filteredAndSortedFiles.length === 0 && (
+                <p className="text-sm text-bambu-gray">{t('fileManager.noMatchingFiles')}</p>
               )}
             </div>
           )}
@@ -3198,7 +3432,7 @@ export function FileManagerPage() {
                 </div>
               </div>
             </div>
-          ) : files?.length === 0 ? (
+          ) : files?.length === 0 && folderSearchMatches.length === 0 ? (
             <div className="flex-1 flex flex-col items-center justify-center">
               <div className="p-4 bg-bambu-dark rounded-2xl mb-4">
                 <FileBox className="w-12 h-12 text-bambu-gray/50" />
@@ -3226,14 +3460,20 @@ export function FileManagerPage() {
                 {t('fileManager.uploadFiles')}
               </Button>
             </div>
-          ) : filteredAndSortedFiles.length === 0 ? (
+          ) : filteredAndSortedFiles.length === 0 && folderSearchMatches.length === 0 ? (
             <div className="flex-1 flex flex-col items-center justify-center">
               <div className="p-4 bg-bambu-dark rounded-2xl mb-4">
                 <Search className="w-12 h-12 text-bambu-gray/50" />
               </div>
-              <h3 className="text-lg font-medium text-white mb-2">{t('fileManager.noMatchingFiles')}</h3>
+              {/* A search looks for folders too, so say so; a plain type or
+                  user filter still only ever hides files. */}
+              <h3 className="text-lg font-medium text-white mb-2">
+                {searchQuery.trim() ? t('fileManager.search.noMatches') : t('fileManager.noMatchingFiles')}
+              </h3>
               <p className="text-bambu-gray text-center max-w-md mb-6">
-                {t('fileManager.noMatchingFilesDescription')}
+                {searchQuery.trim()
+                  ? t('fileManager.search.noMatchesDescription')
+                  : t('fileManager.noMatchingFilesDescription')}
               </p>
               <Button variant="secondary" onClick={() => { setSearchQuery(''); setFilterType('all'); }}>
                 {t('fileManager.clearFilters')}

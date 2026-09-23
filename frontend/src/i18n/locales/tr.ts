@@ -3906,6 +3906,17 @@ export default {
     dragToResizeTooltip: 'Yeniden boyutlandırmak için sürükleyin, sıfırlamak için çift tıklayın',
     searchFiles: 'Dosyalarda ara...',
     searchSubfoldersHint: 'Alt klasörler dahil',
+    pathBar: {
+      label: 'Konum',
+      showHidden: 'Gizlenen klasörleri göster',
+    },
+    search: {
+      foldersHeading: 'Klasörler ({{count}})',
+      filesHeading: 'Dosyalar ({{count}})',
+      resultsCount: 'Klasörler: {{folders}} · Dosyalar: {{total}} dosyadan {{showing}}',
+      noMatches: 'Eşleşen dosya veya klasör yok',
+      noMatchesDescription: 'Mevcut arama veya filtre kriterlerinizle eşleşen dosya ya da klasör yok.',
+    },
     readme: {
       truncated: 'Kısaltıldı',
       show: 'README’yi göster',

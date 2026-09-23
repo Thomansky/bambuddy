@@ -3911,6 +3911,17 @@ export default {
     dragToResizeTooltip: 'ドラッグしてリサイズ、ダブルクリックでリセット',
     searchFiles: 'ファイルを検索...',
     searchSubfoldersHint: 'サブフォルダーを含む',
+    pathBar: {
+      label: '場所',
+      showHidden: '省略されたフォルダを表示',
+    },
+    search: {
+      foldersHeading: 'フォルダ ({{count}})',
+      filesHeading: 'ファイル ({{count}})',
+      resultsCount: 'フォルダ: {{folders}} · ファイル: {{total}}件中{{showing}}件',
+      noMatches: '一致するファイルやフォルダがありません',
+      noMatchesDescription: '現在の検索またはフィルター条件に一致するファイルもフォルダもありません。',
+    },
     readme: {
       truncated: '切り詰め',
       show: 'READMEを表示',

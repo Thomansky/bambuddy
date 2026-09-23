@@ -3941,6 +3941,17 @@ export default {
     dragToResizeTooltip: 'Drag to resize, double-click to reset',
     searchFiles: 'Search files...',
     searchSubfoldersHint: 'Including subfolders',
+    pathBar: {
+      label: 'Location',
+      showHidden: 'Show hidden folders',
+    },
+    search: {
+      foldersHeading: 'Folders ({{count}})',
+      filesHeading: 'Files ({{count}})',
+      resultsCount: 'Folders: {{folders}} · Files: {{showing}} of {{total}}',
+      noMatches: 'No matching files or folders',
+      noMatchesDescription: 'No file or folder matches your current search or filter criteria.',
+    },
     readme: {
       truncated: 'Truncated',
       show: 'Show README',

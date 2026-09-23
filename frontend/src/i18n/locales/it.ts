@@ -3899,6 +3899,17 @@ export default {
     dragToResizeTooltip: 'Trascina per ridimensionare, doppio clic per reset',
     searchFiles: 'Cerca file...',
     searchSubfoldersHint: 'Sottocartelle incluse',
+    pathBar: {
+      label: 'Posizione',
+      showHidden: 'Mostra le cartelle nascoste',
+    },
+    search: {
+      foldersHeading: 'Cartelle ({{count}})',
+      filesHeading: 'File ({{count}})',
+      resultsCount: 'Cartelle: {{folders}} · File: {{showing}} di {{total}}',
+      noMatches: 'Nessun file o cartella corrispondente',
+      noMatchesDescription: 'Nessun file e nessuna cartella corrisponde ai criteri di ricerca o filtro.',
+    },
     readme: {
       truncated: 'Troncato',
       show: 'Mostra README',

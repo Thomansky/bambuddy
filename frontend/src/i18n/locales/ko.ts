@@ -3721,6 +3721,17 @@ export default {
     dragToResizeTooltip: '드래그하여 크기 조정, 더블클릭하여 초기화',
     searchFiles: '파일 검색...',
     searchSubfoldersHint: '하위 폴더 포함',
+    pathBar: {
+      label: '위치',
+      showHidden: '생략된 폴더 표시',
+    },
+    search: {
+      foldersHeading: '폴더 ({{count}})',
+      filesHeading: '파일 ({{count}})',
+      resultsCount: '폴더: {{folders}} · 파일: 전체 {{total}}개 중 {{showing}}개',
+      noMatches: '일치하는 파일 또는 폴더 없음',
+      noMatchesDescription: '현재 검색 또는 필터 조건과 일치하는 파일이나 폴더가 없습니다.',
+    },
     readme: {
       truncated: '잘림',
       show: 'README 표시',

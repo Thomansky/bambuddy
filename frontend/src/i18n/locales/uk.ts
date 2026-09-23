@@ -3939,6 +3939,17 @@ export default {
     dragToResizeTooltip: "Перетягніть, щоб змінити розмір, двічі клацніть, щоб скинути",
     searchFiles: "Пошук файлів...",
     searchSubfoldersHint: "Включаючи вкладені папки",
+    pathBar: {
+      label: "Розташування",
+      showHidden: "Показати приховані папки",
+    },
+    search: {
+      foldersHeading: "Папки ({{count}})",
+      filesHeading: "Файли ({{count}})",
+      resultsCount: "Папки: {{folders}} · Файли: {{showing}} з {{total}}",
+      noMatches: "Немає відповідних файлів або папок",
+      noMatchesDescription: "Жоден файл і жодна папка не відповідає вашим поточним критеріям пошуку чи фільтру.",
+    },
     readme: {
       truncated: "Усічений",
       show: "Показати README",

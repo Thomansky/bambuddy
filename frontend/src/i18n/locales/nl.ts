@@ -3941,6 +3941,17 @@ export default {
     dragToResizeTooltip: 'Sleep om grootte te wijzigen, dubbelklik om te resetten',
     searchFiles: 'Bestanden zoeken...',
     searchSubfoldersHint: 'Inclusief submappen',
+    pathBar: {
+      label: 'Locatie',
+      showHidden: 'Verborgen mappen tonen',
+    },
+    search: {
+      foldersHeading: 'Mappen ({{count}})',
+      filesHeading: 'Bestanden ({{count}})',
+      resultsCount: 'Mappen: {{folders}} · Bestanden: {{showing}} van {{total}}',
+      noMatches: 'Geen overeenkomende bestanden of mappen',
+      noMatchesDescription: 'Geen bestand of map komt overeen met je huidige zoek- of filtercriteria.',
+    },
     readme: {
       truncated: 'Afgekapt',
       show: 'README tonen',

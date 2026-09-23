@@ -3911,6 +3911,17 @@ export default {
     dragToResizeTooltip: 'Ziehen zum Ändern der Größe, Doppelklick zum Zurücksetzen',
     searchFiles: 'Dateien suchen...',
     searchSubfoldersHint: 'Inklusive Unterordner',
+    pathBar: {
+      label: 'Pfad',
+      showHidden: 'Ausgeblendete Ordner anzeigen',
+    },
+    search: {
+      foldersHeading: 'Ordner ({{count}})',
+      filesHeading: 'Dateien ({{count}})',
+      resultsCount: 'Ordner: {{folders}} · Dateien: {{showing}} von {{total}}',
+      noMatches: 'Keine passenden Dateien oder Ordner',
+      noMatchesDescription: 'Keine Datei und kein Ordner entspricht Ihren aktuellen Such- oder Filterkriterien.',
+    },
     readme: {
       truncated: 'Gekürzt',
       show: 'README anzeigen',
