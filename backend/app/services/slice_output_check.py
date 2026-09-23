@@ -30,6 +30,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import re
 import zipfile
 
 logger = logging.getLogger(__name__)
@@ -174,4 +175,82 @@ def unresolved_filament_message(slots: list[int], preset_names: list[str]) -> st
         "The file was kept, but check the temperatures before printing. This usually means the "
         "slicer sidecar's bundled profiles do not contain the preset that was picked - updating "
         "the sidecar image, or picking a preset from its own bundled list, resolves it."
+    )
+
+
+# The two markers that make a sliced file capable of measuring pressure
+# advance. ``M1002 judge_flag extrude_cali_flag`` is the gate the firmware
+# evaluates against the ``extrude_cali_flag`` of the dispatched project_file;
+# ``M983.3`` is the command inside it that actually runs the measurement.
+# Both are vendor content from the machine preset's start G-code — Bambuddy
+# writes neither — and both were read out of Bambu Studio's own
+# ``auto_pa_line_calib_mode`` job for an H2S.
+_EXTRUDE_CALI_GATE = "M1002 judge_flag extrude_cali_flag"
+_EXTRUDE_CALI_COMMAND = "M983.3"
+
+_PLATE_GCODE_RE = re.compile(r"^Metadata/plate_\d+\.gcode$")
+
+
+def _executable_gcode(text: str) -> str:
+    """``text`` with comment-only lines removed.
+
+    A plate's G-code carries the whole preset as ``; key = value`` comments,
+    and ``machine_start_gcode`` is one of them — so the *template* of the
+    calibration block appears in the file even when the slicer failed to
+    expand it into anything the printer would run. Matching against the
+    comments would turn the one guard that has to be certain into a guard that
+    passes on the exact file it exists to reject.
+    """
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith(";"))
+
+
+def extrude_cali_gate_missing(content: bytes, *, export_3mf: bool) -> bool:
+    """Whether ``content`` lacks the flow-dynamics calibration step.
+
+    Answers True — reject — whenever the markers are not both found, including
+    when the file cannot be read at all. This is the opposite default from
+    ``start_gcode_is_missing`` and deliberately so: that check guards an
+    ordinary print, where a file it cannot judge must still be allowed
+    through, while this one guards a job whose entire purpose is to run a
+    measurement. A file without the gate is not a broken print — it is a
+    perfectly normal six-minute print that heats the bed, lays a 30 mm line
+    and produces no K value, which is indistinguishable downstream from a
+    measurement that failed. Nothing may be uploaded or dispatched on a
+    maybe.
+    """
+    if not content:
+        return True
+
+    if not export_3mf:
+        head = content[:_GCODE_SCAN_BYTES].decode("utf-8", errors="ignore")
+        return not _has_extrude_cali_step(head)
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            names = sorted(n for n in archive.namelist() if _PLATE_GCODE_RE.match(n))
+            if not names:
+                logger.warning("Extrude-cali check: no Metadata/plate_N.gcode in the sliced 3MF")
+                return True
+            for name in names:
+                if not _has_extrude_cali_step(archive.read(name).decode("utf-8", errors="ignore")):
+                    logger.warning("Extrude-cali check: %s has no calibration step", name)
+                    return True
+    except (KeyError, OSError, zipfile.BadZipFile) as exc:
+        logger.warning("Extrude-cali check: cannot read the sliced 3MF (%s)", exc)
+        return True
+    return False
+
+
+def _has_extrude_cali_step(gcode: str) -> bool:
+    body = _executable_gcode(gcode)
+    return _EXTRUDE_CALI_GATE in body and _EXTRUDE_CALI_COMMAND in body
+
+
+def missing_extrude_cali_message(printer_preset_name: str) -> str:
+    """Why a flow-dynamics run was abandoned before anything reached the printer."""
+    return (
+        f"The sliced file for '{printer_preset_name}' contains no flow-dynamics calibration step, "
+        "so it was discarded instead of being printed. Without it the printer would run a normal "
+        "six-minute print and return no K value. This usually means the printer preset is not the "
+        "one for this machine, or the slicer sidecar's bundled profiles are older than its firmware."
     )

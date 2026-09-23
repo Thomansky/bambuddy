@@ -1387,6 +1387,14 @@ class BambuMQTTClient:
         # by await_cali_ack.
         self._pending_cali_acks: dict[str, dict | None] = {}
 
+        # In-flight ``extrusion_cali_get_result`` requests, keyed by the
+        # sequence_id we sent. Separate from _pending_kprofile_requests because
+        # the two commands answer with different payloads for different
+        # questions: that one reads the stored calibration table, this one reads
+        # the result of the measurement the last print just performed.
+        # Value: {"nozzle": str, "event": asyncio.Event, "result": dict | None}.
+        self._pending_cali_result_requests: dict[str, dict] = {}
+
         # Identifies the one project_file *we* dispatched, so its echo on the
         # topic can be told apart from a slicer's. One-shot: consumed by the
         # first frame that matches. See _project_file_key.
@@ -2415,6 +2423,10 @@ class BambuMQTTClient:
                 elif cmd == "ams_filament_setting":
                     self._last_ams_cmd_time = 0.0
                     self._ams_cmd_unanswered = 0
+            is_cali_result_response = print_data.get("command") == "extrusion_cali_get_result"
+            if is_cali_result_response:
+                self._handle_cali_result_response(print_data)
+
             is_kprofile_response = "command" in print_data and print_data.get("command") == "extrusion_cali_get"
             if is_kprofile_response:
                 self._handle_kprofile_response(print_data)
@@ -2426,7 +2438,10 @@ class BambuMQTTClient:
             # which then failed the #1899 dispatch guard. The response carries no
             # status telemetry, so skip it; the true nozzle comes from pushall.
             # (Same reasoning as get_accessories in _handle_system_response.)
-            if not is_kprofile_response:
+            # extrusion_cali_get_result echoes the requested nozzle_diameter the
+            # same way, and carries no status telemetry either, so it is skipped
+            # for the same reason.
+            if not is_kprofile_response and not is_cali_result_response:
                 self._update_state(print_data)
 
     def _handle_system_response(self, data: dict):
@@ -6766,6 +6781,172 @@ class BambuMQTTClient:
         logger.error("[%s] Failed to get K-profiles after %s attempts", self.serial_number, max_retries)
         return []
 
+    def _handle_cali_result_response(self, data: dict):
+        """Handle an ``extrusion_cali_get_result`` response from the printer.
+
+        Matched to its request by the echoed ``sequence_id``, falling back to
+        the nozzle diameter among requests that are still waiting — the same
+        two-step rule ``_handle_kprofile_response`` uses, and for the same
+        reason: firmware that does not echo the id still has to be served,
+        while an unmatched broadcast must never resolve somebody else's wait.
+
+        Unlike the K-profile table this result is not cached on the state.
+        It describes the outcome of one specific print and is meaningless
+        outside the run that dispatched it, so nothing reads it except the
+        caller waiting on the event.
+        """
+        response_seq_id = str(data.get("sequence_id", ""))
+        response_nozzle = data.get("nozzle_diameter")
+
+        # Snapshot: the asyncio thread mutates this map while the MQTT
+        # callback thread walks it.
+        pending = dict(self._pending_cali_result_requests)
+        if not pending:
+            return
+
+        request = pending.get(response_seq_id)
+        if request is None:
+            request = next(
+                (r for r in pending.values() if r["nozzle"] == response_nozzle and r["result"] is None),
+                None,
+            )
+        if request is None:
+            logger.debug(
+                "[%s] Ignoring unmatched extrusion_cali_get_result: nozzle=%s, seq_id=%s",
+                self.serial_number,
+                response_nozzle,
+                response_seq_id or "?",
+            )
+            return
+
+        logger.info(
+            "[%s] extrusion_cali_get_result: result=%s reason=%s nozzle=%s seq=%s filaments=%d",
+            self.serial_number,
+            data.get("result"),
+            data.get("reason", ""),
+            response_nozzle,
+            response_seq_id or "?",
+            len(data.get("filaments") or []),
+        )
+        request["result"] = data
+
+        event = request["event"]
+        if self._loop and self._loop.is_running():
+            self._loop.call_soon_threadsafe(event.set)
+        else:
+            event.set()
+
+    async def get_extrusion_cali_result(
+        self, nozzle_diameter: str = "0.4", timeout: float = 8.0, max_retries: int = 3
+    ) -> dict | None:
+        """Read the result of the flow-dynamics measurement the last print ran.
+
+        This is the H2-series counterpart to ``extrusion_cali``'s in-band
+        answer: the measurement happens inside the print's start G-code
+        (``M983.3``, gated on ``extrude_cali_flag``), and the number it produced
+        is only obtainable by asking for it afterwards. Bambu Studio asks
+        roughly three seconds after the job reaches FINISH.
+
+        Returns the raw response dict — ``{result, reason, nozzle_diameter,
+        filaments[...]}`` — or None when the printer never answered. Callers
+        must check ``result``: a ``"fail"`` is an answer, and its ``reason``
+        belongs in front of the user.
+        """
+        if not self._client or not self.state.connected:
+            logger.warning("[%s] Cannot read calibration result: not connected", self.serial_number)
+            return None
+
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            logger.warning("[%s] No running event loop", self.serial_number)
+            return None
+
+        for attempt in range(max_retries):
+            self._sequence_id += 1
+            seq_id = str(self._sequence_id)
+            request: dict = {"nozzle": nozzle_diameter, "event": asyncio.Event(), "result": None}
+            self._pending_cali_result_requests[seq_id] = request
+
+            command = {
+                "print": {
+                    "command": "extrusion_cali_get_result",
+                    "nozzle_diameter": nozzle_diameter,
+                    "sequence_id": seq_id,
+                }
+            }
+            logger.info(
+                "[%s] Requesting calibration result for nozzle_diameter=%s (attempt %d/%d, seq_id=%s)",
+                self.serial_number,
+                nozzle_diameter,
+                attempt + 1,
+                max_retries,
+                seq_id,
+            )
+            try:
+                self._client.publish(self.topic_publish, json.dumps(command), qos=1)
+                await asyncio.wait_for(request["event"].wait(), timeout=timeout)
+                return request["result"]
+            except TimeoutError:
+                logger.warning(
+                    "[%s] Timeout on calibration result attempt %d/%d",
+                    self.serial_number,
+                    attempt + 1,
+                    max_retries,
+                )
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(0.5)
+            finally:
+                self._pending_cali_result_requests.pop(seq_id, None)
+
+        logger.error(
+            "[%s] No calibration result after %s attempts",
+            self.serial_number,
+            max_retries,
+        )
+        return None
+
+    def set_measured_kprofile(self, nozzle_diameter: str, filament: dict) -> str | None:
+        """Write one measured K value, reproducing Bambu Studio's payload.
+
+        ``filament`` is built by ``utils.pa_calibration.build_extrusion_cali_set_filament``
+        and goes on the wire unchanged — in particular with **no** ``cali_idx``,
+        which is what makes the printer match on
+        ``(filament_id, nozzle_id, extruder_id)`` and replace the existing entry
+        in place instead of appending a second one.
+
+        Separate from ``set_kprofile`` rather than another branch inside it:
+        that method's shape is the one the manual K-profile editor depends on
+        (``cali_idx``, a minted ``setting_id``, ``ams_id: 0``), and every one of
+        those differs here. Returns the sequence_id so the caller can await
+        ``await_cali_ack``.
+        """
+        if not self._client or not self.state.connected:
+            logger.warning("[%s] Cannot write measured K-profile: not connected", self.serial_number)
+            return None
+
+        self._sequence_id += 1
+        seq_id = str(self._sequence_id)
+        command = {
+            "print": {
+                "command": "extrusion_cali_set",
+                "filaments": [filament],
+                "nozzle_diameter": nozzle_diameter,
+                "sequence_id": seq_id,
+            }
+        }
+        logger.info(
+            "[%s] Writing measured K-profile: filament=%s nozzle=%s k=%s n_coef=%s",
+            self.serial_number,
+            filament.get("filament_id"),
+            filament.get("nozzle_id"),
+            filament.get("k_value"),
+            filament.get("n_coef"),
+        )
+        logger.debug("[%s] Measured K-profile SET command: %s", self.serial_number, json.dumps(command))
+        self._publish_cali_write(command, seq_id)
+        return seq_id
+
     def _publish_cali_write(self, command: dict, seq_id: str) -> bool:
         """Publish a K-profile write and arm its ack slot.
 
@@ -6822,6 +7003,7 @@ class BambuMQTTClient:
         setting_id: str | None = None,
         slot_id: int = 0,
         cali_idx: int | None = None,
+        n_coef: str = "0.000000",
     ) -> str | None:
         """Set/update a K-profile on the printer.
 
@@ -6835,6 +7017,12 @@ class BambuMQTTClient:
             setting_id: Existing setting ID for updates, None for new
             slot_id: Calibration index (cali_idx) for the profile
             cali_idx: For edits, the existing slot being edited (enables in-place edit)
+            n_coef: Flow-rate exponent. The default is what a hand-entered
+                profile has always sent and MUST NOT change — every existing
+                caller relies on it. A measured profile passes the value the
+                printer itself returned (``"0.750000"`` on the captured H2S
+                runs); inventing one would file a measurement under a
+                coefficient it was not measured with.
 
         Returns:
             The sequence_id the command was sent under, so the caller can
@@ -6869,7 +7057,7 @@ class BambuMQTTClient:
             "extruder_id": extruder_id,
             "filament_id": filament_id,
             "k_value": k_value,
-            "n_coef": "0.000000",
+            "n_coef": n_coef,
             "name": name,
             "nozzle_diameter": nozzle_diameter,
             "nozzle_id": nozzle_id,
