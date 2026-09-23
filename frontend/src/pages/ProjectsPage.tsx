@@ -26,7 +26,7 @@ import {
   Image as ImageIcon,
   X,
 } from 'lucide-react';
-import { api } from '../api/client';
+import { api, ApiError } from '../api/client';
 import type { ProjectListItem, ProjectCreate, ProjectUpdate, ProjectImport, Permission } from '../api/client';
 import { Button } from '../components/Button';
 import { ConfirmModal } from '../components/ConfirmModal';
@@ -61,6 +61,7 @@ interface ProjectModalProps {
 
 export function ProjectModal({ project, onClose, onSave, isLoading, currencySymbol, t }: ProjectModalProps) {
   const [name, setName] = useState(project?.name || '');
+  const [number, setNumber] = useState(project?.number || '');
   const [description, setDescription] = useState(project?.description || '');
   const [color, setColor] = useState(project?.color || PROJECT_COLORS[0]);
   const [targetCount, setTargetCount] = useState(project?.target_count?.toString() || '');
@@ -131,6 +132,9 @@ export function ProjectModal({ project, onClose, onSave, isLoading, currencySymb
     setUrlError(null);
     onSave({
       name: name.trim(),
+      // Empty on create means "let the series decide"; on edit it clears the
+      // number, so it has to be an explicit null rather than an omission.
+      number: project ? (number.trim() || null) : (number.trim() || undefined),
       description: description.trim() || undefined,
       color,
       target_count: targetCount ? parseInt(targetCount, 10) : undefined,
@@ -178,6 +182,21 @@ export function ProjectModal({ project, onClose, onSave, isLoading, currencySymb
               className="w-full bg-bambu-dark border border-bambu-dark-tertiary rounded px-3 py-2 text-white placeholder-bambu-gray focus:outline-none focus:border-bambu-green"
               placeholder={t('projects.namePlaceholder')}
               required
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-white mb-1" htmlFor="project-number">
+              {t('projects.number')}
+            </label>
+            <input
+              id="project-number"
+              type="text"
+              value={number}
+              onChange={(e) => setNumber(e.target.value)}
+              className="w-full bg-bambu-dark border border-bambu-dark-tertiary rounded px-3 py-2 text-white placeholder-bambu-gray focus:outline-none focus:border-bambu-green"
+              placeholder={t('projects.numberPlaceholder')}
+              maxLength={32}
             />
           </div>
 
@@ -614,6 +633,14 @@ function ProjectCard({ project, parentName, onClick, onEdit, onDelete, hasPermis
             )}
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 flex-wrap">
+                {project.number && (
+                  <span
+                    className="text-xs font-mono px-1.5 py-0.5 rounded bg-bambu-dark text-bambu-gray whitespace-nowrap flex-shrink-0"
+                    title={t('projects.number')}
+                  >
+                    {project.number}
+                  </span>
+                )}
                 <h3 className="font-semibold text-white truncate">{project.name}</h3>
                 {project.url && (
                   <a
@@ -1084,6 +1111,14 @@ export function ProjectsPage() {
     );
   };
 
+  // The only 409 either project route answers is a number that is already
+  // taken, and the backend's detail is English — translate it here and leave
+  // the modal open so the number can be corrected.
+  const showSaveError = (error: Error) => {
+    const taken = error instanceof ApiError && error.status === 409;
+    showToast(taken ? t('projects.numberTaken') : error.message, 'error');
+  };
+
   const createMutation = useMutation({
     mutationFn: (data: ProjectCreate) => api.createProject(data),
     onSuccess: () => {
@@ -1091,9 +1126,7 @@ export function ProjectsPage() {
       setShowModal(false);
       showToast(t('projects.toast.created'), 'success');
     },
-    onError: (error: Error) => {
-      showToast(error.message, 'error');
-    },
+    onError: showSaveError,
   });
 
   const updateMutation = useMutation({
@@ -1105,9 +1138,7 @@ export function ProjectsPage() {
       setEditingProject(undefined);
       showToast(t('projects.toast.updated'), 'success');
     },
-    onError: (error: Error) => {
-      showToast(error.message, 'error');
-    },
+    onError: showSaveError,
   });
 
   const deleteMutation = useMutation({

@@ -39,6 +39,21 @@ def _write_3mf_with_filaments(file_path: Path, filaments: list[dict], plate_inde
 class TestVirtualPrinterInstance:
     """Tests for VirtualPrinterInstance class."""
 
+    @pytest.fixture(autouse=True)
+    def no_job_number(self):
+        """Hand every queued job no running number.
+
+        The session these tests pass in is a mock, so the allocator's read of
+        the series row comes back as a mock rather than a row. None is the
+        answer a real install gives until someone turns the series on, which is
+        also the state none of these tests are about.
+        """
+        with patch(
+            "backend.app.services.virtual_printer.manager.allocate_number",
+            AsyncMock(return_value=None),
+        ):
+            yield
+
     @pytest.fixture
     def instance(self, tmp_path):
         """Create a VirtualPrinterInstance with test defaults."""

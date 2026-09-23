@@ -920,6 +920,7 @@ export default {
       dismissLabel: 'Hinweis schließen',
     },
     searchPlaceholder: 'Archiv durchsuchen...',
+    jobNumber: 'Auftragsnummer',
     filterByPrinter: 'Nach Drucker filtern',
     filterByStatus: 'Nach Status filtern',
     sortBy: 'Sortieren nach',
@@ -1208,6 +1209,7 @@ export default {
       energyCost: 'Energiekosten',
       depreciationCost: 'Druckerverschleiß',
       completedAt: 'Beendet',
+      jobNumber: 'Auftragsnr.',
       columns: 'Spalten',
       sortBy: 'Nach {{column}} sortieren',
       allPrinters: 'Alle Drucker',
@@ -1351,6 +1353,8 @@ export default {
     },
     title: 'Druckwarteschlange',
     subtitle: 'Planen und verwalten Sie Ihre Druckaufträge',
+    jobNumber: 'Auftragsnummer',
+    searchPlaceholder: 'Nach Name oder Nummer suchen',
     // Print modal
     editQueueItem: 'Warteschlangeneintrag bearbeiten',
     selectAllPlates: 'Alle {{count}} Platten auswählen',
@@ -3113,6 +3117,24 @@ export default {
     },
 
 
+
+    // Running numbers handed to new projects and queued jobs. Lives on
+    // the Workflow tab's Queue & Dispatch sub-tab.
+    numberSeries: {
+      title: 'Nummernkreis',
+      description: 'Vergibt an jedes neue Projekt und jeden neuen Auftrag eine fortlaufende Nummer. Bereits vorhandene Einträge werden nicht nachträglich nummeriert.',
+      project: 'Projekte',
+      queueJob: 'Druckaufträge',
+      enable: 'Nummern vergeben',
+      prefix: 'Präfix',
+      suffix: 'Suffix',
+      nextNumber: 'Nächste Nummer',
+      padding: 'Stellen',
+      preview: 'nächste: {{value}}',
+      lowerHint: 'Wird die nächste Nummer verringert, kann eine bereits vergebene Nummer erneut ausgegeben werden.',
+      loadError: 'Nummernkreise konnten nicht geladen werden.',
+      saveError: 'Nummernkreis konnte nicht gespeichert werden.',
+    },
     pipelineLimits: {
       title: 'Slicer-Pipeline-Limits',
       maxCopiesLabel: 'Max. Kopien pro Lauf',
@@ -4325,6 +4347,9 @@ export default {
     editProject: 'Projekt bearbeiten',
     deleteProject: 'Projekt löschen',
     projectName: 'Projektname',
+    number: 'Projektnummer',
+    numberPlaceholder: 'Wird automatisch vergeben',
+    numberTaken: 'Diese Nummer ist bereits für ein anderes Projekt vergeben.',
     description: 'Beschreibung',
     noProjects: 'Noch keine Projekte',
     noProjectsFiltered: 'Keine {{status}} Projekte',

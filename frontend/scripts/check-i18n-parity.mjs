@@ -151,6 +151,7 @@ const DE_COGNATES = [
   'Pause', 'Power', 'System', 'Problem', 'Designer', 'Extruder', 'Firmware',
   'Material', 'Original', 'Position', 'Webhook', 'Workflow', 'Slicer',
   'Pipeline', 'Pipelines', 'Filament {{n}}',  // #1425 — Slicer Pipelines (DE)
+  'Suffix',  // number series — "Suffix" is the ordinary German term (Duden), alongside "Präfix"
   'parallel',  // #1425 PR C polish — "parallel" is the same word in German
   'Region', 'Normal', 'Orange', 'Branch', 'Budget', 'Commit', 'Global',
   'Version', 'Slot', 'Live', 'Rate', 'Host', 'Trend', 'Min', 'Admin', 'Cloud',

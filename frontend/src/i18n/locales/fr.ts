@@ -920,6 +920,7 @@ export default {
       dismissLabel: 'Ignorer ce message',
     },
     searchPlaceholder: 'Chercher dans les archives...',
+    jobNumber: 'Numéro de travail',
     filterByPrinter: 'Par imprimante',
     filterByStatus: 'Par statut',
     sortBy: 'Trier par',
@@ -1208,6 +1209,7 @@ export default {
       energyCost: 'Coût énergétique',
       depreciationCost: 'Usure imprimante',
       completedAt: 'Terminé',
+      jobNumber: 'N° travail',
       columns: 'Colonnes',
       sortBy: 'Trier par {{column}}',
       allPrinters: 'Toutes les imprimantes',
@@ -1351,6 +1353,8 @@ export default {
     },
     title: 'File d\'attente',
     subtitle: 'Gérez vos travaux d\'impression',
+    jobNumber: 'Numéro de travail',
+    searchPlaceholder: 'Rechercher par nom ou numéro',
     // Print modal
     editQueueItem: 'Modifier l\'élément',
     selectAllPlates: 'Sélectionner les {{count}} plaques',
@@ -3099,6 +3103,24 @@ export default {
       commandError: 'Échec de l\'envoi de la commande',
     },
 
+
+    // Running numbers handed to new projects and queued jobs. Lives on
+    // the Workflow tab's Queue & Dispatch sub-tab.
+    numberSeries: {
+      title: 'Série de numérotation',
+      description: 'Attribue un numéro séquentiel à chaque nouveau projet et à chaque travail mis en file. Rien de ce qui existe déjà n’est renuméroté.',
+      project: 'Projets',
+      queueJob: 'Travaux en file',
+      enable: 'Attribuer des numéros',
+      prefix: 'Préfixe',
+      suffix: 'Suffixe',
+      nextNumber: 'Prochain numéro',
+      padding: 'Chiffres',
+      preview: 'suivant : {{value}}',
+      lowerHint: 'Abaisser le prochain numéro peut réattribuer un numéro déjà utilisé.',
+      loadError: 'Impossible de charger les séries de numérotation.',
+      saveError: 'Impossible d’enregistrer la série de numérotation.',
+    },
     pipelineLimits: {
       title: 'Limites des pipelines du trancheur',
       maxCopiesLabel: 'Copies maximales par exécution',
@@ -4311,6 +4333,9 @@ export default {
     editProject: 'Modifier Projet',
     deleteProject: 'Supprimer Projet',
     projectName: 'Nom du Projet',
+    number: 'Numéro',
+    numberPlaceholder: 'Attribué automatiquement',
+    numberTaken: 'Ce numéro est déjà utilisé par un autre projet.',
     description: 'Description',
     noProjects: 'Aucun projet',
     noProjectsFiltered: 'Aucun projet {{status}}',

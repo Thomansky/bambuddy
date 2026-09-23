@@ -20,6 +20,7 @@ from backend.app.models.virtual_printer import (
     VP_MODE_QUEUE,
     normalize_vp_mode,
 )
+from backend.app.services.number_series import SERIES_QUEUE_JOB, allocate_number
 from backend.app.services.virtual_printer.bind_server import BindServer
 from backend.app.services.virtual_printer.certificate import CertificateService
 from backend.app.services.virtual_printer.ftp_server import VirtualPrinterFTPServer, compute_passive_port_slice
@@ -1128,6 +1129,7 @@ class VirtualPrinterInstance:
                                 plate_ams_mapping_json = None
 
                         queue_item = PrintQueueItem(
+                            job_number=await allocate_number(db, SERIES_QUEUE_JOB),
                             printer_id=self.target_printer_id,
                             target_model=target_model,
                             archive_id=archive.id,

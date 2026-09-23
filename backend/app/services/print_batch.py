@@ -28,6 +28,7 @@ from sqlalchemy.orm import selectinload
 from backend.app.models.print_batch import PrintBatch, PrintBatchPlate
 from backend.app.models.print_log import PrintLogEntry
 from backend.app.models.print_queue import PrintQueueItem, PrintQueueVariant
+from backend.app.services.number_series import SERIES_QUEUE_JOB, allocate_number
 
 logger = logging.getLogger(__name__)
 
@@ -562,6 +563,10 @@ async def dispatch_remaining(
 
         for _ in range(wanted):
             clone = _clone_queue_item(source, position=position, created_by_id=created_by_id)
+            # A clone is another run of the same plate, not a resurrection of
+            # the source, so it gets a number of its own rather than the
+            # source's — which is why job_number is not in CLONED_SETTING_COLUMNS.
+            clone.job_number = await allocate_number(db, SERIES_QUEUE_JOB)
             position += 1
             db.add(clone)
             await db.flush()

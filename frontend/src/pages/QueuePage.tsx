@@ -64,6 +64,7 @@ import {
   Workflow,
   ThumbsUp,
   Loader2,
+  Search,
 } from 'lucide-react';
 import { api, ApiError } from '../api/client';
 import { PipelineRunsView } from './PipelineRunsPage';
@@ -596,6 +597,14 @@ function SortableQueueItem({
         {/* Info */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1">
+            {item.job_number && (
+              <span
+                className="flex-shrink-0 px-1.5 py-0.5 text-[10px] sm:text-xs font-mono bg-bambu-dark text-bambu-gray rounded border border-bambu-dark-tertiary"
+                title={t('queue.jobNumber')}
+              >
+                {item.job_number}
+              </span>
+            )}
             <p className="text-sm sm:text-base text-white font-medium truncate">
               {queueItemDisplayName(item, (n) => t('common.plusNMore', { count: n }))}
               {(platesData?.is_multi_plate ?? false) && item.plate_id !== undefined && item.plate_id !== null && ` • ${plates.find(plate => plate.index === item.plate_id)?.name || t('queue.plateNumber', { index: item.plate_id })}`}
@@ -1455,6 +1464,7 @@ export function QueuePage() {
   const [filterPrinter, setFilterPrinter] = useState<number | null>(null);
   const [filterStatus, setFilterStatus] = useState<string>('');
   const [filterLocation, setFilterLocation] = useState<string>('');
+  const [searchQuery, setSearchQuery] = useState<string>('');
   const [showClearHistoryConfirm, setShowClearHistoryConfirm] = useState(false);
   const [editItem, setEditItem] = useState<PrintQueueItem | null>(null);
   const [requeueItem, setRequeueItem] = useState<PrintQueueItem | null>(null);
@@ -1808,13 +1818,20 @@ export function QueuePage() {
     return false;
   }, [filterLocation, printers]);
 
-  const pendingItems = useMemo(() => {
-    let items = queue?.filter(i => i.status === 'pending') || [];
+  // Name or job number: a farm looks a job up by whichever of the two the
+  // person at the other end of the phone read out.
+  const matchesSearch = useCallback((item: PrintQueueItem): boolean => {
+    const needle = searchQuery.trim().toLowerCase();
+    if (!needle) return true;
+    if (item.job_number?.toLowerCase().includes(needle)) return true;
+    return queueItemDisplayName(item).toLowerCase().includes(needle);
+  }, [searchQuery]);
 
-    // Apply location filter
-    if (filterLocation) {
-      items = items.filter(matchesLocationFilter);
-    }
+  // Every pending row in display order, filters aside. Reordering needs it:
+  // positions are global, so a row the location filter or the search box is
+  // hiding still holds one.
+  const allPendingItems = useMemo(() => {
+    const items = queue?.filter(i => i.status === 'pending') || [];
 
     // Helper to get scheduled time as timestamp (ASAP/placeholder = 0 for earliest)
     const getScheduledTime = (item: PrintQueueItem): number => {
@@ -1846,7 +1863,15 @@ export function QueuePage() {
       }
       return pendingSortAsc ? cmp : -cmp;
     });
-  }, [queue, pendingSortBy, pendingSortAsc, matchesLocationFilter, filterLocation, settings?.queue_shortest_first]);
+  }, [queue, pendingSortBy, pendingSortAsc, settings?.queue_shortest_first]);
+
+  const pendingItems = useMemo(() => {
+    let items = allPendingItems;
+    if (filterLocation) {
+      items = items.filter(matchesLocationFilter);
+    }
+    return items.filter(matchesSearch);
+  }, [allPendingItems, filterLocation, matchesLocationFilter, matchesSearch]);
 
   const handleSelectAll = () => {
     const allPendingIds = pendingItems.map(i => i.id);
@@ -1862,8 +1887,8 @@ export function QueuePage() {
     if (filterLocation) {
       items = items.filter(matchesLocationFilter);
     }
-    return items;
-  }, [queue, filterLocation, matchesLocationFilter]);
+    return items.filter(matchesSearch);
+  }, [queue, filterLocation, matchesLocationFilter, matchesSearch]);
 
   // Queue items eligible for an "if started now" ETA (#2740).
   //
@@ -2011,6 +2036,7 @@ export function QueuePage() {
     if (filterLocation) {
       items = items.filter(matchesLocationFilter);
     }
+    items = items.filter(matchesSearch);
     return [...items].sort((a, b) => {
       let cmp: number;
       if (historySortBy === 'name') {
@@ -2025,7 +2051,7 @@ export function QueuePage() {
       }
       return historySortAsc ? -cmp : cmp;
     });
-  }, [queue, historySortBy, historySortAsc, matchesLocationFilter, filterLocation]);
+  }, [queue, historySortBy, historySortAsc, matchesLocationFilter, matchesSearch, filterLocation]);
 
   // Calculate total queue time
   const totalQueueTime = useMemo(() => {
@@ -2040,6 +2066,23 @@ export function QueuePage() {
   const handleDragStart = (event: DragStartEvent) => {
     const id = event.active.id;
     setActiveDragId(typeof id === 'number' || typeof id === 'string' ? id : null);
+  };
+
+  // Persist a reordering of the rows currently on screen. Positions are global
+  // and every pending row holds one, so the rows a filter or the search box is
+  // hiding are renumbered too — around the visible ones, keeping their own
+  // order. Sending 1..n for the visible rows alone handed those numbers to
+  // rows that already had them, and clearing the filter showed a queue nobody
+  // had arranged (and a scheduler picking the wrong job next).
+  const persistPendingOrder = (reorderedVisible: PrintQueueItem[]) => {
+    const visibleIds = new Set(pendingItems.map((i) => i.id));
+    let next = 0;
+    reorderMutation.mutate(
+      allPendingItems.map((item, index) => ({
+        id: (visibleIds.has(item.id) ? reorderedVisible[next++] : item).id,
+        position: index + 1,
+      })),
+    );
   };
 
   const handleDragEnd = (event: DragEndEvent) => {
@@ -2098,11 +2141,7 @@ export function QueuePage() {
       ...remaining.slice(insertAt),
     ];
 
-    const updates = reordered.map((item, index) => ({
-      id: item.id,
-      position: index + 1,
-    }));
-    reorderMutation.mutate(updates);
+    persistPendingOrder(reordered);
   };
 
   // Group pending items by batch_id. Items with batch_id null render as
@@ -2164,9 +2203,7 @@ export function QueuePage() {
       ...movingItems,
       ...remaining.slice(insertAt),
     ];
-    reorderMutation.mutate(
-      reordered.map((item, index) => ({ id: item.id, position: index + 1 })),
-    );
+    persistPendingOrder(reordered);
   };
 
   // Build up/down thunks for the row at `idx` within its displayed sibling
@@ -2452,6 +2489,18 @@ export function QueuePage() {
           dashboard, so this row is hidden when that tab is active. */}
       {activeTab !== 'pipelines' && activeTab !== 'batches' && (
       <div className="flex flex-wrap items-center gap-2 sm:gap-4 mb-6">
+        <div className="relative min-w-0 flex-1 sm:flex-none sm:w-64">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-bambu-gray" />
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder={t('queue.searchPlaceholder')}
+            aria-label={t('queue.searchPlaceholder')}
+            className="w-full pl-9 pr-3 py-2 text-sm sm:text-base bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:border-bambu-green focus:outline-none"
+          />
+        </div>
+
         <select
           className="px-2 sm:px-3 py-2 text-sm sm:text-base bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none min-w-0 flex-1 sm:flex-none"
           value={filterPrinter === -1 ? 'unassigned' : (filterPrinter || '')}

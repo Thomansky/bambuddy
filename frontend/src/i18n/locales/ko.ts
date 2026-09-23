@@ -876,6 +876,7 @@ export default {
       dismissLabel: '이 알림 닫기'
     },
     searchPlaceholder: '아카이브 검색...',
+    jobNumber: '작업 번호',
     filterByPrinter: '프린터별 필터',
     filterByStatus: '상태별 필터',
     sortBy: '정렬 기준',
@@ -1143,6 +1144,7 @@ export default {
       energyCost: '전력 비용',
       depreciationCost: '프린터 마모',
       completedAt: '완료',
+      jobNumber: '작업 번호',
       columns: '열',
       sortBy: '{{column}} 기준 정렬',
       allPrinters: '모든 프린터',
@@ -1272,6 +1274,8 @@ export default {
   queue: {
     title: '인쇄 대기열',
     subtitle: '인쇄 작업을 예약하고 관리하세요',
+    jobNumber: '작업 번호',
+    searchPlaceholder: '이름 또는 번호로 검색',
     editQueueItem: '대기열 항목 편집',
     selectAllPlates: '{{count}}개 플레이트 전체 선택',
     deselectAll: '전체 해제',
@@ -2964,6 +2968,24 @@ export default {
     energyCostBadge: '에너지',
     passwordRequirements: '최소 8자, 대문자, 소문자, 숫자, 특수문자 각 1개 이상 포함',
 
+
+    // Running numbers handed to new projects and queued jobs. Lives on
+    // the Workflow tab's Queue & Dispatch sub-tab.
+    numberSeries: {
+      title: '번호 규칙',
+      description: '새 프로젝트와 대기열에 추가된 작업에 일련번호를 부여합니다. 이미 있는 항목의 번호는 다시 매기지 않습니다.',
+      project: '프로젝트',
+      queueJob: '대기열 작업',
+      enable: '번호 부여',
+      prefix: '접두사',
+      suffix: '접미사',
+      nextNumber: '다음 번호',
+      padding: '자릿수',
+      preview: '다음: {{value}}',
+      lowerHint: '다음 번호를 낮추면 이미 사용한 번호가 다시 나갈 수 있습니다.',
+      loadError: '번호 규칙을 불러오지 못했습니다.',
+      saveError: '번호 규칙을 저장하지 못했습니다.',
+    },
     pipelineLimits: {
       title: '슬라이서 파이프라인 한도',
       maxCopiesLabel: '실행당 최대 사본 수',
@@ -4129,6 +4151,9 @@ export default {
     editProject: '프로젝트 편집',
     deleteProject: '프로젝트 삭제',
     projectName: '프로젝트 이름',
+    number: '번호',
+    numberPlaceholder: '자동으로 부여됩니다',
+    numberTaken: '해당 번호는 다른 프로젝트가 사용 중입니다.',
     description: '설명',
     noProjects: '프로젝트 없음',
     noProjectsFiltered: '{{status}} 프로젝트 없음',

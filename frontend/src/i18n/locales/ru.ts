@@ -875,6 +875,7 @@ export default {
       dismissLabel: "Закрыть это уведомление",
     },
     searchPlaceholder: "Поиск в архиве...",
+    jobNumber: 'Номер задания',
     filterByPrinter: "Фильтр по принтеру",
     filterByStatus: "Фильтр по состоянию",
     sortBy: "Сортировать по",
@@ -1163,6 +1164,7 @@ export default {
       energyCost: 'Стоимость энергии',
       depreciationCost: 'Износ принтера',
       completedAt: 'Завершено',
+      jobNumber: '№ задания',
       columns: 'Столбцы',
       sortBy: 'Сортировать по: {{column}}',
       allPrinters: "Все принтеры",
@@ -1269,6 +1271,8 @@ export default {
   queue: {
     title: "Очередь печати",
     subtitle: "Планирование и управление заданиями печати",
+    jobNumber: 'Номер задания',
+    searchPlaceholder: 'Поиск по названию или номеру',
     filamentShort: {
       rowBadge: "Для назначенной катушки недостаточно филамента",
       rowTooltip: "Планировщик отметил это задание. Нажмите «Запустить», чтобы увидеть нехватку по каждому слоту и решить, печатать ли всё равно.",
@@ -2959,6 +2963,24 @@ export default {
       decryptionBrokenError: "Невозможно расшифровать записей: {{count}}, поскольку ключ шифрования больше недоступен. Для восстановления верните прежний MFA_ENCRYPTION_KEY или файл DATA_DIR/.mfa_encryption_key.",
       migrationErrorWarning: "Не удалось повторно зашифровать старых записей при запуске: {{count}}. Проверьте журнал сервера и перезапустите Bambuddy для повторной попытки.",
     },
+
+    // Running numbers handed to new projects and queued jobs. Lives on
+    // the Workflow tab's Queue & Dispatch sub-tab.
+    numberSeries: {
+      title: 'Нумерация',
+      description: 'Присваивает порядковый номер каждому новому проекту и каждому заданию в очереди. Уже существующие записи не перенумеровываются.',
+      project: 'Проекты',
+      queueJob: 'Задания очереди',
+      enable: 'Выдавать номера',
+      prefix: 'Префикс',
+      suffix: 'Суффикс',
+      nextNumber: 'Следующий номер',
+      padding: 'Разрядов',
+      preview: 'следующий: {{value}}',
+      lowerHint: 'Если уменьшить следующий номер, может быть выдан номер, который уже использовался.',
+      loadError: 'Не удалось загрузить нумерацию.',
+      saveError: 'Не удалось сохранить нумерацию.',
+    },
     pipelineLimits: {
       title: "Ограничения конвейеров слайсера",
       maxCopiesLabel: "Максимум копий за запуск",
@@ -4121,6 +4143,9 @@ export default {
     editProject: "Изменить проект",
     deleteProject: "Удалить проект",
     projectName: "Название проекта",
+    number: 'Номер',
+    numberPlaceholder: 'Назначается автоматически',
+    numberTaken: 'Этот номер уже занят другим проектом.',
     description: "Описание",
     noProjects: "Проектов пока нет",
     noProjectsFiltered: "Нет проектов со статусом «{{status}}»",

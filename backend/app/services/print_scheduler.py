@@ -7536,6 +7536,18 @@ class PrintScheduler:
             await self._power_off_if_needed(db, item)
             return
 
+        # The queue row's running number rides onto the archive the way plate_id
+        # does above: the queue row is deleted once the order is done and the
+        # archive is what Print History reads, so the number has to travel with
+        # it. Only when the archive has none, so a reprint of an already-numbered
+        # archive is not relabelled by whichever queue row happens to run it.
+        # One archive can hold only one number while many runs share it — copies
+        # 2..N of a quantity order, every reprint — so the archive keeps the
+        # number it first printed under and each run's own number is written to
+        # its print-log row instead (see services/print_log.write_log_entry).
+        if archive is not None and archive.job_number is None and item.job_number:
+            archive.job_number = item.job_number
+
         # Check file exists on disk
         if not file_path.exists():
             item.status = "failed"

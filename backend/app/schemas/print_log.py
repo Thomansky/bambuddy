@@ -14,6 +14,10 @@ class PrintLogEntrySchema(BaseModel):
 
     id: int
     archive_id: int | None = None
+    # The running number of the queue job this run came from. Its own column
+    # rather than the archive's copy: a quantity order and every reprint share
+    # one archive row but each run has its own number (#2603).
+    job_number: str | None = None
     print_name: str | None = None
     printer_name: str | None = None
     printer_id: int | None = None

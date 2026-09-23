@@ -920,6 +920,7 @@ export default {
       dismissLabel: 'Bu bildirimi kapat',
     },
     searchPlaceholder: 'Arşivlerde ara...',
+    jobNumber: 'İş numarası',
     filterByPrinter: 'Yazıcıya göre filtrele',
     filterByStatus: 'Duruma göre filtrele',
     sortBy: 'Sıralama',
@@ -1208,6 +1209,7 @@ export default {
       energyCost: 'Enerji maliyeti',
       depreciationCost: 'Yazıcı Aşınması',
       completedAt: 'Bitti',
+      jobNumber: 'İş no',
       columns: 'Sütunlar',
       sortBy: '{{column}} ölçütüne göre sırala',
       allPrinters: 'Tüm Yazıcılar',
@@ -1320,6 +1322,8 @@ export default {
   queue: {
     title: 'Baskı Kuyruğu',
     subtitle: 'Baskı işlerinizi zamanlayın ve yönetin',
+    jobNumber: 'İş numarası',
+    searchPlaceholder: 'Ada veya numaraya göre ara',
     filamentShort: {
       rowBadge: 'Atanan makara için yetersiz filament',
       rowTooltip: 'Sevk planlayıcı bu öğeyi işaretledi. Yuva başına eksikliği görmek ve yine de yazdırıp yazdırmayacağınıza karar vermek için Oynat\'a tıklayın.',
@@ -3113,6 +3117,24 @@ export default {
     },
 
 
+
+    // Running numbers handed to new projects and queued jobs. Lives on
+    // the Workflow tab's Queue & Dispatch sub-tab.
+    numberSeries: {
+      title: 'Numara serisi',
+      description: 'Her yeni projeye ve kuyruğa eklenen her işe sıra numarası verir. Hâlihazırda var olanlar yeniden numaralandırılmaz.',
+      project: 'Projeler',
+      queueJob: 'Kuyruk işleri',
+      enable: 'Numara ver',
+      prefix: 'Ön ek',
+      suffix: 'Son ek',
+      nextNumber: 'Sonraki numara',
+      padding: 'Basamak',
+      preview: 'sonraki: {{value}}',
+      lowerHint: 'Sonraki numarayı düşürmek, daha önce kullanılmış bir numaranın yeniden verilmesine yol açabilir.',
+      loadError: 'Numara serileri yüklenemedi.',
+      saveError: 'Numara serisi kaydedilemedi.',
+    },
     pipelineLimits: {
       title: 'Dilimleyici pipeline limitleri',
       maxCopiesLabel: 'Çalıştırma başına maksimum kopya',
@@ -4317,6 +4339,9 @@ export default {
     editProject: 'Projeyi Düzenle',
     deleteProject: 'Projeyi Sil',
     projectName: 'Proje Adı',
+    number: 'Numara',
+    numberPlaceholder: 'Otomatik olarak verilir',
+    numberTaken: 'Bu numara başka bir proje tarafından kullanılıyor.',
     description: 'Açıklama',
     noProjects: 'Henüz proje yok',
     noProjectsFiltered: '{{status}} proje yok',

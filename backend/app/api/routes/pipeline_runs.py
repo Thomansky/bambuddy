@@ -57,6 +57,7 @@ from backend.app.schemas.pipeline_run import (
     PipelineRunResponse,
 )
 from backend.app.schemas.slicer import PresetRef, SliceRequest
+from backend.app.services.number_series import SERIES_QUEUE_JOB, allocate_number
 from backend.app.services.pipeline_eligibility import (
     EligibilityReport,
     check_pipeline_eligibility,
@@ -577,6 +578,7 @@ def _make_orchestration_callable(
 
             for job, (printer_id, target_model) in zip(jobs, assignments, strict=False):
                 queue_item = PrintQueueItem(
+                    job_number=await allocate_number(session, SERIES_QUEUE_JOB),
                     printer_id=printer_id,
                     target_model=target_model,
                     library_file_id=slice_response.library_file_id,

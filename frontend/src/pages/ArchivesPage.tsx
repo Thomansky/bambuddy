@@ -143,6 +143,7 @@ const LOG_COLUMN_CONFIG_KEY = 'bambuddy-printlog-columns';
 /** Column id -> i18n key. Also the authoritative list of valid ids. */
 const LOG_COLUMN_LABEL_KEYS: Record<string, string> = {
   date: 'archives.log.date',
+  job_number: 'archives.log.jobNumber',
   print_name: 'archives.log.printName',
   printer: 'archives.log.printer',
   user: 'archives.log.user',
@@ -171,6 +172,7 @@ const DEFAULT_LOG_COLUMNS: Array<{ id: string; visible: boolean }> = [
   { id: 'filament', visible: true },
   { id: 'filament_used', visible: true },
   { id: 'completed_at', visible: false },
+  { id: 'job_number', visible: false },
   { id: 'cost', visible: false },
   { id: 'energy', visible: false },
   { id: 'energy_cost', visible: false },
@@ -1174,8 +1176,16 @@ function ArchiveCard({
       </div>
 
       <CardContent className="p-4 flex-1 flex flex-col">
-        {/* Archive ID */}
-        <p className="text-[10px] text-bambu-gray/70 mb-1">#{archive.id}</p>
+        {/* Archive ID, and the job number the queue ran this under when there
+            was one — what a farm files the print under. */}
+        <p className="text-[10px] text-bambu-gray/70 mb-1">
+          #{archive.id}
+          {archive.job_number && (
+            <span className="ml-2 font-mono text-bambu-gray" title={t('archives.jobNumber')}>
+              {archive.job_number}
+            </span>
+          )}
+        </p>
 
         {/* Title */}
         <div className="flex items-center justify-between gap-2 mb-1">
@@ -3274,6 +3284,12 @@ export function ArchivesPage() {
               {entry.completed_at ? formatDateTime(entry.completed_at, timeFormat) : '—'}
             </span>
           );
+        case 'job_number':
+          return (
+            <span className="text-bambu-gray-light font-mono whitespace-nowrap">
+              {entry.job_number || '—'}
+            </span>
+          );
         case 'print_name':
           return (
             <div className="flex items-center gap-2">
@@ -3630,8 +3646,12 @@ export function ArchivesPage() {
           break;
       }
 
-      // Search filter
-      const matchesSearch = (a.print_name || a.filename).toLowerCase().includes(search.toLowerCase());
+      // Search filter — name or job number: a farm looks a print up by
+      // whichever of the two it has to hand.
+      const needle = search.toLowerCase();
+      const matchesSearch =
+        (a.print_name || a.filename).toLowerCase().includes(needle) ||
+        (a.job_number?.toLowerCase().includes(needle) ?? false);
 
       // Material filter
       const matchesMaterial = !filterMaterial ||

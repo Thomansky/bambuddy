@@ -924,6 +924,7 @@ export default {
       dismissLabel: "Відхилити це повідомлення",
     },
     searchPlaceholder: "Пошук в архівах...",
+    jobNumber: 'Номер завдання',
     filterByPrinter: "Фільтрувати за принтером",
     filterByStatus: "Фільтрувати за статусом",
     sortBy: "Сортувати за",
@@ -1212,6 +1213,7 @@ export default {
       energyCost: 'Вартість енергії',
       depreciationCost: 'Знос принтера',
       completedAt: 'Завершено',
+      jobNumber: '№ завдання',
       columns: 'Стовпці',
       sortBy: 'Сортувати за: {{column}}',
       allPrinters: "Усі принтери",
@@ -1329,6 +1331,8 @@ export default {
   queue: {
     title: "Черга друку",
     subtitle: "Плануйте завдання друку та керуйте ними",
+    jobNumber: 'Номер завдання',
+    searchPlaceholder: 'Пошук за назвою або номером',
     filamentShort: {
       rowBadge: "Недостатньо філаменту для призначеної котушки",
       rowTooltip: "Планувальник відправлення позначив цей елемент. Натисніть «Запустити», щоб переглянути нестачу для кожного слота й вирішити, чи друкувати попри неї.",
@@ -3131,6 +3135,24 @@ export default {
     // Slicer Pipeline limits (#1425 PR C). Admin-tunable cap that constrains
     // the copies input in the Run-with-pipeline modal. Lives on the Workflow
     // tab's Queue & Dispatch sub-tab.
+
+    // Running numbers handed to new projects and queued jobs. Lives on
+    // the Workflow tab's Queue & Dispatch sub-tab.
+    numberSeries: {
+      title: 'Нумерація',
+      description: 'Надає порядковий номер кожному новому проєкту та кожному завданню в черзі. Наявні записи не перенумеровуються.',
+      project: 'Проєкти',
+      queueJob: 'Завдання черги',
+      enable: 'Видавати номери',
+      prefix: 'Префікс',
+      suffix: 'Суфікс',
+      nextNumber: 'Наступний номер',
+      padding: 'Розрядів',
+      preview: 'наступний: {{value}}',
+      lowerHint: 'Якщо зменшити наступний номер, може бути видано номер, який уже використовувався.',
+      loadError: 'Не вдалося завантажити нумерацію.',
+      saveError: 'Не вдалося зберегти нумерацію.',
+    },
     pipelineLimits: {
       title: "Межі конвеєра слайсера",
       maxCopiesLabel: "Максимальна кількість копій за один запуск",
@@ -4350,6 +4372,9 @@ export default {
     editProject: "Редагувати проєкт",
     deleteProject: "Видалити проєкт",
     projectName: "Назва проєкту",
+    number: 'Номер',
+    numberPlaceholder: 'Призначається автоматично',
+    numberTaken: 'Цей номер уже використовує інший проєкт.',
     description: "опис",
     noProjects: "Проєктів ще немає",
     noProjectsFiltered: "Немає проєктів {{status}}.",

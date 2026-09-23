@@ -164,6 +164,7 @@ class TestSchemaValidatesFromOrmRow:
         row = MagicMock()
         row.id = 7
         row.archive_id = 3
+        row.job_number = "J0042"
         row.print_name = "Benchy"
         row.printer_name = "X1C-01"
         row.printer_id = 1

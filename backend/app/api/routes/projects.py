@@ -12,6 +12,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import and_, case, func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -43,6 +44,11 @@ from backend.app.schemas.project import (
     ProjectStats,
     ProjectUpdate,
     TimelineEvent,
+)
+from backend.app.services.number_series import (
+    SERIES_PROJECT,
+    NumbersAlreadyInUse,
+    allocate_unused_number,
 )
 from backend.app.utils.http import build_content_disposition
 from backend.app.utils.safe_path import safe_join_under
@@ -391,6 +397,60 @@ async def compute_subtree_stats(db: AsyncSession, root_id: int) -> _SubtreeRepor
     return _SubtreeReport(descendant_count=len(descendants), rollup=rollup, child_previews=previews)
 
 
+async def _flush_project_number(db: AsyncSession, number: str | None) -> None:
+    """Flush a pending project write, turning a duplicate number into a 409.
+
+    The route only flushes — ``get_db`` commits after it returns — so without
+    this the unique index would raise outside the handler and the caller would
+    read a 500 for what is a plain "that number is taken". ``number`` is the
+    only unique constraint on the table, so that is what an IntegrityError here
+    means.
+    """
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=f"Project number '{number}' is already in use") from None
+
+
+async def _project_number_taken(db: AsyncSession, number: str, exclude_id: int | None = None) -> bool:
+    query = select(Project.id).where(Project.number == number)
+    if exclude_id is not None:
+        query = query.where(Project.id != exclude_id)
+    return (await db.execute(query.limit(1))).scalar_one_or_none() is not None
+
+
+async def _assert_project_number_free(db: AsyncSession, number: str, exclude_id: int | None = None) -> None:
+    """Answer 409 before writing, so the common case keeps its transaction.
+
+    Racy on its own — two creates can both pass it — which is why the unique
+    index and :func:`_flush_project_number` are the actual guard.
+    """
+    if await _project_number_taken(db, number, exclude_id):
+        raise HTTPException(status_code=409, detail=f"Project number '{number}' is already in use")
+
+
+async def _allocate_project_number(db: AsyncSession) -> str | None:
+    """Take the next project number the table does not already hold.
+
+    A number the series reaches can already be on a project — someone typed
+    their legacy numbers by hand, or lowered the start number to begin a year
+    again. Answering 409 there would roll the counter back with the failed
+    create and park the series on that number for good, so the number is
+    consumed and the next one taken instead (#2603).
+    """
+    try:
+        return await allocate_unused_number(db, SERIES_PROJECT, lambda number: _project_number_taken(db, number))
+    except NumbersAlreadyInUse as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"The project number series has run into numbers that are already in use "
+                f"(last tried '{exc.last_tried}') — raise its next number in Settings"
+            ),
+        ) from None
+
+
 @router.get("", response_model=list[ProjectListResponse])
 @router.get("/", response_model=list[ProjectListResponse])
 async def list_projects(
@@ -490,6 +550,7 @@ async def list_projects(
             ProjectListResponse(
                 id=project.id,
                 name=project.name,
+                number=project.number,
                 description=project.description,
                 color=project.color,
                 status=project.status,
@@ -534,8 +595,18 @@ async def create_project(
             raise HTTPException(status_code=400, detail="Parent project not found")
         parent_name = parent.name
 
+    # Allocated before the row exists so a create that fails afterwards rolls
+    # the counter back with it. A number the caller typed always wins, and it
+    # does not move the counter.
+    number = data.number
+    if number:
+        await _assert_project_number_free(db, number)
+    else:
+        number = await _allocate_project_number(db)
+
     project = Project(
         name=data.name,
+        number=number,
         description=data.description,
         color=data.color,
         target_count=data.target_count,
@@ -550,7 +621,7 @@ async def create_project(
         url=data.url,
     )
     db.add(project)
-    await db.flush()
+    await _flush_project_number(db, number)
     await db.refresh(project)
 
     stats = await compute_project_stats(db, project.id, project.target_count, project.target_parts_count)
@@ -558,6 +629,7 @@ async def create_project(
     return ProjectResponse(
         id=project.id,
         name=project.name,
+        number=project.number,
         description=project.description,
         color=project.color,
         status=project.status,
@@ -607,6 +679,7 @@ async def list_templates(
             ProjectListResponse(
                 id=project.id,
                 name=project.name,
+                number=project.number,
                 description=project.description,
                 color=project.color,
                 status=project.status,
@@ -647,9 +720,14 @@ async def create_project_from_template(
     if not template.is_template:
         raise HTTPException(status_code=400, detail="Project is not a template")
 
-    # Create new project
+    # Create new project. The template's own number is deliberately not copied:
+    # a template is a shape to start from, and every project made from it is a
+    # different job with a different number.
+    number = await _allocate_project_number(db)
+
     project = Project(
         name=name or template.name.replace(" (Template)", ""),
+        number=number,
         description=template.description,
         color=template.color,
         target_count=template.target_count,
@@ -664,7 +742,7 @@ async def create_project_from_template(
         url=template.url,
     )
     db.add(project)
-    await db.flush()
+    await _flush_project_number(db, number)
 
     # Copy BOM items
     bom_result = await db.execute(select(ProjectBOMItem).where(ProjectBOMItem.project_id == template_id))
@@ -692,6 +770,7 @@ async def create_project_from_template(
     return ProjectResponse(
         id=project.id,
         name=project.name,
+        number=project.number,
         description=project.description,
         color=project.color,
         status=project.status,
@@ -746,6 +825,7 @@ async def get_project(
     return ProjectResponse(
         id=project.id,
         name=project.name,
+        number=project.number,
         description=project.description,
         color=project.color,
         status=project.status,
@@ -790,6 +870,14 @@ async def update_project(
     # Update fields if provided
     if data.name is not None:
         project.name = data.name
+    # Sent-but-null clears the number; omitted leaves it alone (same #2536
+    # semantics as tags/due_date below). Nothing re-allocates here — a project
+    # created before the series was switched on stays unnumbered until someone
+    # types a number themselves.
+    if "number" in data.model_fields_set:
+        if data.number:
+            await _assert_project_number_free(db, data.number, exclude_id=project_id)
+        project.number = data.number
     if data.description is not None:
         project.description = data.description
     if data.color is not None:
@@ -842,7 +930,7 @@ async def update_project(
         else:
             project.parent_id = None
 
-    await db.flush()
+    await _flush_project_number(db, project.number)
     await db.refresh(project)
 
     # Get parent name
@@ -858,6 +946,7 @@ async def update_project(
     return ProjectResponse(
         id=project.id,
         name=project.name,
+        number=project.number,
         description=project.description,
         color=project.color,
         status=project.status,
@@ -1751,6 +1840,7 @@ async def create_template_from_project(
     return ProjectResponse(
         id=template.id,
         name=template.name,
+        number=template.number,
         description=template.description,
         color=template.color,
         status=template.status,
@@ -2076,6 +2166,7 @@ async def import_project(
     return ProjectResponse(
         id=project.id,
         name=project.name,
+        number=project.number,
         description=project.description,
         color=project.color,
         status=project.status,
@@ -2269,6 +2360,7 @@ async def import_project_file(
     return ProjectResponse(
         id=project.id,
         name=project.name,
+        number=project.number,
         description=project.description,
         color=project.color,
         status=project.status,

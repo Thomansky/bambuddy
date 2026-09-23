@@ -1660,6 +1660,16 @@ export function PrintModal({
               <span className="text-white font-medium truncate block">{archiveName}</span>
             </p>
 
+            {/* The job's running number, when it has one. Only in edit mode: a
+                job being created has not been given one yet — the number is
+                allocated when the queue row is written. */}
+            {queueItem?.job_number && (
+              <p className="text-sm text-bambu-gray -mt-2">
+                <span className="block text-bambu-gray mb-1">{t('queue.jobNumber')}</span>
+                <span className="text-white font-mono">{queueItem.job_number}</span>
+              </p>
+            )}
+
             {/* Build-plate badge for the selected (or sole) plate — surfaced
                 early so the user knows which plate to mount before scheduling
                 (#1281). PlateSelector renders its own per-plate badges for

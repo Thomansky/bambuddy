@@ -6,9 +6,11 @@ Log entries are written to a separate table and never touch archives or queue it
 import logging
 from datetime import datetime
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.print_log import PrintLogEntry
+from backend.app.models.print_queue import PrintQueueItem
 
 logger = logging.getLogger(__name__)
 
@@ -68,10 +70,30 @@ async def write_log_entry(
     recomputing from the stale timestamps.
     """
     duration = run_duration_seconds(started_at, completed_at, reconciled=reconciled)
+    # The run's own running number, read from the queue row that produced it
+    # (#2603). Read here rather than back off the archive at display time: a
+    # quantity>1 order and every reprint share one archive row, and the archive
+    # can only carry whichever number printed first — so the log would file
+    # every later run under the first one's number. Resolved from
+    # ``queue_item_id`` rather than passed in, so no caller can forget it; the
+    # queue row is still there at this point, it is deleted later.
+    job_number: str | None = None
+    if queue_item_id is not None:
+        job_number = (
+            await db.execute(select(PrintQueueItem.job_number).where(PrintQueueItem.id == queue_item_id))
+        ).scalar_one_or_none()
+
+    if reconciled:
+        duration: int | None = 0
+    elif started_at and completed_at:
+        duration = int((completed_at - started_at).total_seconds())
+    else:
+        duration = None
 
     entry = PrintLogEntry(
         archive_id=archive_id,
         queue_item_id=queue_item_id,
+        job_number=job_number,
         print_name=print_name,
         printer_name=printer_name,
         printer_id=printer_id,

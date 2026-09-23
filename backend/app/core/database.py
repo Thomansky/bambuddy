@@ -308,6 +308,7 @@ async def init_db():
         maintenance,
         notification,
         notification_template,
+        number_series,
         oidc_provider,
         orca_base_cache,
         pending_upload,
@@ -365,6 +366,9 @@ async def init_db():
     # Seed default catalog entries
     await seed_spool_catalog()
     await seed_color_catalog()
+
+    # Seed the running-number series (both disabled)
+    await seed_number_series()
 
     await check_pool_fits_server()
 
@@ -5169,6 +5173,56 @@ async def run_migrations(conn):
     # simply show no date.
     await _safe_execute(conn, "ALTER TABLE maintenance_types ADD COLUMN deleted_at TIMESTAMP")
 
+    # Migration: running-number series. The `number_series` table is new, so
+    # create_all() builds it on a fresh install; upgrades need it spelled out.
+    # The rows themselves are seeded by seed_number_series() after migrations,
+    # both disabled, so an existing install hands out nothing until someone
+    # turns a series on.
+    await _safe_execute(
+        conn,
+        """
+        CREATE TABLE IF NOT EXISTS number_series (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            key VARCHAR(32) NOT NULL,
+            enabled BOOLEAN NOT NULL DEFAULT 0,
+            prefix VARCHAR(16) NOT NULL DEFAULT '',
+            suffix VARCHAR(16) NOT NULL DEFAULT '',
+            next_value INTEGER NOT NULL DEFAULT 1,
+            padding INTEGER NOT NULL DEFAULT 0,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+        if is_sqlite()
+        else """
+        CREATE TABLE IF NOT EXISTS number_series (
+            id SERIAL PRIMARY KEY,
+            key VARCHAR(32) NOT NULL,
+            enabled BOOLEAN NOT NULL DEFAULT FALSE,
+            prefix VARCHAR(16) NOT NULL DEFAULT '',
+            suffix VARCHAR(16) NOT NULL DEFAULT '',
+            next_value INTEGER NOT NULL DEFAULT 1,
+            padding INTEGER NOT NULL DEFAULT 0,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+    )
+    # One row per key is what makes "allocate from series X" unambiguous; the
+    # model declares unique=True so create_all builds the same index.
+    await _safe_execute(conn, "CREATE UNIQUE INDEX IF NOT EXISTS ix_number_series_key ON number_series (key)")
+
+    # Migration: where the numbers land. VARCHAR(32) is spelled identically on
+    # SQLite and Postgres. Nothing is renumbered retroactively — existing rows
+    # keep NULL, which is why none of these carry a default.
+    await _safe_execute(conn, "ALTER TABLE projects ADD COLUMN number VARCHAR(32)")
+    await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN job_number VARCHAR(32)")
+    await _safe_execute(conn, "ALTER TABLE print_archives ADD COLUMN job_number VARCHAR(32)")
+    await _safe_execute(conn, "ALTER TABLE print_log_entries ADD COLUMN job_number VARCHAR(32)")
+    # A project number is what a quote and an invoice are filed under, so two
+    # projects must never share one. Both backends treat NULLs as distinct in a
+    # unique index, so the unnumbered projects an upgrade starts with do not
+    # collide with each other.
+    await _safe_execute(conn, "CREATE UNIQUE INDEX IF NOT EXISTS ix_projects_number ON projects (number)")
+
     # Migration: storage location sensor alerts (#2824), own column rather than
     # reusing on_ha_sensor_alert. That column can be scoped to one printer
     # (printer_id), and a location alert has no printer to scope by — sharing
@@ -6197,6 +6251,37 @@ async def seed_color_catalog():
             )
         await session.commit()
         logger.info("Seeded %d default color catalog entries", len(DEFAULT_COLOR_CATALOG))
+
+
+async def seed_number_series():
+    """Create any missing running-number series row, disabled.
+
+    Per key rather than "skip if the table has rows", so a later Bambuddy that
+    adds a third series still gets it on an install that already has the first
+    two.
+    """
+    import logging
+
+    from sqlalchemy import select
+
+    from backend.app.models.number_series import NumberSeries
+    from backend.app.services.number_series import DEFAULT_SERIES_KEYS
+
+    logger = logging.getLogger(__name__)
+
+    async with async_session() as session:
+        existing = set(
+            (await session.execute(select(NumberSeries.key).where(NumberSeries.key.in_(DEFAULT_SERIES_KEYS))))
+            .scalars()
+            .all()
+        )
+        missing = [key for key in DEFAULT_SERIES_KEYS if key not in existing]
+        if not missing:
+            return
+        for key in missing:
+            session.add(NumberSeries(key=key, enabled=False, prefix="", suffix="", next_value=1, padding=0))
+        await session.commit()
+        logger.info("Seeded %d number series: %s", len(missing), ", ".join(missing))
 
 
 async def repair_wallet_ledger_internal(session: AsyncSession):

@@ -185,6 +185,9 @@ class QueueVariantSummary(BaseModel):
 
 class PrintQueueItemResponse(BaseModel):
     id: int
+    # Running number from the `queue_job` series; None when the series is off
+    # or the item predates it.
+    job_number: str | None = None
     printer_id: int | None  # None = unassigned
     target_model: str | None = None  # Target printer model for model-based assignment
     target_location: str | None = None  # Target location filter for model-based assignment

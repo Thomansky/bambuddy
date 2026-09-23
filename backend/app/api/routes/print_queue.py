@@ -45,6 +45,7 @@ from backend.app.services.filament_deficit import compute_deficit_for_queue_item
 from backend.app.services.filament_requirements import overrides_for_plate
 from backend.app.services.finance_budget import release_budget_reservation, validate_print_budget
 from backend.app.services.notification_service import notification_service
+from backend.app.services.number_series import SERIES_QUEUE_JOB, allocate_number
 from backend.app.services.print_batch import (
     BatchDispatchError,
     dispatch_remaining,
@@ -445,6 +446,7 @@ def _enrich_response(item: PrintQueueItem) -> PrintQueueItemResponse:
     # Create response with parsed ams_mapping
     item_dict = {
         "id": item.id,
+        "job_number": item.job_number,
         "printer_id": item.printer_id,
         "target_model": item.target_model,
         "target_location": item.target_location,
@@ -1169,7 +1171,10 @@ async def add_to_queue(
             ams_mapping_json = json.dumps(saved["mapping"])
     items = []
     for i in range(quantity):
+        # One number per copy: each row is its own job that can be dispatched,
+        # cancelled and invoiced on its own.
         item = PrintQueueItem(
+            job_number=await allocate_number(db, SERIES_QUEUE_JOB),
             printer_id=data.printer_id,
             target_model=target_model_norm,
             target_location=data.target_location,

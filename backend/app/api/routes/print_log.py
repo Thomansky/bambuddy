@@ -45,6 +45,10 @@ _SORTABLE_COLUMNS = {
     "energy": PrintLogEntry.energy_kwh,
     "energy_cost": PrintLogEntry.energy_cost,
     "depreciation_cost": PrintLogEntry.depreciation_cost,
+    # The run's own number, not the archive's: several runs share one
+    # archive, so sorting or searching through the archive would file every
+    # copy of a quantity order under the first copy's number (#2603).
+    "job_number": PrintLogEntry.job_number,
 }
 
 
@@ -86,8 +90,12 @@ async def get_print_log(
         query = query.where(PrintLogEntry.status == status)
         count_query = count_query.where(PrintLogEntry.status == status)
     if search:
-        query = query.where(PrintLogEntry.print_name.ilike(f"%{search}%"))
-        count_query = count_query.where(PrintLogEntry.print_name.ilike(f"%{search}%"))
+        # Name or job number — the Archives page feeds this endpoint the same
+        # search box that filters the cards, and a farm looks a print up by
+        # whichever of the two it has to hand.
+        matches = PrintLogEntry.print_name.ilike(f"%{search}%") | PrintLogEntry.job_number.ilike(f"%{search}%")
+        query = query.where(matches)
+        count_query = count_query.where(matches)
     if date_from:
         query = query.where(PrintLogEntry.created_at >= date_from)
         count_query = count_query.where(PrintLogEntry.created_at >= date_from)
@@ -119,7 +127,7 @@ async def get_print_log(
     # a row as the user pages through.
     query = query.offset(offset).limit(limit)
     result = await db.execute(query)
-    entries = result.scalars().all()
+    rows = result.scalars().all()
 
     # Validate straight off the ORM rows rather than naming each field: the
     # hand-written version dropped whatever it forgot to mention, and a
@@ -128,7 +136,7 @@ async def get_print_log(
     # energy_cost, which were written to the table but never sent — so the
     # Print Log's cost and energy columns read empty for every run (#2636).
     return PrintLogResponse(
-        items=[PrintLogEntrySchema.model_validate(e) for e in entries],
+        items=[PrintLogEntrySchema.model_validate(entry) for entry in rows],
         total=total,
     )
 
