@@ -20,7 +20,7 @@ import {
   StickyNote,
 } from 'lucide-react';
 import { api } from '../api/client';
-import type { KProfile, KProfileCreate, KProfileDelete, Permission } from '../api/client';
+import type { KProfile, KProfileCreate, KProfileDelete, Permission, PrinterStatus } from '../api/client';
 import {
   buildFilamentPresetOptions,
   resolveFilamentId,
@@ -32,6 +32,48 @@ import { Button } from './Button';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useCancellableTimeout } from '../hooks/useCancellableTimeout';
+import { PaCalibrationModal } from './PaCalibrationModal';
+import { supportsPaCalibration } from '../utils/paCalibration';
+
+/**
+ * The slot this profile's filament is loaded into, or null.
+ *
+ * A K profile is stored per filament, not per slot, so calibrating one from
+ * this list is only possible while that filament is actually loaded somewhere
+ * — the measurement is a print, and a print needs a spool. The AMS is searched
+ * before the external spool for no better reason than that it is the common
+ * case; a filament loaded twice is calibrated in whichever slot is found
+ * first, and either answer measures the same nozzle.
+ */
+function findLoadedSlot(
+  status: PrinterStatus | undefined,
+  filamentId: string,
+): { amsId: number; slotId: number; label: string } | null {
+  if (!filamentId) return null;
+  for (const unit of status?.ams ?? []) {
+    for (const tray of unit.tray ?? []) {
+      if (tray.tray_info_idx === filamentId) {
+        return { amsId: unit.id, slotId: tray.id, label: `AMS ${unit.id + 1} · ${tray.id + 1}` };
+      }
+    }
+  }
+  for (const tray of status?.vt_tray ?? []) {
+    if (tray.tray_info_idx === filamentId) {
+      // The external spools are addressed as ams_id 255 with slot 0/1, which
+      // is what getGlobalTrayId and the backend's global_tray_id both expect.
+      return { amsId: 255, slotId: Math.max(0, (tray.id ?? 254) - 254), label: 'External' };
+    }
+  }
+  return null;
+}
+
+interface CalibrateConfig {
+  /** False when the model cannot do this, or the filament is not loaded. */
+  enabled: boolean;
+  /** Why it is disabled, already translated. Always set when disabled. */
+  disabledReason?: string;
+  onCalibrate: () => void;
+}
 
 interface KProfileCardProps {
   profile: KProfile;
@@ -41,6 +83,7 @@ interface KProfileCardProps {
   isSelected?: boolean;
   onToggleSelect?: () => void;
   note?: string;  // Note text to display as preview
+  calibrate?: CalibrateConfig;
 }
 
 // Truncate to 3 decimal places (like Bambu Studio) instead of rounding
@@ -92,7 +135,8 @@ const extractFilamentName = (profileName: string) => {
   return profileName;
 };
 
-function KProfileCard({ profile, onEdit, onCopy, selectionMode, isSelected, onToggleSelect, note }: KProfileCardProps) {
+function KProfileCard({ profile, onEdit, onCopy, selectionMode, isSelected, onToggleSelect, note, calibrate }: KProfileCardProps) {
+  const { t } = useTranslation();
   const flowType = getFlowTypeLabel(profile.nozzle_id);
   const diameter = profile.nozzle_diameter;
 
@@ -144,6 +188,20 @@ function KProfileCard({ profile, onEdit, onCopy, selectionMode, isSelected, onTo
           </div>
         )}
       </button>
+      {!selectionMode && calibrate && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            calibrate.onCalibrate();
+          }}
+          disabled={!calibrate.enabled}
+          data-testid={`kprofile-calibrate-${profile.slot_id}_${profile.extruder_id}`}
+          className="text-bambu-gray hover:text-white transition-colors p-1 disabled:opacity-40 disabled:cursor-not-allowed"
+          title={calibrate.disabledReason || t('paCalibration.menuAction')}
+        >
+          <Gauge className="w-4 h-4" />
+        </button>
+      )}
       {!selectionMode && onCopy && (
         <button
           onClick={(e) => {
@@ -829,6 +887,10 @@ export function KProfilesView() {
   const [selectedProfiles, setSelectedProfiles] = useState<Set<string>>(new Set());
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
   const [bulkDeleteInProgress, setBulkDeleteInProgress] = useState(false);
+  // The profile whose filament is being measured, and the slot it is loaded
+  // into. Opened from a row; the modal itself is the same one the printer
+  // page's slot menu opens.
+  const [calibratingSlot, setCalibratingSlot] = useState<{ amsId: number; slotId: number; label: string } | null>(null);
 
   // Helper to create unique profile key for selection - wrapped in useCallback to prevent re-renders
   const getProfileKey = useCallback((profile: KProfile) => `${profile.slot_id}_${profile.extruder_id}`, []);
@@ -847,6 +909,16 @@ export function KProfilesView() {
   const { data: printers, isLoading: printersLoading } = useQuery({
     queryKey: ['printers'],
     queryFn: api.getPrinters,
+  });
+
+  // Live slot contents, so a row can say whether its filament is loaded
+  // anywhere. Only a "Calibrate" enable/disable depends on it, so a failure
+  // degrades to a disabled button with a reason rather than an error.
+  const { data: printerStatus } = useQuery({
+    queryKey: ['printerStatus', selectedPrinter],
+    queryFn: () => api.getPrinterStatus(selectedPrinter!),
+    enabled: !!selectedPrinter,
+    refetchInterval: 15_000,
   });
 
   // Get K-profiles for selected printer (filtered by nozzle diameter)
@@ -1049,6 +1121,31 @@ export function KProfilesView() {
   // carry a nozzle_id — most printers omit that field entirely (#1748) while
   // still offering both flows. Only the A-series has a single variant.
   const supportsFlowType = selectedPrinterData?.supports_nozzle_flow_type ?? true;
+
+  // The secondary entry point into flow-dynamics calibration: a row can start
+  // a measurement for its own filament, provided that filament is loaded. The
+  // button is shown either way -- a missing one reads as a bug, a disabled one
+  // with a reason reads as the truth.
+  const paSupported = supportsPaCalibration(selectedPrinterData?.model);
+  const canCalibrate = hasPermission('printers:control');
+  const calibrateConfig = useCallback(
+    (profile: KProfile) => {
+      const slot = paSupported ? findLoadedSlot(printerStatus, profile.filament_id) : null;
+      const disabledReason = !paSupported
+        ? t('paCalibration.blocked.model_not_supported')
+        : !canCalibrate
+          ? t('paCalibration.noPermission')
+          : slot === null
+            ? t('paCalibration.notLoaded')
+            : undefined;
+      return {
+        enabled: Boolean(slot) && paSupported && canCalibrate,
+        disabledReason,
+        onCalibrate: () => slot && setCalibratingSlot(slot),
+      };
+    },
+    [paSupported, canCalibrate, printerStatus, t],
+  );
 
   // Don't strand the list behind a filter whose control just disappeared.
   useEffect(() => {
@@ -1525,6 +1622,7 @@ export function KProfilesView() {
                       isSelected={selectedProfiles.has(getProfileKey(profile))}
                       onToggleSelect={() => toggleProfileSelection(getProfileKey(profile))}
                       note={getNote(profile)}
+                      calibrate={calibrateConfig(profile)}
                     />
                   ))}
               </div>
@@ -1545,6 +1643,7 @@ export function KProfilesView() {
                       isSelected={selectedProfiles.has(getProfileKey(profile))}
                       onToggleSelect={() => toggleProfileSelection(getProfileKey(profile))}
                       note={getNote(profile)}
+                      calibrate={calibrateConfig(profile)}
                     />
                   ))}
               </div>
@@ -1563,6 +1662,7 @@ export function KProfilesView() {
                 isSelected={selectedProfiles.has(getProfileKey(profile))}
                 onToggleSelect={() => toggleProfileSelection(getProfileKey(profile))}
                 note={getNote(profile)}
+                calibrate={calibrateConfig(profile)}
               />
             ))}
           </div>
@@ -1591,6 +1691,21 @@ export function KProfilesView() {
             </Button>
           </CardContent>
         </Card>
+      )}
+
+      {/* Flow-dynamics calibration, opened from a row with the slot that row's
+          filament is loaded into. Same modal the printer page's slot menu
+          opens -- it is the slot, not the profile, that gets calibrated. */}
+      {calibratingSlot && selectedPrinter && (
+        <PaCalibrationModal
+          isOpen
+          printerId={selectedPrinter}
+          printerName={selectedPrinterData?.name || ''}
+          amsId={calibratingSlot.amsId}
+          slotId={calibratingSlot.slotId}
+          slotLabel={calibratingSlot.label}
+          onClose={() => setCalibratingSlot(null)}
+        />
       )}
 
       {/* Edit Modal */}

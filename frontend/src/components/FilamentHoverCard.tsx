@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useLayoutEffect, type ReactNode } from 're
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Droplets, Copy, Check, Settings2, Package, Unlink } from 'lucide-react';
+import { Droplets, Copy, Check, Settings2, Package, Unlink, Gauge } from 'lucide-react';
 import { isLightColor, resolveSpoolColorName } from '../utils/colors';
 import { buildFilamentBackground, parseStops } from './filamentSwatchHelpers';
 
@@ -62,6 +62,21 @@ interface ConfigureSlotConfig {
   onConfigure?: () => void;
 }
 
+/**
+ * Flow-dynamics calibration, offered per slot because the whole sequence is
+ * keyed on this slot's identity: its ams_id, slot_id, filament_id and the
+ * nozzle it feeds. A per-printer action would have to open by asking which
+ * slot, and a spool-inventory action would be about a spool that is not loaded
+ * into a nozzle -- the one thing that cannot be calibrated.
+ */
+interface CalibratePaConfig {
+  /** False on models where this is not supported yet: shown, disabled, explained. */
+  enabled: boolean;
+  /** Why it is disabled, already translated. */
+  disabledReason?: string;
+  onCalibrate?: () => void;
+}
+
 interface FilamentHoverCardProps {
   data: FilamentData;
   children: ReactNode;
@@ -70,6 +85,7 @@ interface FilamentHoverCardProps {
   spoolman?: SpoolmanConfig;
   inventory?: InventoryConfig;
   configureSlot?: ConfigureSlotConfig;
+  calibratePa?: CalibratePaConfig;
   actions?: ReactNode;
 }
 
@@ -77,7 +93,7 @@ interface FilamentHoverCardProps {
  * A hover card that displays filament details when hovering over AMS slots.
  * Replaces the basic browser tooltip with a styled popover.
  */
-export function FilamentHoverCard({ data, children, disabled, className = '', spoolman, inventory, configureSlot, actions }: FilamentHoverCardProps) {
+export function FilamentHoverCard({ data, children, disabled, className = '', spoolman, inventory, configureSlot, calibratePa, actions }: FilamentHoverCardProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [isVisible, setIsVisible] = useState(false);
@@ -557,6 +573,27 @@ export function FilamentHoverCard({ data, children, disabled, className = '', sp
                     <Settings2 className="w-3.5 h-3.5" />
                     {t('ams.configure')}
                   </button>
+                </div>
+              )}
+              {calibratePa && (
+                <div className="pt-2 mt-2 border-t border-bambu-dark-tertiary">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      dismiss();
+                      calibratePa.onCalibrate?.();
+                    }}
+                    disabled={!calibratePa.enabled}
+                    data-testid="calibrate-pa-action"
+                    className="w-full flex items-center justify-start gap-1.5 px-2 py-1.5 text-xs font-medium rounded transition-colors bg-bambu-blue/20 hover:bg-bambu-blue/40 text-bambu-blue disabled:opacity-40 disabled:cursor-not-allowed"
+                    title={calibratePa.disabledReason || t('paCalibration.title')}
+                  >
+                    <Gauge className="w-3.5 h-3.5" />
+                    {t('paCalibration.menuAction')}
+                  </button>
+                  {!calibratePa.enabled && calibratePa.disabledReason && (
+                    <p className="mt-1 text-[10px] text-bambu-gray">{calibratePa.disabledReason}</p>
+                  )}
                 </div>
               )}
               {actions && (

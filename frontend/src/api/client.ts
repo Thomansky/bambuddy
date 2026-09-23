@@ -683,6 +683,100 @@ export interface PrinterStatus {
   supports_chamber_heater?: boolean;
 }
 
+// --- Flow-dynamics (pressure advance) calibration ---
+
+/** A preset the calibration slice runs with. Same shape the slice modal sends. */
+export interface PaPresetRef {
+  source: 'orca_cloud' | 'cloud' | 'local' | 'standard';
+  id: string;
+}
+
+export interface PaPresetTriplet {
+  printer: PaPresetRef;
+  process: PaPresetRef;
+  filament: PaPresetRef;
+}
+
+export interface PaCalibrationFilament {
+  filament_id: string;
+  setting_id: string;
+  name: string;
+  material: string;
+  colour: string;
+}
+
+/**
+ * Everything the modal needs, including every reason Start is disabled.
+ * `blocked_reasons` is the whole answer: empty means ready, and each entry is
+ * an i18n key under `paCalibration.blocked.*` — the UI never derives its own.
+ */
+export interface PaCalibrationPreflight {
+  supported: boolean;
+  blocked_reasons: string[];
+  printer_model: string | null;
+  nozzle_diameter: string | null;
+  nozzle_id: string | null;
+  extruder_id: number;
+  filament: PaCalibrationFilament | null;
+  current_k: number | null;
+  current_cali_idx: number | null;
+  current_profile_name: string | null;
+  presets: PaPresetTriplet | null;
+  plate_types: string[];
+  default_plate_type: string | null;
+  estimated_seconds: number;
+  estimated_grams: number;
+}
+
+export type PaCalibrationStatus =
+  | 'queued'
+  | 'slicing'
+  | 'uploading'
+  | 'printing'
+  | 'reading_result'
+  | 'awaiting_confirmation'
+  | 'saving'
+  | 'done'
+  | 'failed'
+  | 'cancelled';
+
+export interface PaCalibrationRun {
+  id: number;
+  printer_id: number;
+  ams_id: number;
+  slot_id: number;
+  tray_id: number;
+  extruder_id: number;
+  filament_id: string;
+  filament_name: string;
+  nozzle_diameter: string;
+  nozzle_id: string | null;
+  plate_type: string;
+  plate_confirmed: boolean;
+  method: string;
+  status: PaCalibrationStatus;
+  stage: string;
+  waiting_reason: string | null;
+  waiting_detail: Record<string, unknown> | null;
+  progress: number;
+  k_before: number | null;
+  k_value: number | null;
+  n_coef: string | null;
+  confidence: number | null;
+  error_message: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface PaCalibrationRunCreate {
+  ams_id: number;
+  slot_id: number;
+  plate_type: string;
+  presets: PaPresetTriplet;
+  plate_confirmed: boolean;
+}
+
 export interface PrinterCreate {
   name: string;
   serial_number: string;
@@ -2953,6 +3047,7 @@ export interface NotificationProvider {
   on_ams_humidity_high: boolean;
   on_ams_temperature_high: boolean;
   on_ams_drying_suspended: boolean;
+  on_pa_calibration: boolean;
   // AMS-HT environmental alarms
   on_ams_ht_humidity_high: boolean;
   on_ams_ht_temperature_high: boolean;
@@ -3017,6 +3112,7 @@ export interface NotificationProviderCreate {
   on_ams_humidity_high?: boolean;
   on_ams_temperature_high?: boolean;
   on_ams_drying_suspended?: boolean;
+  on_pa_calibration?: boolean;
   // AMS-HT environmental alarms
   on_ams_ht_humidity_high?: boolean;
   on_ams_ht_temperature_high?: boolean;
@@ -3074,6 +3170,7 @@ export interface NotificationProviderUpdate {
   on_ams_humidity_high?: boolean;
   on_ams_temperature_high?: boolean;
   on_ams_drying_suspended?: boolean;
+  on_pa_calibration?: boolean;
   // AMS-HT environmental alarms
   on_ams_ht_humidity_high?: boolean;
   on_ams_ht_temperature_high?: boolean;
@@ -6059,6 +6156,36 @@ export const api = {
   ungroupBatch: (id: number) =>
     request<{ ungrouped_count: number; message: string }>(
       `/queue/batches/${id}/ungroup`,
+      { method: 'POST' },
+    ),
+
+  // Flow-dynamics (pressure advance) calibration
+  getPaCalibrationPreflight: (printerId: number, amsId: number, slotId: number) =>
+    request<PaCalibrationPreflight>(
+      `/printers/${printerId}/pa-calibration/preflight?ams_id=${amsId}&slot_id=${slotId}`,
+    ),
+  createPaCalibrationRun: (printerId: number, body: PaCalibrationRunCreate) =>
+    request<PaCalibrationRun>(`/printers/${printerId}/pa-calibration/runs`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  getPaCalibrationRuns: (printerId: number, activeOnly = false) =>
+    request<{ runs: PaCalibrationRun[] }>(
+      `/printers/${printerId}/pa-calibration/runs${activeOnly ? '?active=true' : ''}`,
+    ),
+  getPaCalibrationRun: (printerId: number, runId: number) =>
+    request<PaCalibrationRun>(`/printers/${printerId}/pa-calibration/runs/${runId}`),
+  confirmPaCalibrationRun: (printerId: number, runId: number) =>
+    request<PaCalibrationRun>(`/printers/${printerId}/pa-calibration/runs/${runId}/confirm`, {
+      method: 'POST',
+    }),
+  discardPaCalibrationRun: (printerId: number, runId: number) =>
+    request<PaCalibrationRun>(`/printers/${printerId}/pa-calibration/runs/${runId}/discard`, {
+      method: 'POST',
+    }),
+  cancelPaCalibrationRun: (printerId: number, runId: number, stopPrint = false) =>
+    request<PaCalibrationRun>(
+      `/printers/${printerId}/pa-calibration/runs/${runId}/cancel${stopPrint ? '?stop_print=true' : ''}`,
       { method: 'POST' },
     ),
 

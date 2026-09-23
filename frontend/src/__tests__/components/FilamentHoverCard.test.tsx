@@ -882,3 +882,54 @@ describe('FilamentHoverCard — assigned spool swatch (#2967)', () => {
     expect(header().style.backgroundImage).toBe('');
   });
 });
+
+describe('FilamentHoverCard flow-dynamics action', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  it('offers the calibration and reports the click', async () => {
+    const onCalibrate = vi.fn();
+    renderWithHover(
+      <FilamentHoverCard data={baseFilamentData} calibratePa={{ enabled: true, onCalibrate }}>
+        <div>trigger</div>
+      </FilamentHoverCard>
+    );
+    vi.advanceTimersByTime(100);
+
+    const action = await waitFor(() => screen.getByTestId('calibrate-pa-action'));
+    expect(action).toBeEnabled();
+
+    fireEvent.click(action);
+    expect(onCalibrate).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows it disabled with the reason rather than hiding it', async () => {
+    // A missing menu entry reads as a Bambuddy bug; a greyed-out one with
+    // "not supported on this printer yet" reads as the truth.
+    renderWithHover(
+      <FilamentHoverCard
+        data={baseFilamentData}
+        calibratePa={{ enabled: false, disabledReason: 'Not supported on this printer yet.' }}
+      >
+        <div>trigger</div>
+      </FilamentHoverCard>
+    );
+    vi.advanceTimersByTime(100);
+
+    const action = await waitFor(() => screen.getByTestId('calibrate-pa-action'));
+    expect(action).toBeDisabled();
+    expect(screen.getByText('Not supported on this printer yet.')).toBeInTheDocument();
+  });
+
+  it('is absent when the caller does not offer it', async () => {
+    renderWithHover(
+      <FilamentHoverCard data={baseFilamentData}>
+        <div>trigger</div>
+      </FilamentHoverCard>
+    );
+    vi.advanceTimersByTime(100);
+    await waitFor(() => expect(screen.getByText('Red')).toBeInTheDocument());
+    expect(screen.queryByTestId('calibrate-pa-action')).not.toBeInTheDocument();
+  });
+});
