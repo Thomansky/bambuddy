@@ -33,7 +33,7 @@ import {
   Pencil,
   FileBox,
 } from 'lucide-react';
-import { api } from '../api/client';
+import { api, ApiError } from '../api/client';
 import { parseUTCDate, formatDateOnly, formatDateTime, formatDurationFromHours, type TimeFormat } from '../utils/date';
 import type { Archive, ProjectUpdate, BOMItem, BOMItemCreate, BOMItemUpdate, LibraryFileListItem } from '../api/client';
 import { Card, CardContent } from '../components/Card';
@@ -299,7 +299,10 @@ export function ProjectDetailPage() {
       showToast(t('projectDetail.toast.projectUpdated'), 'success');
     },
     onError: (error: Error) => {
-      showToast(error.message, 'error');
+      // The only 409 this route answers is a project number that is already
+      // taken; its detail is English, so say it in the user's language.
+      const taken = error instanceof ApiError && error.status === 409;
+      showToast(taken ? t('projects.numberTaken') : error.message, 'error');
     },
   });
 
@@ -524,7 +527,17 @@ export function ProjectDetailPage() {
               style={{ backgroundColor: project.color || '#6b7280' }}
             />
             <div>
-              <h1 className="text-2xl font-bold text-white">{project.name}</h1>
+              <div className="flex items-center gap-2 flex-wrap">
+                {project.number && (
+                  <span
+                    className="text-sm font-mono px-2 py-0.5 rounded bg-bambu-dark text-bambu-gray whitespace-nowrap"
+                    title={t('projects.number')}
+                  >
+                    {project.number}
+                  </span>
+                )}
+                <h1 className="text-2xl font-bold text-white">{project.name}</h1>
+              </div>
               {project.description && (
                 <p className="text-bambu-gray mt-1">{project.description}</p>
               )}
