@@ -429,6 +429,16 @@ class BatchThumbnailResult(BaseModel):
     error: str | None = None
 
 
+class PendingPreviewThumbnail(BaseModel):
+    """A file waiting for a thumbnail only the browser can render (#2976)."""
+
+    id: int
+    filename: str
+    file_type: str
+    file_size: int
+    created_by_id: int | None = None
+
+
 class BatchThumbnailResponse(BaseModel):
     """Schema for batch thumbnail generation response."""
 

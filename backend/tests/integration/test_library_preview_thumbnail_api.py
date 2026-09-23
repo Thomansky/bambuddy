@@ -72,6 +72,58 @@ async def file_factory(db_session):
     return _create_file
 
 
+class TestPendingPreviewThumbnails:
+    """GET /library/files/pending-preview-thumbnails — the batch's work list."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_lists_only_client_types_without_a_thumbnail(
+        self, async_client: AsyncClient, file_factory, isolated_storage
+    ):
+        waiting_step = await file_factory(file_type="step")
+        waiting_sheet = await file_factory(file_type="xlsx")
+        already_done = await file_factory(file_type="pdf")
+        already_done.thumbnail_path = "library/thumbnails/done.png"
+        server_rendered = await file_factory(file_type="stl")
+
+        response = await async_client.get("/api/v1/library/files/pending-preview-thumbnails")
+        assert response.status_code == 200
+        ids = [row["id"] for row in response.json()]
+
+        assert waiting_step.id in ids
+        assert waiting_sheet.id in ids
+        # An STL is rendered by the server, and a file that already has its
+        # picture is not work — neither belongs on the browser's list.
+        assert already_done.id not in ids
+        assert server_rendered.id not in ids
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_rows_carry_what_the_renderer_needs(self, async_client: AsyncClient, file_factory, isolated_storage):
+        library_file = await file_factory(file_type="step")
+
+        rows = (await async_client.get("/api/v1/library/files/pending-preview-thumbnails")).json()
+        row = next(r for r in rows if r["id"] == library_file.id)
+
+        # The page picks the renderer by type and refuses oversized files by
+        # size before fetching them, so both have to be on the row.
+        assert row["file_type"] == "step"
+        assert row["filename"] == library_file.filename
+        assert row["file_size"] == library_file.file_size
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_limit_is_bounded(self, async_client: AsyncClient, file_factory, isolated_storage):
+        for _ in range(3):
+            await file_factory(file_type="step")
+
+        assert len((await async_client.get("/api/v1/library/files/pending-preview-thumbnails?limit=2")).json()) == 2
+        # A silly limit cannot turn the list into a full table scan.
+        assert (
+            len((await async_client.get("/api/v1/library/files/pending-preview-thumbnails?limit=99999")).json()) <= 500
+        )
+
+
 class TestPreviewThumbnailUpload:
     @pytest.mark.asyncio
     @pytest.mark.integration

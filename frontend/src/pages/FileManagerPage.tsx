@@ -67,8 +67,10 @@ import type {
   AppSettings,
   Archive,
   Permission,
+  PendingPreviewThumbnail,
 } from '../api/client';
 import { Button } from '../components/Button';
+import { PreviewThumbnailBatch } from '../components/PreviewThumbnailBatch';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { ContextMenu, type ContextMenuItem } from '../components/ContextMenu';
 import { PrintModal } from '../components/PrintModal';
@@ -1993,6 +1995,25 @@ export function FileManagerPage() {
     },
   });
 
+  // What the server-side batch leaves behind: previews only a browser can
+  // draw. The run starts when that batch reports back, and drives the hidden
+  // renderer mounted at the bottom of the page (#2976).
+  const [previewBatch, setPreviewBatch] = useState<PendingPreviewThumbnail[]>([]);
+  const [previewBatchProgress, setPreviewBatchProgress] = useState<{ done: number; total: number } | null>(null);
+
+  const startPreviewBatch = useCallback(async () => {
+    if (!hasAnyPermission('library:update_own', 'library:update_all')) return;
+    try {
+      const pending = await api.listPendingPreviewThumbnails();
+      if (pending.length === 0) return;
+      setPreviewBatchProgress({ done: 0, total: pending.length });
+      setPreviewBatch(pending);
+    } catch {
+      // The server batch already reported its own result; the browser half is
+      // an extra and stays silent when the list cannot be fetched.
+    }
+  }, [hasAnyPermission]);
+
   const batchThumbnailMutation = useMutation({
     mutationFn: () => api.batchGenerateStlThumbnails({ all_missing: true }),
     onSuccess: (result) => {
@@ -2008,6 +2029,7 @@ export function FileManagerPage() {
         });
         setThumbnailVersions((prev) => ({ ...prev, ...newVersions }));
       }
+      void startPreviewBatch();
       if (result.succeeded > 0 && result.failed === 0) {
         showToast(t('fileManager.toast.thumbnailsGenerated', { count: result.succeeded }), 'success');
       } else if (result.succeeded > 0 && result.failed > 0) {
@@ -2535,15 +2557,24 @@ export function FileManagerPage() {
           <Button
             variant="secondary"
             onClick={() => batchThumbnailMutation.mutate()}
-            disabled={batchThumbnailMutation.isPending || !hasAnyPermission('library:update_own', 'library:update_all')}
+            disabled={
+              batchThumbnailMutation.isPending ||
+              previewBatch.length > 0 ||
+              !hasAnyPermission('library:update_own', 'library:update_all')
+            }
             title={!hasAnyPermission('library:update_own', 'library:update_all') ? t('fileManager.noPermissionGenerateThumbnail') : t('fileManager.generateThumbnailsForMissing')}
           >
-            {batchThumbnailMutation.isPending ? (
+            {batchThumbnailMutation.isPending || previewBatch.length > 0 ? (
               <Loader2 className="w-4 h-4 mr-2 animate-spin" />
             ) : (
               <Image className="w-4 h-4 mr-2" />
             )}
-            {t('fileManager.generateThumbnails')}
+            {previewBatch.length > 0 && previewBatchProgress
+              ? t('fileManager.renderingPreviews', {
+                  done: previewBatchProgress.done,
+                  total: previewBatchProgress.total,
+                })
+              : t('fileManager.generateThumbnails')}
           </Button>
           <Button
             variant="secondary"
@@ -3813,6 +3844,29 @@ export function FileManagerPage() {
                 }
               : undefined
           }
+        />
+      )}
+
+      {previewBatch.length > 0 && (
+        <PreviewThumbnailBatch
+          files={previewBatch}
+          onProgress={(done, total) => setPreviewBatchProgress({ done, total })}
+          onDone={(succeeded) => {
+            setPreviewBatch([]);
+            setPreviewBatchProgress(null);
+            if (succeeded > 0) {
+              queryClient.invalidateQueries({ queryKey: ['library-files'] });
+              setThumbnailVersions((prev) => {
+                const now = Date.now();
+                const next = { ...prev };
+                previewBatch.forEach((f) => {
+                  next[f.id] = now;
+                });
+                return next;
+              });
+              showToast(t('fileManager.toast.previewsRendered', { count: succeeded }), 'success');
+            }
+          }}
         />
       )}
 
