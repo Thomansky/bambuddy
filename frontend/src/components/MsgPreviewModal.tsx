@@ -177,7 +177,8 @@ export function MsgPreviewModal({ libraryFileId, filename, fileSize, onClose, on
         const blob = await drawMsgSnapshot(fields, bodyText);
         if (blob && !cancelled) onSnapshotRef.current?.(blob);
       }
-    })().catch(() => {
+    })().catch((err: unknown) => {
+      console.error('[msg-preview] load failed', err);
       if (!cancelled) setError(t('fileManager.preview.error'));
     });
 
