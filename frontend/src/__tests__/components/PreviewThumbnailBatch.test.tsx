@@ -85,9 +85,12 @@ describe('PreviewThumbnailBatch', () => {
     await waitFor(() => expect(onDone).toHaveBeenCalledWith(1));
   });
 
+  // A CAD format the server lists nowhere and no preview can draw: the batch
+  // must step over it rather than sit out its 45 s budget. (Not 'msg' — the
+  // fork renders those, so it would stop being an unknown type there.)
   it('skips a type this build has no renderer for without waiting it out', async () => {
     const onDone = vi.fn();
-    render(<PreviewThumbnailBatch files={[file(5, 'msg'), file(6, 'pdf')]} onDone={onDone} />);
+    render(<PreviewThumbnailBatch files={[file(5, 'catpart'), file(6, 'pdf')]} onDone={onDone} />);
 
     // Straight past the unknown type to the one it can draw, no timer involved.
     await waitFor(() => expect(screen.getByTestId('pdf-modal')).toBeInTheDocument());
