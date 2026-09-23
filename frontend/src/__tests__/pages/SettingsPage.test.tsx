@@ -1071,6 +1071,67 @@ describe('SettingsPage', () => {
         expect(within(row).getByRole('checkbox')).toBeChecked();
       });
     });
+
+    describe('after-print RFID read (ams_read_unidentified_after_print)', () => {
+      const label = 'Read unidentified AMS spools after a print';
+
+      async function openWorkflow() {
+        const user = userEvent.setup();
+        render(<SettingsPage />);
+        await user.click(await screen.findByText('Workflow'));
+        return user;
+      }
+
+      it('is off when the backend has never stored the setting', async () => {
+        // A missing row must read as off: this one makes the AMS move filament
+        // on a machine that has just finished, which nobody opted into.
+        await openWorkflow();
+
+        const row = (await screen.findByText(label)).closest('div')!.parentElement!;
+        expect(within(row).getByRole('checkbox')).not.toBeChecked();
+      });
+
+      it('reflects a stored on value', async () => {
+        server.use(
+          http.get('/api/v1/settings/', () =>
+            HttpResponse.json({ ...mockSettings, ams_read_unidentified_after_print: true })
+          )
+        );
+        await openWorkflow();
+
+        const row = (await screen.findByText(label)).closest('div')!.parentElement!;
+        expect(within(row).getByRole('checkbox')).toBeChecked();
+      });
+
+      it('sends the new value on save without disturbing the pre-dispatch one', async () => {
+        // The two toggles live in one card and are saved through the same
+        // explicit list; a new setting left out of it never reaches the server.
+        let saved: Record<string, unknown> | null = null;
+        server.use(
+          http.get('/api/v1/settings/', () =>
+            HttpResponse.json({ ...mockSettings, queue_rfid_reread_before_start: true })
+          ),
+          http.put('/api/v1/settings/', async ({ request }) => {
+            saved = (await request.json()) as Record<string, unknown>;
+            return HttpResponse.json({ ...mockSettings, ...saved });
+          })
+        );
+        const user = await openWorkflow();
+
+        const labelEl = await screen.findByText(label);
+        // Same 100 ms post-load auto-save suppression as the other toggles.
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        const row = labelEl.closest('div')!.parentElement!;
+        await user.click(within(row).getByRole('checkbox'));
+
+        await waitFor(() => {
+          expect(saved).not.toBeNull();
+        }, { timeout: 3000 });
+        expect(saved!.ams_read_unidentified_after_print).toBe(true);
+        expect(saved!.queue_rfid_reread_before_start).toBe(true);
+        expect(within(row).getByRole('checkbox')).toBeChecked();
+      });
+    });
   });
 
   describe('API Keys tab', () => {

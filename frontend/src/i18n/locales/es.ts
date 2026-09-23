@@ -2482,6 +2482,8 @@ export default {
     rfidRereadTitle: 'Bobinas AMS sin identificar',
     rfidRereadLabel: 'Volver a leer las bobinas AMS sin identificar antes de iniciar un trabajo',
     rfidRereadDescription: 'Las bobinas insertadas mientras la impresora estaba ocupada no son identificadas por el AMS. Con esta opción, la cola pide al AMS que lea cada ranura ocupada pero sin identificar antes de asignar e iniciar el trabajo: una vez por trabajo, y el trabajo se inicia sea cual sea el resultado.',
+    rfidAfterPrintLabel: 'Leer las bobinas AMS sin identificar después de imprimir',
+    rfidAfterPrintDescription: 'La misma lectura en el otro extremo: cuando termina una impresión la impresora está libre, el AMS puede mover filamento y ningún trabajo espera la respuesta. Se ejecuta después de cada impresión, tanto si terminó como si falló, omite las bobinas que siguen cargadas en un extrusor y se detiene de inmediato si comienza una impresión nueva. El apagado automático espera a que termine.',
     staggeredStart: 'Inicio escalonado',
     staggeredStartDescription: 'Tamaño de grupo e intervalo predeterminados al escalonar los inicios de lotes en varias impresoras. Se pueden anular por lote en la ventana de impresión.',
     preheatTitle: 'Precalentamiento y Heat Soak',

@@ -294,6 +294,33 @@ class TestSettingsAPI:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    async def test_ams_read_unidentified_after_print_round_trips(self, async_client: AsyncClient):
+        """The after-print read, off by default and independent of the pre-dispatch one.
+
+        The response is built from a hand-maintained list of boolean keys, so a
+        new toggle left out of it reads back as the raw string ``"true"`` and
+        the switch never settles. Both are asserted together because the two
+        share a settings card and are saved in one request.
+        """
+        response = await async_client.get("/api/v1/settings/")
+        assert response.status_code == 200
+        assert response.json()["ams_read_unidentified_after_print"] is False
+
+        response = await async_client.put("/api/v1/settings/", json={"ams_read_unidentified_after_print": True})
+        assert response.status_code == 200
+        assert response.json()["ams_read_unidentified_after_print"] is True
+        # Turning this one on must not turn the pre-dispatch read on with it.
+        assert response.json()["queue_rfid_reread_before_start"] is False
+
+        response = await async_client.get("/api/v1/settings/")
+        assert response.json()["ams_read_unidentified_after_print"] is True
+
+        response = await async_client.put("/api/v1/settings/", json={"ams_read_unidentified_after_print": False})
+        assert response.status_code == 200
+        assert (await async_client.get("/api/v1/settings/")).json()["ams_read_unidentified_after_print"] is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_update_notification_language(self, async_client: AsyncClient):
         """Verify notification language can be updated."""
         response = await async_client.put("/api/v1/settings/", json={"notification_language": "de"})

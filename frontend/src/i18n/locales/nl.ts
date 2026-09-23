@@ -2499,6 +2499,8 @@ export default {
     rfidRereadTitle: 'Niet-geïdentificeerde AMS-spoelen',
     rfidRereadLabel: 'Niet-geïdentificeerde AMS-spoelen opnieuw lezen voordat een taak start',
     rfidRereadDescription: 'Spoelen die zijn geplaatst terwijl de printer bezig was, worden niet door de AMS geïdentificeerd. Met deze optie vraagt de wachtrij de AMS om elk bezet maar niet-geïdentificeerd slot te lezen voordat de taak wordt toegewezen en gestart — één keer per taak, en de taak start ongeacht het resultaat.',
+    rfidAfterPrintLabel: 'Niet-geïdentificeerde AMS-spoelen na een print lezen',
+    rfidAfterPrintDescription: 'Dezelfde uitlezing aan de andere kant: als een print klaar is, is de printer vrij, kan de AMS filament verplaatsen en wacht geen enkele taak op het antwoord. Draait na elke print, voltooid of mislukt, slaat de spoelen over die nog in een nozzle geladen zijn en stopt meteen als er een nieuwe print begint. Automatisch uitschakelen wacht tot de uitlezing klaar is.',
     staggeredStart: 'Gespreide start',
     staggeredStartDescription: 'Standaard groepsgrootte en interval bij gespreid starten van batches over meerdere printers. Kan per batch in het afdrukvenster worden overschreven.',
     preheatTitle: 'Voorverwarmen en warmtestabilisatie',

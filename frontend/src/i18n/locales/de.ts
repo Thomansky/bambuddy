@@ -2479,6 +2479,8 @@ export default {
     rfidRereadTitle: 'Nicht identifizierte AMS-Spulen',
     rfidRereadLabel: 'Nicht identifizierte AMS-Spulen vor dem Start eines Auftrags erneut einlesen',
     rfidRereadDescription: 'Spulen, die eingesetzt wurden, während der Drucker beschäftigt war, werden vom AMS nicht identifiziert. Mit dieser Option lässt die Warteschlange das AMS jeden belegten, aber nicht identifizierten Slot einlesen, bevor der Auftrag zugeordnet und gestartet wird – einmal pro Auftrag, und der Auftrag startet unabhängig vom Ergebnis.',
+    rfidAfterPrintLabel: 'Nicht erkannte AMS-Spulen nach dem Druck lesen',
+    rfidAfterPrintDescription: 'Dieselbe Abfrage am anderen Ende: Wenn ein Druck endet, ist der Drucker frei, das AMS kann Filament bewegen und kein Auftrag wartet auf die Antwort. Läuft nach jedem Druck, ob abgeschlossen oder fehlgeschlagen, überspringt die Spulen, die noch in einer Düse geladen sind, und bricht sofort ab, wenn ein neuer Druck startet. Die automatische Abschaltung wartet, bis die Abfrage fertig ist.',
     staggeredStart: 'Versetzter Start',
     staggeredStartDescription: 'Standard-Gruppengröße und -Intervall beim Staffeln von Mehrdrucker-Batchstarts. Pro Batch im Druck-Dialog überschreibbar.',
     preheatTitle: 'Vorheizen & Heat Soak',

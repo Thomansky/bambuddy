@@ -2434,6 +2434,8 @@ export default {
     rfidRereadTitle: 'Bobine AMS non identificate',
     rfidRereadLabel: 'Rileggi le bobine AMS non identificate prima di avviare un lavoro',
     rfidRereadDescription: "Le bobine inserite mentre la stampante era occupata non vengono identificate dall'AMS. Con questa opzione la coda chiede all'AMS di leggere ogni slot occupato ma non identificato prima che il lavoro venga mappato e avviato: una volta per lavoro, e il lavoro parte comunque, qualunque sia il risultato.",
+    rfidAfterPrintLabel: 'Leggi le bobine AMS non identificate dopo una stampa',
+    rfidAfterPrintDescription: "La stessa lettura dall'altro lato: quando una stampa finisce la stampante è libera, l'AMS può muovere il filamento e nessun lavoro attende la risposta. Viene eseguita dopo ogni stampa, completata o fallita, salta le bobine ancora caricate in un ugello e si interrompe subito se parte una nuova stampa. Lo spegnimento automatico attende che finisca.",
     staggeredStart: 'Avvio scaglionato',
     staggeredStartDescription: 'Dimensione gruppo e intervallo predefiniti per scaglionare avvii di batch multi-stampante. Sovrascrivibili per batch nella finestra di stampa.',
     preheatTitle: 'Preriscaldo & Heat Soak',

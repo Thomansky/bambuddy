@@ -496,6 +496,15 @@ class AppSettings(BaseModel):
             "filament is loaded because the AMS cannot move it then."
         ),
     )
+    ams_read_unidentified_after_print: bool = Field(
+        default=False,
+        description=(
+            "When a print ends — completed or failed — ask the AMS to read every occupied slot it has "
+            "not identified yet, while the printer is idle and nobody is waiting on the answer. The "
+            "slots still loaded in a hotend are left alone, and a new print takes the printer back at "
+            "once. Auto-off waits for the read to finish."
+        ),
+    )
     queue_max_concurrent_uploads: int = Field(
         default=4,
         ge=1,
@@ -814,6 +823,7 @@ class AppSettingsUpdate(BaseModel):
     require_plate_clear: bool | None = None
     queue_shortest_first: bool | None = None
     queue_rfid_reread_before_start: bool | None = None
+    ams_read_unidentified_after_print: bool | None = None
     queue_max_concurrent_uploads: int | None = Field(default=None, ge=1, le=16)
     preheat_enabled: bool | None = None
     preheat_filament_targets: str | None = None

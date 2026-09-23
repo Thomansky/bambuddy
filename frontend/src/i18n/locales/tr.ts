@@ -2481,6 +2481,8 @@ export default {
     rfidRereadTitle: 'Tanımlanmamış AMS Makaraları',
     rfidRereadLabel: 'Bir iş başlamadan önce tanımlanmamış AMS makaralarını yeniden oku',
     rfidRereadDescription: "Yazıcı meşgulken takılan makaralar AMS tarafından tanımlanmaz. Bu seçenek açıkken kuyruk, iş eşlenip başlatılmadan önce AMS'den dolu ancak tanımlanmamış her yuvayı okumasını ister — iş başına bir kez ve iş sonuçtan bağımsız olarak başlar.",
+    rfidAfterPrintLabel: 'Baskıdan sonra tanımlanmamış AMS makaralarını oku',
+    rfidAfterPrintDescription: 'Aynı okuma, diğer uçta: bir baskı bittiğinde yazıcı boştur, AMS filamenti hareket ettirebilir ve hiçbir iş yanıtı beklemez. Tamamlanmış ya da başarısız, her baskıdan sonra çalışır; hâlâ bir nozula takılı makaraları atlar ve yeni bir baskı başlarsa hemen durur. Otomatik kapatma okumanın bitmesini bekler.',
     staggeredStart: 'Kademeli Başlatma',
     staggeredStartDescription: 'Çoklu yazıcı toplu başlatmaları kademelendirilirken varsayılan grup boyutu ve aralığı. Baskı modalinde yığın başına geçersiz kılınabilir.',
     preheatTitle: 'Ön Isıtma & Heat Soak',

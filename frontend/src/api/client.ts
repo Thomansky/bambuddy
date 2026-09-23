@@ -1622,6 +1622,11 @@ export interface AppSettings {
   // the outcome. A spool inserted mid-print is what this is for: the AMS
   // sees it but never reads its tag on its own afterwards.
   queue_rfid_reread_before_start: boolean;
+  // The same read, at the other end: when a print ends the printer is idle,
+  // the AMS is free to move filament and nobody is waiting on the answer. On
+  // a farm whose machines are always either printing or holding a finished
+  // plate, this is the one moment the read can actually happen.
+  ams_read_unidentified_after_print: boolean;
   // How many printers the queue may upload to at once (#2555). 1 restores the
   // old strictly-serial behaviour, where every printer waited out every other
   // printer's transfer.

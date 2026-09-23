@@ -2478,6 +2478,8 @@ export default {
     rfidRereadTitle: '未识别的 AMS 料卷',
     rfidRereadLabel: '开始任务前重新读取未识别的 AMS 料卷',
     rfidRereadDescription: '打印机忙碌时插入的料卷不会被 AMS 识别。开启后，队列会在任务映射并启动之前，要求 AMS 读取每个已占用但未识别的槽位——每个任务仅执行一次，且无论结果如何任务都会启动。',
+    rfidAfterPrintLabel: '打印结束后读取未识别的 AMS 料卷',
+    rfidAfterPrintDescription: '同一读取动作放在另一端：打印结束时打印机空闲，AMS 可以移动料丝，也没有任务在等结果。无论打印成功还是失败都会执行，跳过仍装载在喷嘴中的料卷，一旦有新打印开始立即停止。自动断电会等待读取完成。',
     staggeredStart: '错峰启动',
     staggeredStartDescription: '错峰启动多台打印机批次时的默认组大小和间隔。可在打印对话框中按批次覆盖。',
     preheatTitle: '预热与热保温',

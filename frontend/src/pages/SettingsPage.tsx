@@ -90,7 +90,7 @@ registerSettingsSearch({ labelKey: 'settings.tempFanPresetsTitle', labelFallback
 registerSettingsSearch({ labelKey: 'settings.staggeredStart', labelFallback: 'Staggered Start', tab: 'queue', keywords: 'staggered batch delay start queue group', anchor: 'card-staggered' });
 registerSettingsSearch({ labelKey: 'settings.plateClear', labelFallback: 'Plate-Clear Confirmation', tab: 'queue', keywords: 'plate clear confirm auto queue', anchor: 'card-plate' });
 registerSettingsSearch({ labelKey: 'settings.concurrentUploadsTitle', labelFallback: 'Concurrent Uploads', tab: 'queue', keywords: 'concurrent parallel upload transfer ftp queue slow farm simultaneous', anchor: 'card-concurrent-uploads' });
-registerSettingsSearch({ labelKey: 'settings.rfidRereadTitle', labelFallback: 'Unidentified AMS Spools', tab: 'queue', keywords: 'rfid ams spool unidentified unknown re-read reread tag queue mapping', anchor: 'card-rfid-reread' });
+registerSettingsSearch({ labelKey: 'settings.rfidRereadTitle', labelFallback: 'Unidentified AMS Spools', tab: 'queue', keywords: 'rfid ams spool unidentified unknown re-read reread tag queue mapping after print finished idle', anchor: 'card-rfid-reread' });
 registerSettingsSearch({ labelKey: 'settings.gcodeInjection', labelFallback: 'G-code Injection', tab: 'queue', keywords: 'gcode injection start end autoprint farmloop swapmod autoclear printflow', anchor: 'card-gcode' });
 registerSettingsSearch({ labelKey: 'settings.slicerCard', labelFallback: 'Slicer', tab: 'queue', keywords: 'slicer orcaslicer bambustudio orca bambu api sidecar url docker preferred', anchor: 'card-slicer' });
 registerSettingsSearch({ labelKey: 'settings.queueDrying', tab: 'queue', keywords: 'drying presets temperature time humidity ams', anchor: 'card-drying' });
@@ -1212,6 +1212,8 @@ export function SettingsPage() {
       (baseline.require_plate_clear ?? false) !== (localSettings.require_plate_clear ?? false) ||
       (baseline.queue_max_concurrent_uploads ?? 4) !== (localSettings.queue_max_concurrent_uploads ?? 4) ||
       (baseline.queue_rfid_reread_before_start ?? false) !== (localSettings.queue_rfid_reread_before_start ?? false) ||
+      (baseline.ams_read_unidentified_after_print ?? false) !==
+        (localSettings.ams_read_unidentified_after_print ?? false) ||
       (baseline.preheat_enabled ?? false) !== (localSettings.preheat_enabled ?? false) ||
       (baseline.preheat_filament_targets ?? '') !== (localSettings.preheat_filament_targets ?? '') ||
       (baseline.preheat_max_wait_seconds ?? 900) !== (localSettings.preheat_max_wait_seconds ?? 900) ||
@@ -1331,6 +1333,7 @@ export function SettingsPage() {
         require_plate_clear: localSettings.require_plate_clear,
         queue_max_concurrent_uploads: localSettings.queue_max_concurrent_uploads,
         queue_rfid_reread_before_start: localSettings.queue_rfid_reread_before_start,
+        ams_read_unidentified_after_print: localSettings.ams_read_unidentified_after_print,
         preheat_enabled: localSettings.preheat_enabled,
         preheat_filament_targets: localSettings.preheat_filament_targets,
         preheat_max_wait_seconds: localSettings.preheat_max_wait_seconds,
@@ -5292,6 +5295,25 @@ export function SettingsPage() {
                     type="checkbox"
                     checked={localSettings.queue_rfid_reread_before_start ?? false}
                     onChange={(e) => updateSetting('queue_rfid_reread_before_start', e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-bambu-dark-tertiary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-bambu-green"></div>
+                </label>
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="flex-1 mr-4">
+                  <p className="text-sm text-white">
+                    {t('settings.rfidAfterPrintLabel', 'Read unidentified AMS spools after a print')}
+                  </p>
+                  <p className="text-xs text-bambu-gray mt-1">
+                    {t('settings.rfidAfterPrintDescription', 'The same read at the other end: when a print ends the printer is idle, the AMS is free to move filament and no job is waiting for the answer. Runs after every print, whether it completed or failed, skips the spools still loaded in a hotend, and stops at once if a new print starts. Auto-off waits for it to finish.')}
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={localSettings.ams_read_unidentified_after_print ?? false}
+                    onChange={(e) => updateSetting('ams_read_unidentified_after_print', e.target.checked)}
                     className="sr-only peer"
                   />
                   <div className="w-11 h-6 bg-bambu-dark-tertiary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-bambu-green"></div>
