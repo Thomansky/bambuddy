@@ -2853,6 +2853,8 @@ export default {
     createArchiveEntryDescription: 'Lors de l\'impression depuis le gestionnaire de fichiers, créer optionnellement une entrée d\'archive',
     lowDiskSpaceWarning: 'Avertissement espace disque faible',
     lowDiskSpaceDescription: 'Afficher un avertissement lorsque l\'espace disque libre descend sous ce seuil',
+    libraryRootListsAllFiles: 'La racine liste tous les fichiers',
+    libraryRootListsAllFilesDescription: 'Activé : « Tous les fichiers » liste tous les fichiers de la bibliothèque. Désactivé : la racine affiche les dossiers de premier niveau et une entrée « Sans dossier » pour les fichiers hors de tout dossier. La recherche et les filtres par étiquette portent toujours sur toute la bibliothèque.',
     printerFirmware: 'Firmware imprimante',
     checkFirmwareDescription: 'Vérifier les mises à jour firmware de Bambu Lab',
     bambuddySoftware: 'Logiciel Bambuddy',
@@ -4095,6 +4097,9 @@ export default {
     },
     searchFiles: 'Chercher fichiers...',
     searchSubfoldersHint: 'Sous-dossiers inclus',
+    pickAFolder: 'Choisissez un dossier pour voir ses fichiers',
+    copyPath: 'Copier le chemin',
+    noFolder: 'Sans dossier',
     pathBar: {
       label: 'Emplacement',
       showHidden: 'Afficher les dossiers masqués',
@@ -4271,6 +4276,8 @@ export default {
     toast: {
       folderCreated: 'Dossier créé',
       openInSlicerFailed: "Impossible d'ouvrir dans le slicer",
+      pathCopied: 'Chemin copié',
+      folderPathCopied: 'Chemin du dossier copié',
       folderDeleted: 'Dossier supprimé',
       fileDeleted: 'Fichier supprimé',
       filesDeleted: '{{count}} fichiers supprimés',

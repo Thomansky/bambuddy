@@ -2897,6 +2897,8 @@ export default {
     createArchiveEntryDescription: '从文件管理器打印时，可选择创建归档条目',
     lowDiskSpaceWarning: '磁盘空间不足警告',
     lowDiskSpaceDescription: '当可用磁盘空间低于此阈值时显示警告',
+    libraryRootListsAllFiles: '根目录列出所有文件',
+    libraryRootListsAllFilesDescription: '开启：“所有文件”列出库中的每个文件。关闭：改为显示顶层文件夹，以及用于不属于任何文件夹的文件的“无文件夹”条目。搜索和标签筛选始终覆盖整个库。',
     printerFirmware: '打印机固件',
     checkFirmwareDescription: '检查Bambu Lab的打印机固件更新',
     bambuddySoftware: 'Bambuddy 软件',
@@ -4094,6 +4096,9 @@ export default {
     },
     searchFiles: '搜索文件...',
     searchSubfoldersHint: '包含子文件夹',
+    pickAFolder: '选择一个文件夹以查看其文件',
+    copyPath: '复制路径',
+    noFolder: '无文件夹',
     pathBar: {
       label: '位置',
       showHidden: '显示折叠的文件夹',
@@ -4270,6 +4275,8 @@ export default {
     toast: {
       folderCreated: '文件夹已创建',
       openInSlicerFailed: '无法在切片软件中打开',
+      pathCopied: '已复制路径',
+      folderPathCopied: '已复制文件夹路径',
       folderDeleted: '文件夹已删除',
       fileDeleted: '文件已删除',
       filesDeleted: '已删除 {{count}} 个文件',

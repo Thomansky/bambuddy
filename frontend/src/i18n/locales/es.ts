@@ -2907,6 +2907,8 @@ export default {
     createArchiveEntryDescription: 'Al imprimir desde el gestor de archivos, crear opcionalmente una entrada de archivo',
     lowDiskSpaceWarning: 'Advertencia de poco espacio en disco',
     lowDiskSpaceDescription: 'Mostrar una advertencia cuando el espacio libre en disco caiga por debajo de este umbral',
+    libraryRootListsAllFiles: 'La raíz muestra todos los archivos',
+    libraryRootListsAllFilesDescription: 'Activado: "Todos los archivos" muestra todos los archivos de la biblioteca. Desactivado: muestra las carpetas de primer nivel y una entrada "Sin carpeta" para los archivos que no están en ninguna carpeta. La búsqueda y los filtros por etiqueta siempre recorren toda la biblioteca.',
     // Updates
     printerFirmware: 'Firmware de la impresora',
     checkFirmwareDescription: 'Buscar actualizaciones de firmware de la impresora de Bambu Lab',
@@ -4111,6 +4113,9 @@ export default {
     },
     searchFiles: 'Buscar archivos...',
     searchSubfoldersHint: 'Incluyendo subcarpetas',
+    pickAFolder: 'Elige una carpeta para ver sus archivos',
+    copyPath: 'Copiar ruta',
+    noFolder: 'Sin carpeta',
     pathBar: {
       label: 'Ubicación',
       showHidden: 'Mostrar carpetas ocultas',
@@ -4287,6 +4292,8 @@ export default {
     toast: {
       folderCreated: 'Carpeta creada',
       openInSlicerFailed: 'No se pudo abrir en el laminador',
+      pathCopied: 'Ruta copiada',
+      folderPathCopied: 'Ruta de la carpeta copiada',
       folderDeleted: 'Carpeta eliminada',
       fileDeleted: 'Archivo eliminado',
       filesDeleted: 'Se eliminaron {{count}} archivos',

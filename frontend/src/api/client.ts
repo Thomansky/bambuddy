@@ -1558,6 +1558,9 @@ export interface AppSettings {
   // File Manager / Library settings
   library_archive_mode: 'always' | 'never' | 'ask';
   library_disk_warning_gb: number;
+  // Root ("All Files") lists every file in the library. Off makes the root show
+  // its top-level folders plus a "No folder" entry instead.
+  library_root_lists_all_files: boolean;
   // Camera view settings
   camera_view_mode: 'window' | 'embedded';
   // Preferred slicer (server-side API / sidecar)
@@ -8744,6 +8747,11 @@ export interface LibraryFileUploadResponse {
 export interface LibraryStats {
   total_files: number;
   total_folders: number;
+  // Files sitting in no folder at all, per bucket. Lets the File Manager's
+  // folders-first root offer its "No folder" entry without asking for the
+  // listing it exists to avoid.
+  unfoldered_files?: number;
+  unfoldered_external_files?: number;
   total_size_bytes: number;
   files_by_type: Record<string, number>;
   total_prints: number;

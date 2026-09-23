@@ -2852,6 +2852,8 @@ export default {
     createArchiveEntryDescription: 'Ao imprimir pelo gerenciador de arquivos, criar opcionalmente uma entrada de arquivo',
     lowDiskSpaceWarning: 'Aviso de pouco espaço em disco',
     lowDiskSpaceDescription: 'Mostrar aviso quando o espaço livre em disco ficar abaixo deste limite',
+    libraryRootListsAllFiles: 'A raiz lista todos os arquivos',
+    libraryRootListsAllFilesDescription: 'Ligado: "Todos os arquivos" lista todos os arquivos da biblioteca. Desligado: mostra as pastas de primeiro nível e uma entrada "Sem pasta" para os arquivos fora de qualquer pasta. A busca e os filtros por etiqueta sempre percorrem a biblioteca inteira.',
     printerFirmware: 'Firmware da impressora',
     checkFirmwareDescription: 'Verificar atualizações de firmware da Bambu Lab',
     bambuddySoftware: 'Software Bambuddy',
@@ -4094,6 +4096,9 @@ export default {
     },
     searchFiles: 'Pesquisar arquivos...',
     searchSubfoldersHint: 'Incluindo subpastas',
+    pickAFolder: 'Escolha uma pasta para ver seus arquivos',
+    copyPath: 'Copiar caminho',
+    noFolder: 'Sem pasta',
     pathBar: {
       label: 'Local',
       showHidden: 'Mostrar pastas ocultas',
@@ -4270,6 +4275,8 @@ export default {
     toast: {
       folderCreated: 'Pasta criada',
       openInSlicerFailed: 'Não foi possível abrir no fatiador',
+      pathCopied: 'Caminho copiado',
+      folderPathCopied: 'Caminho da pasta copiado',
       folderDeleted: 'Pasta excluída',
       fileDeleted: 'Arquivo excluído',
       filesDeleted: 'Excluídos {{count}} arquivos',

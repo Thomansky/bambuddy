@@ -2903,6 +2903,8 @@ export default {
     createArchiveEntryDescription: 'ファイルマネージャーから印刷時に、オプションでアーカイブエントリを作成',
     lowDiskSpaceWarning: 'ディスク容量不足の警告',
     lowDiskSpaceDescription: '空きディスク容量がこのしきい値を下回った場合に警告を表示',
+    libraryRootListsAllFiles: 'ルートにすべてのファイルを表示',
+    libraryRootListsAllFilesDescription: 'オン：「すべてのファイル」はライブラリ内のすべてのファイルを一覧表示します。オフ：代わりに最上位のフォルダと、どのフォルダにも属さないファイル用の「フォルダなし」項目を表示します。検索とタグフィルターは常にライブラリ全体を対象にします。',
     // Updates
     printerFirmware: 'プリンターファームウェア',
     checkFirmwareDescription: 'Bambu Labのプリンターファームウェア更新を確認',
@@ -4108,6 +4110,9 @@ export default {
     },
     searchFiles: 'ファイルを検索...',
     searchSubfoldersHint: 'サブフォルダーを含む',
+    pickAFolder: 'フォルダを選ぶとそのファイルが表示されます',
+    copyPath: 'パスをコピー',
+    noFolder: 'フォルダなし',
     pathBar: {
       label: '場所',
       showHidden: '省略されたフォルダを表示',
@@ -4284,6 +4289,8 @@ export default {
     toast: {
       folderCreated: 'フォルダを作成しました',
       openInSlicerFailed: 'スライサーで開けませんでした',
+      pathCopied: 'パスをコピーしました',
+      folderPathCopied: 'フォルダのパスをコピーしました',
       folderDeleted: 'フォルダを削除しました',
       fileDeleted: 'ファイルを削除しました',
       filesDeleted: '{{count}}件のファイルを削除しました',

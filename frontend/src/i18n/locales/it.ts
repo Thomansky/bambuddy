@@ -2853,6 +2853,8 @@ export default {
     createArchiveEntryDescription: 'Quando si stampa dal gestore file, crea opzionalmente una voce di archivio',
     lowDiskSpaceWarning: 'Avviso spazio disco insufficiente',
     lowDiskSpaceDescription: 'Mostra avviso quando lo spazio disco scende sotto questa soglia',
+    libraryRootListsAllFiles: 'La radice elenca tutti i file',
+    libraryRootListsAllFilesDescription: 'Attivo: "Tutti i file" elenca ogni file della libreria. Disattivo: mostra invece le cartelle di primo livello e una voce "Senza cartella" per i file che non stanno in nessuna cartella. La ricerca e i filtri per tag riguardano sempre tutta la libreria.',
     printerFirmware: 'Firmware stampante',
     checkFirmwareDescription: 'Controlla aggiornamenti firmware da Bambu Lab',
     bambuddySoftware: 'Software Bambuddy',
@@ -4095,6 +4097,9 @@ export default {
     },
     searchFiles: 'Cerca file...',
     searchSubfoldersHint: 'Sottocartelle incluse',
+    pickAFolder: 'Scegli una cartella per vederne i file',
+    copyPath: 'Copia percorso',
+    noFolder: 'Senza cartella',
     pathBar: {
       label: 'Posizione',
       showHidden: 'Mostra le cartelle nascoste',
@@ -4271,6 +4276,8 @@ export default {
     toast: {
       folderCreated: 'Cartella creata',
       openInSlicerFailed: 'Impossibile aprire nello slicer',
+      pathCopied: 'Percorso copiato',
+      folderPathCopied: 'Percorso della cartella copiato',
       folderDeleted: 'Cartella eliminata',
       fileDeleted: 'File eliminato',
       filesDeleted: 'Eliminati {{count}} file',

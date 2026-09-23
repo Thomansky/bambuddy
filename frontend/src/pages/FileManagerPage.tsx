@@ -58,6 +58,8 @@ import {
   MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
+  Copy,
+  FolderX,
   type LucideIcon,
 } from 'lucide-react';
 import { api } from '../api/client';
@@ -86,6 +88,7 @@ import { FolderReadmePanel } from '../components/FolderReadmePanel';
 import { LibraryTagsModal } from '../components/LibraryTagsModal';
 import { LibraryFileDetailsModal } from '../components/LibraryFileDetailsModal';
 import { PurgeOldFilesModal } from '../components/PurgeOldFilesModal';
+import { CopyButton, copyTextToClipboard } from '../components/CopyButton';
 import { useToast } from '../contexts/ToastContext';
 import { usePageFileDrop } from '../hooks/usePageFileDrop';
 import { useAuth } from '../contexts/AuthContext';
@@ -839,6 +842,7 @@ interface FolderTreeItemProps {
   onDelete: (id: number) => void;
   onLink: (folder: LibraryFolderTree) => void;
   onRename: (folder: LibraryFolderTree) => void;
+  onCopyPath: (folder: LibraryFolderTree) => void;
   depth?: number;
   wrapNames?: boolean;
   defaultExpanded?: boolean;
@@ -858,6 +862,7 @@ interface FolderActionsMenuProps {
   onDelete: (id: number) => void;
   onLink: (folder: LibraryFolderTree) => void;
   onRename: (folder: LibraryFolderTree) => void;
+  onCopyPath: (folder: LibraryFolderTree) => void;
   hasPermission: (permission: Permission) => boolean;
   // Hide the kebab until its `group` row is hovered or focused — only for
   // pointers that can hover (#2865). The menu is a DOM descendant, so the
@@ -868,7 +873,7 @@ interface FolderActionsMenuProps {
   t: TFunction;
 }
 
-function FolderActionsMenu({ folder, onDownloadFolder, onDelete, onLink, onRename, hasPermission, revealOnHover = false, tabIndex, t }: FolderActionsMenuProps) {
+function FolderActionsMenu({ folder, onDownloadFolder, onDelete, onLink, onRename, onCopyPath, hasPermission, revealOnHover = false, tabIndex, t }: FolderActionsMenuProps) {
   const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number } | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -920,6 +925,14 @@ function FolderActionsMenu({ folder, onDownloadFolder, onDelete, onLink, onRenam
       title: folder.file_count === 0 ? t('fileManager.folderHasNoFiles') : undefined,
     },
     {
+      // An external folder copies its real on-disk path — that is the string
+      // the farm pastes into Explorer or the slicer, and the whole reason the
+      // entry earns its place; a managed folder has only its library path.
+      label: t('fileManager.copyPath'),
+      icon: <Copy className="w-3.5 h-3.5" />,
+      onClick: () => onCopyPath(folder),
+    },
+    {
       label: t('common.delete'),
       icon: <Trash2 className="w-3.5 h-3.5" />,
       onClick: () => onDelete(folder.id),
@@ -966,7 +979,7 @@ function FolderActionsMenu({ folder, onDownloadFolder, onDelete, onLink, onRenam
   );
 }
 
-function FolderTreeItem({ folder, selectedFolderId, onSelect, onDownloadFolder, onDelete, onLink, onRename, depth = 0, wrapNames = false, defaultExpanded = true, showModified = false, hasPermission, t }: FolderTreeItemProps) {
+function FolderTreeItem({ folder, selectedFolderId, onSelect, onDownloadFolder, onDelete, onLink, onRename, onCopyPath, depth = 0, wrapNames = false, defaultExpanded = true, showModified = false, hasPermission, t }: FolderTreeItemProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const hasChildren = folder.children.length > 0;
   const isLinked = folder.project_id || folder.archive_id;
@@ -1055,6 +1068,7 @@ function FolderTreeItem({ folder, selectedFolderId, onSelect, onDownloadFolder, 
           onDelete={onDelete}
           onLink={onLink}
           onRename={onRename}
+          onCopyPath={onCopyPath}
           hasPermission={hasPermission}
           revealOnHover={!wrapNames}
           t={t}
@@ -1072,6 +1086,7 @@ function FolderTreeItem({ folder, selectedFolderId, onSelect, onDownloadFolder, 
               onDelete={onDelete}
               onLink={onLink}
               onRename={onRename}
+              onCopyPath={onCopyPath}
               depth={depth + 1}
               wrapNames={wrapNames}
               defaultExpanded={defaultExpanded}
@@ -1107,6 +1122,7 @@ interface FileCardProps {
   onRename?: (file: LibraryFileListItem) => void;
   onDetails?: (file: LibraryFileListItem) => void;
   onGenerateThumbnail?: (file: LibraryFileListItem) => void;
+  onCopyPath?: (file: LibraryFileListItem) => void;
   onTagClick?: (tagId: number) => void;
   thumbnailVersion?: number;
   hasPermission: (permission: Permission) => boolean;
@@ -1116,7 +1132,7 @@ interface FileCardProps {
   t: TFunction;
 }
 
-function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, onSlice, onOpenInSlicer, onRunPipeline, useSlicerApi, desktopSlicer, canSlice, onPreview, onRename, onDetails, onGenerateThumbnail, onTagClick, thumbnailVersion, hasPermission, canModify, authEnabled, showModified, t }: FileCardProps) {
+function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, onSlice, onOpenInSlicer, onRunPipeline, useSlicerApi, desktopSlicer, canSlice, onPreview, onRename, onDetails, onGenerateThumbnail, onCopyPath, onTagClick, thumbnailVersion, hasPermission, canModify, authEnabled, showModified, t }: FileCardProps) {
   // Viewport coordinates rather than a flag, because the menu is rendered by
   // `ContextMenu` at `position: fixed` and anchored to the button (#2846). The
   // card it belongs to is only ~270px tall for a bare STL, which is shorter
@@ -1207,6 +1223,13 @@ function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, o
       onClick: () => onGenerateThumbnail(file),
       disabled: !canRename,
       title: !canRename ? t('fileManager.noPermissionGenerateThumbnail') : undefined,
+    });
+  }
+  if (onCopyPath) {
+    menuItems.push({
+      label: t('fileManager.copyPath'),
+      icon: <Copy className="w-4 h-4" />,
+      onClick: () => onCopyPath(file),
     });
   }
   menuItems.push({
@@ -1401,6 +1424,7 @@ interface FileActionStripProps {
   onDownload: (id: number) => void;
   onRename: (file: LibraryFileListItem) => void;
   onGenerateThumbnail: (file: LibraryFileListItem) => void;
+  onCopyPath: (file: LibraryFileListItem) => void;
   thumbnailPending: boolean;
   onDelete: (id: number) => void;
   hasPermission: (permission: Permission) => boolean;
@@ -1411,7 +1435,7 @@ interface FileActionStripProps {
   t: TFunction;
 }
 
-function FileActionStrip({ file, onPrint, onSlice, onOpenInSlicer, onRunPipeline, useSlicerApi, desktopSlicer, canSlice, onPreview, onDetails, onDownload, onRename, onGenerateThumbnail, thumbnailPending, onDelete, hasPermission, canModify, tabIndex, t }: FileActionStripProps) {
+function FileActionStrip({ file, onPrint, onSlice, onOpenInSlicer, onRunPipeline, useSlicerApi, desktopSlicer, canSlice, onPreview, onDetails, onDownload, onRename, onGenerateThumbnail, onCopyPath, thumbnailPending, onDelete, hasPermission, canModify, tabIndex, t }: FileActionStripProps) {
   const canRename = canModify('library', 'update', file.created_by_id);
   const canDelete = canModify('library', 'delete', file.created_by_id);
   return (
@@ -1557,6 +1581,14 @@ function FileActionStrip({ file, onPrint, onSlice, onOpenInSlicer, onRunPipeline
       )}
       <button
         tabIndex={tabIndex}
+        onClick={() => onCopyPath(file)}
+        className="p-1.5 rounded transition-colors hover:bg-bambu-dark text-bambu-gray hover:text-white"
+        title={t('fileManager.copyPath')}
+      >
+        <Copy className="w-4 h-4" />
+      </button>
+      <button
+        tabIndex={tabIndex}
         onClick={() => canDelete && onDelete(file.id)}
         className={`p-1.5 rounded transition-colors ${
           canDelete
@@ -1654,12 +1686,16 @@ interface PathBarProps {
   rootLabel: string;
   rootIsExternal: boolean;
   path: LibraryFolderTree[];
+  // A location inside the root that is not a folder — today only the root's
+  // "No folder" listing. Shown as the trailing crumb, which turns the root
+  // crumb into the way back out.
+  leafLabel?: string;
   onSelectRoot: () => void;
   onSelectFolder: (id: number) => void;
   t: TFunction;
 }
 
-function PathBar({ rootLabel, rootIsExternal, path, onSelectRoot, onSelectFolder, t }: PathBarProps) {
+function PathBar({ rootLabel, rootIsExternal, path, leafLabel, onSelectRoot, onSelectFolder, t }: PathBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -1693,7 +1729,7 @@ function PathBar({ rootLabel, rootIsExternal, path, onSelectRoot, onSelectFolder
       data-testid="library-path-bar"
       className="flex items-center gap-0.5 mb-3 min-w-0 overflow-hidden whitespace-nowrap text-sm"
     >
-      {path.length === 0 ? (
+      {path.length === 0 && !leafLabel ? (
         <span aria-current="page" className={`${crumbClass} text-white font-medium`}>
           {rootIcon}
           <span className="truncate">{rootLabel}</span>
@@ -1753,7 +1789,7 @@ function PathBar({ rootLabel, rootIsExternal, path, onSelectRoot, onSelectFolder
         </>
       )}
       {visible.map((folder, i) => {
-        const isCurrent = i === visible.length - 1;
+        const isCurrent = !leafLabel && i === visible.length - 1;
         return (
           <span key={folder.id} className="flex items-center gap-0.5 min-w-0">
             {separator}
@@ -1775,6 +1811,24 @@ function PathBar({ rootLabel, rootIsExternal, path, onSelectRoot, onSelectFolder
           </span>
         );
       })}
+      {leafLabel && (
+        <span className="flex items-center gap-0.5 min-w-0">
+          {separator}
+          <span aria-current="page" title={leafLabel} className={`${crumbClass} text-white font-medium`}>
+            <span className="truncate">{leafLabel}</span>
+          </span>
+        </span>
+      )}
+      {/* The chain as text, for Explorer / the slicer / a mail. The root has
+          no path, so at the root there is nothing to copy. */}
+      {path.length > 0 && (
+        <CopyButton
+          value={path.map((folder) => folder.name).join('/')}
+          titleKey="fileManager.copyPath"
+          copiedTitleKey="fileManager.toast.pathCopied"
+          className="ml-1 flex-shrink-0 p-1 rounded text-bambu-gray hover:text-white hover:bg-bambu-dark transition-colors"
+        />
+      )}
     </nav>
   );
 }
@@ -1892,6 +1946,30 @@ function ContentFolderNav({
   );
 }
 
+// The chain of folders from a top-level folder down to `folderId`, or null
+// when the id is not in the tree. Backs "Copy path", which needs the ancestors
+// a file list item does not carry.
+function findFolderChain(items: LibraryFolderTree[], folderId: number): LibraryFolderTree[] | null {
+  for (const item of items) {
+    if (item.id === folderId) return [item];
+    const deeper = findFolderChain(item.children, folderId);
+    if (deeper) return [item, ...deeper];
+  }
+  return null;
+}
+
+// Join an external folder's real path with a filename in that path's own
+// flavour — a linked Windows share reads `C:\Jobs\RAFI`, and pasting a
+// forward slash onto it back into Explorer is exactly the failure this
+// feature exists to remove.
+function joinExternalPath(dir: string, filename: string): string {
+  const sep = dir.includes('\\') ? '\\' : '/';
+  return dir.endsWith(sep) ? `${dir}${filename}` : `${dir}${sep}${filename}`;
+}
+
+// Stable stand-in for the flat listing the folders-first root never requests.
+const NO_FILES: LibraryFileListItem[] = [];
+
 export function FileManagerPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -1911,6 +1989,10 @@ export function FileManagerPage() {
   // combined view across every linked external folder (#1621). Per-folder
   // selection bypasses this (selectedFolderId !== null disables the filter).
   const [topLevelView, setTopLevelView] = useState<'internal' | 'external'>('internal');
+  // The root's "No folder" entry has been opened: a location inside the root,
+  // not a filter, so leaving the root drops it. Only reachable while the root
+  // lists folders instead of every file.
+  const [showUnfoldered, setShowUnfoldered] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<number[]>([]);
   const [showNewFolderModal, setShowNewFolderModal] = useState(false);
   const [showExternalFolderModal, setShowExternalFolderModal] = useState(false);
@@ -2046,7 +2128,7 @@ export function FileManagerPage() {
   }, [searchParams]);
 
   // Queries
-  const { data: settings } = useQuery({
+  const { data: settings, isLoading: settingsLoading } = useQuery({
     queryKey: ['settings'],
     queryFn: () => api.getSettings() as Promise<AppSettings>,
   });
@@ -2186,23 +2268,47 @@ export function FileManagerPage() {
     );
   }, []);
 
-  const { data: files, isLoading: filesLoading } = useQuery({
-    queryKey: ['library-files', selectedFolderId, topLevelView, searchExpandsSubfolders, tagFilterKey],
+  // The root either lists every file in the library — no folder, no project and
+  // no tag filter narrows the query, so the server answers with all of it — or
+  // its own top-level folders. A search or a tag filter means "look
+  // everywhere", so both restore the flat listing whatever the setting says.
+  const rootQueryOverridden = searchQuery.trim().length > 0 || selectedTagIds.length > 0;
+  const rootListsFolders =
+    selectedFolderId === null && !(settings?.library_root_lists_all_files ?? true) && !rootQueryOverridden;
+  // Inside the root, "No folder": the files that belong to no folder at all.
+  const rootUnfolderedView = rootListsFolders && showUnfoldered;
+  // Folder tiles only — the whole point is not to ask the server for the rows.
+  const rootTilesOnly = rootListsFolders && !showUnfoldered;
+  // Until the setting has arrived, the root cannot know which of the two it is,
+  // and firing the all-files request meanwhile would defeat the whole thing —
+  // the rows would already be on the wire by the time the answer says not to
+  // ask for them. Only the root waits; a selected folder is unaffected.
+  const rootAwaitingSetting = selectedFolderId === null && settingsLoading;
+
+  const { data: fetchedFiles, isLoading: filesQueryLoading } = useQuery({
+    queryKey: ['library-files', selectedFolderId, topLevelView, searchExpandsSubfolders, tagFilterKey, rootUnfolderedView],
     // When a specific folder is selected we list its contents directly; when
     // no folder is selected the topLevelView pseudo-node decides whether the
     // server scopes the result to internal-managed-storage files or to the
     // union of every external folder (#1621). include_root stays false so the
-    // listing still descends into subfolders (regression guard from #1499).
+    // listing still descends into subfolders (regression guard from #1499) —
+    // except in the root's "No folder" view, which is exactly that listing.
     queryFn: () =>
       api.getLibraryFiles(
         selectedFolderId,
-        false,
+        rootUnfolderedView,
         undefined,
         selectedFolderId === null ? topLevelView : undefined,
         searchExpandsSubfolders,
         tagFilterKey,
       ),
+    enabled: !rootTilesOnly && !rootAwaitingSetting,
   });
+  // An empty list rather than `undefined` while the request is deliberately not
+  // made, so the empty state below reads "no files" and not "still loading".
+  const files = rootTilesOnly ? NO_FILES : fetchedFiles;
+  // Waiting for the setting is still loading, not "no files".
+  const filesLoading = filesQueryLoading || rootAwaitingSetting;
 
   const { data: stats } = useQuery({
     queryKey: ['library-stats'],
@@ -2658,6 +2764,49 @@ export function FileManagerPage() {
   // its layout and the toggle is inert (and disabled) while it is active.
   const folderSidebarVisible = !sidebarHidden || viewMode === 'columns';
 
+  // "Copy path" (tree and columns kebab, the file actions, the path bar). An
+  // external folder copies the real directory it was linked from — the string
+  // that goes back into Explorer or the slicer — while a managed one has only
+  // its library path. They are not interchangeable, so the toast says which of
+  // the two landed on the clipboard.
+  const copyPath = useCallback(
+    async (value: string, isRealPath: boolean) => {
+      if (!(await copyTextToClipboard(value))) return;
+      showToast(t(isRealPath ? 'fileManager.toast.folderPathCopied' : 'fileManager.toast.pathCopied'), 'success');
+    },
+    [showToast, t],
+  );
+
+  const libraryPathOf = useCallback(
+    (folderId: number | null) =>
+      folderId === null || !folders
+        ? ''
+        : (findFolderChain(folders, folderId) ?? []).map((folder) => folder.name).join('/'),
+    [folders],
+  );
+
+  const handleCopyFolderPath = useCallback(
+    (folder: LibraryFolderTree) => {
+      if (folder.is_external && folder.external_path) copyPath(folder.external_path, true);
+      else copyPath(libraryPathOf(folder.id), false);
+    },
+    [copyPath, libraryPathOf],
+  );
+
+  const handleCopyFilePath = useCallback(
+    (file: LibraryFileListItem) => {
+      const parent =
+        file.folder_id !== null && folders ? findFolderChain(folders, file.folder_id)?.at(-1) : undefined;
+      if (parent?.is_external && parent.external_path) {
+        copyPath(joinExternalPath(parent.external_path, file.filename), true);
+        return;
+      }
+      const dir = libraryPathOf(file.folder_id);
+      copyPath(dir ? `${dir}/${file.filename}` : file.filename, false);
+    },
+    [copyPath, folders, libraryPathOf],
+  );
+
   // Shared by the list row and the columns view (see FileActionStrip).
   const fileActionProps = {
     onPrint: setPrintFile,
@@ -2672,6 +2821,7 @@ export function FileManagerPage() {
     onDownload: handleDownload,
     onRename: (f: LibraryFileListItem) => setRenameItem({ type: 'file', id: f.id, name: f.filename }),
     onGenerateThumbnail: (f: LibraryFileListItem) => singleThumbnailMutation.mutate(f.id),
+    onCopyPath: handleCopyFilePath,
     thumbnailPending: singleThumbnailMutation.isPending,
     onDelete: (id: number) => setDeleteConfirm({ type: 'file', id }),
     hasPermission,
@@ -2721,6 +2871,14 @@ export function FileManagerPage() {
   // list matches from every descendant folder, so per-folder navigation
   // would sit beside results it doesn't scope.
   const showFolderTiles = visibleSubfolders.length > 0 && !searchQuery.trim() && selectedTagIds.length === 0;
+
+  // "No folder" sits beside the root's folder tiles, and only when there is
+  // something behind it. The count rides along on the stats the header already
+  // fetches — asking the listing endpoint whether it would return anything is
+  // the very query this view exists to avoid.
+  const unfolderedCount =
+    (topLevelView === 'external' ? stats?.unfoldered_external_files : stats?.unfoldered_files) ?? 0;
+  const showNoFolderEntry = rootTilesOnly && unfolderedCount > 0;
 
   // The chain of folders from a top-level folder down to the selected one.
   // Selection is the single source of truth — clicking a folder anywhere just
@@ -2791,11 +2949,13 @@ export function FileManagerPage() {
   // the selection. One query per rendered level, keyed on that level's folder
   // id so walking back up a path is instant. Only levels the view actually
   // renders are fetched, and the level that IS the current selection is
-  // skipped — the pane on the right already lists exactly those files.
+  // skipped — the pane on the right already lists exactly those files. The
+  // exception is the folders-first root, where that pane lists nothing at all:
+  // its column keeps its own files, which are only the unfoldered ones.
   const columnFileLevels = useMemo(() => {
     if (viewMode !== 'columns' || columnsFilterActive) return [];
     return folderColumns
-      .filter((col) => col.folderId !== selectedFolderId)
+      .filter((col) => col.folderId !== selectedFolderId || rootTilesOnly)
       .map((col) => ({
         key: col.key,
         folderId: col.folderId,
@@ -2806,7 +2966,7 @@ export function FileManagerPage() {
               : ('internal' as const)
             : undefined,
       }));
-  }, [viewMode, columnsFilterActive, folderColumns, selectedFolderId, currentBucketIsExternal]);
+  }, [viewMode, columnsFilterActive, folderColumns, selectedFolderId, currentBucketIsExternal, rootTilesOnly]);
 
   const columnFileQueries = useQueries({
     queries: columnFileLevels.map((level) => ({
@@ -2896,6 +3056,12 @@ export function FileManagerPage() {
     setSelectedFiles([]);
   }, [selectedFolderId]);
 
+  // Descending into a folder leaves the root, and with it the root's
+  // "No folder" listing.
+  useEffect(() => {
+    if (selectedFolderId !== null) setShowUnfoldered(false);
+  }, [selectedFolderId]);
+
   const rootCrumbLabel = currentBucketIsExternal ? t('fileManager.allExternal') : t('fileManager.allFiles');
 
   const selectFolderFromChrome = (folderId: number) => {
@@ -2905,6 +3071,7 @@ export function FileManagerPage() {
 
   const selectPathRoot = () => {
     setColumnsFocusedFileId(null);
+    setShowUnfoldered(false);
     setTopLevelView(currentBucketIsExternal ? 'external' : 'internal');
     setSelectedFolderId(null);
   };
@@ -2914,6 +3081,7 @@ export function FileManagerPage() {
   // linked external folders.
   const selectTopLevelBucket = (view: 'internal' | 'external') => {
     setColumnsFocusedFileId(null);
+    setShowUnfoldered(false);
     setTopLevelView(view);
     setSelectedFolderId(null);
   };
@@ -3334,8 +3502,7 @@ export function FileManagerPage() {
             onChange={(e) => {
               const v = e.target.value;
               if (v.startsWith('__top:')) {
-                setSelectedFolderId(null);
-                setTopLevelView(v.slice('__top:'.length) as 'internal' | 'external');
+                selectTopLevelBucket(v.slice('__top:'.length) as 'internal' | 'external');
               } else {
                 setSelectedFolderId(parseInt(v, 10));
               }
@@ -3473,10 +3640,7 @@ export function FileManagerPage() {
                   ? 'bg-bambu-green/20 text-bambu-green'
                   : 'hover:bg-bambu-dark text-white'
               }`}
-              onClick={() => {
-                setSelectedFolderId(null);
-                setTopLevelView('internal');
-              }}
+              onClick={() => selectTopLevelBucket('internal')}
             >
               <FileBox className="w-4 h-4" />
               <span className="text-sm">{t('fileManager.allFiles')}</span>
@@ -3492,10 +3656,7 @@ export function FileManagerPage() {
                     ? 'bg-bambu-green/20 text-bambu-green'
                     : 'hover:bg-bambu-dark text-white'
                 }`}
-                onClick={() => {
-                  setSelectedFolderId(null);
-                  setTopLevelView('external');
-                }}
+                onClick={() => selectTopLevelBucket('external')}
               >
                 <FolderSymlink className="w-4 h-4 text-purple-600 dark:text-purple-400" />
                 <span className="text-sm">{t('fileManager.allExternal')}</span>
@@ -3515,6 +3676,7 @@ export function FileManagerPage() {
                 onDelete={(id) => setDeleteConfirm({ type: 'folder', id })}
                 onLink={setLinkFolder}
                 onRename={(f) => setRenameItem({ type: 'folder', id: f.id, name: f.name })}
+                onCopyPath={handleCopyFolderPath}
                 wrapNames={wrapFolderNames}
                 defaultExpanded={!collapseFoldersByDefault}
                 showModified={showModified}
@@ -3887,6 +4049,7 @@ export function FileManagerPage() {
             rootLabel={rootCrumbLabel}
             rootIsExternal={currentBucketIsExternal}
             path={folderPath}
+            leafLabel={rootUnfolderedView ? t('fileManager.noFolder') : undefined}
             onSelectRoot={selectPathRoot}
             onSelectFolder={selectFolderFromChrome}
             t={t}
@@ -3983,7 +4146,7 @@ export function FileManagerPage() {
                 {!columnsFilterActive && folderColumns.map((col) => {
                   const level = columnFiles.get(col.key);
                   // A column carrying file rows needs the room the files pane
-                  // has: checkbox, thumbnail and the seven-icon action strip
+                  // has: checkbox, thumbnail and the eight-icon action strip
                   // leave nothing for the name at the folder-only width. A
                   // column that only lists folders keeps that narrow width.
                   const wide = Boolean(level && (level.loading || level.files.length > 0));
@@ -4054,6 +4217,7 @@ export function FileManagerPage() {
                             onDelete={(id) => setDeleteConfirm({ type: 'folder', id })}
                             onLink={setLinkFolder}
                             onRename={(f) => setRenameItem({ type: 'folder', id: f.id, name: f.name })}
+                            onCopyPath={handleCopyFolderPath}
                             hasPermission={hasPermission}
                             revealOnHover={!isSelectedFolder}
                             tabIndex={isSelectedFolder ? 0 : -1}
@@ -4100,9 +4264,11 @@ export function FileManagerPage() {
                         ? t('fileManager.noMatchingFiles')
                         : selectedFolderId !== null
                           ? t('fileManager.folderIsEmpty')
-                          : topLevelView === 'external'
-                            ? t('fileManager.externalIsEmpty')
-                            : t('fileManager.noFilesYet')}
+                          : rootTilesOnly
+                            ? t('fileManager.pickAFolder')
+                            : topLevelView === 'external'
+                              ? t('fileManager.externalIsEmpty')
+                              : t('fileManager.noFilesYet')}
                     </div>
                   ) : (
                     filteredAndSortedFiles.map((file) => (
@@ -4125,7 +4291,7 @@ export function FileManagerPage() {
                 </div>
               </div>
             </div>
-          ) : files?.length === 0 && !showFolderTiles && folderSearchMatches.length === 0 ? (
+          ) : files?.length === 0 && !showFolderTiles && !showNoFolderEntry && folderSearchMatches.length === 0 ? (
             <div className="flex-1 flex flex-col items-center justify-center">
               <div className="p-4 bg-bambu-dark rounded-2xl mb-4">
                 <FileBox className="w-12 h-12 text-bambu-gray/50" />
@@ -4198,6 +4364,23 @@ export function FileManagerPage() {
                     </div>
                   </button>
                 ))}
+                {/* The files that belong to no folder — the one thing the
+                    folders-first root would otherwise hide. */}
+                {showNoFolderEntry && (
+                  <button
+                    data-testid="no-folder-entry"
+                    onClick={() => setShowUnfoldered(true)}
+                    className="group relative bg-bambu-dark-secondary rounded-lg border border-bambu-dark-tertiary hover:border-bambu-green/50 transition-all cursor-pointer text-left"
+                  >
+                    <div className="aspect-square bg-bambu-dark flex items-center justify-center rounded-t-lg">
+                      <FolderX className="w-16 h-16 text-bambu-gray/50" />
+                    </div>
+                    <div className="p-3">
+                      <h3 className="text-sm font-medium text-white truncate">{t('fileManager.noFolder')}</h3>
+                      <div className="mt-1 text-xs text-bambu-gray">{unfolderedCount}</div>
+                    </div>
+                  </button>
+                )}
                 {filteredAndSortedFiles.map((file) => (
                   <FileCard
                     key={file.id}
@@ -4218,6 +4401,7 @@ export function FileManagerPage() {
                     onRename={(f) => setRenameItem({ type: 'file', id: f.id, name: f.filename })}
                     onDetails={setDetailsFile}
                     onGenerateThumbnail={(f) => singleThumbnailMutation.mutate(f.id)}
+                    onCopyPath={handleCopyFilePath}
                     onTagClick={toggleTagFilter}
                     thumbnailVersion={thumbnailVersions[file.id]}
                     hasPermission={hasPermission}
@@ -4237,12 +4421,12 @@ export function FileManagerPage() {
                   column couldn't fit (#1325 follow-up reported in chat). */}
               <div className="bg-bambu-dark-secondary rounded-lg border border-bambu-dark-tertiary overflow-x-auto">
                 {/* List header - hidden on mobile, show simplified on small screens.
-                    Trailing actions column is fixed at 220px (sliced 3MF = 7 icons
-                    ~220px). It used to be `min-content`, but header + body are sibling
+                    Trailing actions column is fixed at 252px (sliced 3MF = 8 icons
+                    ~252px). It used to be `min-content`, but header + body are sibling
                     grids that compute `min-content` independently — the header's empty
                     trailing div resolved to 0px, leaving body columns shifted left of
                     their headers. Fixed width keeps header and body in lockstep. */}
-                <div className={`hidden sm:grid ${authEnabled ? 'grid-cols-[auto_1fr_120px_100px_100px_100px_minmax(0,200px)_220px]' : 'grid-cols-[auto_1fr_100px_100px_100px_minmax(0,200px)_220px]'} gap-4 px-4 py-2 bg-bambu-dark-secondary border-b border-bambu-dark-tertiary text-xs text-bambu-gray font-medium`}>
+                <div className={`hidden sm:grid ${authEnabled ? 'grid-cols-[auto_1fr_120px_100px_100px_100px_minmax(0,200px)_252px]' : 'grid-cols-[auto_1fr_100px_100px_100px_minmax(0,200px)_252px]'} gap-4 px-4 py-2 bg-bambu-dark-secondary border-b border-bambu-dark-tertiary text-xs text-bambu-gray font-medium`}>
                   <div className="w-6" />
                   <div>{t('common.name')}</div>
                   {authEnabled && <div>{t('fileManager.uploadedBy', { defaultValue: 'Uploaded By' })}</div>}
@@ -4256,7 +4440,7 @@ export function FileManagerPage() {
                 {showFolderTiles && visibleSubfolders.map((folder) => (
                   <div
                     key={`folder-${folder.id}`}
-                    className={`grid ${authEnabled ? 'grid-cols-[auto_1fr_120px_100px_100px_100px_minmax(0,200px)_220px]' : 'grid-cols-[auto_1fr_100px_100px_100px_minmax(0,200px)_220px]'} gap-4 px-4 py-3 items-center border-b border-bambu-dark-tertiary cursor-pointer hover:bg-bambu-dark/50 transition-colors`}
+                    className={`grid ${authEnabled ? 'grid-cols-[auto_1fr_120px_100px_100px_100px_minmax(0,200px)_252px]' : 'grid-cols-[auto_1fr_100px_100px_100px_minmax(0,200px)_252px]'} gap-4 px-4 py-3 items-center border-b border-bambu-dark-tertiary cursor-pointer hover:bg-bambu-dark/50 transition-colors`}
                     onClick={() => setSelectedFolderId(folder.id)}
                   >
                     <div className="w-6" />
@@ -4276,11 +4460,34 @@ export function FileManagerPage() {
                     <div />
                   </div>
                 ))}
+                {/* Same entry as the grid's tile: the files in no folder. */}
+                {showNoFolderEntry && (
+                  <div
+                    data-testid="no-folder-entry"
+                    role="button"
+                    tabIndex={0}
+                    className={`grid ${authEnabled ? 'grid-cols-[auto_1fr_120px_100px_100px_100px_minmax(0,200px)_252px]' : 'grid-cols-[auto_1fr_100px_100px_100px_minmax(0,200px)_252px]'} gap-4 px-4 py-3 items-center border-b border-bambu-dark-tertiary cursor-pointer hover:bg-bambu-dark/50 transition-colors`}
+                    onClick={() => setShowUnfoldered(true)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setShowUnfoldered(true); } }}
+                  >
+                    <div className="w-6" />
+                    <div className="flex items-center gap-2 min-w-0">
+                      <FolderX className="w-4 h-4 text-bambu-gray flex-shrink-0" />
+                      <span className="text-sm text-white truncate">{t('fileManager.noFolder')}</span>
+                    </div>
+                    {authEnabled && <div />}
+                    <div />
+                    <div className="text-sm text-bambu-gray">{unfolderedCount}</div>
+                    <div />
+                    <div />
+                    <div />
+                  </div>
+                )}
                 {/* List rows */}
                 {filteredAndSortedFiles.map((file) => (
                   <div
                     key={file.id}
-                    className={`grid ${authEnabled ? 'grid-cols-[auto_1fr_120px_100px_100px_100px_minmax(0,200px)_220px]' : 'grid-cols-[auto_1fr_100px_100px_100px_minmax(0,200px)_220px]'} gap-4 px-4 py-3 items-center border-b border-bambu-dark-tertiary last:border-b-0 cursor-pointer hover:bg-bambu-dark/50 transition-colors ${
+                    className={`grid ${authEnabled ? 'grid-cols-[auto_1fr_120px_100px_100px_100px_minmax(0,200px)_252px]' : 'grid-cols-[auto_1fr_100px_100px_100px_minmax(0,200px)_252px]'} gap-4 px-4 py-3 items-center border-b border-bambu-dark-tertiary last:border-b-0 cursor-pointer hover:bg-bambu-dark/50 transition-colors ${
                       selectedFiles.includes(file.id) ? 'bg-bambu-green/10' : ''
                     }`}
                     onClick={() => handleFileSelect(file.id)}

@@ -2920,6 +2920,8 @@ export default {
     createArchiveEntryDescription: "Під час друку з диспетчера файлів можна додатково створити запис архіву",
     lowDiskSpaceWarning: "Попередження про брак місця на диску",
     lowDiskSpaceDescription: "Показувати попередження, коли вільний простір на диску стає нижче цього порогу",
+    libraryRootListsAllFiles: "У корені показувати всі файли",
+    libraryRootListsAllFilesDescription: "Увімкнено: «Усі файли» показує всі файли бібліотеки. Вимкнено: натомість показуються папки верхнього рівня та пункт «Без папки» для файлів поза папками. Пошук і фільтри за мітками завжди охоплюють усю бібліотеку.",
     // Updates
     printerFirmware: "Прошивка принтера",
     checkFirmwareDescription: "Перевірте наявність оновлень прошивки принтера від Bambu Lab",
@@ -4134,6 +4136,9 @@ export default {
     },
     searchFiles: "Пошук файлів...",
     searchSubfoldersHint: "Включаючи вкладені папки",
+    pickAFolder: "Оберіть папку, щоб побачити її файли",
+    copyPath: "Скопіювати шлях",
+    noFolder: "Без папки",
     pathBar: {
       label: "Розташування",
       showHidden: "Показати приховані папки",
@@ -4310,6 +4315,8 @@ export default {
     toast: {
       folderCreated: "Папка створена",
       openInSlicerFailed: "Не вдалося відкрити у слайсері",
+      pathCopied: "Шлях скопійовано",
+      folderPathCopied: "Шлях до папки скопійовано",
       folderDeleted: "Папку видалено",
       fileDeleted: "Файл видалено",
       filesDeleted: "Видалені файли {{count}}.",
