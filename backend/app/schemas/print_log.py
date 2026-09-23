@@ -14,6 +14,11 @@ class PrintLogEntrySchema(BaseModel):
 
     id: int
     archive_id: int | None = None
+    # Not a column on this table: read from the run's archive, which is where
+    # the queue item's running number was copied at dispatch. None once that
+    # archive is deleted, which is also when the rest of the run's provenance
+    # goes.
+    job_number: str | None = None
     print_name: str | None = None
     printer_name: str | None = None
     printer_id: int | None = None

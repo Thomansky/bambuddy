@@ -164,6 +164,10 @@ class TestSchemaValidatesFromOrmRow:
         row = MagicMock()
         row.id = 7
         row.archive_id = 3
+        # Not a column on this table — the list route joins it in from the run's
+        # archive. Set here so the "nothing falls back to its default" sweep
+        # below still covers every other field.
+        row.job_number = "J0042"
         row.print_name = "Benchy"
         row.printer_name = "X1C-01"
         row.printer_id = 1

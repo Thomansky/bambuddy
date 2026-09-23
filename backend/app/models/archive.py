@@ -64,6 +64,11 @@ class PrintArchive(Base):
     # Printer model this file was sliced for (extracted from 3MF metadata)
     sliced_for_model: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
+    # The queue item's running number, copied at dispatch the way plate_id is
+    # (#2603). The queue row is deleted once the order is done; the archive is
+    # what history reads, so the number has to ride along or it is lost.
+    job_number: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
     # Print result
     status: Mapped[str] = mapped_column(String(20), default="completed")
     started_at: Mapped[datetime | None] = mapped_column(DateTime)

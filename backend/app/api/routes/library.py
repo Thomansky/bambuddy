@@ -75,6 +75,7 @@ from backend.app.services.design_settings import (
     overrides_from_config,
 )
 from backend.app.services.filament_requirements import annotate_rack_groups
+from backend.app.services.number_series import SERIES_QUEUE_JOB, allocate_number
 from backend.app.services.plate_thumbnail import inject_plate_thumbnails_if_missing
 from backend.app.services.process_overrides import apply_process_overrides
 from backend.app.services.slice_output_check import (
@@ -2993,6 +2994,7 @@ async def add_files_to_queue(
             # Create queue item referencing library file (archive created at print start)
             max_position += 1
             queue_item = PrintQueueItem(
+                job_number=await allocate_number(db, SERIES_QUEUE_JOB),
                 printer_id=item_printer_id,
                 target_model=item_target_model,
                 required_filament_types=required_filament_types,

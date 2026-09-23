@@ -13,6 +13,12 @@ class PrintQueueItem(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
 
+    # Running number from the `queue_job` series, handed out when the item is
+    # created. Copied onto the archive at dispatch so history keeps it once
+    # this row is gone. Not unique: a number is only ever handed out once, but
+    # a farm that reuses one by hand is its own business.
+    job_number: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
     # Links
     printer_id: Mapped[int | None] = mapped_column(ForeignKey("printers.id", ondelete="CASCADE"), nullable=True)
     # Target printer model for model-based assignment (mutually exclusive with printer_id)

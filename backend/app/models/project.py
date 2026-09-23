@@ -13,6 +13,11 @@ class Project(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255))
+    # Running number from the `project` series, handed out on create when that
+    # series is on. Unique so a quote and an invoice can never name two
+    # projects; NULL is the "no number" case and repeats freely, which is what
+    # every project predating the series keeps.
+    number: Mapped[str | None] = mapped_column(String(32), nullable=True, unique=True, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     color: Mapped[str | None] = mapped_column(String(20), nullable=True)  # Hex color for UI
     status: Mapped[str] = mapped_column(String(20), default="active")  # active, completed, archived

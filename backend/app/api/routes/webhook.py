@@ -11,6 +11,7 @@ from backend.app.models.api_key import APIKey
 from backend.app.models.archive import PrintArchive
 from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer import Printer
+from backend.app.services.number_series import SERIES_QUEUE_JOB, allocate_number
 from backend.app.services.printer_manager import printer_manager
 
 logger = logging.getLogger(__name__)
@@ -108,6 +109,7 @@ async def webhook_add_to_queue(
 
     # Create queue item
     queue_item = PrintQueueItem(
+        job_number=await allocate_number(db, SERIES_QUEUE_JOB),
         printer_id=data.printer_id,
         archive_id=data.archive_id,
         project_id=data.project_id,

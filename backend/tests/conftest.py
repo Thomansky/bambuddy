@@ -229,6 +229,7 @@ async def test_engine():
         maintenance,
         notification,
         notification_template,
+        number_series,
         oidc_provider,
         print_log,
         print_queue,

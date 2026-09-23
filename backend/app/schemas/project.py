@@ -1,6 +1,7 @@
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 def _validate_project_url(value: str | None) -> str | None:
@@ -18,10 +19,25 @@ def _validate_project_url(value: str | None) -> str | None:
     return trimmed
 
 
+def _normalize_project_number(value: str | None) -> str | None:
+    """Trim the hand-typed number; an emptied field means "no number".
+
+    Kept out of the series' hands entirely — a number the user typed always
+    wins, and clearing one must not make the next save re-allocate.
+    """
+    if value is None:
+        return None
+    trimmed = value.strip()
+    return trimmed or None
+
+
 class ProjectCreate(BaseModel):
     """Schema for creating a new project."""
 
     name: str
+    # Left out (or empty) means "let the series decide"; anything else is kept
+    # verbatim and the counter does not move.
+    number: Annotated[str | None, Field(max_length=32)] = None
     description: str | None = None
     color: str | None = None
     target_count: int | None = None
@@ -40,11 +56,17 @@ class ProjectCreate(BaseModel):
     def _check_url(cls, v: str | None) -> str | None:
         return _validate_project_url(v)
 
+    @field_validator("number")
+    @classmethod
+    def _check_number(cls, v: str | None) -> str | None:
+        return _normalize_project_number(v)
+
 
 class ProjectUpdate(BaseModel):
     """Schema for updating a project."""
 
     name: str | None = None
+    number: Annotated[str | None, Field(max_length=32)] = None
     description: str | None = None
     color: str | None = None
     status: str | None = None  # active, completed, archived
@@ -63,6 +85,11 @@ class ProjectUpdate(BaseModel):
     @classmethod
     def _check_url(cls, v: str | None) -> str | None:
         return _validate_project_url(v)
+
+    @field_validator("number")
+    @classmethod
+    def _check_number(cls, v: str | None) -> str | None:
+        return _normalize_project_number(v)
 
 
 class ProjectStats(BaseModel):
@@ -116,6 +143,7 @@ class ProjectResponse(BaseModel):
 
     id: int
     name: str
+    number: str | None = None  # Running number from the `project` series
     description: str | None
     color: str | None
     status: str
@@ -170,6 +198,9 @@ class ProjectListResponse(BaseModel):
 
     id: int
     name: str
+    # The edit dialog is fed from this payload too (see the tags note below), so
+    # the number has to travel with the list or a save from the grid clears it.
+    number: str | None = None
     description: str | None
     color: str | None
     status: str
