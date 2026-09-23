@@ -11,7 +11,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MsgPreviewModal } from '../../components/MsgPreviewModal';
 import { rtfToText } from '../../utils/rtfToText';
-import { buildMsgFixture, MSG_FIXTURE } from '../mocks/msgFixture';
+import { buildMsgFixture, MSG_FIXTURE, MSG_RTF_BODY } from '../mocks/msgFixture';
 
 vi.mock('../../api/client', () => ({
   api: {
@@ -88,5 +88,11 @@ describe('rtfToText', () => {
     const rtf = String.raw`{\rtf1\ansi\fromhtml1 <html><body><p>Hello &amp; welcome</p></body></html>}`;
     expect(rtfToText(rtf)).toContain('Hello & welcome');
     expect(rtfToText(rtf)).not.toContain('<p>');
+  });
+
+  it('drops the \\* destination markers Outlook writes around every HTML tag', () => {
+    const text = rtfToText(MSG_RTF_BODY);
+    expect(text).toBe('Hello, your filament order has shipped.');
+    expect(text).not.toContain(String.raw`\*`);
   });
 });

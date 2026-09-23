@@ -9,11 +9,14 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { buildMsgFixture, MSG_FIXTURE } from '../mocks/msgFixture';
+import { buildMsgFixture, buildRtfOnlyMsgFixture, MSG_FIXTURE } from '../mocks/msgFixture';
+
+function toBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
 
 function fixtureBuffer(): ArrayBuffer {
-  const bytes = buildMsgFixture();
-  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  return toBuffer(buildMsgFixture());
 }
 
 async function importParser() {
@@ -35,6 +38,20 @@ describe('parseMsgFile', () => {
     expect(parsed.bodyText).toContain('your filament order has shipped');
     expect(parsed.bodyFromRtf).toBe(false);
     expect(parsed.fields.attachments?.[0]?.fileName).toBe(MSG_FIXTURE.attachmentName);
+  });
+
+  it('recovers an HTML-only body from compressed RTF without leaking RTF markers', async () => {
+    const parseMsgFile = await importParser();
+    const parsed = await parseMsgFile(toBuffer(buildRtfOnlyMsgFixture()));
+
+    expect(parsed.bodyFromRtf).toBe(true);
+    expect(parsed.bodyText).toContain('your filament order has shipped');
+    // Every encapsulated-HTML destination opens with the \* control symbol,
+    // which no control-word strip can reach — the body used to be dozens of
+    // literal "\*" lines with the text buried among them.
+    expect(parsed.bodyText).not.toContain(String.raw`\*`);
+    expect(parsed.bodyText).not.toContain('htmltag');
+    expect(parsed.bodyText).not.toContain('<p>');
   });
 
   it('rejects a file that is not an Outlook message', async () => {

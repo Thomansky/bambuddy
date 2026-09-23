@@ -7,9 +7,14 @@
  * gets neither: Vite substitutes an empty module for a built-in it cannot map,
  * and the libraries read `Buffer` / `StringDecoder` at module scope, so the
  * whole preview died on `undefined.prototype` while the suite stayed green.
- * This builds src/utils/msgFile.ts with the app's own Vite config, in the mode
- * `npm run build` uses, and runs the emitted chunk — the only place that class
- * of failure is visible.
+ * This builds src/utils/msgFile.ts with the app's own Vite config and runs the
+ * emitted chunk — the only place that class of failure is visible.
+ *
+ * The build runs with mode 'production' but inherits vitest's NODE_ENV=test,
+ * and it is NODE_ENV, not the mode, that Vite reads for `isProduction`. So
+ * this chunk gets the throwing variant of Vite's stand-in for an unmapped
+ * built-in where `npm run build` gets the silently empty one: stricter than
+ * the shipped build, never laxer.
  */
 
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
@@ -63,16 +68,20 @@ describe('bundled .msg parser', () => {
       expect(parsed.fields.attachments?.[0]?.fileName).toBe(MSG_FIXTURE.attachmentName);
       expect(parsed.reader.getAttachment(parsed.fields.attachments![0]).content.length).toBeGreaterThan(0);
 
-      // Vite's stand-in for a built-in it cannot map throws on property
-      // access outside a production NODE_ENV and is a silently empty object
-      // inside one, so which of the two failures a run sees depends on the
-      // environment. Assert the structural invariant instead: no built-in
-      // this chunk touches may be left as that stand-in.
+      // Vite's stand-in for a built-in it cannot map throws on property access
+      // in a non-production build and is a silently empty object in a
+      // production one, so which of the two a run meets depends on NODE_ENV —
+      // and the empty one is no failure at all until a library reads a
+      // property it needs. Assert the structural invariant instead: no
+      // built-in this chunk touches may be left as that stand-in.
       const emitted = readdirSync(outDir)
         .filter((name) => name.endsWith('.mjs'))
         .map((name) => readFileSync(path.join(outDir, name), 'utf8'))
         .join('\n');
-      expect(emitted).not.toMatch(/vite[-_]browser[-_]external/);
+      expect(
+        emitted,
+        'a Node built-in this chunk touches was left as Vite\'s stand-in — check resolve.alias in vite.config.ts',
+      ).not.toMatch(/vite[-_]browser[-_]external/);
     } finally {
       rmSync(outDir, { recursive: true, force: true });
     }

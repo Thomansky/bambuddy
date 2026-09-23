@@ -23,12 +23,19 @@ const backendUrl = `http://localhost:${backendPort}`
 // build instead of quietly shipping the empty stub again. The trailing slash
 // is what makes Node resolve the npm package and not the built-in's name.
 // `stream` is only feature-detected by iconv-lite (see the shim).
+//
+// The finds are anchored regexes, not bare strings: a string alias also
+// matches subpaths and rewrites them by substring, so `buffer/index.js`,
+// `string_decoder/` (which readable-stream@2 requires in exactly that form)
+// or `stream/promises` would resolve to `<replacement file>/<rest>` and fail
+// the build with an unloadable path nothing in the repo wrote. Anchoring
+// leaves every subpath to resolve normally.
 const require_ = createRequire(__filename)
-const NODE_SHIMS = {
-  buffer: require_.resolve('buffer/'),
-  string_decoder: require_.resolve('string_decoder/'),
-  stream: path.resolve(__dirname, './src/shims/node-stream-empty.ts'),
-}
+const NODE_SHIMS = [
+  { find: /^buffer$/, replacement: require_.resolve('buffer/') },
+  { find: /^string_decoder$/, replacement: require_.resolve('string_decoder/') },
+  { find: /^stream$/, replacement: path.resolve(__dirname, './src/shims/node-stream-empty.ts') },
+]
 
 export default defineConfig({
   // Default base ('/') emits absolute asset URLs (/assets/...). Required so
@@ -69,9 +76,9 @@ export default defineConfig({
     },
   },
   resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
+    alias: [
+      { find: '@', replacement: path.resolve(__dirname, './src') },
       ...NODE_SHIMS,
-    },
+    ],
   },
 })

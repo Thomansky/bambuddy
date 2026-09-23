@@ -15,6 +15,11 @@ export function rtfToText(rtf: string): string {
     .replace(/\\tab\b/g, '\t')
     .replace(/\\'([0-9a-fA-F]{2})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)))
     .replace(/\\u(-?\d+)\s?\??/g, (_, code: string) => String.fromCharCode((Number(code) + 0x10000) % 0x10000))
+    // \* is a control *symbol*, so the control-word strip below — which needs
+    // a letter after the backslash — cannot reach it. It opens every
+    // encapsulated-HTML destination, i.e. exactly the groups kept above, so
+    // without this an HTML-only body arrives as a wall of literal "\*".
+    .replace(/\\\*/g, '')
     .replace(/\\[a-zA-Z]+-?\d* ?/g, '')
     .replace(/[{}]/g, '')
     .replace(/\r/g, '');
