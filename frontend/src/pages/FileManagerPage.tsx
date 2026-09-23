@@ -573,12 +573,21 @@ function MoveFilesModal({ folders, selectedFiles, currentFolderId, onClose, onMo
 
   // A folder survives the filter when its own name matches or one of its
   // descendants does: dropping the parent of a hit would leave the hit
-  // indented under nothing.
+  // indented under nothing. A folder that matches itself keeps its whole
+  // subtree — typing a customer's name is how you narrow to that customer's
+  // jobs, and those job folders are the destinations, so filtering them out
+  // would leave only the level above the one the user wants.
   const query = folderFilter.trim().toLowerCase();
+  const nameMatches = (item: LibraryFolderTree): boolean =>
+    item.name.toLowerCase().includes(query);
   const matchesQuery = (item: LibraryFolderTree): boolean =>
-    item.name.toLowerCase().includes(query) || item.children.some(matchesQuery);
+    nameMatches(item) || item.children.some(matchesQuery);
   const filterTree = (items: LibraryFolderTree[]): LibraryFolderTree[] =>
-    items.filter(matchesQuery).map((item) => ({ ...item, children: filterTree(item.children) }));
+    items
+      .filter(matchesQuery)
+      .map((item) =>
+        nameMatches(item) ? item : { ...item, children: filterTree(item.children) }
+      );
 
   const rootEntry = { id: null, name: t('fileManager.rootNoFolder'), depth: 0 };
   const flatFolders = query
@@ -642,7 +651,7 @@ function MoveFilesModal({ folders, selectedFiles, currentFolderId, onClose, onMo
               <p className="text-sm text-bambu-gray text-center py-4">{t('fileManager.folderFilter.noMatches')}</p>
             )}
           </div>
-          <div className="flex justify-end gap-2 pt-2 flex-shrink-0">
+          <div className="flex justify-end gap-2 pt-2 flex-shrink-0" data-testid="move-dialog-actions">
             <Button type="button" variant="secondary" onClick={onClose}>
               {t('common.cancel')}
             </Button>
@@ -1791,6 +1800,11 @@ interface ContentFolderNavProps {
   atRoot: boolean;
   onSelectFolder: (id: number) => void;
   onSelectBucket: (view: 'internal' | 'external') => void;
+  onDownloadFolder: (folder: LibraryFolderTree) => void;
+  onDeleteFolder: (id: number) => void;
+  onLinkFolder: (folder: LibraryFolderTree) => void;
+  onRenameFolder: (folder: LibraryFolderTree) => void;
+  hasPermission: (permission: Permission) => boolean;
   t: TFunction;
 }
 
@@ -1802,6 +1816,11 @@ function ContentFolderNav({
   atRoot,
   onSelectFolder,
   onSelectBucket,
+  onDownloadFolder,
+  onDeleteFolder,
+  onLinkFolder,
+  onRenameFolder,
+  hasPermission,
   t,
 }: ContentFolderNavProps) {
   if (!showBuckets && folders.length === 0) return null;
@@ -1850,41 +1869,74 @@ function ContentFolderNav({
           </button>
         </div>
       )}
+      {/* The same kebab the tree row carries. Without it, switching the
+          sidebar off would take Rename / Link / Delete with it — a persisted
+          preference must not remove a capability, only move it. */}
       {folders.length > 0 &&
         (variant === 'grid' ? (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
             {folders.map((folder) => (
-              <button
+              <div
                 key={folder.id}
-                type="button"
-                onClick={() => onSelectFolder(folder.id)}
-                title={folder.name}
-                className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-bambu-dark-secondary border border-bambu-dark-tertiary text-left hover:bg-bambu-dark hover:border-bambu-green/40 transition-colors"
+                data-folder-id={folder.id}
+                className="group flex items-center gap-1 pr-1 rounded-lg bg-bambu-dark-secondary border border-bambu-dark-tertiary hover:bg-bambu-dark hover:border-bambu-green/40 transition-colors"
               >
-                {folderIcon(folder)}
-                <span className="min-w-0 flex-1 truncate text-sm text-white">{folder.name}</span>
-                {folder.file_count > 0 && (
-                  <span className="text-xs text-bambu-gray flex-shrink-0">{folder.file_count}</span>
-                )}
-              </button>
+                <button
+                  type="button"
+                  onClick={() => onSelectFolder(folder.id)}
+                  title={folder.name}
+                  className="min-w-0 flex-1 flex items-center gap-2 px-3 py-2.5 text-left"
+                >
+                  {folderIcon(folder)}
+                  <span className="min-w-0 flex-1 truncate text-sm text-white">{folder.name}</span>
+                  {folder.file_count > 0 && (
+                    <span className="text-xs text-bambu-gray flex-shrink-0">{folder.file_count}</span>
+                  )}
+                </button>
+                <FolderActionsMenu
+                  folder={folder}
+                  onDownloadFolder={onDownloadFolder}
+                  onDelete={onDeleteFolder}
+                  onLink={onLinkFolder}
+                  onRename={onRenameFolder}
+                  hasPermission={hasPermission}
+                  revealOnHover
+                  t={t}
+                />
+              </div>
             ))}
           </div>
         ) : (
           <div className="bg-bambu-dark-secondary rounded-lg border border-bambu-dark-tertiary divide-y divide-bambu-dark-tertiary overflow-hidden">
             {folders.map((folder) => (
-              <button
+              <div
                 key={folder.id}
-                type="button"
-                onClick={() => onSelectFolder(folder.id)}
-                title={folder.name}
-                className="w-full flex items-center gap-3 px-3 py-2 text-left hover:bg-bambu-dark transition-colors"
+                data-folder-id={folder.id}
+                className="group flex items-center gap-1 pr-2 hover:bg-bambu-dark transition-colors"
               >
-                {folderIcon(folder)}
-                <span className="min-w-0 flex-1 truncate text-sm text-white">{folder.name}</span>
-                {folder.file_count > 0 && (
-                  <span className="text-xs text-bambu-gray flex-shrink-0">{folder.file_count}</span>
-                )}
-              </button>
+                <button
+                  type="button"
+                  onClick={() => onSelectFolder(folder.id)}
+                  title={folder.name}
+                  className="min-w-0 flex-1 flex items-center gap-3 px-3 py-2 text-left"
+                >
+                  {folderIcon(folder)}
+                  <span className="min-w-0 flex-1 truncate text-sm text-white">{folder.name}</span>
+                  {folder.file_count > 0 && (
+                    <span className="text-xs text-bambu-gray flex-shrink-0">{folder.file_count}</span>
+                  )}
+                </button>
+                <FolderActionsMenu
+                  folder={folder}
+                  onDownloadFolder={onDownloadFolder}
+                  onDelete={onDeleteFolder}
+                  onLink={onLinkFolder}
+                  onRename={onRenameFolder}
+                  hasPermission={hasPermission}
+                  revealOnHover
+                  t={t}
+                />
+              </div>
             ))}
           </div>
         ))}
@@ -2503,12 +2555,6 @@ export function FileManagerPage() {
     return file && isPreviewableLibraryFile(file) ? file : null;
   }, [files, selectedFiles]);
 
-  // Get sliced files from selection
-  const selectedSlicedFiles = useMemo(() => {
-    if (!files) return [];
-    return files.filter(f => selectedFiles.includes(f.id) && isSlicedLibraryFile(f));
-  }, [files, selectedFiles]);
-
   // The clicked file's variant group, so printing one member offers the rest
   // without the user re-selecting them (#2570).
   const { data: printFileGroup } = useQuery({
@@ -2516,28 +2562,6 @@ export function FileManagerPage() {
     queryFn: () => api.getVariantGroup(printFile!.variant_group_id!),
     enabled: !!printFile?.variant_group_id,
   });
-
-  // Candidates for a cross-model print (#671), or undefined for an ordinary one.
-  // An explicit multi-selection wins over the group: the user just said, in this
-  // action, which files they meant.
-  const printVariantFiles = useMemo(() => {
-    if (!printFile) return undefined;
-    if (selectedSlicedFiles.length > 1) {
-      return selectedSlicedFiles.map(f => ({
-        id: f.id,
-        filename: f.filename,
-        sliced_for_model: f.sliced_for_model,
-      }));
-    }
-    if (printFileGroup && printFileGroup.members.length > 1) {
-      return printFileGroup.members.map(m => ({
-        id: m.library_file_id,
-        filename: m.filename,
-        sliced_for_model: m.target_model,
-      }));
-    }
-    return undefined;
-  }, [printFile, selectedSlicedFiles, printFileGroup]);
 
   // Handlers
   const handleFileSelect = useCallback((id: number) => {
@@ -2655,7 +2679,11 @@ export function FileManagerPage() {
   }, []);
 
   // The columns view already replaces the tree with its own panes, so it keeps
-  // its layout and the toggle is inert (and disabled) while it is active.
+  // its layout and the toggle is inert while it is active. `aria-disabled`
+  // rather than `disabled`: the explanation lives in the tooltip, and a
+  // `disabled` button is out of the tab order, so a keyboard or screen-reader
+  // user would meet an unreachable control with no reason given.
+  const sidebarToggleInert = viewMode === 'columns';
   const folderSidebarVisible = !sidebarHidden || viewMode === 'columns';
 
   // Shared by the list row and the columns view (see FileActionStrip).
@@ -2842,23 +2870,58 @@ export function FileManagerPage() {
           .find((list) => list?.some((f) => f.id === columnsFocusedFileId));
   const focusedFileList = focusedFileColumnList ?? filteredAndSortedFiles;
 
+  // The ticked rows as file objects. The main query only ever holds the
+  // selected folder's files, but the columns view lets a file be ticked in any
+  // ancestor column, so anything that needs more than the bare id has to look
+  // at those levels too — otherwise the actions that read the file (Print,
+  // Group as versions) find nothing and silently disappear.
+  const selectedFileObjects = (() => {
+    if (selectedFiles.length === 0) return [];
+    const byId = new Map<number, LibraryFileListItem>();
+    for (const file of files ?? []) byId.set(file.id, file);
+    for (const entry of columnFiles.values()) {
+      for (const file of entry.files) byId.set(file.id, file);
+    }
+    return selectedFiles
+      .map((id) => byId.get(id))
+      .filter((file): file is LibraryFileListItem => file !== undefined);
+  })();
+
+  const selectedSlicedFiles = selectedFileObjects.filter(isSlicedLibraryFile);
+
   // Where the selected files actually live. A file can be ticked in any
   // column, so this is not the same as selectedFolderId — the move dialog
   // needs the files' own folder to know which row is the no-op destination.
   // `undefined` when the selection spans several folders or none of the rows
   // is on screen any more: nothing is then marked current.
   const selectionSourceFolderId = (() => {
-    if (selectedFiles.length === 0) return undefined;
-    const byId = new Map<number, number | null>();
-    for (const file of filteredAndSortedFiles) byId.set(file.id, file.folder_id);
-    for (const entry of columnFiles.values()) {
-      for (const file of entry.files) byId.set(file.id, file.folder_id);
-    }
-    const folderIds = new Set<number | null>();
-    for (const id of selectedFiles) {
-      if (byId.has(id)) folderIds.add(byId.get(id) ?? null);
-    }
+    if (selectedFileObjects.length === 0) return undefined;
+    const folderIds = new Set<number | null>(
+      selectedFileObjects.map((file) => file.folder_id ?? null)
+    );
     return folderIds.size === 1 ? [...folderIds][0] : undefined;
+  })();
+
+  // Candidates for a cross-model print (#671), or undefined for an ordinary one.
+  // An explicit multi-selection wins over the group: the user just said, in this
+  // action, which files they meant.
+  const printVariantFiles = (() => {
+    if (!printFile) return undefined;
+    if (selectedSlicedFiles.length > 1) {
+      return selectedSlicedFiles.map(f => ({
+        id: f.id,
+        filename: f.filename,
+        sliced_for_model: f.sliced_for_model,
+      }));
+    }
+    if (printFileGroup && printFileGroup.members.length > 1) {
+      return printFileGroup.members.map(m => ({
+        id: m.library_file_id,
+        filename: m.filename,
+        sliced_for_model: m.target_model,
+      }));
+    }
+    return undefined;
   })();
 
   // Folder name matches for the active search. The tree is already in memory,
@@ -3146,7 +3209,13 @@ export function FileManagerPage() {
             {t('fileManager.subtitle')}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        {/* The row must wrap. It carries eight controls at full permission and
+            the labels are long in several locales; without `flex-wrap` the
+            overflow is absorbed by each Button breaking its own label over two
+            or three lines, which makes the header taller than a wrapped row
+            would and reads as broken. `whitespace-nowrap` on the buttons is
+            the other half: it keeps a label from being the thing that gives. */}
+        <div className="flex flex-wrap items-center justify-end gap-2" data-testid="file-manager-actions">
           {/* View mode toggle */}
           <div className="flex items-center bg-bambu-dark rounded-lg p-1">
             <button
@@ -3185,24 +3254,33 @@ export function FileManagerPage() {
               says. The title still names the action the click performs. */}
           <button
             type="button"
-            onClick={handleToggleSidebar}
-            disabled={viewMode === 'columns'}
+            onClick={sidebarToggleInert ? undefined : handleToggleSidebar}
+            aria-disabled={sidebarToggleInert || undefined}
             aria-pressed={folderSidebarVisible}
             aria-label={t('fileManager.sidebarToggle.label')}
             title={
-              viewMode === 'columns'
+              sidebarToggleInert
                 ? t('fileManager.sidebarToggle.columnsDisabled')
-                : sidebarHidden
-                ? t('fileManager.sidebarToggle.show')
-                : t('fileManager.sidebarToggle.hide')
+                : folderSidebarVisible
+                ? t('fileManager.sidebarToggle.hide')
+                : t('fileManager.sidebarToggle.show')
             }
             data-testid="toggle-folder-sidebar"
-            className="hidden lg:flex items-center p-2 rounded-lg bg-bambu-dark text-bambu-gray hover:text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-bambu-gray"
+            className={`hidden lg:flex items-center p-2 rounded-lg bg-bambu-dark transition-colors ${
+              sidebarToggleInert
+                ? 'opacity-40 cursor-not-allowed text-bambu-gray'
+                : 'text-bambu-gray hover:text-white'
+            }`}
           >
-            {sidebarHidden ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
+            {/* Keyed off the effective visibility, like aria-pressed: in the
+                columns view the tree is on screen whatever the stored
+                preference says, and an "open the sidebar" icon beside an open
+                sidebar reads as the opposite of the truth. */}
+            {folderSidebarVisible ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
           </button>
           <Button
             variant="secondary"
+            className="whitespace-nowrap"
             onClick={() => batchThumbnailMutation.mutate()}
             disabled={
               batchThumbnailMutation.isPending ||
@@ -3225,6 +3303,7 @@ export function FileManagerPage() {
           </Button>
           <Button
             variant="secondary"
+            className="whitespace-nowrap"
             onClick={() => setShowExternalFolderModal(true)}
             disabled={!hasPermission('library:upload')}
             title={!hasPermission('library:upload') ? t('fileManager.noPermissionCreateFolder') : t('fileManager.linkExternalFolder')}
@@ -3234,6 +3313,7 @@ export function FileManagerPage() {
           </Button>
           <Button
             variant="secondary"
+            className="whitespace-nowrap"
             onClick={() => setShowNewFolderModal(true)}
             disabled={!hasPermission('library:upload')}
             title={!hasPermission('library:upload') ? t('fileManager.noPermissionCreateFolder') : undefined}
@@ -3243,6 +3323,7 @@ export function FileManagerPage() {
           </Button>
           <Button
             variant="secondary"
+            className="whitespace-nowrap"
             onClick={() => setShowTagsModal(true)}
             title={t('fileManager.tags.manageTitle')}
           >
@@ -3252,6 +3333,7 @@ export function FileManagerPage() {
           {hasPermission('library:purge') && (
             <Button
               variant="secondary"
+              className="whitespace-nowrap"
               onClick={() => setShowPurgeModal(true)}
               title={t('libraryPurge.headerTooltip')}
             >
@@ -3262,7 +3344,7 @@ export function FileManagerPage() {
           {(hasAnyPermission('library:delete_own', 'library:delete_all')) && (
             <Link
               to="/files/trash"
-              className="inline-flex items-center px-3 py-1.5 text-sm rounded bg-bambu-dark-secondary text-bambu-gray hover:text-white hover:bg-bambu-dark transition-colors"
+              className="inline-flex items-center whitespace-nowrap px-3 py-1.5 text-sm rounded bg-bambu-dark-secondary text-bambu-gray hover:text-white hover:bg-bambu-dark transition-colors"
               title={t('libraryTrash.headerTooltip')}
             >
               <Trash2 className="w-4 h-4 mr-2" />
@@ -3275,6 +3357,7 @@ export function FileManagerPage() {
             </Link>
           )}
           <Button
+            className="whitespace-nowrap"
             onClick={() => setShowUploadModal(true)}
             disabled={!hasPermission('library:upload')}
             title={!hasPermission('library:upload') ? t('fileManager.noPermissionUpload') : undefined}
@@ -3903,6 +3986,11 @@ export function FileManagerPage() {
               atRoot={selectedFolderId === null}
               onSelectFolder={selectFolderFromChrome}
               onSelectBucket={selectTopLevelBucket}
+              onDownloadFolder={handleDownloadFolder}
+              onDeleteFolder={(id) => setDeleteConfirm({ type: 'folder', id })}
+              onLinkFolder={setLinkFolder}
+              onRenameFolder={(f) => setRenameItem({ type: 'folder', id: f.id, name: f.name })}
+              hasPermission={hasPermission}
               t={t}
             />
           )}
