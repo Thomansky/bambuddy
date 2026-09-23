@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
@@ -6,6 +7,28 @@ import path from 'path'
 const backendPort = process.env.BACKEND_PORT || '8000'
 const backendUrl = `http://localhost:${backendPort}`
 
+// iconv-lite — pulled in by @kenjiuno/msgreader for the .msg preview — is
+// CommonJS written for Node and takes two built-ins apart at module scope:
+// safer-buffer reads `require('buffer').Buffer` and then
+// `safer.Buffer.prototype = Buffer.prototype`, and iconv-lite's
+// encodings/internal.js reads `require('string_decoder').StringDecoder` and
+// then `StringDecoder.prototype.end`. A browser build has no such built-ins,
+// so Vite substitutes an empty module for each and both lines threw "Cannot
+// read properties of undefined (reading 'prototype')" — the msgreader chunk
+// never initialised and every .msg preview showed the generic error. The
+// jsdom tests could not see it: vitest resolves those requires to Node's real
+// built-ins. Mapping them to their npm polyfills is the fix, spelled out here
+// rather than left to the resolver happening to prefer an installed `buffer`
+// package over the built-in name, so that a missing dependency fails the
+// build instead of quietly shipping the empty stub again. The trailing slash
+// is what makes Node resolve the npm package and not the built-in's name.
+// `stream` is only feature-detected by iconv-lite (see the shim).
+const require_ = createRequire(__filename)
+const NODE_SHIMS = {
+  buffer: require_.resolve('buffer/'),
+  string_decoder: require_.resolve('string_decoder/'),
+  stream: path.resolve(__dirname, './src/shims/node-stream-empty.ts'),
+}
 
 export default defineConfig({
   // Default base ('/') emits absolute asset URLs (/assets/...). Required so
@@ -48,6 +71,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      ...NODE_SHIMS,
     },
   },
 })
