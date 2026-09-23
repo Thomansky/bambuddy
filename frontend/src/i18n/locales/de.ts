@@ -3931,7 +3931,7 @@ export default {
     tags: {
       title: 'Tags',
       subtitle: 'Dateien mit Labels versehen — Spielzeug, kindersicher, nur PETG, was immer du willst.',
-      manage: 'Tags',
+      manage: 'Tags verwalten',
       manageTitle: 'Tag-Katalog verwalten',
       add: 'Neuer Tag',
       edit: 'Tag umbenennen',
@@ -3955,7 +3955,7 @@ export default {
       applyRemoveSuccess: '{{count}} Tag(s) von {{files}} Datei(en) entfernt.',
       actionAdd: 'Zu ausgewählten Dateien hinzufügen',
       actionRemove: 'Von ausgewählten Dateien entfernen',
-      tagAction: 'Tag',
+      tagAction: 'Tags zuweisen',
       bulkTitle: '{{count}} ausgewählte Datei(en) taggen',
       bulkTooltip: 'Tags für alle ausgewählten Dateien hinzufügen oder entfernen.',
       noPermission: 'Du hast keine Berechtigung, Dateien zu taggen.',

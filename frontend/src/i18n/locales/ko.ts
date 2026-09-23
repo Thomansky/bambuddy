@@ -3741,7 +3741,7 @@ export default {
     tags: {
       title: '태그',
       subtitle: '파일에 가로지르는 필터용 라벨을 붙이세요 — 장난감, 어린이용, PETG 전용 등.',
-      manage: '태그',
+      manage: '태그 관리',
       manageTitle: '태그 카탈로그 관리',
       add: '새 태그',
       edit: '태그 이름 변경',
@@ -3765,7 +3765,7 @@ export default {
       applyRemoveSuccess: '{{files}}개 파일에서 태그 {{count}}개를 제거했습니다.',
       actionAdd: '선택한 파일에 추가',
       actionRemove: '선택한 파일에서 제거',
-      tagAction: '태그',
+      tagAction: '태그 지정',
       bulkTitle: '선택한 {{count}}개 파일에 태그 지정',
       bulkTooltip: '선택한 모든 파일에 태그를 추가하거나 제거합니다.',
       noPermission: '파일에 태그를 붙일 권한이 없습니다.',

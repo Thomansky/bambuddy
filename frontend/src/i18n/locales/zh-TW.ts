@@ -3919,7 +3919,7 @@ export default {
     tags: {
       title: '標籤',
       subtitle: '為檔案加上跨資料夾的標籤 —— 玩具、兒童安全、僅 PETG 等等。',
-      manage: '標籤',
+      manage: '管理標籤',
       manageTitle: '管理標籤目錄',
       add: '新增標籤',
       edit: '重新命名標籤',
@@ -3943,7 +3943,7 @@ export default {
       applyRemoveSuccess: '已從 {{files}} 個檔案移除 {{count}} 個標籤。',
       actionAdd: '加到所選檔案',
       actionRemove: '從所選檔案移除',
-      tagAction: '標籤',
+      tagAction: '指派標籤',
       bulkTitle: '為所選的 {{count}} 個檔案加標籤',
       bulkTooltip: '在每個所選檔案上新增或移除標籤。',
       noPermission: '您沒有為檔案加標籤的權限。',

@@ -3919,7 +3919,7 @@ export default {
     tags: {
       title: 'Tags',
       subtitle: 'Rotule arquivos para filtros transversais — brinquedos, seguro para crianças, somente PETG, o que precisar.',
-      manage: 'Tags',
+      manage: 'Gerenciar tags',
       manageTitle: 'Gerenciar catálogo de tags',
       add: 'Nova tag',
       edit: 'Renomear tag',
@@ -3943,7 +3943,7 @@ export default {
       applyRemoveSuccess: '{{count}} tag(s) removida(s) em {{files}} arquivo(s).',
       actionAdd: 'Adicionar aos arquivos selecionados',
       actionRemove: 'Remover dos arquivos selecionados',
-      tagAction: 'Marcar',
+      tagAction: 'Atribuir tags',
       bulkTitle: 'Marcar {{count}} arquivo(s) selecionado(s)',
       bulkTooltip: 'Adicionar ou remover tags em cada arquivo selecionado.',
       noPermission: 'Você não tem permissão para marcar arquivos.',

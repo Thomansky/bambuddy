@@ -3961,7 +3961,7 @@ export default {
     tags: {
       title: 'Tags',
       subtitle: 'Label bestanden voor flexibele filtering — speelgoed, kindveilig, alleen PETG, wat je maar wilt.',
-      manage: 'Tags',
+      manage: 'Tags beheren',
       manageTitle: 'Tagcatalogus beheren',
       add: 'Nieuwe tag',
       edit: 'Tag hernoemen',
@@ -3985,7 +3985,7 @@ export default {
       applyRemoveSuccess: '{{count}} tag(s) verwijderd van {{files}} bestand(en).',
       actionAdd: 'Toevoegen aan geselecteerde bestanden',
       actionRemove: 'Verwijderen van geselecteerde bestanden',
-      tagAction: 'Tag',
+      tagAction: 'Tags toewijzen',
       bulkTitle: '{{count}} geselecteerde bestand(en) taggen',
       bulkTooltip: 'Tags toevoegen aan of verwijderen van elk geselecteerd bestand.',
       noPermission: 'Je hebt geen toestemming om bestanden te taggen.',

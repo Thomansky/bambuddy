@@ -3919,7 +3919,7 @@ export default {
     tags: {
       title: '标签',
       subtitle: '为文件添加跨目录的标签 —— 玩具、儿童安全、仅 PETG 等等。',
-      manage: '标签',
+      manage: '管理标签',
       manageTitle: '管理标签目录',
       add: '新建标签',
       edit: '重命名标签',
@@ -3943,7 +3943,7 @@ export default {
       applyRemoveSuccess: '已从 {{files}} 个文件移除 {{count}} 个标签。',
       actionAdd: '添加到所选文件',
       actionRemove: '从所选文件移除',
-      tagAction: '标签',
+      tagAction: '分配标签',
       bulkTitle: '为所选的 {{count}} 个文件加标签',
       bulkTooltip: '在每个所选文件上添加或移除标签。',
       noPermission: '您没有为文件加标签的权限。',

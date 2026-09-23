@@ -3919,7 +3919,7 @@ export default {
     tags: {
       title: 'Etichette',
       subtitle: 'Etichetta i file per filtri trasversali — giocattoli, sicuri per bambini, solo PETG, qualunque cosa serva.',
-      manage: 'Etichette',
+      manage: 'Gestisci etichette',
       manageTitle: 'Gestisci il catalogo delle etichette',
       add: 'Nuova etichetta',
       edit: 'Rinomina etichetta',
@@ -3943,7 +3943,7 @@ export default {
       applyRemoveSuccess: 'Rimosse {{count}} etichetta/e da {{files}} file.',
       actionAdd: 'Aggiungi ai file selezionati',
       actionRemove: 'Rimuovi dai file selezionati',
-      tagAction: 'Etichetta',
+      tagAction: 'Assegna etichette',
       bulkTitle: 'Etichetta {{count}} file selezionato/i',
       bulkTooltip: 'Aggiungi o rimuovi etichette su ogni file selezionato.',
       noPermission: 'Non hai il permesso per etichettare i file.',

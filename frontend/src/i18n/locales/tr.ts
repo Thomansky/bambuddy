@@ -3926,7 +3926,7 @@ export default {
     tags: {
       title: 'Etiketler',
       subtitle: 'Çapraz filtreleme için dosyaları etiketleyin — oyuncak, çocuklar için güvenli, sadece PETG, ne isterseniz.',
-      manage: 'Etiketler',
+      manage: 'Etiketleri yönet',
       manageTitle: 'Etiket kataloğunu yönet',
       add: 'Yeni etiket',
       edit: 'Etiketi yeniden adlandır',
@@ -3950,7 +3950,7 @@ export default {
       applyRemoveSuccess: '{{files}} dosyadan {{count}} etiket kaldırıldı.',
       actionAdd: 'Seçili dosyalara ekle',
       actionRemove: 'Seçili dosyalardan kaldır',
-      tagAction: 'Etiketle',
+      tagAction: 'Etiket ata',
       bulkTitle: 'Seçili {{count}} dosyayı etiketle',
       bulkTooltip: 'Seçili her dosyaya etiket ekleyin veya kaldırın.',
       noPermission: 'Dosyaları etiketleme izniniz yok.',

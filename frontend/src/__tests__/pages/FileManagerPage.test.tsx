@@ -993,6 +993,155 @@ describe('FileManagerPage', () => {
     });
   });
 
+    it('walks off the last folder of a column into that same column files', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await user.click(screen.getByTitle('Column view'));
+      const root = screen.getByTestId('columns-level-root');
+      const level = within(root);
+      // The last folder of the column: ArrowDown has no sibling left, so the
+      // column own files are what continues the list.
+      const folderRows = Array.from(root.querySelectorAll('[data-folder-id]'));
+      const lastFolder = folderRows[folderRows.length - 1] as HTMLElement;
+      const lastName = lastFolder.querySelector('button')!.textContent!.replace(/\d+$/, '').trim();
+      await user.click(within(lastFolder).getByTitle(lastName));
+      await waitFor(() => expect(currentCrumb()).toHaveTextContent(lastName));
+      await waitFor(() => expect(level.getByText('Benchy')).toBeInTheDocument());
+
+      await user.keyboard('{ArrowDown}');
+      await waitFor(() =>
+        expect(level.getByText('Benchy').closest('[title="Benchy"]')?.className).toContain('ring-1')
+      );
+      // That row action strip is now in the Tab order.
+      const row = level.getByText('Benchy').closest('[data-file-id]') as HTMLElement;
+      expect(within(row).getByTitle('Download')).toHaveAttribute('tabindex', '0');
+
+      await user.keyboard('{ArrowDown}');
+      await waitFor(() =>
+        expect(level.getByText('bracket.stl').closest('[title="bracket.stl"]')?.className).toContain('ring-1')
+      );
+
+      // Up off the first file hands the focus back to the folders, and the
+      // folder selection never moved.
+      await user.keyboard('{ArrowUp}{ArrowUp}');
+      await waitFor(() =>
+        expect(level.getByText('Benchy').closest('[title="Benchy"]')?.className).not.toContain('ring-1')
+      );
+      expect(currentCrumb()).toHaveTextContent(lastName);
+    });
+
+  // The page chrome is one card: the select-all control and the selection
+  // actions live in it, so a selection is never left without them.
+  describe('selection chrome', () => {
+    it('keeps the selection actions on screen when the selected pane is empty', async () => {
+      const user = userEvent.setup();
+      server.use(
+        http.get('/api/v1/library/files', ({ request }) => {
+          const folderId = new URL(request.url).searchParams.get('folder_id');
+          // Functional Parts still holds its own file; Brackets is empty, so
+          // the rightmost pane has nothing to render.
+          if (folderId === '2') return HttpResponse.json([]);
+          return HttpResponse.json(filesForRequest(request));
+        })
+      );
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await user.click(screen.getByTitle('Column view'));
+      const columns = within(screen.getByTestId('columns-view'));
+      await user.click(columns.getByText('Functional Parts'));
+      await user.click(await columns.findByText('Brackets'));
+      await waitFor(() =>
+        expect(within(screen.getByTestId('columns-files-pane')).getByText('Folder is empty')).toBeInTheDocument()
+      );
+
+      // Tick a file in the parent column — the pane it belongs to is not the
+      // selected folder's.
+      const level = within(screen.getByTestId('columns-level-folder-1'));
+      await user.click(await level.findByText('Spacer'));
+
+      const actions = within(screen.getByTestId('selection-actions'));
+      expect(actions.getByText('1 selected')).toBeInTheDocument();
+      expect(actions.getByTitle(/Add or remove tags/)).toBeInTheDocument();
+      expect(actions.getByText('Move')).toBeInTheDocument();
+      expect(actions.getByText('Delete')).toBeInTheDocument();
+
+      // …and Clear empties it again.
+      await user.click(actions.getByText('Clear'));
+      expect(screen.queryByTestId('selection-actions')).not.toBeInTheDocument();
+    });
+
+    it('drops the selection when the folder changes, so no action points off screen', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await user.click(screen.getByTitle('Column view'));
+      const columns = within(screen.getByTestId('columns-view'));
+      await user.click(columns.getByText('Functional Parts'));
+      const level = within(screen.getByTestId('columns-level-root'));
+      await user.click(await level.findByText('Benchy'));
+      expect(within(screen.getByTestId('selection-actions')).getByText('1 selected')).toBeInTheDocument();
+
+      await user.click(columns.getByText('Art Projects'));
+      await waitFor(() => expect(screen.queryByTestId('selection-actions')).not.toBeInTheDocument());
+    });
+
+    it('carries select-all inside the filter card instead of a bar of its own', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      const card = screen.getByTestId('library-filter-card');
+      expect(within(card).getByText('Select All')).toBeInTheDocument();
+      // The control leads the card, before the search input.
+      const controls = Array.from(card.querySelectorAll('button, input'));
+      expect(controls.indexOf(within(card).getByText('Select All').closest('button')!)).toBe(0);
+
+      // Selecting turns it into Deselect all and opens the action row in the
+      // same card — not a separate bordered bar.
+      await user.click(within(card).getByText('Select All'));
+      expect(within(card).getByText('Deselect All')).toBeInTheDocument();
+      expect(card.contains(screen.getByTestId('selection-actions'))).toBe(true);
+    });
+
+    it('offers the search box in a folder that holds only subfolders', async () => {
+      const user = userEvent.setup();
+      server.use(
+        http.get('/api/v1/library/files', ({ request }) => {
+          const folderId = new URL(request.url).searchParams.get('folder_id');
+          // Functional Parts is purely organisational here.
+          if (folderId === '1') return HttpResponse.json([]);
+          return HttpResponse.json(filesForRequest(request));
+        })
+      );
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await user.click(sidebar().getByText('Functional Parts'));
+      await waitFor(() => expect(currentCrumb()).toHaveTextContent('Functional Parts'));
+
+      // The folder search is the whole point of standing here — typing a
+      // subfolder name must still be possible.
+      const search = screen.getByPlaceholderText('Search files...');
+      await user.type(search, 'Brack');
+      expect(await screen.findByText('Folders (1)')).toBeInTheDocument();
+    });
+
+    it('names the tag catalogue and the assign action differently', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      expect(screen.getByText('Manage tags')).toBeInTheDocument();
+
+      await user.click(within(screen.getByTestId('library-filter-card')).getByText('Select All'));
+      expect(within(screen.getByTestId('selection-actions')).getByText('Assign tags')).toBeInTheDocument();
+    });
+  });
+
   describe('path bar', () => {
     it('renders the chain from the root down to the selected folder', async () => {
       const user = userEvent.setup();
@@ -1023,6 +1172,22 @@ describe('FileManagerPage', () => {
 
       await user.click(pathBar().getByRole('button', { name: 'All Files' }));
       await waitFor(() => expect(currentCrumb()).toHaveTextContent('All Files'));
+    });
+
+    it('keeps a root-plus-three chain whole rather than folding a crumb that fits', async () => {
+      const user = userEvent.setup();
+      server.use(http.get('/api/v1/library/folders', () => HttpResponse.json(deepFolders)));
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await user.click(await sidebar().findByText('N1125035'));
+      await waitFor(() => expect(currentCrumb()).toHaveTextContent('N1125035'));
+
+      // All Files > Kunden > RAFI > N1125035 — every ancestor stays clickable.
+      expect(pathBar().getByRole('button', { name: 'All Files' })).toBeInTheDocument();
+      expect(pathBar().getByRole('button', { name: 'Kunden' })).toBeInTheDocument();
+      expect(pathBar().getByRole('button', { name: 'RAFI' })).toBeInTheDocument();
+      expect(pathBar().queryByRole('button', { name: 'Show hidden folders' })).not.toBeInTheDocument();
     });
 
     it('collapses a deep chain and lists the hidden ancestors in a menu', async () => {
