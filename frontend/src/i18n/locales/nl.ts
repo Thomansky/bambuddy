@@ -2481,7 +2481,7 @@ export default {
     confirmOutcomeExternalPrints: 'Ook vragen bij prints die buiten Bambuddy zijn gestart',
     confirmOutcomeExternalPrintsDesc: 'Prints die op de printer, in Bambu Studio of in de Handy-app zijn gestart, worden ook door Bambuddy gearchiveerd. Met deze optie krijgen ze dezelfde resultaatvraag als prints uit de wachtrij.',
     confirmDefaultGoodOnPlateClear: 'Onbeantwoorde resultaten als goed tellen bij plaatvrijgave',
-    confirmDefaultGoodOnPlateClearDescription: 'Wanneer de plaat wordt vrijgegeven (handmatig of door de volgende afdruk in de wachtrij) en de resultaatvraag van de afdruk nog onbeantwoord is, wordt deze automatisch als goed onderdeel geregistreerd.',
+    confirmDefaultGoodOnPlateClearDescription: 'Wanneer de plaat wordt vrijgegeven (handmatig of door de volgende afdruk in de wachtrij) en de resultaatvraag van de afdruk nog onbeantwoord is, wordt deze automatisch als goed onderdeel geregistreerd. De afdruk geldt dan als goed zodra de plaat wordt vrijgegeven; een antwoord via Telegram of link daarna toont alleen nog het opgeslagen resultaat.',
     defaultNozzleOffsetCali: 'Nozzle-offsetkalibratie',
     defaultNozzleOffsetCaliDesc: 'Nozzle-offsets tussen extruders kalibreren',
     tempFanPresetsTitle: 'Voorinstellingen temperatuur en ventilator',
@@ -5763,6 +5763,14 @@ export default {
     alreadyGood: 'Al bevestigd als goed onderdeel.',
     alreadyRejected: 'Al gemarkeerd als afgekeurd.',
     cardPrompt: 'Hoe is het gelukt?',
+    sources: {
+      dialog: 'Vastgelegd in de app.',
+      link: 'Vastgelegd via een link met één tik.',
+      plateClear: 'Vastgelegd bij het vrijgeven van de plaat.',
+      printerCard: 'Vastgelegd via de printerkaart.',
+      api: 'Vastgelegd via de API.',
+      reaction: 'Vastgelegd via een reactie in de chat.',
+    },
   },
 
   // Edit archive modal

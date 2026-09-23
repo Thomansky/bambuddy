@@ -3528,8 +3528,13 @@ async def dispatch_outcome_confirmation(
 
     import secrets as _secrets
 
-    if not confirm_archive.confirm_token:
+    # A spent token stays on the row so the one-tap route can recognise it, so
+    # "has a token" no longer means "answerable". A prompt going out now needs a
+    # live one: mint a new token whenever the stored one is already spent, or
+    # every button in the new message would land on the already-answered page.
+    if not confirm_archive.confirm_token or confirm_archive.confirm_token_used_at is not None:
         confirm_archive.confirm_token = _secrets.token_urlsafe(32)
+        confirm_archive.confirm_token_used_at = None
         await db.commit()
 
     from backend.app.api.routes.settings import get_external_base_url, get_setting
@@ -3902,7 +3907,10 @@ async def on_print_start(printer_id: int, data: dict):
                 # nobody ever judged.
                 if archive.confirm_requested:
                     archive.user_verdict = None
+                    archive.user_verdict_source = None
+                    archive.user_verdict_at = None
                     archive.confirm_token = None
+                    archive.confirm_token_used_at = None
 
                 # Reprint of an archive reuses the source row. Without resetting
                 # ``timelapse_path`` _scan_for_timelapse_with_retries early-returns

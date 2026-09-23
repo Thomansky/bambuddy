@@ -143,11 +143,15 @@ class TestApplyOutcomeVerdict:
         printer = await printer_factory()
         archive = await archive_factory(printer.id, confirm_requested=True, confirm_token="tok")
 
-        assert await apply_outcome_verdict(db_session, archive, "reject", reason="warping") is True
+        assert await apply_outcome_verdict(db_session, archive, "reject", source="reaction", reason="warping") is True
         await db_session.commit()
         assert archive.user_verdict == "reject"
         assert archive.failure_reason == "warping"
-        assert archive.confirm_token is None
+        # #1898: the capability is spent, not deleted, so a later tap on the
+        # same link can be told what was recorded instead of getting a 404.
+        assert archive.confirm_token is not None
+        assert archive.confirm_token_used_at is not None
+        assert archive.user_verdict_source == "reaction"
         entry = await db_session.scalar(
             select(PrintLogEntry).where(PrintLogEntry.archive_id == archive.id).order_by(PrintLogEntry.id.desc())
         )
@@ -155,7 +159,7 @@ class TestApplyOutcomeVerdict:
         assert entry.failure_reason == "warping"
 
         # A later verdict from any path is a no-op.
-        assert await apply_outcome_verdict(db_session, archive, "good") is False
+        assert await apply_outcome_verdict(db_session, archive, "good", source="reaction") is False
         assert archive.user_verdict == "reject"
 
     @pytest.mark.asyncio
@@ -164,7 +168,7 @@ class TestApplyOutcomeVerdict:
         printer = await printer_factory()
         archive = await archive_factory(printer.id)
         with pytest.raises(ValueError):
-            await apply_outcome_verdict(db_session, archive, "meh")
+            await apply_outcome_verdict(db_session, archive, "meh", source="reaction")
 
 
 # ---------------------------------------------------------------------------
@@ -322,7 +326,11 @@ class TestPoller:
 
         await db_session.refresh(archive)
         assert archive.user_verdict == "good"
-        assert archive.confirm_token is None
+        # #1898: the capability is spent, not deleted, so a later tap on the
+        # same link can be told what was recorded instead of getting a 404.
+        assert archive.confirm_token is not None
+        assert archive.confirm_token_used_at is not None
+        assert archive.user_verdict_source == "reaction"
         entry = await db_session.scalar(
             select(PrintLogEntry).where(PrintLogEntry.archive_id == archive.id).order_by(PrintLogEntry.id.desc())
         )

@@ -2415,7 +2415,7 @@ export default {
     confirmOutcomeExternalPrints: 'Demander aussi pour les impressions lancées hors de Bambuddy',
     confirmOutcomeExternalPrintsDesc: 'Les impressions lancées sur l\'imprimante, dans Bambu Studio ou dans l\'application Handy sont elles aussi archivées par Bambuddy. Avec cette option, elles reçoivent la même demande de résultat que les travaux de la file d\'attente.',
     confirmDefaultGoodOnPlateClear: 'Compter les résultats sans réponse comme bons à la libération du plateau',
-    confirmDefaultGoodOnPlateClearDescription: 'Lorsque le plateau est libéré (manuellement ou par l\'impression suivante en file d\'attente) et que la demande de résultat de l\'impression reste sans réponse, l\'enregistrer automatiquement comme bonne pièce.',
+    confirmDefaultGoodOnPlateClearDescription: 'Lorsque le plateau est libéré (manuellement ou par l\'impression suivante en file d\'attente) et que la demande de résultat de l\'impression reste sans réponse, l\'enregistrer automatiquement comme bonne pièce. Une fois le plateau libéré, la pièce compte comme bonne ; une réponse ultérieure par Telegram ou par lien affiche seulement le résultat enregistré.',
     defaultNozzleOffsetCali: 'Calibration du décalage des buses',
     defaultNozzleOffsetCaliDesc: 'Calibrer les décalages entre les buses',
     tempFanPresetsTitle: 'Préréglages de température et de ventilateur',
@@ -5697,6 +5697,14 @@ export default {
     alreadyGood: 'Déjà confirmée comme bonne pièce.',
     alreadyRejected: 'Déjà marquée comme rebut.',
     cardPrompt: 'Comment est-elle sortie ?',
+    sources: {
+      dialog: 'Enregistré depuis Bambuddy.',
+      link: 'Enregistré via un lien rapide.',
+      plateClear: 'Enregistré lors de la libération du plateau.',
+      printerCard: 'Enregistré depuis la carte imprimante.',
+      api: 'Enregistré par API.',
+      reaction: 'Enregistré par une réaction dans le chat.',
+    },
   },
 
   // Edit archive modal

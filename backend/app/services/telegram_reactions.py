@@ -302,7 +302,7 @@ class TelegramReactionPoller:
                 return
 
             archive = await db.get(PrintArchive, pending.archive_id)
-            applied = archive is not None and await apply_outcome_verdict(db, archive, verdict)
+            applied = archive is not None and await apply_outcome_verdict(db, archive, verdict, source="reaction")
             has_caption = bool(pending.has_caption)
             text = pending.message_text
             archive_id = pending.archive_id

@@ -2464,7 +2464,7 @@ export default {
     confirmOutcomeExternalPrints: 'Preguntar también por impresiones iniciadas fuera de Bambuddy',
     confirmOutcomeExternalPrintsDesc: 'Las impresiones iniciadas en la impresora, en Bambu Studio o en la app Handy también se archivan en Bambuddy. Con esta opción reciben la misma pregunta de resultado que los trabajos de la cola.',
     confirmDefaultGoodOnPlateClear: 'Contar resultados sin responder como buenos al despejar la cama',
-    confirmDefaultGoodOnPlateClearDescription: 'Cuando se despeja la cama (manualmente o por la siguiente impresión en cola) y la pregunta sobre el resultado de la impresión sigue sin responder, registrarla automáticamente como pieza buena.',
+    confirmDefaultGoodOnPlateClearDescription: 'Cuando se despeja la cama (manualmente o por la siguiente impresión en cola) y la pregunta sobre el resultado de la impresión sigue sin responder, registrarla automáticamente como pieza buena. La impresión cuenta entonces como buena en cuanto se despeja la cama; una respuesta posterior por Telegram o por enlace solo muestra el resultado ya registrado.',
     defaultNozzleOffsetCali: 'Calibración del offset de boquillas',
     defaultNozzleOffsetCaliDesc: 'Calibrar los desplazamientos entre boquillas',
     tempFanPresetsTitle: 'Predefinidos de temperatura y ventilador',
@@ -5720,6 +5720,14 @@ export default {
     alreadyGood: 'Ya está confirmada como pieza buena.',
     alreadyRejected: 'Ya está marcada como rechazada.',
     cardPrompt: '¿Cómo ha salido?',
+    sources: {
+      dialog: 'Registrado en la aplicación.',
+      link: 'Registrado con un enlace de un toque.',
+      plateClear: 'Registrado al despejar la cama.',
+      printerCard: 'Registrado desde la tarjeta de la impresora.',
+      api: 'Registrado a través de la API.',
+      reaction: 'Registrado con una reacción en el chat.',
+    },
   },
 
   // Edit archive modal

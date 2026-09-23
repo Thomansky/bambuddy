@@ -2460,7 +2460,7 @@ export default {
     confirmOutcomeExternalPrints: '也詢問非 Bambuddy 啟動的列印',
     confirmOutcomeExternalPrintsDesc: '在印表機、Bambu Studio 或 Handy 應用程式中啟動的列印同樣會被 Bambuddy 封存。開啟後，它們會收到與佇列列印相同的成品確認。',
     confirmDefaultGoodOnPlateClear: '熱床清空時將未回答的結果計為良品',
-    confirmDefaultGoodOnPlateClearDescription: '當熱床被清空（手動或由下一個佇列列印觸發）而該列印的成品結果詢問仍未回答時，自動將其記錄為良品。',
+    confirmDefaultGoodOnPlateClearDescription: '當熱床被清空（手動或由下一個佇列列印觸發）而該列印的成品結果詢問仍未回答時，自動將其記錄為良品。熱床被清空後，該列印即算作良品；之後透過 Telegram 或連結作答只會顯示已記錄的結果。',
     defaultNozzleOffsetCali: '噴嘴偏移校準',
     defaultNozzleOffsetCaliDesc: '校準兩個擠出機之間的噴嘴偏移',
     tempFanPresetsTitle: '溫度與風扇預設',
@@ -5696,6 +5696,14 @@ export default {
     alreadyGood: '已確認為良品。',
     alreadyRejected: '已標記為不良。',
     cardPrompt: '成品如何？',
+    sources: {
+      dialog: '在應用程式中記錄。',
+      link: '透過一鍵連結記錄。',
+      plateClear: '在清空熱床時記錄。',
+      printerCard: '從印表機卡片記錄。',
+      api: '透過 API 記錄。',
+      reaction: '透過聊天中的表情回應記錄。',
+    },
   },
 
   // Edit archive modal

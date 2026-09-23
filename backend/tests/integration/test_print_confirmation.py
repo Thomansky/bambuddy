@@ -50,7 +50,11 @@ class TestOutcomeVerdictPatch:
 
         await db_session.refresh(archive)
         assert archive.user_verdict == "reject"
-        assert archive.confirm_token is None
+        # Retired by stamping, not by dropping the value: the link stays
+        # resolvable so a later tap can be told it is already answered.
+        assert archive.confirm_token == "test-token-mirror"
+        assert archive.confirm_token_used_at is not None
+        assert archive.user_verdict_source == "api"
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -79,7 +83,9 @@ class TestConfirmTokenEndpoint:
 
         await db_session.refresh(archive)
         assert archive.user_verdict == "good"
-        assert archive.confirm_token is None
+        assert archive.user_verdict_source == "link"
+        assert archive.confirm_token == "test-token-good"
+        assert archive.confirm_token_used_at is not None
 
         entry = await db_session.scalar(
             select(PrintLogEntry).where(PrintLogEntry.archive_id == archive.id).order_by(PrintLogEntry.id.desc())
@@ -87,9 +93,60 @@ class TestConfirmTokenEndpoint:
         assert entry is not None
         assert entry.user_verdict == "good"
 
-        # Second use of the same token: gone.
+        # Second use of the same token: spent, and said so rather than 404.
         response = await async_client.get("/api/v1/archives/confirm/test-token-good/reject")
-        assert response.status_code == 404
+        assert response.status_code == 200
+        assert "Already answered" in response.text
+        await db_session.refresh(archive)
+        assert archive.user_verdict == "good"
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_spent_link_reports_the_recorded_verdict_without_changing_it(
+        self, async_client: AsyncClient, archive_factory, printer_factory, db_session
+    ):
+        """The live-farm case (#1898): the plate-clear default answered the
+        prompt, then the Telegram button was tapped. The link must name the
+        verdict on file, say how it got there, and leave it alone."""
+        from backend.app.services.print_confirmation import resolve_pending_confirmation_as_good
+
+        printer = await printer_factory()
+        archive = await archive_factory(printer.id, confirm_requested=True, confirm_token="plate-cleared-token")
+
+        assert await resolve_pending_confirmation_as_good(db_session, printer.id) == archive.id
+        await db_session.commit()
+
+        response = await async_client.get("/api/v1/archives/confirm/plate-cleared-token/reject")
+        assert response.status_code == 200
+        body = response.text
+        assert "Already answered" in body
+        assert "Good part" in body
+        assert "plate was cleared" in body
+        assert f"/archives?confirm={archive.id}" in body
+
+        await db_session.refresh(archive)
+        assert archive.user_verdict == "good"
+        assert archive.user_verdict_source == "plate_clear"
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_spent_link_after_the_verdict_was_cleared_again(
+        self, async_client: AsyncClient, archive_factory, printer_factory
+    ):
+        """Clearing the verdict in the app does not un-spend the link: the
+        capability was used, so the page explains rather than re-opening it."""
+        printer = await printer_factory()
+        archive = await archive_factory(printer.id, confirm_requested=True, confirm_token="cleared-again-token")
+
+        assert (await async_client.get("/api/v1/archives/confirm/cleared-again-token/good")).status_code == 200
+        assert (
+            await async_client.patch(f"/api/v1/archives/{archive.id}", json={"user_verdict": None})
+        ).status_code == 200
+
+        response = await async_client.get("/api/v1/archives/confirm/cleared-again-token/good")
+        assert response.status_code == 200
+        assert "Already answered" in response.text
+        assert (await async_client.get(f"/api/v1/archives/{archive.id}")).json()["user_verdict"] is None
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -127,7 +184,9 @@ class TestDefaultGoodOnPlateClear:
         assert resolved == newest_pending.id
         await db_session.refresh(newest_pending)
         assert newest_pending.user_verdict == "good"
-        assert newest_pending.confirm_token is None
+        assert newest_pending.user_verdict_source == "plate_clear"
+        assert newest_pending.confirm_token == "pending-token"
+        assert newest_pending.confirm_token_used_at is not None
         await db_session.refresh(older)
         assert older.user_verdict is None
         await db_session.refresh(answered)
@@ -183,3 +242,162 @@ class TestVerdictStatistics:
         assert body["rejected_prints"] == 1
         assert body["yield_rate"] == pytest.approx(33.3, abs=0.1)
         assert body["rejects_by_reason"] == {"other": 1}
+
+
+class TestVerdictSource:
+    """How a verdict came in (#1898) — every writer on this branch stamps it."""
+
+    def test_every_source_has_a_phrase_for_the_already_answered_page(self):
+        """Including 'reaction', which the Telegram reaction work (#3046) will
+        write from its own branch: the page that explains a spent link must not
+        fall silent the day it lands."""
+        from backend.app.api.routes.archives import _VERDICT_SOURCE_PHRASES
+        from backend.app.services.print_confirmation import VERDICT_SOURCES
+
+        assert set(VERDICT_SOURCES) == set(_VERDICT_SOURCE_PHRASES)
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_response_exposes_the_source(self, async_client: AsyncClient, archive_factory, printer_factory):
+        printer = await printer_factory()
+        archive = await archive_factory(printer.id, confirm_requested=True)
+
+        assert (await async_client.get(f"/api/v1/archives/{archive.id}")).json()["user_verdict_source"] is None
+
+        assert (
+            await async_client.patch(
+                f"/api/v1/archives/{archive.id}", json={"user_verdict": "good", "user_verdict_source": "dialog"}
+            )
+        ).status_code == 200
+        body = (await async_client.get(f"/api/v1/archives/{archive.id}")).json()
+        assert body["user_verdict"] == "good"
+        assert body["user_verdict_source"] == "dialog"
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_printer_card_and_bare_patch_sources(
+        self, async_client: AsyncClient, archive_factory, printer_factory, db_session
+    ):
+        printer = await printer_factory()
+        from_card = await archive_factory(printer.id, confirm_requested=True)
+        from_script = await archive_factory(printer.id, confirm_requested=True)
+
+        await async_client.patch(
+            f"/api/v1/archives/{from_card.id}", json={"user_verdict": "good", "user_verdict_source": "printer_card"}
+        )
+        # No source claimed: some script or integration did it.
+        await async_client.patch(f"/api/v1/archives/{from_script.id}", json={"user_verdict": "reject"})
+
+        await db_session.refresh(from_card)
+        await db_session.refresh(from_script)
+        assert from_card.user_verdict_source == "printer_card"
+        assert from_script.user_verdict_source == "api"
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_server_owned_sources_cannot_be_claimed_over_the_api(
+        self, async_client: AsyncClient, archive_factory, printer_factory
+    ):
+        """'link', 'plate_clear' and 'reaction' are stamped by the paths that
+        own them — a PATCH may not forge them."""
+        printer = await printer_factory()
+        archive = await archive_factory(printer.id, confirm_requested=True)
+
+        for forged in ("link", "plate_clear", "reaction", "nonsense"):
+            response = await async_client.patch(
+                f"/api/v1/archives/{archive.id}", json={"user_verdict": "good", "user_verdict_source": forged}
+            )
+            assert response.status_code == 422, forged
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_the_page_dates_the_verdict_on_file_not_the_spent_token(
+        self, async_client: AsyncClient, archive_factory, printer_factory, db_session
+    ):
+        """A verdict changed later must not be reported with the older decision's time.
+
+        The live case: the plate-clear default answers a print, the operator
+        changes the verdict in the app an hour later, then the old Telegram link
+        is tapped. Reporting the new verdict with the old timestamp would
+        describe two different events as one.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        printer = await printer_factory()
+        archive = await archive_factory(printer.id, confirm_requested=True, confirm_token="dates-token")
+
+        await async_client.patch(
+            f"/api/v1/archives/{archive.id}", json={"user_verdict": "good", "user_verdict_source": "dialog"}
+        )
+        await db_session.refresh(archive)
+        first_at = archive.user_verdict_at
+        assert first_at is not None
+        # Age the first decision so the two timestamps cannot coincide.
+        archive.user_verdict_at = first_at - timedelta(hours=1)
+        archive.confirm_token_used_at = first_at - timedelta(hours=1)
+        await db_session.commit()
+
+        await async_client.patch(
+            f"/api/v1/archives/{archive.id}", json={"user_verdict": "reject", "user_verdict_source": "dialog"}
+        )
+        await db_session.refresh(archive)
+        assert archive.user_verdict == "reject"
+        assert archive.user_verdict_at > archive.confirm_token_used_at
+
+        page = await async_client.get(f"/api/v1/archives/confirm/{archive.confirm_token}/good")
+        assert page.status_code == 200
+
+        # SQLite hands back naive datetimes; they are already UTC, which is how
+        # the route formats them too.
+        def _as_shown(value):
+            if value.tzinfo is not None:
+                value = value.astimezone(timezone.utc)
+            return value.strftime("%Y-%m-%d %H:%M UTC")
+
+        shown = _as_shown(archive.user_verdict_at)
+        stale = _as_shown(archive.confirm_token_used_at)
+        assert shown in page.text
+        assert stale not in page.text
+        # And the link still changed nothing.
+        await db_session.refresh(archive)
+        assert archive.user_verdict == "reject"
+
+    async def test_a_re_sent_prompt_carries_a_live_token(self, archive_factory, printer_factory, db_session):
+        """A spent token must never be re-used for a new prompt.
+
+        Since a verdict keeps the token value on the row, "has a token" stopped
+        meaning "answerable": without minting a fresh one, every button in the
+        new message would land on the already-answered page.
+        """
+        from backend.app.main import dispatch_outcome_confirmation
+
+        printer = await printer_factory()
+        archive = await archive_factory(printer.id, confirm_requested=True, confirm_token="spent-token")
+        from backend.app.services.print_confirmation import retire_confirm_token
+
+        retire_confirm_token(archive)
+        await db_session.commit()
+        assert archive.confirm_token_used_at is not None
+
+        await dispatch_outcome_confirmation(db_session, printer.id, printer.name, {}, archive.id, None)
+
+        await db_session.refresh(archive)
+        assert archive.confirm_token != "spent-token"
+        assert archive.confirm_token_used_at is None
+
+    async def test_clearing_the_verdict_drops_the_source(
+        self, async_client: AsyncClient, archive_factory, printer_factory, db_session
+    ):
+        printer = await printer_factory()
+        archive = await archive_factory(printer.id, confirm_requested=True, confirm_token="drop-source-token")
+
+        await async_client.patch(
+            f"/api/v1/archives/{archive.id}", json={"user_verdict": "good", "user_verdict_source": "dialog"}
+        )
+        await async_client.patch(f"/api/v1/archives/{archive.id}", json={"user_verdict": None})
+
+        await db_session.refresh(archive)
+        assert archive.user_verdict is None
+        assert archive.user_verdict_source is None
+        # ...but the capability stays spent.
+        assert archive.confirm_token_used_at is not None

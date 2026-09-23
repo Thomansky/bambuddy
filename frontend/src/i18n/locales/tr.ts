@@ -2463,7 +2463,7 @@ export default {
     confirmOutcomeExternalPrints: 'Bambuddy dışında başlatılan baskılar için de sor',
     confirmOutcomeExternalPrintsDesc: 'Yazıcıda, Bambu Studio\'da veya Handy uygulamasında başlatılan baskılar da Bambuddy tarafından arşivlenir. Bu seçenek açıkken, kuyruktaki baskılarla aynı sonuç sorusunu alırlar.',
     confirmDefaultGoodOnPlateClear: 'Plaka temizlendiğinde yanıtsız sonuçları iyi olarak say',
-    confirmDefaultGoodOnPlateClearDescription: 'Plaka temizlendi olarak onaylandığında (elle veya kuyruktaki bir sonraki baskıyla) ve baskının sonuç sorusu hâlâ yanıtsızsa, otomatik olarak iyi parça olarak kaydet.',
+    confirmDefaultGoodOnPlateClearDescription: 'Plaka temizlendi olarak onaylandığında (elle veya kuyruktaki bir sonraki baskıyla) ve baskının sonuç sorusu hâlâ yanıtsızsa, otomatik olarak iyi parça olarak kaydet. Plaka temizlendiği anda baskı iyi sayılır; sonrasında Telegram veya bağlantı üzerinden verilen yanıt yalnızca kayıtlı sonucu gösterir.',
     defaultNozzleOffsetCali: 'Nozül Ofset Kalibrasyonu',
     defaultNozzleOffsetCaliDesc: 'Ekstrüderler arasındaki nozül ofsetlerini kalibre et',
     tempFanPresetsTitle: 'Sıcaklık ve Fan Ön Ayarları',
@@ -5682,6 +5682,14 @@ export default {
     alreadyGood: 'Zaten iyi parça olarak onaylandı.',
     alreadyRejected: 'Zaten reddedildi olarak işaretlendi.',
     cardPrompt: 'Nasıl çıktı?',
+    sources: {
+      dialog: 'Uygulamada kaydedildi.',
+      link: 'Tek dokunuşluk bağlantıyla kaydedildi.',
+      plateClear: 'Plaka temizlendiğinde kaydedildi.',
+      printerCard: 'Yazıcı kartından kaydedildi.',
+      api: 'API üzerinden kaydedildi.',
+      reaction: 'Sohbetteki bir tepkiyle kaydedildi.',
+    },
   },
 
   // Arşiv düzenleme modali

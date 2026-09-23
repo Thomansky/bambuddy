@@ -75,6 +75,7 @@ import { VatBadge } from '../components/VatBadge';
 import { getBedTypeInfo } from '../utils/bedType';
 import { invalidateArchiveAndProjectViews } from '../utils/projectQueries';
 import { assignableProjects } from '../utils/projectTree';
+import { verdictSourceKey } from '../utils/verdictSource';
 import { usePageFileDrop } from '../hooks/usePageFileDrop';
 import type { Archive, PrintLogEntry, ProjectListItem } from '../api/client';
 import { Card, CardContent } from '../components/Card';
@@ -398,6 +399,9 @@ function ArchiveCard({
 
   // Use pre-computed duplicate sequence and original archive ID from list response
   const duplicateSequence = archive.duplicate_sequence ?? 0;
+  // Appended to the verdict badge's tooltip (#1898) so a verdict the
+  // plate-clear default recorded can be explained where it is shown.
+  const verdictSourceHintKey = verdictSourceKey(archive.user_verdict_source);
   const originalArchiveId = archive.original_archive_id ?? null;
 
   const plates = platesData?.plates ?? [];
@@ -1044,7 +1048,7 @@ function ArchiveCard({
         {archive.status === 'completed' && archive.user_verdict === 'reject' && (
           <div
             className="absolute top-2 left-12 px-2 py-1 rounded text-xs bg-status-error/80 text-white flex items-center gap-1"
-            title={t('archives.card.rejectedTitle')}
+            title={`${t('archives.card.rejectedTitle')}${verdictSourceHintKey ? ` — ${t(verdictSourceHintKey)}` : ''}`}
           >
             <ThumbsDown className="w-3 h-3" />
             {t('archives.card.rejected')}
@@ -1053,7 +1057,7 @@ function ArchiveCard({
         {archive.status === 'completed' && archive.user_verdict === 'good' && (
           <div
             className="absolute top-2 left-12 px-2 py-1 rounded text-xs bg-bambu-green/80 text-white flex items-center gap-1"
-            title={t('archives.card.confirmedGoodTitle')}
+            title={`${t('archives.card.confirmedGoodTitle')}${verdictSourceHintKey ? ` — ${t(verdictSourceHintKey)}` : ''}`}
           >
             <ThumbsUp className="w-3 h-3" />
             {t('archives.card.confirmedGood')}
@@ -1903,6 +1907,9 @@ function ArchiveListRow({
 
   // Use pre-computed duplicate sequence and original archive ID from list response
   const duplicateSequence = archive.duplicate_sequence ?? 0;
+  // Appended to the verdict badge's tooltip (#1898) so a verdict the
+  // plate-clear default recorded can be explained where it is shown.
+  const verdictSourceHintKey = verdictSourceKey(archive.user_verdict_source);
   const originalArchiveId = archive.original_archive_id ?? null;
 
   // 3D Preview click handler. Multi-plate archives show the plate picker
@@ -2421,7 +2428,7 @@ function ArchiveListRow({
             {archive.status === 'completed' && archive.user_verdict === 'reject' && (
               <span
                 className="px-1.5 py-0.5 rounded text-[10px] leading-tight bg-status-error/80 text-white flex-shrink-0"
-                title={t('archives.card.rejectedTitle')}
+                title={`${t('archives.card.rejectedTitle')}${verdictSourceHintKey ? ` — ${t(verdictSourceHintKey)}` : ''}`}
               >
                 {t('archives.card.rejected')}
               </span>
@@ -2429,7 +2436,7 @@ function ArchiveListRow({
             {archive.status === 'completed' && archive.user_verdict === 'good' && (
               <span
                 className="px-1.5 py-0.5 rounded text-[10px] leading-tight bg-bambu-green/80 text-white flex-shrink-0"
-                title={t('archives.card.confirmedGoodTitle')}
+                title={`${t('archives.card.confirmedGoodTitle')}${verdictSourceHintKey ? ` — ${t(verdictSourceHintKey)}` : ''}`}
               >
                 {t('archives.card.confirmedGood')}
               </span>

@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { ThumbsUp, ThumbsDown, X, RotateCcw, ImageOff } from 'lucide-react';
 import { api } from '../api/client';
 import { FAILURE_REASON_KEYS } from './EditArchiveModal';
+import { verdictSourceKey } from '../utils/verdictSource';
 import { PrintModal } from './PrintModal';
 import { useToast } from '../contexts/ToastContext';
 
@@ -34,7 +35,7 @@ export function ConfirmOutcomeDialog({ archiveId, onClose }: ConfirmOutcomeDialo
 
   const verdictMutation = useMutation({
     mutationFn: (data: { user_verdict: 'good' | 'reject'; failure_reason?: string }) =>
-      api.updateArchive(archiveId, data),
+      api.updateArchive(archiveId, { ...data, user_verdict_source: 'dialog' }),
     onSuccess: (_updated, variables) => {
       queryClient.invalidateQueries({ queryKey: ['archives'] });
       queryClient.invalidateQueries({ queryKey: ['archive', archiveId] });
@@ -57,6 +58,10 @@ export function ConfirmOutcomeDialog({ archiveId, onClose }: ConfirmOutcomeDialo
   const photoFilename = archive?.photos?.[0] ?? null;
   const photoUrl = photoFilename ? api.getArchivePhotoUrl(archiveId, photoFilename) : null;
   const alreadyDecided = archive?.user_verdict != null;
+  // Why this print already has a verdict — the plate-clear default answers
+  // prompts on its own, and without this the answer looks like it appeared
+  // from nowhere (#1898).
+  const sourceKey = verdictSourceKey(archive?.user_verdict_source);
 
   const handleGood = () => verdictMutation.mutate({ user_verdict: 'good' });
   const handleRejectSave = (reprint: boolean) => {
@@ -112,11 +117,18 @@ export function ConfirmOutcomeDialog({ archiveId, onClose }: ConfirmOutcomeDialo
           <p className="text-sm text-white text-center mb-1 truncate" title={name}>{name}</p>
 
           {alreadyDecided ? (
-            <p className="text-sm text-bambu-gray text-center">
-              {archive?.user_verdict === 'good'
-                ? t('confirmOutcome.alreadyGood')
-                : t('confirmOutcome.alreadyRejected')}
-            </p>
+            <>
+              <p className="text-sm text-bambu-gray text-center">
+                {archive?.user_verdict === 'good'
+                  ? t('confirmOutcome.alreadyGood')
+                  : t('confirmOutcome.alreadyRejected')}
+              </p>
+              {sourceKey && (
+                <p className="text-xs text-bambu-gray/70 text-center mt-1" data-testid="verdict-source-hint">
+                  {t(sourceKey)}
+                </p>
+              )}
+            </>
           ) : !rejecting ? (
             <div className="flex items-center justify-center gap-6 mt-3">
               <button

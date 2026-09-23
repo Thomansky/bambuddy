@@ -1788,6 +1788,26 @@ describe('SettingsPage', () => {
       expect(within(row).getByRole('checkbox')).toBeChecked();
     });
   });
+
+  // --------------------------------------------------------------------
+  // The plate-clear default answers outcome prompts on its own (#1898), so
+  // its help text has to name that consequence — the farm case was a user
+  // who had it on and could not work out why Telegram said "already used".
+  // --------------------------------------------------------------------
+  describe('plate-clear outcome default help text (#1898)', () => {
+    it('warns that a later Telegram or link answer only shows the result', async () => {
+      render(<SettingsPage />);
+      const user = userEvent.setup();
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Workflow' })).toBeInTheDocument());
+      await user.click(screen.getByRole('button', { name: 'Workflow' }));
+
+      const label = await screen.findByText('Count unanswered outcomes as good on plate release');
+      const row = label.closest('div')!;
+      expect(row).toHaveTextContent(
+        /a Telegram or link answer after that only shows the recorded result/i,
+      );
+    });
+  });
 });
 
 /**

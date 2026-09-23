@@ -774,6 +774,9 @@ export interface ArchivePrinterMedia {
   warnings: Array<'printer_missing' | 'timelapse_unavailable' | 'ipcam_unavailable' | 'printer_files_forbidden'>;
 }
 
+/** How a post-print outcome verdict reached the archive (#1898). */
+export type VerdictSource = 'dialog' | 'link' | 'plate_clear' | 'printer_card' | 'api' | 'reaction';
+
 export interface Archive {
   id: number;
   printer_id: number | null;
@@ -822,6 +825,10 @@ export interface Archive {
   failure_reason: string | null;
   // Post-print outcome confirmation (#1898)
   user_verdict: 'good' | 'reject' | null;
+  // How the verdict arrived; 'reaction' is written by the Telegram reaction
+  // handler (#3046) and is labelled here so it reads correctly once that lands.
+  user_verdict_source: VerdictSource | null;
+  user_verdict_at: string | null;
   confirm_requested: boolean;
   quantity: number;
   energy_kwh: number | null;
@@ -5320,6 +5327,9 @@ export const api = {
     filament_used_grams?: number | null;
     // Post-print outcome verdict (#1898); null clears it
     user_verdict?: 'good' | 'reject' | null;
+    // Which surface answered. The backend only accepts the sources a client
+    // can honestly claim and defaults to 'api' when none is given.
+    user_verdict_source?: 'dialog' | 'printer_card';
   }) =>
     request<Archive>(`/archives/${id}`, {
       method: 'PATCH',

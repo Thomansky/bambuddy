@@ -5104,7 +5104,7 @@ export function SettingsPage() {
                     {t('settings.confirmDefaultGoodOnPlateClear', 'Count unanswered outcomes as good on plate release')}
                   </p>
                   <p className="text-xs text-bambu-gray mt-1">
-                    {t('settings.confirmDefaultGoodOnPlateClearDescription', 'When the plate is released (manually or by the next queued print) and the print\'s outcome prompt is still unanswered, record it as a good part automatically.')}
+                    {t('settings.confirmDefaultGoodOnPlateClearDescription', 'When the plate is released (manually or by the next queued print) and the print\'s outcome prompt is still unanswered, record it as a good part automatically. The print then counts as good as soon as the plate is released; a Telegram or link answer after that only shows the recorded result.')}
                   </p>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer">

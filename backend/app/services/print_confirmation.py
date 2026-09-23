@@ -1,6 +1,7 @@
 """Post-print outcome confirmation helpers (#1898)."""
 
 import logging
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +11,38 @@ from backend.app.models.print_log import PrintLogEntry
 
 logger = logging.getLogger(__name__)
 
+# How a verdict reached the archive. 'reaction' is written by the Telegram
+# reaction handler (#3046), which lives on its own branch — listed here so the
+# vocabulary is complete and the UI can label it the day that lands.
+VERDICT_SOURCES = ("dialog", "link", "plate_clear", "printer_card", "api", "reaction")
+
+
+def stamp_verdict(archive: PrintArchive, source: str) -> None:
+    """Record a verdict's provenance and the moment it landed (#1898).
+
+    Both fields move together on every verdict write, which is what keeps the
+    "already answered" page from pairing a new source with the timestamp of an
+    older decision. `retire_confirm_token` is separate on purpose: spending the
+    one-tap capability happens once, recording a verdict can happen again.
+    """
+    archive.user_verdict_source = source
+    archive.user_verdict_at = datetime.now(timezone.utc)
+
+
+def retire_confirm_token(archive: PrintArchive) -> None:
+    """Spend the one-tap capability token without destroying it.
+
+    The token is still single-use: once ``confirm_token_used_at`` is stamped,
+    no verdict path accepts it again. Keeping the VALUE is what lets the
+    one-tap route recognise a link belonging to an already-answered print and
+    say so, instead of 404ing as if the link had never been real (the live-farm
+    case: the plate-clear default answered the prompt, then the user tapped the
+    Telegram button and got "invalid or already used").
+    """
+    if archive.confirm_token and archive.confirm_token_used_at is None:
+        archive.confirm_token_used_at = datetime.now(timezone.utc)
+
+
 VERDICTS = ("good", "reject")
 
 
@@ -18,6 +51,7 @@ async def apply_outcome_verdict(
     archive: PrintArchive,
     verdict: str,
     *,
+    source: str,
     reason: str | None = None,
 ) -> bool:
     """Record a verdict on an archive that has not been answered yet.
@@ -35,16 +69,24 @@ async def apply_outcome_verdict(
     Edit Archive modal's PATCH route is deliberately not routed through
     here — it is the explicit way to change a verdict afterwards.
 
+    ``source`` says which path recorded it (#1898) and is stamped together
+    with the time the verdict landed; the capability token is spent rather
+    than deleted, so a later tap on the same link can be told what happened
+    instead of being called invalid.
+
     ``reason`` is an optional failure_reason for a reject. Deliberately does
     NOT commit — callers manage their own transaction.
     """
+    if source not in VERDICT_SOURCES:
+        raise ValueError(f"Source must be one of {VERDICT_SOURCES}, got {source!r}")
     if verdict not in VERDICTS:
         raise ValueError(f"Verdict must be one of {VERDICTS}, got {verdict!r}")
     if archive.user_verdict is not None:
         return False
 
     archive.user_verdict = verdict
-    archive.confirm_token = None
+    stamp_verdict(archive, source)
+    retire_confirm_token(archive)
     if reason is not None and verdict == "reject":
         archive.failure_reason = reason
 
@@ -87,7 +129,7 @@ async def resolve_pending_confirmation_as_good(db: AsyncSession, printer_id: int
     if archive is None:
         return None
 
-    await apply_outcome_verdict(db, archive, "good")
+    await apply_outcome_verdict(db, archive, "good", source="plate_clear")
 
     logger.info("[#1898] Plate clear defaulted archive %s to 'good' (printer %s)", archive.id, printer_id)
     return archive.id
