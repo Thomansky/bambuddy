@@ -54,6 +54,21 @@ async def _active_run(db: AsyncSession, printer_id: int) -> PaCalibrationRun | N
     return result.scalars().first()
 
 
+def _rendered_k(k_value) -> str | None:
+    """A profile's stored K in the six-decimal form the write used, or None.
+
+    ``KProfile.k_value`` is whatever string the printer put in its table, so an
+    empty or non-numeric one has to compare unequal rather than raise: the row
+    is already at ``saving`` by the time the read-back runs, and a ValueError
+    out of the route would leave it there with a bare 500 and no reason on it,
+    to be reported two hours later as a timeout.
+    """
+    try:
+        return f"{float(k_value):.6f}"
+    except (TypeError, ValueError):
+        return None
+
+
 def _stored_profile(profiles, *, filament_id: str, nozzle_id: str | None):
     """The K-profile this run would overwrite, or None if it would create one.
 
@@ -191,7 +206,12 @@ async def preflight(
             slicer_url = ""
 
     active = await _active_run(db, printer_id)
-    reserved = printer_id in await pa.active_run_printer_ids(db)
+    # The queue's side of the reservation. Not `pa.active_run_printer_ids`,
+    # which only ever reports this feature's own runs — that is what
+    # `run_already_active` says, and asking it here produced a blocker that
+    # could not occur while the one the spec asks for (the queue, an upload in
+    # flight, a drying cycle) was never reported at all.
+    reserved = await pa.printer_reserved_elsewhere(db, printer_id)
     reasons = pa.blocking_reasons(
         printer=printer,
         state=state,
@@ -200,7 +220,7 @@ async def preflight(
         extruder_id=extruder_id,
         slicer_url=slicer_url,
         has_active_run=active is not None,
-        printer_reserved=reserved and (active is None or active.printer_id != printer_id),
+        printer_reserved=reserved,
     )
 
     presets = None
@@ -448,7 +468,7 @@ async def confirm_run(
     stored = await client.get_kprofiles(nozzle_diameter=row.nozzle_diameter)
     written = _stored_profile(stored, filament_id=row.filament_id, nozzle_id=row.nozzle_id)
     expected = payload["k_value"]
-    if written is None or f"{float(written.k_value):.6f}" != expected:
+    if written is None or _rendered_k(written.k_value) != expected:
         pa.fail_run(row, "The printer did not store the value.")
         await db.commit()
         await pa.notify("failed", row, printer.name, row.error_message or "")
@@ -479,9 +499,15 @@ async def discard_run(
     printer_id: int,
     run_id: int,
     db: AsyncSession = Depends(get_db),
-    _: User | None = RequirePermissionIfAuthEnabled(Permission.KPROFILES_READ),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.KPROFILES_UPDATE),
 ):
-    """Throw the measurement away. Publishes nothing."""
+    """Throw the measurement away. Publishes nothing.
+
+    Behind the *write* permission even though it writes nothing to the
+    printer: it is the other half of the same decision confirm makes, and it
+    destroys a seven-minute measurement irrecoverably. A viewer-level account
+    should not be able to end somebody else's run.
+    """
     row = await _get_run(db, printer_id, run_id)
     if row.status != "awaiting_confirmation":
         raise HTTPException(409, f"This run is {row.status}, not waiting for confirmation.")

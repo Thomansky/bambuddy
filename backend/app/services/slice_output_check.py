@@ -246,6 +246,42 @@ def _has_extrude_cali_step(gcode: str) -> bool:
     return _EXTRUDE_CALI_GATE in body and _EXTRUDE_CALI_COMMAND in body
 
 
+# ``M983.3 F10.4167 A0.4`` — the A argument is the nozzle diameter the
+# measurement is run for, expanded from the printer preset's own
+# ``A{nozzle_diameter}``.
+_EXTRUDE_CALI_NOZZLE_RE = re.compile(r"^[ \t]*M983\.3\b[^\n;]*?\bA([\d.]+)", re.MULTILINE)
+
+
+def extrude_cali_nozzle_diameters(content: bytes, *, export_3mf: bool) -> set[str]:
+    """Every nozzle diameter the sliced file's ``M983.3`` lines measure for.
+
+    Empty when the file carries no ``A`` argument, which is not an error: the
+    caller compares only what it finds, so a preset shape nobody has captured
+    cannot fail a run on its own. What it does catch is the one thing the live
+    nozzle check cannot — a file sliced against a *different* printer preset
+    than the nozzle that is fitted, which would run ``M983.3 A0.6`` through a
+    0.4 nozzle and then file the result under 0.4.
+    """
+    if not content:
+        return set()
+
+    def diameters(text: str) -> set[str]:
+        return {match.group(1) for match in _EXTRUDE_CALI_NOZZLE_RE.finditer(_executable_gcode(text))}
+
+    if not export_3mf:
+        return diameters(content[:_GCODE_SCAN_BYTES].decode("utf-8", errors="ignore"))
+
+    found: set[str] = set()
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            for name in sorted(n for n in archive.namelist() if _PLATE_GCODE_RE.match(n)):
+                found |= diameters(archive.read(name).decode("utf-8", errors="ignore"))
+    except (KeyError, OSError, zipfile.BadZipFile) as exc:
+        logger.warning("Extrude-cali nozzle check: cannot read the sliced 3MF (%s)", exc)
+        return set()
+    return found
+
+
 def missing_extrude_cali_message(printer_preset_name: str) -> str:
     """Why a flow-dynamics run was abandoned before anything reached the printer."""
     return (

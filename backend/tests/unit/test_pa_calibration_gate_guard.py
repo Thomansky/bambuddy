@@ -12,7 +12,7 @@ import zipfile
 
 import pytest
 
-from backend.app.services.slice_output_check import extrude_cali_gate_missing
+from backend.app.services.slice_output_check import extrude_cali_gate_missing, extrude_cali_nozzle_diameters
 
 # The real shape, trimmed: Bambu Studio's auto_pa_line_calib_mode job for an
 # H2S, Metadata/plate_1.gcode lines 782-820.
@@ -113,3 +113,43 @@ class TestExtrudeCaliGateMissing:
             archive.writestr("Metadata/plate_1.gcode", CALIBRATING_GCODE)
             archive.writestr("Metadata/plate_2.gcode", PLAIN_GCODE)
         assert extrude_cali_gate_missing(buffer.getvalue(), export_3mf=True) is True
+
+
+class TestExtrudeCaliNozzleDiameters:
+    """Which nozzle the sliced file will actually measure.
+
+    ``A{nozzle_diameter}`` is expanded from the printer preset, so this is the
+    only place the preset's idea of the nozzle survives into something the
+    printer runs -- and the only check that catches a file sliced for another
+    machine's nozzle, which would measure 0.6 and have the answer filed
+    under 0.4.
+    """
+
+    def test_reads_the_a_argument_of_the_captured_block(self):
+        assert extrude_cali_nozzle_diameters(make_3mf(CALIBRATING_GCODE), export_3mf=True) == {"0.4"}
+
+    def test_reads_a_larger_nozzle(self):
+        gcode = CALIBRATING_GCODE.replace("A0.4", "A0.6")
+        assert extrude_cali_nozzle_diameters(make_3mf(gcode), export_3mf=True) == {"0.6"}
+
+    def test_a_raw_gcode_body_is_handled(self):
+        assert extrude_cali_nozzle_diameters(CALIBRATING_GCODE.encode(), export_3mf=False) == {"0.4"}
+
+    def test_the_preset_comments_do_not_count(self):
+        """The whole preset is embedded as '; key = value' comments, template
+        form included, so matching them would report a diameter for a file
+        whose calibration block was never expanded."""
+        commented = "\n".join(f"; {line}" for line in CALIBRATING_GCODE.splitlines())
+        assert extrude_cali_nozzle_diameters(make_3mf(commented), export_3mf=True) == set()
+
+    def test_a_file_without_an_a_argument_reports_nothing(self):
+        """Not an error: the caller compares only what it finds, so a preset
+        shape nobody has captured cannot fail a run on its own."""
+        gcode = CALIBRATING_GCODE.replace(" A0.4", "")
+        assert extrude_cali_nozzle_diameters(make_3mf(gcode), export_3mf=True) == set()
+
+    @pytest.mark.parametrize("payload", [b"", b"not a zip at all"])
+    def test_unreadable_input_reports_nothing(self, payload):
+        """The gate guard has already rejected these; reporting a diameter for
+        a file that cannot be read would only add a confusing second reason."""
+        assert extrude_cali_nozzle_diameters(payload, export_3mf=True) == set()

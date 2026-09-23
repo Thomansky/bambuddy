@@ -188,4 +188,73 @@ describe('PaCalibrationCard', () => {
       'The printer returned no calibration result.',
     );
   });
+
+  describe('what the printers page actually renders', () => {
+    /**
+     * PrintersPage passes no `run` prop, so these go through the query -- the
+     * path that used to ask for `?active=true` and therefore could never
+     * receive a `done`, `failed` or `cancelled` row. The failure messages the
+     * backend composes, the content guard's explanation above all, were
+     * unreachable in the app while the tests above passed by injecting the
+     * prop.
+     */
+    it('asks for every run, not only the live ones', async () => {
+      vi.mocked(api.getPaCalibrationRuns).mockResolvedValue({ runs: [] });
+      render(<PaCalibrationCard printerId={1} />);
+      await waitFor(() => expect(api.getPaCalibrationRuns).toHaveBeenCalledWith(1));
+    });
+
+    it('shows a run that just failed, and why', async () => {
+      vi.mocked(api.getPaCalibrationRuns).mockResolvedValue({
+        runs: [
+          run({
+            status: 'failed',
+            error_message: 'The sliced file contains no flow-dynamics calibration step.',
+            completed_at: new Date().toISOString(),
+          }),
+        ],
+      });
+      render(<PaCalibrationCard printerId={1} />);
+
+      expect(await screen.findByTestId('pa-calibration-error')).toHaveTextContent(
+        'The sliced file contains no flow-dynamics calibration step.',
+      );
+      expect(screen.getByTestId('pa-calibration-stage')).toHaveTextContent('Failed');
+    });
+
+    it('goes away when the user dismisses it', async () => {
+      const user = userEvent.setup();
+      vi.mocked(api.getPaCalibrationRuns).mockResolvedValue({
+        runs: [run({ status: 'failed', error_message: 'nope', completed_at: new Date().toISOString() })],
+      });
+      render(<PaCalibrationCard printerId={1} />);
+
+      await user.click(await screen.findByTestId('pa-calibration-dismiss'));
+      await waitFor(() => expect(screen.queryByTestId('pa-calibration-card')).not.toBeInTheDocument());
+    });
+
+    it('does not resurrect a run that ended hours ago', async () => {
+      vi.mocked(api.getPaCalibrationRuns).mockResolvedValue({
+        runs: [
+          run({
+            status: 'done',
+            completed_at: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString(),
+          }),
+        ],
+      });
+      render(<PaCalibrationCard printerId={1} />);
+
+      await waitFor(() => expect(api.getPaCalibrationRuns).toHaveBeenCalled());
+      expect(screen.queryByTestId('pa-calibration-card')).not.toBeInTheDocument();
+    });
+
+    it('offers no dismiss while the run is still going', async () => {
+      vi.mocked(api.getPaCalibrationRuns).mockResolvedValue({ runs: [run({ status: 'printing' })] });
+      render(<PaCalibrationCard printerId={1} />);
+
+      await screen.findByTestId('pa-calibration-card');
+      expect(screen.queryByTestId('pa-calibration-dismiss')).not.toBeInTheDocument();
+      expect(screen.getByTestId('pa-calibration-cancel')).toBeInTheDocument();
+    });
+  });
 });

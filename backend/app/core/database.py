@@ -4998,6 +4998,7 @@ async def run_migrations(conn):
             progress FLOAT NOT NULL DEFAULT 0,
             remote_filename VARCHAR(255),
             dispatched_subtask_id VARCHAR(64),
+            print_started BOOLEAN DEFAULT FALSE,
             k_before FLOAT,
             k_value FLOAT,
             n_coef VARCHAR(32),
@@ -5035,6 +5036,7 @@ async def run_migrations(conn):
             progress DOUBLE PRECISION NOT NULL DEFAULT 0,
             remote_filename VARCHAR(255),
             dispatched_subtask_id VARCHAR(64),
+            print_started BOOLEAN DEFAULT FALSE,
             k_before DOUBLE PRECISION,
             k_value DOUBLE PRECISION,
             n_coef VARCHAR(32),
@@ -5061,6 +5063,10 @@ async def run_migrations(conn):
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_pa_calibration_runs_active "
         "ON pa_calibration_runs (printer_id) WHERE " + _PA_ACTIVE_STATUS_SQL,
     )
+    # For a database that already carries the table without this column: the
+    # latch that separates this run's FINISH from the one the previous run left
+    # behind on the same printer.
+    await _safe_execute(conn, "ALTER TABLE pa_calibration_runs ADD COLUMN print_started BOOLEAN DEFAULT FALSE")
 
     # Migration: storage location sensor alerts (#2824), own column rather than
     # reusing on_ha_sensor_alert. That column can be scoped to one printer

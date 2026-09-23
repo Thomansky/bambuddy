@@ -271,3 +271,92 @@ class TestRunToResponse:
 
         row = SimpleNamespace(**dict.fromkeys(PaCalibrationRunResponse.model_fields, None))
         assert set(pa.run_to_response(row)) == set(PaCalibrationRunResponse.model_fields)
+
+
+class TestPrintFinished:
+    """Telling this run's FINISH from the one the last run left behind.
+
+    Every PA run dispatches the same constant filename, so every run's subtask
+    name is ``bambuddy_pa_cali``; gcode_state can sit at FINISH for the better
+    part of a minute after the printer accepted project_file (#1078); and the
+    dispatch precondition deliberately allows FINISH. Without the latch, the
+    first tick after dispatch reads the *previous* run's FINISH as this one's.
+    """
+
+    @staticmethod
+    def row(**overrides):
+        fields = {"dispatched_subtask_id": "bambuddy_pa_cali", "print_started": True, **overrides}
+        return SimpleNamespace(**fields)
+
+    @staticmethod
+    def state(*, state="FINISH", subtask_name="bambuddy_pa_cali"):
+        # dispatched_subtask is what Bambuddy wrote itself at dispatch. It is
+        # in the state object, and it must never be what answers this question.
+        return SimpleNamespace(state=state, subtask_name=subtask_name, dispatched_subtask="bambuddy_pa_cali")
+
+    def test_a_finish_after_the_printer_was_seen_printing_is_ours(self):
+        assert pa.print_finished(self.state(), self.row()) is True
+
+    def test_a_finish_before_the_printer_ever_started_is_not(self):
+        assert pa.print_finished(self.state(), self.row(print_started=False)) is False
+
+    def test_an_empty_subtask_name_does_not_fall_back_to_our_own_dispatch(self):
+        assert pa.print_finished(self.state(subtask_name=""), self.row(print_started=False)) is False
+        assert pa.print_finished(self.state(subtask_name=None), self.row(print_started=False)) is False
+
+    def test_a_printer_that_reports_no_subtask_still_finishes_once_it_has_started(self):
+        """An X1C-style reconnect reports no subtask_name at all. The latch is
+        then the only evidence there is, and it is enough."""
+        assert pa.print_finished(self.state(subtask_name=None), self.row()) is True
+
+    def test_another_jobs_finish_is_ignored(self):
+        assert pa.print_finished(self.state(subtask_name="someone_elses_benchy"), self.row()) is False
+
+    @pytest.mark.parametrize("state", ["RUNNING", "PREPARE", "PAUSE", "IDLE", "FAILED"])
+    def test_only_finish_counts(self, state):
+        assert pa.print_finished(self.state(state=state), self.row()) is False
+
+
+class TestPresetNozzleDiameter:
+    """Precondition 7's other half: the diameter the slice was made for.
+
+    ``M983.3 A{nozzle_diameter}`` is expanded from the printer preset, so the
+    preset is what decides which nozzle gets measured -- while the existing
+    check compares two values that both come from push_status and can only
+    ever catch a physical swap.
+    """
+
+    @pytest.mark.parametrize(
+        "preset,expected",
+        [
+            ('{"nozzle_diameter": ["0.4"]}', "0.4"),
+            ('{"nozzle_diameter": "0.4"}', "0.4"),
+            ('{"nozzle_diameter": 0.6}', "0.6"),
+            ('{"nozzle_diameter": ["0.40"]}', "0.4"),
+        ],
+    )
+    def test_reads_the_shapes_a_preset_uses(self, preset, expected):
+        assert pa.preset_nozzle_diameter(preset) == expected
+
+    @pytest.mark.parametrize(
+        "preset",
+        [
+            '{"inherits": "Bambu Lab H2S 0.4 nozzle"}',
+            '{"nozzle_diameter": []}',
+            '{"nozzle_diameter": ""}',
+            "[]",
+            "",
+            "}",
+        ],
+    )
+    def test_says_nothing_rather_than_guessing(self, preset):
+        assert pa.preset_nozzle_diameter(preset) is None
+
+    def test_a_mismatch_is_a_mismatch(self):
+        assert pa.nozzle_diameter_mismatch("0.4", "0.6") is True
+
+    @pytest.mark.parametrize("found", ["0.4", "0.40", None, ""])
+    def test_agreement_and_silence_are_not(self, found):
+        """A preset that does not carry the field must not fail a run that is
+        otherwise perfectly correct -- older sidecars do not report it."""
+        assert pa.nozzle_diameter_mismatch("0.4", found) is False

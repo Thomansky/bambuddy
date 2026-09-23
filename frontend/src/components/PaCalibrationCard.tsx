@@ -8,13 +8,21 @@
  * At `awaiting_confirmation` the card stops being a progress indicator and
  * becomes a decision: old K next to new K, whether this overwrites a profile
  * or creates one, and two buttons. Discard makes no call that could write.
+ *
+ * It keeps showing a run after it has ended, which is why the query cannot
+ * ask for `?active=true`: that filter excludes `done`, `failed` and
+ * `cancelled` server-side, so every message a failed run recorded -- the
+ * content guard's explanation above all -- would be composed and then never
+ * displayed anywhere.
  */
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Gauge, X } from 'lucide-react';
 
 import { api } from '../api/client';
 import type { PaCalibrationRun } from '../api/client';
+import { hasLiveRun, pickVisibleRun } from '../utils/paCalibration';
 
 interface PaCalibrationCardProps {
   printerId: number;
@@ -38,18 +46,21 @@ function formatK(value: number | null | undefined): string {
 export function PaCalibrationCard({ printerId, run: runProp }: PaCalibrationCardProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const [dismissedId, setDismissedId] = useState<number | null>(null);
 
   const { data } = useQuery({
     queryKey: ['pa-calibration-runs', printerId],
-    queryFn: () => api.getPaCalibrationRuns(printerId, true),
+    queryFn: () => api.getPaCalibrationRuns(printerId),
     enabled: runProp === undefined,
     // Fast only while something is actually happening. Most of the time this
     // asks an idle printer whether nothing is still nothing, and every
     // supported printer on the page asks separately.
-    refetchInterval: (query) => (query.state.data?.runs?.length ? 5_000 : 20_000),
+    refetchInterval: (query) => (hasLiveRun(query.state.data?.runs) ? 5_000 : 20_000),
   });
 
-  const run = runProp ?? data?.runs?.[0] ?? null;
+  // The prop is the explicit-override path and renders whatever it is given;
+  // the polled path has to decide which run is still worth a card.
+  const run = runProp ?? pickVisibleRun(data?.runs, dismissedId);
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['pa-calibration-runs', printerId] });
 
@@ -75,6 +86,7 @@ export function PaCalibrationCard({ printerId, run: runProp }: PaCalibrationCard
 
   const inProgress = IN_PROGRESS.includes(run.status);
   const awaiting = run.status === 'awaiting_confirmation';
+  const terminal = !inProgress && !awaiting;
   const overwrites = run.k_before !== null && run.k_before !== undefined;
 
   return (
@@ -164,6 +176,19 @@ export function PaCalibrationCard({ printerId, run: runProp }: PaCalibrationCard
         <p style={{ color: 'var(--color-danger, #ef4444)' }} data-testid="pa-calibration-error">
           {run.error_message}
         </p>
+      )}
+
+      {terminal && (
+        <button
+          type="button"
+          onClick={() => setDismissedId(run.id)}
+          data-testid="pa-calibration-dismiss"
+          className="flex items-center gap-1 text-xs"
+          style={{ color: textSecondary }}
+        >
+          <X className="w-3 h-3" />
+          {t('common.dismiss')}
+        </button>
       )}
 
       {inProgress && (

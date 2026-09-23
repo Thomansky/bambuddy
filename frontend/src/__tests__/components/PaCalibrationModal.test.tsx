@@ -97,6 +97,11 @@ describe('PaCalibrationModal', () => {
     ['slicer_not_configured', /slicer sidecar is not reachable/],
     ['slot_empty', 'The slot holds no identified filament.'],
     ['run_already_active', 'A calibration is already running on this printer.'],
+    // The queue has the printer: an item already printing on it, an upload in
+    // flight, a post-dispatch hold, a drying cycle. None of those shows up in
+    // gcode_state, so without the preflight asking for them the modal reported
+    // "ready" for a printer that was about to start a job.
+    ['printer_reserved', 'The printer is reserved by another job.'],
   ])('disables Start and says why for %s', async (reason, text) => {
     preflight({ blocked_reasons: [reason] });
     render(<PaCalibrationModal {...props} />);

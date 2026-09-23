@@ -172,7 +172,7 @@ import { AssignSpoolModal } from '../components/AssignSpoolModal';
 import { ConfigureAmsSlotModal } from '../components/ConfigureAmsSlotModal';
 import { PaCalibrationModal } from '../components/PaCalibrationModal';
 import { PaCalibrationCard } from '../components/PaCalibrationCard';
-import { supportsPaCalibration } from '../utils/paCalibration';
+import { paCalibrationBlockedKey, supportsPaCalibration } from '../utils/paCalibration';
 import { useToast } from '../contexts/ToastContext';
 import { ChamberLight } from '../components/icons/ChamberLight';
 import { PlateClearedIcon } from '../components/icons/PlateClearedIcon';
@@ -5726,9 +5726,13 @@ function PrinterCard({
                                         })()}
                                         calibratePa={{
                                           enabled: hasPermission('printers:control') && supportsPaCalibration(printer.model),
-                                          disabledReason: supportsPaCalibration(printer.model)
-                                            ? undefined
-                                            : t('paCalibration.blocked.model_not_supported'),
+                                          disabledReason: (() => {
+                                            const key = paCalibrationBlockedKey({
+                                              model: printer.model,
+                                              canControl: hasPermission('printers:control'),
+                                            });
+                                            return key ? t(key) : undefined;
+                                          })(),
                                           onCalibrate: () => setPaCalibrationModal({
                                             amsId: ams.id,
                                             slotId: slotIdx,
@@ -6144,9 +6148,13 @@ function PrinterCard({
                                     })()}
                                     calibratePa={{
                                       enabled: hasPermission('printers:control') && supportsPaCalibration(printer.model),
-                                      disabledReason: supportsPaCalibration(printer.model)
-                                        ? undefined
-                                        : t('paCalibration.blocked.model_not_supported'),
+                                      disabledReason: (() => {
+                                        const key = paCalibrationBlockedKey({
+                                          model: printer.model,
+                                          canControl: hasPermission('printers:control'),
+                                        });
+                                        return key ? t(key) : undefined;
+                                      })(),
                                       onCalibrate: () => setPaCalibrationModal({
                                         amsId: ams.id,
                                         slotId: htSlotId,
@@ -6447,9 +6455,13 @@ function PrinterCard({
                                       })()}
                                       calibratePa={{
                                         enabled: hasPermission('printers:control') && supportsPaCalibration(printer.model),
-                                        disabledReason: supportsPaCalibration(printer.model)
-                                          ? undefined
-                                          : t('paCalibration.blocked.model_not_supported'),
+                                        disabledReason: (() => {
+                                          const key = paCalibrationBlockedKey({
+                                            model: printer.model,
+                                            canControl: hasPermission('printers:control'),
+                                          });
+                                          return key ? t(key) : undefined;
+                                        })(),
                                         onCalibrate: () => setPaCalibrationModal({
                                           amsId: 255,
                                           slotId: slotTrayId,

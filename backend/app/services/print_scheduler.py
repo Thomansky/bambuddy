@@ -997,6 +997,11 @@ class PrintScheduler:
         logger.info("Print scheduler started")
 
         await self._clear_stale_dispatch_claims(at_startup=True)
+        # Same reasoning, for the other kind of claim a restart can strand: a
+        # calibration run left in slicing / uploading / reading_result has no
+        # coroutine behind it any more, and every one of those statuses holds
+        # the printer off this queue.
+        await pa_calibration.reconcile_interrupted_runs()
 
         while self._running:
             dispatched = False
@@ -4685,25 +4690,60 @@ class PrintScheduler:
     SCHEDULED_DRYING_GRACE_SECONDS = 120  # firmware needs time to report dry_time
     SCHEDULED_DRYING_COMPLETE_FRACTION = 0.9  # dry_time==0 earlier than this = interrupted
 
+    async def printers_reserved_elsewhere(self, db: AsyncSession) -> set[int]:
+        """Printers something other than a calibration run has already claimed.
+
+        The other half of the reservation. The print dispatch subtracts a live
+        calibration run from its own pass; this is what a calibration run has
+        to subtract before it claims a printer, and what the preflight reports
+        as `printer_reserved`. Every fact in it is one the queue keeps
+        precisely *because* it is not visible in ``gcode_state``:
+
+        * a queue row already ``printing``, or claimed by a dispatch worker
+          (``dispatching_at``, #2615) — the MQTT transition from IDLE to
+          RUNNING lags the print command by several seconds, which is the same
+          reason ``busy_printers`` is seeded from the table rather than from
+          ``_is_printer_idle``;
+        * an upload still in flight from an earlier pass (#2602) — the row is
+          still ``pending`` and the printer still IDLE while the 3MF goes over
+          FTP;
+        * a printer inside its post-dispatch hold window (#1157);
+        * drying, scheduled or manual.
+
+        The calibration pass runs before this pass seeds any of the first
+        three for itself, so reading them here is the only thing that keeps a
+        calibration out of a printer the queue claimed seconds ago.
+        """
+        claimed = set(self._drying_in_progress) | set(self._scheduled_drying_printer_ids)
+        claimed |= {pid for (_task, pid) in self._inflight.values() if pid is not None}
+        claimed |= {pid for pid in list(self._dispatch_holds) if self._printer_in_dispatch_hold(pid)}
+        rows = await db.execute(
+            select(PrintQueueItem.printer_id)
+            .where(PrintQueueItem.printer_id.is_not(None))
+            .where(or_(PrintQueueItem.status == "printing", PrintQueueItem.dispatching_at.is_not(None)))
+        )
+        return claimed | {pid for (pid,) in rows.all() if pid is not None}
+
     async def _check_pa_calibration_runs(self, db: AsyncSession, require_plate_clear: bool) -> None:
         """Advance flow-dynamics calibration runs and record which printers they hold.
 
         A thin wrapper on purpose: the state machine lives in
         ``services.pa_calibration`` so it can be driven directly by tests
         without standing up a scheduler, and this is the one place that knows
-        the scheduler's own vocabulary — the plate-clear setting on the way in,
-        and the reservation set on the way out.
+        the scheduler's own vocabulary — the plate-clear setting and the
+        printers the queue has taken on the way in, and the reservation set on
+        the way out.
 
-        ``_queue_printers_taken_for_pa`` is the printers this pass must not
-        dispatch to. It is deliberately NOT the whole set of live runs: a run
-        still waiting for the printer has claimed nothing, and reserving there
-        would deadlock it against the very queue it is waiting behind.
+        What comes back is the printers this pass must not dispatch to. It is
+        deliberately NOT the whole set of live runs: a run still waiting for
+        the printer has claimed nothing, and reserving there would deadlock it
+        against the very queue it is waiting behind.
         """
         try:
             self._pa_calibrating_printer_ids = await pa_calibration.tick(
                 db,
                 require_plate_clear=require_plate_clear,
-                printer_busy_ids=set(self._drying_in_progress) | self._scheduled_drying_printer_ids,
+                printer_busy_ids=await self.printers_reserved_elsewhere(db),
             )
         except Exception:
             # One bad row must not cost the whole queue pass -- print dispatch

@@ -33,7 +33,7 @@ import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useCancellableTimeout } from '../hooks/useCancellableTimeout';
 import { PaCalibrationModal } from './PaCalibrationModal';
-import { supportsPaCalibration } from '../utils/paCalibration';
+import { paCalibrationBlockedKey, supportsPaCalibration } from '../utils/paCalibration';
 
 /**
  * The slot this profile's filament is loaded into, or null.
@@ -1131,20 +1131,19 @@ export function KProfilesView() {
   const calibrateConfig = useCallback(
     (profile: KProfile) => {
       const slot = paSupported ? findLoadedSlot(printerStatus, profile.filament_id) : null;
-      const disabledReason = !paSupported
-        ? t('paCalibration.blocked.model_not_supported')
-        : !canCalibrate
-          ? t('paCalibration.noPermission')
-          : slot === null
-            ? t('paCalibration.notLoaded')
-            : undefined;
+      const blocked = paCalibrationBlockedKey({
+        model: selectedPrinterData?.model,
+        canControl: canCalibrate,
+        slotLoaded: slot !== null,
+      });
+      const disabledReason = blocked ? t(blocked) : undefined;
       return {
         enabled: Boolean(slot) && paSupported && canCalibrate,
         disabledReason,
         onCalibrate: () => slot && setCalibratingSlot(slot),
       };
     },
-    [paSupported, canCalibrate, printerStatus, t],
+    [paSupported, canCalibrate, printerStatus, selectedPrinterData?.model, t],
   );
 
   // Don't strand the list behind a filter whose control just disappeared.

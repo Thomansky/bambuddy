@@ -24,6 +24,7 @@ two complete runs (``mqtt-tap/tap-0938BJ611001133-20260920-103100.jsonl``).
 
 from __future__ import annotations
 
+import json
 import logging
 import tempfile
 import uuid
@@ -47,6 +48,7 @@ from backend.app.services.bambu_ftp import (
 from backend.app.services.printer_manager import printer_manager
 from backend.app.services.slice_output_check import (
     extrude_cali_gate_missing,
+    extrude_cali_nozzle_diameters,
     missing_extrude_cali_message,
     missing_start_gcode_message,
     start_gcode_is_missing,
@@ -108,9 +110,11 @@ PA_PLATE_TYPES = ("cool_plate", "eng_plate", "hot_plate", "textured_plate")
 # applies to a queued job.
 START_WATCHDOG_SECONDS = 90
 
-# An active run older than this is dead: its backend restarted mid-slice, or
-# the printer went offline mid-print and never came back. Closing it keeps the
-# next attempt from being blocked forever by the one-run-per-printer index.
+# A started run older than this is dead: the printer went offline mid-print
+# and never came back, or a task died somewhere this module does not model.
+# Closing it keeps the next attempt from being blocked forever by the
+# one-run-per-printer index. The restart case does not wait for this clock --
+# see reconcile_interrupted_runs.
 STALE_ACTIVE_HOURS = 2
 # A result nobody confirmed is not written. Sweeping it keeps the row out of
 # the way without ever touching the printer.
@@ -127,6 +131,21 @@ _ACTIVE_PRINT_STATES = frozenset({"PREPARE", "SLICING", "RUNNING", "PAUSE"})
 # `awaiting_confirmation` the print has finished -- holding a farm printer for
 # up to 24 hours waiting on a click would be worse than anything it protects.
 RESERVING_STATUSES: frozenset[str] = frozenset({"slicing", "uploading", "printing", "reading_result"})
+
+# Statuses that only ever move forward because a background task is driving
+# them. No coroutine survives a process restart, and nothing re-spawns one, so
+# a row found in one of these at startup has nothing behind it -- and every one
+# of them is a RESERVING_STATUS, holding the printer off the print queue while
+# it sits there.
+TASK_DRIVEN_STATUSES: frozenset[str] = frozenset({"slicing", "uploading", "reading_result"})
+
+_INTERRUPTED_MESSAGES = {
+    "slicing": "Bambuddy restarted while the calibration job was being sliced. Nothing reached the printer.",
+    "uploading": "Bambuddy restarted while the calibration job was being uploaded.",
+    "reading_result": (
+        "Bambuddy restarted before the measurement could be read back. Nothing was written to the printer."
+    ),
+}
 
 
 class PaCalibrationError(Exception):
@@ -375,6 +394,50 @@ def _patch_bed_type(process_json: str, bed_type: str) -> str:
     return _patch_process_bed_type(process_json, bed_type)
 
 
+def preset_nozzle_diameter(printer_json: str) -> str | None:
+    """The nozzle diameter a resolved printer preset slices for, or None.
+
+    Bambu presets carry it as a one-element list (``["0.4"]``); a flattened
+    string or a number is accepted too. None means the preset does not say,
+    and the caller must not turn "cannot tell" into a refusal.
+    """
+    try:
+        data = json.loads(printer_json or "")
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    value = data.get("nozzle_diameter")
+    if isinstance(value, list):
+        value = value[0] if value else None
+    if value is None or isinstance(value, bool):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        # "0.40" and "0.4" are the same nozzle; compare as numbers, render the
+        # way the rest of the feature spells a diameter.
+        return f"{float(text):g}"
+    except ValueError:
+        return None
+
+
+def nozzle_diameter_mismatch(expected: str, found: str | None) -> bool:
+    """Whether a diameter from a preset or a sliced file contradicts the run's.
+
+    ``None`` is not a contradiction -- an older sidecar's preset may not carry
+    the field at all, and refusing on a missing value would fail runs that are
+    perfectly correct.
+    """
+    if not found:
+        return False
+    try:
+        return float(found) != float(expected)
+    except (TypeError, ValueError):
+        return False
+
+
 async def slice_calibration_job(db: AsyncSession, row: PaCalibrationRun, *, on_progress=None) -> bytes:
     """Slice the calibration job, or raise ``PaCalibrationError``.
 
@@ -404,6 +467,22 @@ async def slice_calibration_job(db: AsyncSession, row: PaCalibrationRun, *, on_p
     printer_json = await resolve_preset_ref(db, None, printer_ref, "printer")
     process_json = await resolve_preset_ref(db, None, process_ref, "process")
     filament_json = await resolve_preset_ref(db, None, filament_ref, "filament")
+
+    # Precondition 7, on the half the live nozzle check cannot see. The run
+    # records the diameter the printer reports as fitted; the measurement is
+    # run by "M983.3 F... A{nozzle_diameter}" expanded from the PRINTER PRESET.
+    # Both sides of the existing check come from push_status, so a user who
+    # edits the preset field to another machine's nozzle gets a file that
+    # measures 0.6 through a 0.4 nozzle and a result filed under 0.4. Checked
+    # before the slice, because a slice that cannot be used is worth nobody's
+    # minute.
+    preset_diameter = preset_nozzle_diameter(printer_json)
+    if nozzle_diameter_mismatch(row.nozzle_diameter, preset_diameter):
+        raise PaCalibrationError(
+            f"The printer preset '{printer_ref.id}' slices for a {preset_diameter} mm nozzle, "
+            f"but a {row.nozzle_diameter} mm nozzle is fitted. The measurement would be run for "
+            "the wrong nozzle and stored against this one."
+        )
 
     # The plate the user confirmed is on the bed has to reach the SLICER, not
     # the dispatch: ``curr_bed_type`` inside the G-code decides the texture
@@ -449,6 +528,18 @@ async def slice_calibration_job(db: AsyncSession, row: PaCalibrationRun, *, on_p
     if extrude_cali_gate_missing(content, export_3mf=True):
         raise PaCalibrationError(missing_extrude_cali_message(preset_name))
 
+    # The same check again, this time against what the slicer actually wrote:
+    # the A argument of the expanded M983.3 is the diameter the printer will
+    # measure for. Belt and braces with the preset check above, and the only
+    # one of the two that still holds if a sidecar resolves the preset
+    # differently from how it reports it.
+    for sliced in sorted(extrude_cali_nozzle_diameters(content, export_3mf=True)):
+        if nozzle_diameter_mismatch(row.nozzle_diameter, sliced):
+            raise PaCalibrationError(
+                f"The sliced file measures a {sliced} mm nozzle, but a {row.nozzle_diameter} mm "
+                f"nozzle is fitted. It was discarded rather than printed."
+            )
+
     return content
 
 
@@ -457,9 +548,14 @@ async def upload_calibration_job(printer: Printer, row: PaCalibrationRun, conten
 
     Deletes first: the firmware answers 553 to an overwrite, which is the same
     reason the print dispatch deletes before uploading.
+
+    ``remote_filename`` is recorded before the transfer rather than after it.
+    A name only written on success would make every cleanup path skip a
+    transfer that got half-way, leaving a truncated 3MF in the printer's root.
     """
     _, _, _, ftp_timeout = await get_ftp_retry_settings()
     remote = f"/{PA_REMOTE_FILENAME}"
+    row.remote_filename = PA_REMOTE_FILENAME
     try:
         await delete_file_async(
             printer.ip_address,
@@ -496,7 +592,6 @@ async def upload_calibration_job(printer: Printer, row: PaCalibrationRun, conten
 
     if not uploaded:
         raise PaCalibrationError(describe_upload_failure(failure.failure))
-    row.remote_filename = PA_REMOTE_FILENAME
 
 
 def recheck_preconditions(printer: Printer, row: PaCalibrationRun) -> str | None:
@@ -617,6 +712,20 @@ def build_write_payload(row: PaCalibrationRun, *, profile_name: str) -> dict:
     )
 
 
+async def printer_reserved_elsewhere(db: AsyncSession, printer_id: int) -> bool:
+    """Whether the print queue or a drying cycle has already claimed this printer.
+
+    The other direction of the reservation, asked through the scheduler
+    because it owns all four facts -- a queue row printing or claimed, an
+    upload still in flight, a post-dispatch hold, drying -- and none of them
+    is visible in ``gcode_state``. Imported here rather than at module scope:
+    the scheduler imports this module.
+    """
+    from backend.app.services.print_scheduler import scheduler
+
+    return printer_id in await scheduler.printers_reserved_elsewhere(db)
+
+
 async def active_run_printer_ids(db: AsyncSession) -> set[int]:
     """Printers currently held by a calibration run.
 
@@ -629,20 +738,32 @@ async def active_run_printer_ids(db: AsyncSession) -> set[int]:
     return {pid for (pid,) in rows.all() if pid is not None}
 
 
-async def sweep_stale_runs(db: AsyncSession) -> int:
+async def sweep_stale_runs(db: AsyncSession, *, spawn=None) -> int:
     """Close runs that cannot finish, so the next attempt is not blocked.
 
-    Two clocks, two outcomes. An active run older than two hours is dead -- a
-    restart mid-slice, a printer that went offline mid-print -- and is failed.
-    A run waiting for confirmation is not dead, only unanswered; after a day it
-    is cancelled, and cancelled means *nothing was written*.
+    Two clocks, two outcomes. A run that has started and is older than two
+    hours is dead -- a task that died mid-slice, a printer that went offline
+    mid-print -- and is failed. A run waiting for confirmation is not dead,
+    only unanswered; after a day it is cancelled, and cancelled means *nothing
+    was written*.
+
+    A ``queued`` run has neither clock. It is not stale, it is queued: it holds
+    no printer, it has a reason on it saying what it is waiting for, and a
+    queued *print* behind a six-hour job does not expire after two hours
+    either. Failing it would contradict the deferral-never-drop discipline the
+    rest of this module is built on, and the message would be a lie.
+
+    The uploaded job is removed from the printer for anything swept while it
+    still held one -- ``spawn`` defers that to after the caller's commit, so a
+    scheduler tick never waits on FTP; calling without it deletes inline.
     """
     now = utcnow_naive()
     swept = 0
+    orphaned: list[PaCalibrationRun] = []
     result = await db.execute(select(PaCalibrationRun).where(PaCalibrationRun.status.in_(ACTIVE_PA_STATUSES)))
     for row in result.scalars():
         reference = row.started_at or row.created_at
-        if reference is None:
+        if reference is None or row.status == "queued":
             continue
         if row.status == "awaiting_confirmation":
             if now - reference > timedelta(hours=STALE_AWAITING_HOURS):
@@ -652,8 +773,22 @@ async def sweep_stale_runs(db: AsyncSession) -> int:
                 swept += 1
             continue
         if now - reference > timedelta(hours=STALE_ACTIVE_HOURS):
+            if row.remote_filename:
+                orphaned.append(row)
             fail_run(row, "The run stopped making progress and was closed after two hours.")
             swept += 1
+
+    if orphaned:
+        printer_rows = await db.execute(select(Printer).where(Printer.id.in_({r.printer_id for r in orphaned})))
+        printers = {p.id: p for p in printer_rows.scalars()}
+        for row in orphaned:
+            printer = printers.get(row.printer_id)
+            if printer is None:
+                continue
+            if spawn is not None:
+                spawn(cleanup_remote_file(printer, row), name=f"pa-calibration-sweep-cleanup-{row.id}")
+            else:
+                await cleanup_remote_file(printer, row)
     return swept
 
 
@@ -693,8 +828,130 @@ async def finish_terminal(row: PaCalibrationRun, printer: Printer, *, event: str
     await notify(event, row, printer.name, detail)
 
 
+async def run_status_now(db: AsyncSession, run_id: int) -> str | None:
+    """The run's status as the database has it, not as this session remembers it.
+
+    A background task loads its row once and then works for minutes. The cancel
+    route writes from the request's own session, and the sessionmaker is
+    ``expire_on_commit=False``, so this session's copy still says what it said
+    when the task started -- and its next ``commit`` would blindly write that
+    stale status back over the cancel, reviving a run the user stopped.
+
+    ``no_autoflush`` is load-bearing: the row is dirty while this runs (the
+    slice's progress callback writes to it), and an autoflush on the way out
+    would push exactly the value this read exists to question.
+    """
+    with db.no_autoflush:
+        result = await db.execute(select(PaCalibrationRun.status).where(PaCalibrationRun.id == run_id))
+    return result.scalar_one_or_none()
+
+
+async def stopped_meanwhile(db: AsyncSession, run_id: int, printer: Printer, expected: str) -> bool:
+    """Whether this run stopped being ours while the last step ran.
+
+    Cancelled from the route, or closed by the sweep. Rolls back whatever this
+    session was about to write -- committing it would blindly revive the run
+    and carry on to ``start_print`` -- and removes whatever was uploaded
+    before it stopped.
+    """
+    if await run_status_now(db, run_id) == expected:
+        return False
+    await db.rollback()
+    logger.info("PA calibration run %s: no longer %s, stopping before the printer is touched", run_id, expected)
+    row = await db.get(PaCalibrationRun, run_id)
+    if row is not None:
+        await cleanup_remote_file(printer, row)
+    return True
+
+
+async def close_stranded_run(run_id: int, message: str) -> None:
+    """Fail a run whose driving task died, in a session of its own.
+
+    The session the task was using may be the reason it died, so this takes a
+    fresh one. Nothing here may raise: it is already the error path.
+    """
+    from backend.app.core.database import async_session
+
+    try:
+        async with async_session() as db:
+            row = await db.get(PaCalibrationRun, run_id)
+            if row is None or row.status not in ACTIVE_PA_STATUSES:
+                return
+            printer = await db.get(Printer, row.printer_id)
+            fail_run(row, message)
+            await db.commit()
+            if printer is not None:
+                await finish_terminal(row, printer, event="failed", detail=message)
+    except Exception:  # noqa: BLE001 - the error path may not have an error path
+        logger.exception("PA calibration run %s: could not close a stranded run", run_id)
+
+
+async def reconcile_interrupted_runs() -> int:
+    """Close runs whose driving task did not survive a restart.
+
+    ``slicing``, ``uploading`` and ``reading_result`` only ever move forward
+    because a background task is pushing them, and no coroutine survives a
+    process restart -- the same fact the queue clears its dispatch claims on at
+    startup (#2615). Nothing re-spawns these, so without this a run interrupted
+    mid-slice sits there until the two-hour sweep, and for those two hours
+    every queued job for its printer is held with "running a flow-dynamics
+    calibration" while nothing is running and nothing is being sliced.
+
+    Failing rather than resuming: a run that was interrupted before dispatch
+    was authorised by a person who ticked "the build plate is empty" some time
+    ago, and silently starting a print on their plate after a container
+    restart is not a recovery, it is a surprise.
+    """
+    from backend.app.core.database import async_session
+
+    closed = 0
+    try:
+        async with async_session() as db:
+            result = await db.execute(
+                select(PaCalibrationRun).where(PaCalibrationRun.status.in_(sorted(TASK_DRIVEN_STATUSES)))
+            )
+            rows = list(result.scalars().all())
+            if not rows:
+                return 0
+            printer_rows = await db.execute(select(Printer).where(Printer.id.in_({r.printer_id for r in rows})))
+            printers = {p.id: p for p in printer_rows.scalars()}
+            interrupted = []
+            for row in rows:
+                message = _INTERRUPTED_MESSAGES[row.status]
+                fail_run(row, message)
+                interrupted.append((row, message))
+                closed += 1
+            await db.commit()
+            for row, message in interrupted:
+                printer = printers.get(row.printer_id)
+                if printer is not None:
+                    await finish_terminal(row, printer, event="failed", detail=message)
+    except Exception:  # noqa: BLE001 - startup must not fail on this
+        logger.exception("Could not reconcile interrupted flow-dynamics calibration runs")
+    if closed:
+        logger.info("Closed %d flow-dynamics calibration run(s) interrupted by a restart", closed)
+    return closed
+
+
 async def run_slice_and_dispatch(run_id: int) -> None:
     """Slice, guard, upload, re-check, dispatch. One run, up to printing.
+
+    Wrapped so that nothing can escape. Anything this path raises that is not a
+    ``PaCalibrationError`` -- an ``HTTPException`` out of ``resolve_preset_ref``
+    for a preset ref it cannot serve, an ``OSError`` reading the model, a
+    transport error outside a guarded block -- would otherwise leave the row in
+    ``slicing`` with no task behind it, holding the printer off the print queue
+    until the two-hour sweep.
+    """
+    try:
+        await _slice_and_dispatch(run_id)
+    except Exception:
+        logger.exception("PA calibration run %s: preparing the calibration print failed", run_id)
+        await close_stranded_run(run_id, "Preparing the calibration print failed unexpectedly.")
+
+
+async def _slice_and_dispatch(run_id: int) -> None:
+    """The body of ``run_slice_and_dispatch``.
 
     Owns its own session: it runs for minutes and must not hold the scheduler's
     pooled connection while an FTP transfer is in flight, which is the same
@@ -729,7 +986,16 @@ async def run_slice_and_dispatch(run_id: int) -> None:
             await notify("failed", row, printer.name, str(exc))
             return
 
+        # Cancelled while the slice ran? Nothing has been uploaded and nothing
+        # published, so stopping is the whole of it.
+        if await stopped_meanwhile(db, run_id, printer, "slicing"):
+            return
+
         set_stage(row, "uploading", progress=0.0)
+        # Committed before the transfer starts, so both this task and the
+        # cancel route know which file to remove if the upload is interrupted
+        # or only gets half-way.
+        row.remote_filename = PA_REMOTE_FILENAME
         await db.commit()
 
         try:
@@ -740,11 +1006,42 @@ async def run_slice_and_dispatch(run_id: int) -> None:
             await finish_terminal(row, printer, event="failed", detail=str(exc))
             return
 
+        # Cancelled during the upload? The file is on the printer by now, or
+        # partly so, and it goes with the run.
+        if await stopped_meanwhile(db, run_id, printer, "uploading"):
+            return
+
+        # Both re-checks first, then one last look at the run itself, then
+        # the branch that acts -- with nothing awaited in between. Asking
+        # about the run before these would let their conclusion be written
+        # over a cancel that landed while they ran, which is the whole shape
+        # of the bug this guards.
         blocked = recheck_preconditions(printer, row)
+        reserved = False if blocked else await printer_reserved_elsewhere(db, row.printer_id)
+        if await stopped_meanwhile(db, run_id, printer, "uploading"):
+            return
+
         if blocked:
             fail_run(row, blocked)
             await db.commit()
             await finish_terminal(row, printer, event="failed", detail=blocked)
+            return
+
+        if reserved:
+            # The queue claimed the printer while this was being sliced and
+            # uploaded. Deferral, not failure: the user asked for a
+            # calibration, not for one attempt at one. The uploaded file stays
+            # where it is -- the next attempt deletes before uploading, and a
+            # cancel removes it by the name already on the row.
+            set_stage(row, "queued", progress=0.0)
+            row.waiting_reason = "printer_reserved"
+            row.started_at = None
+            await db.commit()
+            logger.info(
+                "PA calibration run %s: the print queue took printer %s during the upload; back to queued",
+                row.id,
+                row.printer_id,
+            )
             return
 
         if not start_calibration_print(row):
@@ -756,6 +1053,9 @@ async def run_slice_and_dispatch(run_id: int) -> None:
         state = printer_manager.get_status(row.printer_id)
         row.dispatched_subtask_id = getattr(state, "dispatched_subtask", None) if state else None
         set_stage(row, "printing", progress=0.0)
+        # The printer has not been seen printing yet. Until it is, a FINISH is
+        # the previous job's, not ours; see ``print_finished``.
+        row.print_started = False
         row.started_at = utcnow_naive()
         await db.commit()
         logger.info(
@@ -772,7 +1072,20 @@ async def run_read_result(run_id: int, *, settle_seconds: float = 3.0) -> None:
     Nothing is written to the printer here. That is the whole point of the
     separate ``awaiting_confirmation`` state: the K value the printer measured
     does not become the K value the printer *uses* until a person says so.
+
+    Wrapped for the same reason the dispatch task is: ``reading_result`` is a
+    reserving status, so a task that dies inside it holds the printer off the
+    print queue with nothing behind it.
     """
+    try:
+        await _read_result(run_id, settle_seconds=settle_seconds)
+    except Exception:
+        logger.exception("PA calibration run %s: reading the measurement failed", run_id)
+        await close_stranded_run(run_id, "Reading the measurement back from the printer failed unexpectedly.")
+
+
+async def _read_result(run_id: int, *, settle_seconds: float = 3.0) -> None:
+    """The body of ``run_read_result``."""
     import asyncio
 
     from backend.app.core.database import async_session
@@ -844,17 +1157,31 @@ async def run_read_result(run_id: int, *, settle_seconds: float = 3.0) -> None:
 def print_finished(state, row: PaCalibrationRun) -> bool:
     """Whether the calibration print we dispatched has ended successfully.
 
-    The subtask name is checked whenever we have one: a FINISH belonging to
-    some other job -- a touchscreen reprint, a job Studio sent -- must not be
-    read as our measurement finishing.
+    Two things have to be true, and the first is what gives the second any
+    meaning. The printer must have been *seen* printing since this run
+    dispatched (``print_started``): ``gcode_state`` can sit at FINISH for the
+    better part of a minute after the printer accepted ``project_file``
+    (#1078, which is why the queue's own start watchdog accepts a subtask
+    advance as well as a state change), and the remote filename is a constant
+    -- so the FINISH the *previous* calibration on this printer left behind
+    reports our own subtask name and would otherwise read as this run
+    finishing, seconds after dispatch and before the printer has moved.
+
+    Then the subtask name, whenever the printer reports one: a FINISH
+    belonging to some other job -- a touchscreen reprint, a job Studio sent --
+    must not be read as our measurement finishing. Only what the printer
+    reports counts. ``state.dispatched_subtask`` is the value Bambuddy wrote
+    itself at dispatch, so comparing against it can only ever agree.
     """
     if getattr(state, "state", None) != "FINISH":
         return False
+    if not row.print_started:
+        return False
     expected = row.dispatched_subtask_id
-    if not expected:
+    observed = getattr(state, "subtask_name", None)
+    if not expected or not observed:
         return True
-    observed = getattr(state, "subtask_name", None) or getattr(state, "dispatched_subtask", None)
-    return not observed or str(observed) == str(expected)
+    return str(observed) == str(expected)
 
 
 async def tick(
@@ -874,7 +1201,29 @@ async def tick(
     from backend.app.core.tasks import spawn_background_task
 
     busy = printer_busy_ids or set()
-    await sweep_stale_runs(db)
+    # Every task this pass decides to start, spawned only after the commit
+    # below. A task that started first would open its own session, read the
+    # row as the database still has it -- `queued`, not `slicing` -- and
+    # return, leaving a status nothing is driving.
+    deferred: list[tuple[object, str | None]] = []
+
+    def defer(coro, name: str | None = None) -> None:
+        deferred.append((coro, name))
+
+    async def commit_and_spawn() -> None:
+        try:
+            await db.commit()
+        except Exception:
+            # The decisions these tasks were to act on were not written, so
+            # they must not run. Closing them also keeps a failed pass from
+            # filling the log with "coroutine was never awaited".
+            for pending, _name in deferred:
+                pending.close()
+            raise
+        for pending, pending_name in deferred:
+            spawn_background_task(pending, name=pending_name)
+
+    await sweep_stale_runs(db, spawn=defer)
 
     result = await db.execute(
         select(PaCalibrationRun)
@@ -883,7 +1232,7 @@ async def tick(
     )
     rows = list(result.scalars().all())
     if not rows:
-        await db.commit()
+        await commit_and_spawn()
         return set()
 
     printer_ids = {row.printer_id for row in rows}
@@ -901,12 +1250,12 @@ async def tick(
                 printer,
                 require_plate_clear=require_plate_clear,
                 busy=busy,
-                spawn=spawn_background_task,
+                spawn=defer,
             )
         elif row.status == "printing":
-            tick_printing(row, printer, now=now, spawn=spawn_background_task)
+            tick_printing(row, printer, now=now, spawn=defer)
 
-    await db.commit()
+    await commit_and_spawn()
     return {row.printer_id for row in rows if row.status in RESERVING_STATUSES}
 
 
@@ -980,6 +1329,11 @@ def tick_printing(row, printer, *, now, spawn) -> None:
         return
     row.waiting_reason = None
 
+    if state.state in _ACTIVE_PRINT_STATES:
+        # The one observation that separates this run's FINISH from the one the
+        # previous run left sitting on this printer. Latched, never cleared.
+        row.print_started = True
+
     if print_finished(state, row):
         set_stage(row, "reading_result", progress=100.0)
         spawn(run_read_result(row.id), name=f"pa-calibration-result-{row.id}")
@@ -1005,7 +1359,13 @@ def tick_printing(row, printer, *, now, spawn) -> None:
         and started is not None
         and (now - started).total_seconds() > START_WATCHDOG_SECONDS
     ):
-        fail_run(row, "The printer never started the calibration print.")
+        # Which of the two this is depends on the latch: a printer that was
+        # never seen printing did not take the job, one that was has stopped
+        # without reaching a FINISH we recognise.
+        if row.print_started:
+            fail_run(row, "The calibration print stopped before it finished.")
+        else:
+            fail_run(row, "The printer never started the calibration print.")
         spawn(
             finish_terminal(row, printer, event="failed", detail=row.error_message or ""),
             name=f"pa-calibration-cleanup-{row.id}",

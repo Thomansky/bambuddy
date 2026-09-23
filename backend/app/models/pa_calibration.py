@@ -88,6 +88,14 @@ class PaCalibrationRun(Base):
 
     remote_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
     dispatched_subtask_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Latched the first time the printer is *observed* in an active print state
+    # after dispatch. Without it a FINISH left over from the previous run on
+    # this printer is indistinguishable from this run's own: gcode_state can sit
+    # at FINISH for the better part of a minute after the printer accepted
+    # project_file (#1078), and the remote filename is a constant, so every run
+    # reports the same subtask name. On the row rather than in memory because a
+    # restart must not turn the latch back off mid-print.
+    print_started: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # The K stored for this (filament_id, nozzle_id) before the run, read at
     # creation so the confirmation card can show old -> new. NULL means there

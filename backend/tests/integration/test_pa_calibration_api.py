@@ -175,6 +175,7 @@ def pa_env(monkeypatch, test_engine):
         starts=[],
         start_result=True,
         plate_clear_pending=False,
+        printer_preset_nozzle=None,
     )
 
     monkeypatch.setattr(pa.printer_manager, "get_status", lambda _pid: env.state)
@@ -233,7 +234,10 @@ def pa_env(monkeypatch, test_engine):
     monkeypatch.setattr("backend.app.services.slicer_api.SlicerApiService", FakeSlicer)
 
     async def _resolve(_db, _user, ref, slot):
-        return json.dumps({"type": slot, "inherits": ref.id})
+        preset = {"type": slot, "inherits": ref.id}
+        if slot == "printer" and env.printer_preset_nozzle:
+            preset["nozzle_diameter"] = [env.printer_preset_nozzle]
+        return json.dumps(preset)
 
     monkeypatch.setattr("backend.app.services.preset_resolver.resolve_preset_ref", _resolve)
     monkeypatch.setattr("backend.app.services.pa_calibration.notify", AsyncMock())
@@ -344,6 +348,61 @@ class TestSliceAndDispatch:
         assert "changed" in row.error_message
         assert pa_env.starts == []
 
+    async def test_a_printer_preset_for_another_nozzle_never_reaches_the_printer(self, db_session, h2s, pa_env):
+        """Precondition 7's other half.
+
+        The fitted-nozzle check compares two values that both come from
+        push_status, so it only ever catches a physical swap. The diameter the
+        measurement is actually run for comes from the printer preset --
+        "M983.3 A{nozzle_diameter}" -- and a preset for another machine's
+        nozzle would measure 0.6 and file the answer under 0.4.
+        """
+        pa_env.printer_preset_nozzle = "0.6"
+        row = await make_run(db_session, h2s, status="slicing", stage="slicing")
+        await pa.run_slice_and_dispatch(row.id)
+        await db_session.refresh(row)
+
+        assert row.status == "failed"
+        assert row.stage == "slicing"
+        assert "0.6" in row.error_message and "0.4" in row.error_message
+        assert pa_env.uploads == []
+        assert pa_env.deletes == []
+        assert pa_env.starts == []
+
+    async def test_a_sliced_file_that_measures_another_nozzle_is_discarded(self, db_session, h2s, pa_env):
+        """Belt and braces with the preset check: whatever the preset claimed,
+        the expanded M983.3 is what the printer will run."""
+        pa_env.slice_content = make_3mf(CALIBRATING_GCODE.replace("A0.4", "A0.6"))
+        row = await make_run(db_session, h2s, status="slicing", stage="slicing")
+        await pa.run_slice_and_dispatch(row.id)
+        await db_session.refresh(row)
+
+        assert row.status == "failed"
+        assert "0.6" in row.error_message
+        assert pa_env.uploads == []
+        assert pa_env.starts == []
+
+    async def test_an_unexpected_error_fails_the_run_instead_of_stranding_it(self, db_session, h2s, pa_env):
+        """`slicing` holds the printer off the print queue, and nothing
+        re-spawns this task -- so anything that escapes it has to end the run
+        rather than leave it sitting there until the two-hour sweep."""
+
+        async def explode(*_args, **_kwargs):
+            raise RuntimeError("preset service said no")
+
+        original = pa.slice_calibration_job
+        pa.slice_calibration_job = explode
+        try:
+            row = await make_run(db_session, h2s, status="slicing", stage="slicing")
+            await pa.run_slice_and_dispatch(row.id)
+        finally:
+            pa.slice_calibration_job = original
+
+        await db_session.refresh(row)
+        assert row.status == "failed"
+        assert pa_env.starts == []
+        assert await pa.active_run_printer_ids(db_session) == set()
+
     async def test_start_refused_fails_the_run_and_removes_the_file(self, db_session, h2s, pa_env):
         pa_env.start_result = False
         row = await make_run(db_session, h2s, status="slicing", stage="slicing")
@@ -353,6 +412,105 @@ class TestSliceAndDispatch:
         assert row.status == "failed"
         # Pre-upload delete, then the cleanup delete.
         assert pa_env.deletes.count("/bambuddy_pa_cali.3mf") == 2
+
+
+class TestCancellationMidPreparation:
+    """Cancel is a promise: nothing reaches the printer after it.
+
+    The background task loads its row once and then works for minutes, and the
+    sessionmaker is ``expire_on_commit=False``, so its in-memory copy still
+    says `slicing` long after the route wrote `cancelled` from another session.
+    Without a re-read, its next commit writes that stale status back and the
+    run carries on to ``start_print``.
+    """
+
+    async def test_cancelling_during_the_slice_stops_before_the_upload(self, async_client, db_session, h2s, pa_env):
+        row = await make_run(db_session, h2s, status="slicing", stage="slicing")
+        original = pa.slice_calibration_job
+
+        async def cancel_midway(db, run, **kwargs):
+            content = await original(db, run, **kwargs)
+            response = await async_client.post(f"/api/v1/printers/{h2s.id}/pa-calibration/runs/{row.id}/cancel")
+            assert response.status_code == 200, response.text
+            return content
+
+        pa.slice_calibration_job = cancel_midway
+        try:
+            await pa.run_slice_and_dispatch(row.id)
+        finally:
+            pa.slice_calibration_job = original
+
+        await db_session.refresh(row)
+        assert row.status == "cancelled"
+        assert pa_env.uploads == []
+        assert pa_env.starts == []
+        assert pa_env.mqtt.commands() == []
+
+    async def test_cancelling_during_the_upload_stops_before_the_dispatch(self, async_client, db_session, h2s, pa_env):
+        row = await make_run(db_session, h2s, status="slicing", stage="slicing")
+        original = pa.upload_file_async
+
+        async def cancel_midway(*args, **kwargs):
+            uploaded = await original(*args, **kwargs)
+            response = await async_client.post(f"/api/v1/printers/{h2s.id}/pa-calibration/runs/{row.id}/cancel")
+            assert response.status_code == 200, response.text
+            return uploaded
+
+        pa.upload_file_async = cancel_midway
+        try:
+            await pa.run_slice_and_dispatch(row.id)
+        finally:
+            pa.upload_file_async = original
+
+        await db_session.refresh(row)
+        assert row.status == "cancelled"
+        assert pa_env.starts == []
+        assert pa_env.mqtt.commands() == []
+        # The name is recorded before the transfer, so the file a cancelled
+        # upload left behind is removed rather than stranded on the SD root.
+        assert row.remote_filename == "bambuddy_pa_cali.3mf"
+        assert pa_env.deletes.count("/bambuddy_pa_cali.3mf") >= 2
+
+    async def test_a_cancel_landing_just_before_the_dispatch_still_wins(self, async_client, db_session, h2s, pa_env):
+        """The last window: the upload is done and the run is still
+        `uploading` while the preconditions are re-checked. A cancel there must
+        not be overwritten by what those checks concluded."""
+        row = await make_run(db_session, h2s, status="slicing", stage="slicing")
+        original = pa.printer_reserved_elsewhere
+
+        async def cancel_while_re_checking(db, printer_id):
+            # Runs between the post-upload check and the dispatch, which is
+            # exactly the window.
+            await async_client.post(f"/api/v1/printers/{h2s.id}/pa-calibration/runs/{row.id}/cancel")
+            return False
+
+        pa.printer_reserved_elsewhere = cancel_while_re_checking
+        try:
+            await pa.run_slice_and_dispatch(row.id)
+        finally:
+            pa.printer_reserved_elsewhere = original
+
+        await db_session.refresh(row)
+        assert row.status == "cancelled"
+        assert pa_env.starts == []
+        assert pa_env.mqtt.commands() == []
+
+    async def test_a_cancelled_run_stops_holding_the_printer(self, async_client, db_session, h2s, pa_env):
+        row = await make_run(db_session, h2s, status="slicing", stage="slicing")
+        original = pa.slice_calibration_job
+
+        async def cancel_midway(db, run, **kwargs):
+            content = await original(db, run, **kwargs)
+            await async_client.post(f"/api/v1/printers/{h2s.id}/pa-calibration/runs/{row.id}/cancel")
+            return content
+
+        pa.slice_calibration_job = cancel_midway
+        try:
+            await pa.run_slice_and_dispatch(row.id)
+        finally:
+            pa.slice_calibration_job = original
+
+        assert await pa.active_run_printer_ids(db_session) == set()
 
 
 class TestResultReadBack:
@@ -474,7 +632,6 @@ class TestTick:
             "backend.app.core.tasks.spawn_background_task",
             lambda coro, name=None: spawned.append(name) or coro.close(),
         )
-        pa_env.state = make_state(state="FINISH", subtask="bambuddy_pa_cali")
         row = await make_run(
             db_session,
             h2s,
@@ -482,10 +639,73 @@ class TestTick:
             stage="printing",
             dispatched_subtask_id="bambuddy_pa_cali",
         )
+        # The printer is seen printing first, exactly as it would be: that
+        # observation is what makes the FINISH below ours.
+        pa_env.state = make_state(state="RUNNING", subtask="bambuddy_pa_cali")
+        await pa.tick(db_session)
+        await db_session.refresh(row)
+        assert row.status == "printing"
+        assert row.print_started is True
+
+        pa_env.state = make_state(state="FINISH", subtask="bambuddy_pa_cali")
         await pa.tick(db_session)
         await db_session.refresh(row)
         assert row.status == "reading_result"
         assert spawned == [f"pa-calibration-result-{row.id}"]
+
+    async def test_the_finish_the_previous_run_left_behind_is_not_ours(self, db_session, h2s, pa_env, monkeypatch):
+        """The second calibration on the same printer, dispatched seconds ago.
+
+        gcode_state can sit at FINISH for the better part of a minute after
+        the printer accepted project_file (#1078), and the remote filename is
+        a constant -- so the FINISH left by run 1 reports run 2's own subtask
+        name. Reading it as run 2 finishing deletes the job file out from
+        under the starting print and parks run 1's K value as if it were a
+        fresh measurement.
+        """
+        spawned = []
+        monkeypatch.setattr(
+            "backend.app.core.tasks.spawn_background_task",
+            lambda coro, name=None: spawned.append(name) or coro.close(),
+        )
+        pa_env.state = make_state(state="FINISH", subtask="bambuddy_pa_cali")
+        row = await make_run(
+            db_session,
+            h2s,
+            status="printing",
+            stage="printing",
+            dispatched_subtask_id="bambuddy_pa_cali",
+            started_at=utcnow_naive(),
+        )
+        await pa.tick(db_session)
+        await db_session.refresh(row)
+
+        assert row.status == "printing"
+        assert spawned == []
+        assert "extrusion_cali_get_result" not in pa_env.mqtt.commands()
+        assert pa_env.deletes == []
+
+    async def test_a_printer_reporting_no_subtask_at_all_still_has_to_have_started(
+        self, db_session, h2s, pa_env, monkeypatch
+    ):
+        """The other way in: a fresh reconnect reports no subtask_name, so the
+        name check cannot help and the latch is the only thing left."""
+        monkeypatch.setattr(
+            "backend.app.core.tasks.spawn_background_task",
+            lambda coro, name=None: coro.close(),
+        )
+        pa_env.state = make_state(state="FINISH", subtask=None)
+        row = await make_run(
+            db_session,
+            h2s,
+            status="printing",
+            stage="printing",
+            dispatched_subtask_id="bambuddy_pa_cali",
+            started_at=utcnow_naive(),
+        )
+        await pa.tick(db_session)
+        await db_session.refresh(row)
+        assert row.status == "printing"
 
     async def test_a_finish_from_another_job_is_ignored(self, db_session, h2s, pa_env):
         pa_env.state = make_state(state="FINISH", subtask="someone_elses_benchy")
@@ -495,6 +715,7 @@ class TestTick:
             status="printing",
             stage="printing",
             dispatched_subtask_id="bambuddy_pa_cali",
+            print_started=True,
         )
         await pa.tick(db_session)
         await db_session.refresh(row)
@@ -529,6 +750,174 @@ class TestTick:
         await db_session.refresh(row)
         assert row.status == "failed"
         assert "never started" in row.error_message
+
+
+class TestTaskHandover:
+    async def test_the_row_is_committed_before_the_task_that_reads_it_starts(
+        self, db_session, h2s, pa_env, monkeypatch
+    ):
+        """`tick_queued` promotes the run and hands it to a task that opens its
+        own session. Spawning before the commit lets that session read the row
+        as still `queued`, return silently, and leave `slicing` with nothing
+        behind it -- holding the printer off the print queue for two hours."""
+        import asyncio
+
+        tasks = []
+        monkeypatch.setattr(
+            "backend.app.core.tasks.spawn_background_task",
+            lambda coro, name=None: tasks.append(asyncio.create_task(coro)),
+        )
+        row = await make_run(db_session, h2s)
+        await pa.tick(db_session)
+        await asyncio.gather(*tasks)
+        await db_session.refresh(row)
+
+        assert row.status == "printing"
+        assert pa_env.uploads == ["/bambuddy_pa_cali.3mf"]
+
+
+class TestQueueReservation:
+    """The reservation the spec asks for in both directions.
+
+    None of what the queue uses to avoid dispatching twice onto one printer is
+    visible in gcode_state -- that is exactly why it keeps it. A calibration
+    that reads only the live state starts into the gap between the queue's
+    project_file and the printer reporting RUNNING.
+    """
+
+    @staticmethod
+    async def _queue_item(db_session, printer, **overrides):
+        from backend.app.models.print_queue import PrintQueueItem
+
+        fields = {"status": "pending", "position": 0, **overrides}
+        item = PrintQueueItem(printer_id=printer.id, **fields)
+        db_session.add(item)
+        await db_session.commit()
+        return item
+
+    async def test_a_printing_queue_row_keeps_a_calibration_queued(self, db_session, h2s, pa_env):
+        from backend.app.services.print_scheduler import PrintScheduler
+
+        await self._queue_item(db_session, h2s, status="printing")
+        row = await make_run(db_session, h2s)
+
+        scheduler = PrintScheduler()
+        await scheduler._check_pa_calibration_runs(db_session, False)
+        await db_session.refresh(row)
+
+        assert row.status == "queued"
+        assert row.waiting_reason == "printer_reserved"
+        assert pa_env.uploads == []
+        assert pa_env.starts == []
+
+    async def test_a_claimed_queue_row_keeps_a_calibration_queued(self, db_session, h2s, pa_env):
+        """#2615's dispatch claim: the row is still `pending` and the printer
+        still IDLE while a dispatch worker is uploading to it."""
+        from backend.app.services.print_scheduler import PrintScheduler
+
+        await self._queue_item(db_session, h2s, dispatching_at=utcnow_naive())
+        row = await make_run(db_session, h2s)
+
+        scheduler = PrintScheduler()
+        await scheduler._check_pa_calibration_runs(db_session, False)
+        await db_session.refresh(row)
+        assert row.status == "queued"
+        assert row.waiting_reason == "printer_reserved"
+
+    async def test_an_upload_in_flight_keeps_a_calibration_queued(self, db_session, h2s, pa_env):
+        from backend.app.services.print_scheduler import PrintScheduler
+
+        scheduler = PrintScheduler()
+        scheduler._inflight[999] = (None, h2s.id)
+        row = await make_run(db_session, h2s)
+
+        await scheduler._check_pa_calibration_runs(db_session, False)
+        await db_session.refresh(row)
+        assert row.status == "queued"
+        assert row.waiting_reason == "printer_reserved"
+        assert pa_env.starts == []
+
+    async def test_an_idle_unclaimed_printer_is_not_reserved(self, db_session, h2s, pa_env):
+        from backend.app.services.print_scheduler import PrintScheduler
+
+        await self._queue_item(db_session, h2s, status="pending")
+        assert await PrintScheduler().printers_reserved_elsewhere(db_session) == set()
+
+    async def test_the_preflight_says_so_rather_than_offering_start(self, async_client, db_session, h2s, pa_env):
+        await self._queue_item(db_session, h2s, status="printing")
+        response = await async_client.get(f"/api/v1/printers/{h2s.id}/pa-calibration/preflight?ams_id=0&slot_id=1")
+        assert response.status_code == 200
+        assert "printer_reserved" in response.json()["blocked_reasons"]
+
+    async def test_a_claim_made_during_the_upload_defers_instead_of_dispatching(self, db_session, h2s, pa_env):
+        """The residual race the dispatch gate cannot close.
+
+        Slicing and uploading take a minute or two, and the queue can win the
+        printer inside that window while gcode_state still says FINISH -- so
+        the live-state re-check waves it through. Deferral, not failure: the
+        user asked for a calibration, not for one attempt at one.
+        """
+        row = await make_run(db_session, h2s, status="slicing", stage="slicing")
+        original = pa.upload_file_async
+
+        async def claim_then_upload(*args, **kwargs):
+            await self._queue_item(db_session, h2s, status="printing")
+            return await original(*args, **kwargs)
+
+        pa.upload_file_async = claim_then_upload
+        try:
+            await pa.run_slice_and_dispatch(row.id)
+        finally:
+            pa.upload_file_async = original
+
+        await db_session.refresh(row)
+        assert row.status == "queued"
+        assert row.waiting_reason == "printer_reserved"
+        assert pa_env.starts == []
+        assert pa_env.mqtt.commands() == []
+
+
+class TestRestartReconciliation:
+    """No coroutine survives a restart, and nothing re-spawns these.
+
+    `slicing`, `uploading` and `reading_result` are all RESERVING_STATUSES, so
+    a row stranded in one holds every queued job for its printer with "running
+    a flow-dynamics calibration" while nothing is running.
+    """
+
+    @pytest.mark.parametrize("status", ["slicing", "uploading", "reading_result"])
+    async def test_a_stranded_row_is_closed_and_releases_the_printer(self, db_session, h2s, pa_env, status):
+        row = await make_run(
+            db_session,
+            h2s,
+            status=status,
+            stage=status,
+            remote_filename="bambuddy_pa_cali.3mf",
+            started_at=utcnow_naive(),
+        )
+        assert await pa.reconcile_interrupted_runs() == 1
+
+        await db_session.refresh(row)
+        assert row.status == "failed"
+        assert row.stage == status
+        assert "restarted" in row.error_message
+        assert await pa.active_run_printer_ids(db_session) == set()
+        # Whatever was uploaded goes with it.
+        assert "/bambuddy_pa_cali.3mf" in pa_env.deletes
+
+    async def test_a_printing_run_is_left_alone(self, db_session, h2s, pa_env):
+        """The tick drives `printing` and `queued` rows itself; a restart
+        loses nothing there, and the printer really is busy."""
+        row = await make_run(db_session, h2s, status="printing", stage="printing", started_at=utcnow_naive())
+        assert await pa.reconcile_interrupted_runs() == 0
+        await db_session.refresh(row)
+        assert row.status == "printing"
+
+    async def test_a_queued_run_is_left_alone(self, db_session, h2s, pa_env):
+        row = await make_run(db_session, h2s)
+        assert await pa.reconcile_interrupted_runs() == 0
+        await db_session.refresh(row)
+        assert row.status == "queued"
 
 
 class TestStaleSweep:
@@ -566,6 +955,35 @@ class TestStaleSweep:
         assert await pa.sweep_stale_runs(db_session) == 0
         await db_session.refresh(row)
         assert row.status == "printing"
+
+    async def test_a_run_still_waiting_for_the_printer_never_expires(self, db_session, h2s, pa_env):
+        """A queued run is not stale, it is queued.
+
+        It holds no printer -- the reservation starts at `slicing` -- and it
+        carries the reason it is waiting. A queued *print* behind a six-hour
+        job does not expire after two hours either, and failing this one with
+        "stopped making progress" would be a lie told to a user who asked for
+        the calibration to run when the printer is free.
+        """
+        row = await make_run(db_session, h2s, created_at=utcnow_naive() - timedelta(hours=6))
+        assert await pa.sweep_stale_runs(db_session) == 0
+        await db_session.refresh(row)
+        assert row.status == "queued"
+
+    async def test_what_the_sweep_closes_does_not_stay_on_the_printer(self, db_session, h2s, pa_env):
+        row = await make_run(
+            db_session,
+            h2s,
+            status="printing",
+            stage="printing",
+            remote_filename="bambuddy_pa_cali.3mf",
+            started_at=utcnow_naive() - timedelta(hours=3),
+        )
+        assert await pa.sweep_stale_runs(db_session) == 1
+        await db_session.commit()
+        await db_session.refresh(row)
+        assert row.status == "failed"
+        assert "/bambuddy_pa_cali.3mf" in pa_env.deletes
 
 
 class TestRoutes:
@@ -693,6 +1111,37 @@ class TestRoutes:
         response = await async_client.post(
             f"/api/v1/printers/{h2s.id}/pa-calibration/runs/{row.id}/confirm",
         )
+        assert response.status_code == 502
+        await db_session.refresh(row)
+        assert row.status == "failed"
+        assert "did not store" in row.error_message
+
+    async def test_confirm_survives_a_read_back_the_printer_cannot_render(self, async_client, db_session, h2s, pa_env):
+        """`k_value` is whatever string the printer put in its own table.
+
+        The row is already at `saving` when the read-back runs, so a
+        ValueError out of the route leaves it there with a bare 500 and no
+        reason on it -- and the stale sweep then reports it two hours later as
+        having "stopped making progress".
+        """
+
+        class UnreadableClient(FakeMqttClient):
+            async def get_kprofiles(self, nozzle_diameter="0.4", **_kwargs):
+                self.published.append(("extrusion_cali_get", {"nozzle_diameter": nozzle_diameter}))
+                return [FakeKProfile(k_value="")]
+
+        pa_env.mqtt = UnreadableClient(result=None)
+        row = await make_run(
+            db_session,
+            h2s,
+            status="awaiting_confirmation",
+            stage="awaiting_confirmation",
+            k_value=0.018612,
+            n_coef="0.750000",
+            result_raw=RESULT_ENTRY,
+        )
+        response = await async_client.post(f"/api/v1/printers/{h2s.id}/pa-calibration/runs/{row.id}/confirm")
+
         assert response.status_code == 502
         await db_session.refresh(row)
         assert row.status == "failed"
