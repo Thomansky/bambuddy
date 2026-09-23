@@ -3839,6 +3839,10 @@ export default {
     moveFiles: '移动 {{count}} 个文件',
     rootNoFolder: '根目录（无文件夹）',
     current: '当前',
+    folderFilter: {
+      placeholder: '筛选文件夹...',
+      noMatches: '没有文件夹匹配此筛选条件。',
+    },
     linkFolder: '链接文件夹',
     linkFolderDescription: '将"{{name}}"链接到项目或归档以便快速访问。',
     project: '项目',

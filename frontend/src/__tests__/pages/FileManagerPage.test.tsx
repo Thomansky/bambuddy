@@ -1305,6 +1305,80 @@ describe('FileManagerPage', () => {
     });
   });
 
+  describe('move dialog', () => {
+    const openMoveDialog = async (user: ReturnType<typeof userEvent.setup>) => {
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+      await user.click(within(screen.getByTestId('library-filter-card')).getByText('Select All'));
+      await user.click(within(screen.getByTestId('selection-actions')).getByText('Move'));
+      return screen.getByTestId('move-folder-list');
+    };
+
+    it('bounds the folder list by the viewport, not by a fixed 256px box', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      const list = await openMoveDialog(user);
+
+      expect(list.className).toContain('flex-1');
+      expect(list.className).toContain('min-h-0');
+      expect(list.className).not.toContain('max-h-64');
+    });
+
+    it('narrows the list as you type and keeps a hit visible under its parent', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      const list = await openMoveDialog(user);
+
+      expect(within(list).getByText('Art Projects')).toBeInTheDocument();
+
+      await user.type(screen.getByPlaceholderText('Filter folders...'), 'brack');
+
+      // Case-insensitive hit plus the parent it is indented under; the
+      // unrelated top-level folder goes.
+      expect(within(list).getByText('Brackets')).toBeInTheDocument();
+      expect(within(list).getByText('Functional Parts')).toBeInTheDocument();
+      expect(within(list).queryByText('Art Projects')).not.toBeInTheDocument();
+    });
+
+    it('restores the full list when the filter is cleared', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      const list = await openMoveDialog(user);
+
+      const filter = screen.getByPlaceholderText('Filter folders...');
+      await user.type(filter, 'brack');
+      expect(within(list).queryByText('Art Projects')).not.toBeInTheDocument();
+
+      await user.clear(filter);
+      expect(within(list).getByText('Art Projects')).toBeInTheDocument();
+      expect(within(list).getByText('Functional Parts')).toBeInTheDocument();
+      expect(within(list).getByText('Root (No Folder)')).toBeInTheDocument();
+    });
+
+    it('keeps the buttons rendered with a long folder list', async () => {
+      const user = userEvent.setup();
+      const manyFolders = Array.from({ length: 32 }, (_, i) => ({
+        id: 100 + i,
+        name: `Kunde ${i}`,
+        parent_id: null,
+        file_count: 0,
+        project_id: null,
+        archive_id: null,
+        project_name: null,
+        archive_name: null,
+        latest_activity_at: null,
+        children: [],
+      }));
+      server.use(http.get('/api/v1/library/folders', () => HttpResponse.json(manyFolders)));
+      render(<FileManagerPage />);
+      const list = await openMoveDialog(user);
+
+      expect(within(list).getAllByRole('button')).toHaveLength(33); // root + 32
+      const dialog = within(screen.getByTestId('move-files-modal'));
+      expect(dialog.getByText('Cancel')).toBeInTheDocument();
+      expect(dialog.getByText('Move')).toBeInTheDocument();
+    });
+  });
+
   describe('folder search results', () => {
     const typeSearch = async (user: ReturnType<typeof userEvent.setup>, query: string) => {
       await user.type(screen.getByPlaceholderText('Search files...'), query);

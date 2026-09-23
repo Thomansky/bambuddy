@@ -3881,6 +3881,10 @@ export default {
     moveFiles: '{{count}} bestand(en) verplaatsen',
     rootNoFolder: 'Hoofdmap (geen map)',
     current: 'huidig',
+    folderFilter: {
+      placeholder: 'Mappen filteren...',
+      noMatches: 'Geen map komt overeen met dit filter.',
+    },
     linkFolder: 'Map koppelen',
     linkFolderDescription: 'Koppel "{{name}}" aan een project of archief voor snelle toegang.',
     project: 'Project',

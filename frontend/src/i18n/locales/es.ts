@@ -3853,6 +3853,10 @@ export default {
     moveFiles: 'Mover {{count}} archivo(s)',
     rootNoFolder: 'Raíz (sin carpeta)',
     current: 'actual',
+    folderFilter: {
+      placeholder: 'Filtrar carpetas...',
+      noMatches: 'Ninguna carpeta coincide con este filtro.',
+    },
     linkFolder: 'Vincular carpeta',
     linkFolderDescription: 'Vincule "{{name}}" a un proyecto o archivo para un acceso rápido.',
     project: 'Proyecto',

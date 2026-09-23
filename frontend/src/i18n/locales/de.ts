@@ -3851,6 +3851,10 @@ export default {
     moveFiles: '{{count}} Datei(en) verschieben',
     rootNoFolder: 'Stammverzeichnis (Kein Ordner)',
     current: 'aktuell',
+    folderFilter: {
+      placeholder: 'Ordner filtern ...',
+      noMatches: 'Kein Ordner passt zu diesem Filter.',
+    },
     linkFolder: 'Ordner verknüpfen',
     linkFolderDescription: '"{{name}}" mit einem Projekt oder Archiv verknüpfen für schnellen Zugriff.',
     project: 'Projekt',

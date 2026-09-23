@@ -3653,6 +3653,10 @@ export default {
     moveFiles: "Переместить файлы ({{count}})",
     rootNoFolder: "Корень (без папки)",
     current: "текущая",
+    folderFilter: {
+      placeholder: "Фильтр папок...",
+      noMatches: "Нет папок, соответствующих этому фильтру.",
+    },
     linkFolder: "Связать папку",
     linkFolderDescription: "Связать «{{name}}» с проектом или архивом для быстрого доступа.",
     project: "Проект",

@@ -3846,6 +3846,10 @@ export default {
     moveFiles: '{{count}} Dosyayı Taşı',
     rootNoFolder: 'Kök (Klasör Yok)',
     current: 'mevcut',
+    folderFilter: {
+      placeholder: 'Klasörleri filtrele...',
+      noMatches: 'Bu filtreyle eşleşen klasör yok.',
+    },
     linkFolder: 'Klasörü Bağla',
     linkFolderDescription: 'Hızlı erişim için "{{name}}" klasörünü bir projeye veya arşive bağla.',
     project: 'Proje',

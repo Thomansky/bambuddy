@@ -3839,6 +3839,10 @@ export default {
     moveFiles: 'Mover {{count}} Arquivo(s)',
     rootNoFolder: 'Raiz (Sem Pasta)',
     current: 'Atual',
+    folderFilter: {
+      placeholder: 'Filtrar pastas...',
+      noMatches: 'Nenhuma pasta corresponde a este filtro.',
+    },
     linkFolder: 'Vincular Pasta',
     linkFolderDescription: 'Vincular "{{name}}" a um projeto ou arquivo para acesso rápido.',
     project: 'Projeto',

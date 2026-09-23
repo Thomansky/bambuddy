@@ -3851,6 +3851,10 @@ export default {
     moveFiles: '{{count}}件のファイルを移動',
     rootNoFolder: 'ルート（フォルダなし）',
     current: '（現在）',
+    folderFilter: {
+      placeholder: 'フォルダを絞り込み...',
+      noMatches: 'この絞り込みに一致するフォルダはありません。',
+    },
     linkFolder: 'フォルダをリンク',
     linkFolderDescription: '「{{name}}」をプロジェクトまたはアーカイブにリンクしてすばやくアクセス。',
     project: 'プロジェクト',

@@ -409,6 +409,7 @@ interface MoveFilesModalProps {
 
 function MoveFilesModal({ folders, selectedFiles, currentFolderId, onClose, onMove, isLoading, t }: MoveFilesModalProps) {
   const [targetFolder, setTargetFolder] = useState<number | null>(null);
+  const [folderFilter, setFolderFilter] = useState('');
 
   const flattenFolders = (items: LibraryFolderTree[], depth = 0): { id: number | null; name: string; depth: number }[] => {
     const result: { id: number | null; name: string; depth: number }[] = [];
@@ -421,16 +422,46 @@ function MoveFilesModal({ folders, selectedFiles, currentFolderId, onClose, onMo
     return result;
   };
 
-  const flatFolders = [{ id: null, name: t('fileManager.rootNoFolder'), depth: 0 }, ...flattenFolders(folders)];
+  // A folder survives the filter when its own name matches or one of its
+  // descendants does: dropping the parent of a hit would leave the hit
+  // indented under nothing.
+  const query = folderFilter.trim().toLowerCase();
+  const matchesQuery = (item: LibraryFolderTree): boolean =>
+    item.name.toLowerCase().includes(query) || item.children.some(matchesQuery);
+  const filterTree = (items: LibraryFolderTree[]): LibraryFolderTree[] =>
+    items.filter(matchesQuery).map((item) => ({ ...item, children: filterTree(item.children) }));
+
+  const rootEntry = { id: null, name: t('fileManager.rootNoFolder'), depth: 0 };
+  const flatFolders = query
+    ? [
+        ...(rootEntry.name.toLowerCase().includes(query) ? [rootEntry] : []),
+        ...flattenFolders(filterTree(folders)),
+      ]
+    : [rootEntry, ...flattenFolders(folders)];
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-      <div className="bg-bambu-dark-secondary rounded-lg w-full max-w-sm border border-bambu-dark-tertiary">
-        <div className="p-4 border-b border-bambu-dark-tertiary">
+      {/* Grows with the window instead of staying a 384x256 peephole, but
+          stays a flex column so the header and the buttons keep their place
+          on a short laptop screen and only the list scrolls. */}
+      <div
+        className="bg-bambu-dark-secondary rounded-lg w-full max-w-lg max-h-[90vh] flex flex-col border border-bambu-dark-tertiary"
+        data-testid="move-files-modal"
+      >
+        <div className="p-4 border-b border-bambu-dark-tertiary flex-shrink-0">
           <h2 className="text-lg font-semibold text-white">{t('fileManager.moveFiles', { count: selectedFiles.length })}</h2>
         </div>
-        <div className="p-4 space-y-4">
-          <div className="max-h-64 overflow-y-auto space-y-1">
+        <div className="p-4 flex flex-col gap-4 min-h-0 flex-1">
+          <input
+            type="text"
+            value={folderFilter}
+            onChange={(e) => setFolderFilter(e.target.value)}
+            placeholder={t('fileManager.folderFilter.placeholder')}
+            aria-label={t('fileManager.folderFilter.placeholder')}
+            autoFocus
+            className="w-full flex-shrink-0 bg-bambu-dark border border-bambu-dark-tertiary rounded px-3 py-2 text-sm text-white placeholder-bambu-gray focus:outline-none focus:border-bambu-green"
+          />
+          <div className="flex-1 min-h-0 max-h-[min(60vh,32rem)] overflow-y-auto space-y-1" data-testid="move-folder-list">
             {flatFolders.map((folder) => (
               <button
                 key={folder.id ?? 'root'}
@@ -450,8 +481,11 @@ function MoveFilesModal({ folders, selectedFiles, currentFolderId, onClose, onMo
                 {folder.id === currentFolderId && <span className="text-xs text-bambu-gray ml-auto">({t('fileManager.current')})</span>}
               </button>
             ))}
+            {flatFolders.length === 0 && (
+              <p className="text-sm text-bambu-gray text-center py-4">{t('fileManager.folderFilter.noMatches')}</p>
+            )}
           </div>
-          <div className="flex justify-end gap-2 pt-2">
+          <div className="flex justify-end gap-2 pt-2 flex-shrink-0">
             <Button type="button" variant="secondary" onClick={onClose}>
               {t('common.cancel')}
             </Button>
@@ -525,8 +559,8 @@ function LinkFolderModal({ folder, onClose, onLink, isLoading, t }: LinkFolderMo
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-      <div className="bg-bambu-dark-secondary rounded-lg w-full max-w-md border border-bambu-dark-tertiary">
-        <div className="p-4 border-b border-bambu-dark-tertiary flex items-center justify-between">
+      <div className="bg-bambu-dark-secondary rounded-lg w-full max-w-md max-h-[90vh] flex flex-col border border-bambu-dark-tertiary">
+        <div className="p-4 border-b border-bambu-dark-tertiary flex items-center justify-between flex-shrink-0">
           <h2 className="text-lg font-semibold text-white flex items-center gap-2">
             <Link2 className="w-5 h-5 text-bambu-green" />
             {t('fileManager.linkFolder')}
@@ -536,7 +570,7 @@ function LinkFolderModal({ folder, onClose, onLink, isLoading, t }: LinkFolderMo
           </button>
         </div>
 
-        <div className="p-4 space-y-4">
+        <div className="p-4 space-y-4 flex flex-col min-h-0 flex-1">
           <p className="text-sm text-bambu-gray">
             {t('fileManager.linkFolderDescription', { name: folder.name })}
           </p>
@@ -568,7 +602,7 @@ function LinkFolderModal({ folder, onClose, onLink, isLoading, t }: LinkFolderMo
           </div>
 
           {/* Selection list */}
-          <div className="max-h-64 overflow-y-auto space-y-1 bg-bambu-dark rounded-lg p-2">
+          <div className="flex-1 min-h-0 max-h-[min(60vh,32rem)] overflow-y-auto space-y-1 bg-bambu-dark rounded-lg p-2">
             {linkType === 'project' ? (
               projects && projects.length > 0 ? (
                 projects.map((project) => (
@@ -614,7 +648,7 @@ function LinkFolderModal({ folder, onClose, onLink, isLoading, t }: LinkFolderMo
           </div>
         </div>
 
-        <div className="p-4 border-t border-bambu-dark-tertiary flex justify-between">
+        <div className="p-4 border-t border-bambu-dark-tertiary flex justify-between flex-shrink-0">
           {isLinked && (
             <Button variant="danger" onClick={handleUnlink} disabled={isLoading}>
               <Unlink className="w-4 h-4 mr-2" />

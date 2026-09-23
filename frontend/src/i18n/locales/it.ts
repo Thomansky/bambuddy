@@ -3839,6 +3839,10 @@ export default {
     moveFiles: 'Sposta {{count}} file',
     rootNoFolder: 'Root (nessuna cartella)',
     current: 'corrente',
+    folderFilter: {
+      placeholder: 'Filtra cartelle...',
+      noMatches: 'Nessuna cartella corrisponde a questo filtro.',
+    },
     linkFolder: 'Collega cartella',
     linkFolderDescription: 'Collega "{{name}}" a un progetto o archivio per accesso rapido.',
     project: 'Progetto',

@@ -3840,6 +3840,10 @@ export default {
     moveFiles: 'Déplacer {{count}} fichier(s)',
     rootNoFolder: 'Racine (aucun dossier)',
     current: 'actuel',
+    folderFilter: {
+      placeholder: 'Filtrer les dossiers...',
+      noMatches: 'Aucun dossier ne correspond à ce filtre.',
+    },
     linkFolder: 'Lier le dossier',
     linkFolderDescription: 'Lier "{{name}}" à un projet ou archive.',
     project: 'Projet',

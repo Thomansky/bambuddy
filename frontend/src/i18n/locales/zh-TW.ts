@@ -3839,6 +3839,10 @@ export default {
     moveFiles: '移動 {{count}} 個檔案',
     rootNoFolder: '根目錄（無資料夾）',
     current: '目前',
+    folderFilter: {
+      placeholder: '篩選資料夾...',
+      noMatches: '沒有資料夾符合此篩選條件。',
+    },
     linkFolder: '連結資料夾',
     linkFolderDescription: '將"{{name}}"連結到專案或歸檔以便快速存取。',
     project: '專案',

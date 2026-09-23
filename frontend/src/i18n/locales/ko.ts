@@ -3661,6 +3661,10 @@ export default {
     moveFiles: '{{count}}개 파일 이동',
     rootNoFolder: '루트 (폴더 없음)',
     current: '현재',
+    folderFilter: {
+      placeholder: '폴더 필터...',
+      noMatches: '이 필터와 일치하는 폴더가 없습니다.',
+    },
     linkFolder: '폴더 연결',
     linkFolderDescription: '"{{name}}"을(를) 프로젝트 또는 아카이브에 연결하여 빠른 접근.',
     project: '프로젝트',

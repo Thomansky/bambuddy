@@ -3881,6 +3881,10 @@ export default {
     moveFiles: 'Move {{count}} File(s)',
     rootNoFolder: 'Root (No Folder)',
     current: 'current',
+    folderFilter: {
+      placeholder: 'Filter folders...',
+      noMatches: 'No folder matches this filter.',
+    },
     linkFolder: 'Link Folder',
     linkFolderDescription: 'Link "{{name}}" to a project or archive for quick access.',
     project: 'Project',
