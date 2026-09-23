@@ -4309,6 +4309,16 @@ class PrintScheduler:
                     continue
                 seen.add(printer.id)
                 if not self._is_printer_idle(printer.id, require_plate_clear):
+                    # Say so, once per printer. A farm whose machines are all
+                    # printing, or holding a finished plate nobody has released,
+                    # never reaches the read at all -- and the reasons for that
+                    # live at debug in _is_printer_idle, so the pre-read's own
+                    # log stayed completely silent and read as "broken".
+                    self._say_rfid_preread(
+                        printer.id,
+                        item.id,
+                        f"setting=on printer not idle ({self._why_not_idle(printer.id, require_plate_clear)})",
+                    )
                     continue
                 slots = self._slots_to_reread(printer.id, item.id)
                 if slots:
@@ -4585,6 +4595,17 @@ class PrintScheduler:
             if done_before is False and slot_read_done(state, ams_id, slot_id):
                 return time.monotonic() - started, True
         return time.monotonic() - started, False
+
+    def _why_not_idle(self, printer_id: int, require_plate_clear: bool) -> str:
+        """The same verdict _is_printer_idle reached, in words, for one log line."""
+        if not printer_manager.is_connected(printer_id):
+            return "not connected"
+        state = printer_manager.get_status(printer_id)
+        if not state:
+            return "no telemetry yet"
+        if require_plate_clear and printer_manager.is_awaiting_plate_clear(printer_id):
+            return f"awaiting plate-clear acknowledgment, state={state.state}"
+        return f"state={state.state}"
 
     def _is_printer_idle(self, printer_id: int, require_plate_clear: bool = True) -> bool:
         """Check if a printer is connected and idle."""

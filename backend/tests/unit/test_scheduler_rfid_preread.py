@@ -147,10 +147,13 @@ def _printer_state(*, tray_now=255, unread=(3,), exist="f"):
 class _Harness:
     """One scheduler pass with a fake printer, plus the read task it spawned."""
 
-    def __init__(self, ctx, scheduler, state, *, refresh=None, states=None):
+    def __init__(self, ctx, scheduler, state, *, refresh=None, states=None, idle=True):
         self.ctx = ctx
         self.scheduler = scheduler
         self.state = state
+        # Whether the fake printers count as idle. False is how a farm whose
+        # machines are all printing, or holding an unreleased plate, looks.
+        self.idle = idle
         # Per-printer states for a farm; printers not listed report `state`.
         self.states = states or {}
         self.client = MagicMock()
@@ -544,6 +547,22 @@ class TestModelBasedItemsTurnedDownForFilament:
         row = await _item(ctx, item_id)
         assert "PETG" in row.waiting_reason
         assert row.rfid_precheck_at is None
+
+    @pytest.mark.asyncio
+    async def test_a_printer_that_is_not_idle_says_so_instead_of_staying_silent(self, ctx, caplog):
+        """The reasons a printer is not idle live at debug inside the idle gate,
+        so a farm where nothing is ever idle saw a pre-read log with not one
+        line in it and read that as a broken feature."""
+        await _set(ctx, "queue_rfid_reread_before_start", "true")
+        await _add_item(ctx, printer_id=None, target_model="X1C", required_filament_types=self.NEEDS_PETG)
+
+        with caplog.at_level(logging.INFO, logger="backend.app.services.print_scheduler"):
+            h = await _Harness(ctx, PrintScheduler(), _printer_state(unread=(3,)), idle=False).run()
+
+        h.client.ams_refresh_tray.assert_not_called()
+        said = [r.message for r in caplog.records if "RFID pre-read" in r.message]
+        assert said, "the pre-read said nothing about a printer it skipped"
+        assert any("printer not idle" in m for m in said)
 
     @pytest.mark.asyncio
     async def test_filament_loaded_on_the_turned_down_printer_means_no_read(self, ctx):
@@ -976,7 +995,7 @@ def _patches(h: _Harness):
         patch("backend.app.services.print_scheduler.spawn_background_task", h._spawn),
         patch("backend.app.api.routes.printers._apply_pa_after_refresh", h.pa_applied),
         patch("backend.app.services.print_scheduler._RFID_REREAD_POLL_INTERVAL", 0.01),
-        patch.object(h.scheduler, "_is_printer_idle", MagicMock(return_value=True)),
+        patch.object(h.scheduler, "_is_printer_idle", MagicMock(return_value=h.idle)),
         patch.object(h.scheduler, "_check_auto_drying", AsyncMock()),
         patch.object(h.scheduler, "_ensure_ams_mapping", h.ensure_mapping),
         patch.object(h.scheduler, "_block_on_filament_deficit", AsyncMock(return_value=False)),
