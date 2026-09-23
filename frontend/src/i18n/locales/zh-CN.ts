@@ -4188,6 +4188,9 @@ export default {
     noPermissionSlice: '您没有切片文件的权限',
     noPermissionAddToQueue: '您没有添加到队列的权限',
     noPermissionDownload: '您没有下载文件的权限',
+    downloadZip: '下载为 ZIP',
+    downloadFolder: '下载文件夹',
+    folderHasNoFiles: '此文件夹中没有文件',
     noPermissionPreview: '您没有预览文件的权限',
     preview3d: '3D 预览',
     // 应用内文档预览（#2976）：PDF 和电子表格文件。
@@ -4270,6 +4273,7 @@ export default {
       folderDeleted: '文件夹已删除',
       fileDeleted: '文件已删除',
       filesDeleted: '已删除 {{count}} 个文件',
+      downloadFailed: '下载失败，请重试。',
       filesMoved: '文件已移动',
       folderLinked: '文件夹已链接',
       folderUnlinked: '文件夹已取消链接',

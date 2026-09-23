@@ -1185,6 +1185,38 @@ describe('FileManagerPage', () => {
       await user.click(within(screen.getByTestId('library-filter-card')).getByText('Select All'));
       expect(within(screen.getByTestId('selection-actions')).getByText('Assign tags')).toBeInTheDocument();
     });
+
+    it('zips a multi-file selection and downloads a single file as itself', async () => {
+      const user = userEvent.setup();
+      const zipped: unknown[] = [];
+      const singles: string[] = [];
+      server.use(
+        http.post('/api/v1/library/files/download-zip', async ({ request }) => {
+          zipped.push(await request.json());
+          return new HttpResponse(new Blob(['PK']), { headers: { 'Content-Type': 'application/zip' } });
+        }),
+        http.get('/api/v1/library/files/:id/download', ({ params }) => {
+          singles.push(String(params.id));
+          return new HttpResponse(new Blob(['x']));
+        })
+      );
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await user.click(within(screen.getByTestId('library-filter-card')).getByText('Select All'));
+      await user.click(within(screen.getByTestId('selection-actions')).getByText('Download as ZIP'));
+      await waitFor(() => expect(zipped).toHaveLength(1));
+      expect((zipped[0] as { file_ids: number[] }).file_ids.length).toBeGreaterThan(1);
+      expect(singles).toHaveLength(0);
+
+      // One file is not worth an archive: it downloads as itself.
+      await user.click(within(screen.getByTestId('library-filter-card')).getByText('Deselect All'));
+      await user.type(screen.getByPlaceholderText('Search files...'), 'benchy');
+      await user.click(within(screen.getByTestId('library-filter-card')).getByText('Select All'));
+      await user.click(within(screen.getByTestId('selection-actions')).getByText('Download'));
+      await waitFor(() => expect(singles).toHaveLength(1));
+      expect(zipped).toHaveLength(1);
+    });
   });
 
   describe('path bar', () => {

@@ -4189,6 +4189,9 @@ export default {
     noPermissionSlice: 'Non hai il permesso di sezionare i file',
     noPermissionAddToQueue: 'Non hai il permesso di aggiungere alla coda',
     noPermissionDownload: 'Non hai il permesso di scaricare file',
+    downloadZip: 'Scarica come ZIP',
+    downloadFolder: 'Scarica cartella',
+    folderHasNoFiles: 'Questa cartella non contiene file',
     noPermissionPreview: 'Non hai il permesso di visualizzare l\'anteprima dei file',
     preview3d: 'Anteprima 3D',
     // Anteprime dei documenti in-app (#2976): file PDF e fogli di calcolo.
@@ -4271,6 +4274,7 @@ export default {
       folderDeleted: 'Cartella eliminata',
       fileDeleted: 'File eliminato',
       filesDeleted: 'Eliminati {{count}} file',
+      downloadFailed: 'Download non riuscito. Riprova.',
       filesMoved: 'File spostati',
       folderLinked: 'Cartella collegata',
       folderUnlinked: 'Cartella scollegata',

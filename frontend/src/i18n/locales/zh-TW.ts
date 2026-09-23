@@ -4188,6 +4188,9 @@ export default {
     noPermissionSlice: '您沒有切片檔案的權限',
     noPermissionAddToQueue: '您沒有新增到佇列的權限',
     noPermissionDownload: '您沒有下載檔案的權限',
+    downloadZip: '下載為 ZIP',
+    downloadFolder: '下載資料夾',
+    folderHasNoFiles: '此資料夾中沒有檔案',
     noPermissionPreview: '您沒有預覽檔案的權限',
     preview3d: '3D 預覽',
     // 應用程式內文件預覽（#2976）：PDF 與試算表檔案。
@@ -4270,6 +4273,7 @@ export default {
       folderDeleted: '資料夾已刪除',
       fileDeleted: '檔案已刪除',
       filesDeleted: '已刪除 {{count}} 個檔案',
+      downloadFailed: '下載失敗，請重試。',
       filesMoved: '檔案已移動',
       folderLinked: '資料夾已連結',
       folderUnlinked: '資料夾已取消連結',

@@ -4189,6 +4189,9 @@ export default {
     noPermissionSlice: 'Vous n\'avez pas la permission de découper des fichiers',
     noPermissionAddToQueue: 'Pas d\'autorisation file',
     noPermissionDownload: 'Pas d\'autorisation téléchargement',
+    downloadZip: 'Télécharger en ZIP',
+    downloadFolder: 'Télécharger le dossier',
+    folderHasNoFiles: 'Ce dossier ne contient aucun fichier',
     noPermissionPreview: 'Vous n\'avez pas la permission de prévisualiser les fichiers',
     preview3d: 'Aperçu 3D',
     // Aperçus de documents intégrés (#2976) : fichiers PDF et tableurs.
@@ -4271,6 +4274,7 @@ export default {
       folderDeleted: 'Dossier supprimé',
       fileDeleted: 'Fichier supprimé',
       filesDeleted: '{{count}} fichiers supprimés',
+      downloadFailed: 'Échec du téléchargement. Veuillez réessayer.',
       filesMoved: 'Fichiers déplacés',
       folderLinked: 'Dossier lié',
       folderUnlinked: 'Dossier délié',

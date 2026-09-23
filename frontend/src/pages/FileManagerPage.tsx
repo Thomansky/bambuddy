@@ -835,6 +835,7 @@ interface FolderTreeItemProps {
   folder: LibraryFolderTree;
   selectedFolderId: number | null;
   onSelect: (id: number | null) => void;
+  onDownloadFolder: (folder: LibraryFolderTree) => void;
   onDelete: (id: number) => void;
   onLink: (folder: LibraryFolderTree) => void;
   onRename: (folder: LibraryFolderTree) => void;
@@ -853,6 +854,7 @@ interface FolderTreeItemProps {
 // a dropdown inside an overflow-y-auto column gets clipped at its edge.
 interface FolderActionsMenuProps {
   folder: LibraryFolderTree;
+  onDownloadFolder: (folder: LibraryFolderTree) => void;
   onDelete: (id: number) => void;
   onLink: (folder: LibraryFolderTree) => void;
   onRename: (folder: LibraryFolderTree) => void;
@@ -866,7 +868,7 @@ interface FolderActionsMenuProps {
   t: TFunction;
 }
 
-function FolderActionsMenu({ folder, onDelete, onLink, onRename, hasPermission, revealOnHover = false, tabIndex, t }: FolderActionsMenuProps) {
+function FolderActionsMenu({ folder, onDownloadFolder, onDelete, onLink, onRename, hasPermission, revealOnHover = false, tabIndex, t }: FolderActionsMenuProps) {
   const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number } | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -907,6 +909,15 @@ function FolderActionsMenu({ folder, onDelete, onLink, onRename, hasPermission, 
       onClick: () => onLink(folder),
       disabled: !canRename,
       title: !canRename ? t('fileManager.noPermissionLinkFolder') : undefined,
+    },
+    {
+      // Subfolders ride along: a job folder is the drawing, the STEP and the
+      // quote, and they are rarely all on one level.
+      label: t('fileManager.downloadFolder'),
+      icon: <Download className="w-3.5 h-3.5" />,
+      onClick: () => onDownloadFolder(folder),
+      disabled: !hasPermission('library:read') || folder.file_count === 0,
+      title: folder.file_count === 0 ? t('fileManager.folderHasNoFiles') : undefined,
     },
     {
       label: t('common.delete'),
@@ -955,7 +966,7 @@ function FolderActionsMenu({ folder, onDelete, onLink, onRename, hasPermission, 
   );
 }
 
-function FolderTreeItem({ folder, selectedFolderId, onSelect, onDelete, onLink, onRename, depth = 0, wrapNames = false, defaultExpanded = true, showModified = false, hasPermission, t }: FolderTreeItemProps) {
+function FolderTreeItem({ folder, selectedFolderId, onSelect, onDownloadFolder, onDelete, onLink, onRename, depth = 0, wrapNames = false, defaultExpanded = true, showModified = false, hasPermission, t }: FolderTreeItemProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const hasChildren = folder.children.length > 0;
   const isLinked = folder.project_id || folder.archive_id;
@@ -1040,6 +1051,7 @@ function FolderTreeItem({ folder, selectedFolderId, onSelect, onDelete, onLink, 
         )}
         <FolderActionsMenu
           folder={folder}
+          onDownloadFolder={onDownloadFolder}
           onDelete={onDelete}
           onLink={onLink}
           onRename={onRename}
@@ -1056,6 +1068,7 @@ function FolderTreeItem({ folder, selectedFolderId, onSelect, onDelete, onLink, 
               folder={child}
               selectedFolderId={selectedFolderId}
               onSelect={onSelect}
+              onDownloadFolder={onDownloadFolder}
               onDelete={onDelete}
               onLink={onLink}
               onRename={onRename}
@@ -2594,6 +2607,27 @@ export function FileManagerPage() {
     });
   };
 
+  // One selected file is still a plain download — wrapping a single 3MF in a
+  // ZIP only costs the user an unpacking step. Several become one archive.
+  // The server's message is shown verbatim: it is the one that names the cap
+  // that was hit and by how much.
+  const handleDownloadSelection = () => {
+    const ids = [...selectedFiles];
+    if (ids.length === 0) return;
+    const request = ids.length === 1 ? api.downloadLibraryFile(ids[0]) : api.downloadLibraryFilesZip(ids);
+    request.catch((err) => {
+      console.error('Library bulk download failed:', err);
+      showToast(err instanceof Error ? err.message : t('fileManager.toast.downloadFailed'), 'error');
+    });
+  };
+
+  const handleDownloadFolder = (folder: LibraryFolderTree) => {
+    api.downloadLibraryFolderZip(folder.id).catch((err) => {
+      console.error('Library folder download failed:', err);
+      showToast(err instanceof Error ? err.message : t('fileManager.toast.downloadFailed'), 'error');
+    });
+  };
+
   const handleDeleteConfirm = () => {
     if (!deleteConfirm) return;
     if (deleteConfirm.type === 'file') {
@@ -3477,6 +3511,7 @@ export function FileManagerPage() {
                 folder={folder}
                 selectedFolderId={selectedFolderId}
                 onSelect={setSelectedFolderId}
+                onDownloadFolder={handleDownloadFolder}
                 onDelete={(id) => setDeleteConfirm({ type: 'folder', id })}
                 onLink={setLinkFolder}
                 onRename={(f) => setRenameItem({ type: 'folder', id: f.id, name: f.name })}
@@ -3749,6 +3784,18 @@ export function FileManagerPage() {
                       <span className="hidden sm:inline">{t('fileManager.preview.open')}</span>
                     </Button>
                   )}
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleDownloadSelection}
+                    disabled={!hasPermission('library:read')}
+                    title={!hasPermission('library:read') ? t('fileManager.noPermissionPreview') : undefined}
+                  >
+                    <Download className="w-4 h-4 sm:mr-1" />
+                    <span className="hidden sm:inline">
+                      {selectedFiles.length > 1 ? t('fileManager.downloadZip') : t('common.download')}
+                    </span>
+                  </Button>
                   {/* Print used to disappear the moment a second sliced file was
                       selected. Selecting several is now how you say "same job,
                       different printers" (#671) — one queue item, whichever
@@ -4003,6 +4050,7 @@ export function FileManagerPage() {
                               without one (#2865) and on the selected row. */}
                           <FolderActionsMenu
                             folder={folder}
+                            onDownloadFolder={handleDownloadFolder}
                             onDelete={(id) => setDeleteConfirm({ type: 'folder', id })}
                             onLink={setLinkFolder}
                             onRename={(f) => setRenameItem({ type: 'folder', id: f.id, name: f.name })}

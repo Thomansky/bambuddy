@@ -4203,6 +4203,9 @@ export default {
     noPermissionSlice: 'Sie haben keine Berechtigung, Dateien zu slicen',
     noPermissionAddToQueue: 'Sie haben keine Berechtigung, zur Warteschlange hinzuzufügen',
     noPermissionDownload: 'Sie haben keine Berechtigung, Dateien herunterzuladen',
+    downloadZip: 'Als ZIP herunterladen',
+    downloadFolder: 'Ordner herunterladen',
+    folderHasNoFiles: 'Dieser Ordner enthält keine Dateien',
     noPermissionPreview: 'Sie haben keine Berechtigung, Dateien in der Vorschau anzuzeigen',
     preview3d: '3D-Vorschau',
     // In-App-Dokumentvorschau (#2976): PDF- und Tabellendateien.
@@ -4285,6 +4288,7 @@ export default {
       folderDeleted: 'Ordner gelöscht',
       fileDeleted: 'Datei gelöscht',
       filesDeleted: '{{count}} Dateien gelöscht',
+      downloadFailed: 'Download fehlgeschlagen. Bitte erneut versuchen.',
       filesMoved: 'Dateien verschoben',
       folderLinked: 'Ordner verknüpft',
       folderUnlinked: 'Ordnerverknüpfung aufgehoben',

@@ -4228,6 +4228,9 @@ export default {
     noPermissionAddToQueue: "Ви не маєте дозволу на додавання в чергу",
     noPermissionSlice: "Ви не маєте дозволу нарізати файли",
     noPermissionDownload: "У вас немає дозволу на завантаження файлів",
+    downloadZip: 'Завантажити у ZIP',
+    downloadFolder: 'Завантажити теку',
+    folderHasNoFiles: 'У цій теці немає файлів',
     noPermissionPreview: 'У вас немає дозволу на попередній перегляд файлів',
     preview3d: '3D-перегляд',
     // Попередній перегляд документів у застосунку (#2976): PDF та електронні таблиці.
@@ -4310,6 +4313,7 @@ export default {
       folderDeleted: "Папку видалено",
       fileDeleted: "Файл видалено",
       filesDeleted: "Видалені файли {{count}}.",
+      downloadFailed: 'Не вдалося завантажити. Спробуйте ще раз.',
       filesMoved: "Файли переміщено",
       folderLinked: "Папку пов’язано",
       folderUnlinked: "Папку від’єднано",

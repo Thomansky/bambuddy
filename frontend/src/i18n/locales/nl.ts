@@ -4233,6 +4233,9 @@ export default {
     noPermissionAddToQueue: 'Je hebt geen toestemming om aan de wachtrij toe te voegen',
     noPermissionSlice: 'Je hebt geen toestemming om bestanden te slicen',
     noPermissionDownload: 'Je hebt geen toestemming om bestanden te downloaden',
+    downloadZip: 'Downloaden als ZIP',
+    downloadFolder: 'Map downloaden',
+    folderHasNoFiles: 'Deze map bevat geen bestanden',
     noPermissionPreview: 'Je hebt geen toestemming om bestanden te bekijken',
     preview3d: '3D-voorbeeld',
     // In-app documentvoorbeelden (#2976): PDF- en spreadsheetbestanden.
@@ -4315,6 +4318,7 @@ export default {
       folderDeleted: 'Map verwijderd',
       fileDeleted: 'Bestand verwijderd',
       filesDeleted: '{{count}} bestanden verwijderd',
+      downloadFailed: 'Downloaden mislukt. Probeer het opnieuw.',
       filesMoved: 'Bestanden verplaatst',
       folderLinked: 'Map gekoppeld',
       folderUnlinked: 'Map ontkoppeld',

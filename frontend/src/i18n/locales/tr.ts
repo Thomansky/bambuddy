@@ -4195,6 +4195,9 @@ export default {
     noPermissionAddToQueue: 'Kuyruğa ekleme izniniz yok',
     noPermissionSlice: 'Dosyaları dilimleme izniniz yok',
     noPermissionDownload: 'Dosyaları indirme izniniz yok',
+    downloadZip: 'ZIP olarak indir',
+    downloadFolder: 'Klasörü indir',
+    folderHasNoFiles: 'Bu klasörde dosya yok',
     noPermissionPreview: 'Dosyaları önizleme izniniz yok',
     preview3d: '3B Önizleme',
     // Uygulama içi belge önizlemeleri (#2976): PDF ve elektronik tablo dosyaları.
@@ -4277,6 +4280,7 @@ export default {
       folderDeleted: 'Klasör silindi',
       fileDeleted: 'Dosya silindi',
       filesDeleted: '{{count}} dosya silindi',
+      downloadFailed: 'İndirme başarısız. Lütfen tekrar deneyin.',
       filesMoved: 'Dosyalar taşındı',
       folderLinked: 'Klasör bağlandı',
       folderUnlinked: 'Klasör bağlantısı kaldırıldı',

@@ -4188,6 +4188,9 @@ export default {
     noPermissionSlice: 'Você não tem permissão para fatiar arquivos',
     noPermissionAddToQueue: 'Você não tem permissão para adicionar à fila',
     noPermissionDownload: 'Você não tem permissão para baixar arquivos',
+    downloadZip: 'Baixar como ZIP',
+    downloadFolder: 'Baixar pasta',
+    folderHasNoFiles: 'Esta pasta não contém arquivos',
     noPermissionPreview: 'Você não tem permissão para pré-visualizar arquivos',
     preview3d: 'Pré-visualização 3D',
     // Pré-visualizações de documentos no app (#2976): arquivos PDF e planilhas.
@@ -4270,6 +4273,7 @@ export default {
       folderDeleted: 'Pasta excluída',
       fileDeleted: 'Arquivo excluído',
       filesDeleted: 'Excluídos {{count}} arquivos',
+      downloadFailed: 'Falha no download. Tente novamente.',
       filesMoved: 'Arquivos movidos',
       folderLinked: 'Pasta vinculada',
       folderUnlinked: 'Pasta desvinculada',

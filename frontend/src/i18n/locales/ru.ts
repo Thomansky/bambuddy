@@ -4002,6 +4002,9 @@ export default {
     noPermissionAddToQueue: "У вас нет прав на добавление в очередь",
     noPermissionSlice: "У вас нет прав на нарезку файлов",
     noPermissionDownload: "У вас нет прав на скачивание файлов",
+    downloadZip: 'Скачать в ZIP',
+    downloadFolder: 'Скачать папку',
+    folderHasNoFiles: 'В этой папке нет файлов',
     noPermissionPreview: 'У вас нет прав на предварительный просмотр файлов',
     preview3d: '3D-просмотр',
     // Встроенный предварительный просмотр документов (#2976): PDF и электронные таблицы.
@@ -4083,6 +4086,7 @@ export default {
       folderDeleted: "Папка удалена",
       fileDeleted: "Файл удалён",
       filesDeleted: "Удалено файлов: {{count}}",
+      downloadFailed: 'Не удалось скачать. Попробуйте ещё раз.',
       filesMoved: "Файлы перемещены",
       folderLinked: "Папка связана",
       folderUnlinked: "Связь с папкой удалена",

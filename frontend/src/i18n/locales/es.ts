@@ -4205,6 +4205,9 @@ export default {
     noPermissionAddToQueue: 'No tiene permiso para añadir a la cola',
     noPermissionSlice: 'No tiene permiso para laminar archivos',
     noPermissionDownload: 'No tiene permiso para descargar archivos',
+    downloadZip: 'Descargar como ZIP',
+    downloadFolder: 'Descargar carpeta',
+    folderHasNoFiles: 'Esta carpeta no contiene archivos',
     noPermissionPreview: 'No tienes permiso para previsualizar archivos',
     preview3d: 'Vista previa 3D',
     // Vistas previas de documentos en la aplicación (#2976): archivos PDF y hojas de cálculo.
@@ -4287,6 +4290,7 @@ export default {
       folderDeleted: 'Carpeta eliminada',
       fileDeleted: 'Archivo eliminado',
       filesDeleted: 'Se eliminaron {{count}} archivos',
+      downloadFailed: 'Error al descargar. Inténtalo de nuevo.',
       filesMoved: 'Archivos movidos',
       folderLinked: 'Carpeta vinculada',
       folderUnlinked: 'Carpeta desvinculada',

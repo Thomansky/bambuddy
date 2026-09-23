@@ -4010,6 +4010,9 @@ export default {
     noPermissionAddToQueue: '대기열 추가 권한이 없습니다',
     noPermissionSlice: '파일 슬라이싱 권한이 없습니다',
     noPermissionDownload: '파일 다운로드 권한이 없습니다',
+    downloadZip: 'ZIP으로 다운로드',
+    downloadFolder: '폴더 다운로드',
+    folderHasNoFiles: '이 폴더에는 파일이 없습니다',
     noPermissionPreview: '파일을 미리 볼 권한이 없습니다',
     preview3d: '3D 미리보기',
     // In-app document previews (#2976): PDF and spreadsheet files.
@@ -4091,6 +4094,7 @@ export default {
       folderDeleted: '폴더 삭제됨',
       fileDeleted: '파일 삭제됨',
       filesDeleted: '{{count}}개 파일 삭제됨',
+      downloadFailed: '다운로드에 실패했습니다. 다시 시도해 주세요.',
       filesMoved: '파일 이동됨',
       folderLinked: '폴더 연결됨',
       folderUnlinked: '폴더 연결 해제됨',

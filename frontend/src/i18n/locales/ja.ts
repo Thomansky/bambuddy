@@ -4202,6 +4202,9 @@ export default {
     noPermissionSlice: 'ファイルをスライスする権限がありません',
     noPermissionAddToQueue: 'キューに追加する権限がありません',
     noPermissionDownload: 'ファイルをダウンロードする権限がありません',
+    downloadZip: 'ZIP でダウンロード',
+    downloadFolder: 'フォルダーをダウンロード',
+    folderHasNoFiles: 'このフォルダーにはファイルがありません',
     noPermissionPreview: 'ファイルをプレビューする権限がありません',
     preview3d: '3Dプレビュー',
     // アプリ内ドキュメントプレビュー（#2976）：PDFおよびスプレッドシートファイル。
@@ -4284,6 +4287,7 @@ export default {
       folderDeleted: 'フォルダを削除しました',
       fileDeleted: 'ファイルを削除しました',
       filesDeleted: '{{count}}件のファイルを削除しました',
+      downloadFailed: 'ダウンロードに失敗しました。もう一度お試しください。',
       filesMoved: 'ファイルを移動しました',
       folderLinked: 'フォルダをリンクしました',
       folderUnlinked: 'フォルダのリンクを解除しました',

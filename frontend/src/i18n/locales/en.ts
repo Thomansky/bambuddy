@@ -4234,6 +4234,9 @@ export default {
     noPermissionAddToQueue: 'You do not have permission to add to queue',
     noPermissionSlice: 'You do not have permission to slice files',
     noPermissionDownload: 'You do not have permission to download files',
+    downloadZip: 'Download as ZIP',
+    downloadFolder: 'Download folder',
+    folderHasNoFiles: 'This folder holds no files',
     noPermissionPreview: 'You do not have permission to preview files',
     preview3d: '3D Preview',
     // In-app document previews (#2976): PDF and spreadsheet files.
@@ -4316,6 +4319,7 @@ export default {
       folderDeleted: 'Folder deleted',
       fileDeleted: 'File deleted',
       filesDeleted: 'Deleted {{count}} files',
+      downloadFailed: 'Download failed. Please try again.',
       filesMoved: 'Files moved',
       folderLinked: 'Folder linked',
       folderUnlinked: 'Folder unlinked',
