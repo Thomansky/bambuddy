@@ -311,14 +311,59 @@ _RFID_REREAD_TASK_TIMEOUT = 120.0
 _RFID_REREAD_POLL_INTERVAL = 1.0
 _RFID_REREAD_MAX_SLOTS = 8
 
+# How long the post-print auto-off waits for an after-print read to hand the
+# printer back before it powers the machine down anyway. The round's own
+# ceiling is `_RFID_REREAD_TASK_TIMEOUT`; the margin covers the evaluation and
+# the settings read in front of it. A task killed before its `finally` must
+# not leave a printer powered forever, so this is a ceiling, not a promise.
+RFID_AFTER_PRINT_MAX_WAIT = _RFID_REREAD_TASK_TIMEOUT + 30.0
 
-def _rfid_preread_tag(printer_id: int, item_id: int) -> str:
-    """The prefix every pre-read log line shares, so one grep finds the lot."""
-    return f"RFID pre-read [printer {printer_id}, item {item_id}]"
+
+def _rfid_preread_tag(printer_id: int, item_id: int | None) -> str:
+    """The prefix every pre-read log line shares, so one grep finds the lot.
+
+    ``item_id`` is None for the round a finished print schedules
+    (``ams_read_unidentified_after_print``): no job is waiting on that one, so
+    the tag says when it ran instead of naming an item it has nothing to do with.
+    """
+    who = f"item {item_id}" if item_id is not None else "after print"
+    return f"RFID pre-read [printer {printer_id}, {who}]"
 
 
 def _rfid_slot_labels(slots: list[tuple[int, int]] | tuple[tuple[int, int], ...]) -> str:
     return ", ".join(f"AMS{ams_id}-T{slot_id}" for ams_id, slot_id in slots)
+
+
+def _is_printing(state: Any) -> bool:
+    """Is this report one of a printer that currently has a print on it?
+
+    Read off the state alone rather than through ``is_print_active``, which
+    also insists on ``connected``: a read round already holds the report it
+    is deciding on, and a stale-looking connection flag must not be what
+    keeps it moving filament.
+    """
+    return getattr(state, "state", None) in printer_manager.ACTIVE_PRINT_STATES
+
+
+def _loaded_ams_slots(state: Any) -> set[tuple[int, int]]:
+    """The slots whose filament is currently in a hotend.
+
+    The AMS has to pull filament back to reach a tag and refuses to do that for
+    a loaded slot, so a round leaves these alone rather than spending a refusal
+    on each. ``tray_now`` is the global tray id (``ams_id * 4 + slot_id``) and
+    names one slot for the whole printer; a dual-nozzle machine can hold two,
+    and only ``extruder_slots`` says which (see ``ExtruderSlot``).
+    """
+    loaded: set[tuple[int, int]] = set()
+    tray_now = getattr(state, "tray_now", 255)
+    if isinstance(tray_now, int) and not isinstance(tray_now, bool) and 0 <= tray_now <= 253:
+        loaded.add((tray_now // 4, tray_now % 4))
+    for slot in (getattr(state, "extruder_slots", None) or {}).values():
+        ams_id = getattr(slot, "ams_id", None)
+        slot_id = getattr(slot, "slot_id", None)
+        if getattr(slot, "has_filament", False) and ams_id is not None and slot_id is not None:
+            loaded.add((ams_id, slot_id))
+    return loaded
 
 
 def _rfid_slot_report(slots: list[tuple[int, int]], reasons: Mapping[tuple[int, int], str]) -> str:
@@ -1005,13 +1050,15 @@ class PrintScheduler:
         # Matches the watchdog timeout (90 s) plus a safety margin so the
         # watchdog runs first on the unhappy path.
         self._dispatch_max_hold = 180.0
-        # Printers whose unidentified AMS slots are being read before dispatch,
-        # printer_id -> the queue item that asked. The printer itself is
-        # reserved through `_dispatch_holds` (marker `_RFID_REREAD_HOLD_MARKER`)
-        # so everything that honours that hold stays off it; this map is what
-        # keeps the asking item's own row saying "reading" rather than "busy"
-        # on the passes in between. Both are dropped together by the read task.
-        self._rfid_rereads: dict[int, int] = {}
+        # Printers whose unidentified AMS slots are being read, printer_id ->
+        # the queue item that asked, or None for the round a finished print
+        # schedules (`ams_read_unidentified_after_print`), which nobody is
+        # waiting on. The printer itself is reserved through `_dispatch_holds`
+        # (marker `_RFID_REREAD_HOLD_MARKER`) so everything that honours that
+        # hold stays off it; this map is what keeps the asking item's own row
+        # saying "reading" rather than "busy" on the passes in between. Both
+        # are dropped together by the read task.
+        self._rfid_rereads: dict[int, int | None] = {}
         # printer_id -> the slots a pre-read already asked about and got no
         # identity out of. An unreadable spool -- a third-party roll, a torn
         # tag -- would otherwise be asked about before every single job, so it
@@ -1569,7 +1616,12 @@ class PrintScheduler:
             for held_printer_id in list(self._dispatch_holds.keys()):
                 if self._printer_in_dispatch_hold(held_printer_id):
                     if held_printer_id in self._rfid_rereads:
-                        mark_busy(held_printer_id, "reading unidentified AMS spools before dispatch")
+                        mark_busy(
+                            held_printer_id,
+                            "reading unidentified AMS spools before dispatch"
+                            if self._rfid_rereads[held_printer_id] is not None
+                            else "reading unidentified AMS spools after its print",
+                        )
                     else:
                         mark_busy(held_printer_id, "still inside its post-dispatch hold window")
 
@@ -4332,8 +4384,8 @@ class PrintScheduler:
             self._start_rfid_reread(printer_id, item.id, slots)
         return [printer_id for printer_id, _slots in to_read]
 
-    def _slots_to_reread(self, printer_id: int, item_id: int) -> list[tuple[int, int]] | None:
-        """The slots a pre-dispatch read on *printer_id* would ask about, capped.
+    def _slots_to_reread(self, printer_id: int, item_id: int | None) -> list[tuple[int, int]] | None:
+        """The slots a read on *printer_id* would ask about, capped.
 
         None when the printer cannot be asked at all (not connected, no
         client or status yet); an empty list when it can but there is
@@ -4341,11 +4393,20 @@ class PrintScheduler:
         loaded (the AMS has to move filament to reach a tag), or nothing left
         after the slots an earlier read already proved unreadable.
 
+        ``item_id`` is None for the round a finished print schedules, and that
+        round is evaluated differently in exactly one way: filament left in a
+        hotend is the normal state of a machine that has just finished, so
+        instead of standing the whole round down it drops the loaded slots and
+        reads the rest. Before dispatch the printer is idle and loaded filament
+        means somebody else is using it, which is a reason to keep out of the
+        way entirely.
+
         Every outcome says so in the log, once, with the masks exactly as
         firmware sent them: when this decides wrongly on somebody's printer,
         the line is what tells us whether the detection or the firmware is
         the surprise.
         """
+        after_print = item_id is None
         if not printer_manager.is_connected(printer_id):
             logger.debug("%s: printer not connected", _rfid_preread_tag(printer_id, item_id))
             return None
@@ -4366,6 +4427,10 @@ class PrintScheduler:
             slot for slot in self._forget_readable_slots(printer_id, state) if reasons.get(slot) == UNREAD_NO_IDENTITY
         }
         slots = [slot for slot in reasons if slot not in skipped]
+        loaded = _loaded_ams_slots(state) if after_print else set()
+        in_hotend = [slot for slot in slots if slot in loaded]
+        if in_hotend:
+            slots = [slot for slot in slots if slot not in loaded]
         if skipped:
             logger.debug(
                 "%s: %s already tried, nothing readable there",
@@ -4373,10 +4438,15 @@ class PrintScheduler:
                 _rfid_slot_labels(sorted(skipped)),
             )
         if not slots:
-            tail = f" ({len(skipped)} skipped: already tried)" if skipped else ""
+            notes = []
+            if skipped:
+                notes.append(f"{len(skipped)} skipped: already tried")
+            if in_hotend:
+                notes.append(f"{len(in_hotend)} skipped: loaded ({_rfid_slot_labels(in_hotend)})")
+            tail = f" ({'; '.join(notes)})" if notes else ""
             self._say_rfid_preread(printer_id, item_id, f"{evaluated} -> 0 unread slot(s){tail}")
             return []
-        if state.tray_now != 255:
+        if not after_print and state.tray_now != 255:
             self._say_rfid_preread(
                 printer_id, item_id, f"{evaluated} -> {len(slots)} unread slot(s), skipped: filament loaded"
             )
@@ -4384,10 +4454,12 @@ class PrintScheduler:
         capped = slots[:_RFID_REREAD_MAX_SLOTS]
         report = _rfid_slot_report(capped, reasons)
         reading = f"reading {report}" if len(capped) < len(slots) else report
+        loaded_note = f", {len(in_hotend)} skipped: loaded ({_rfid_slot_labels(in_hotend)})" if in_hotend else ""
+        held = " -> holding the printer while it reads" if after_print else " -> holding the item for one pass"
         self._say_rfid_preread(
             printer_id,
             item_id,
-            f"{evaluated} -> {len(slots)} unread slot(s): {reading} -> holding the item for one pass",
+            f"{evaluated} -> {len(slots)} unread slot(s){loaded_note}: {reading}{held}",
         )
         return capped
 
@@ -4426,7 +4498,7 @@ class PrintScheduler:
             self._rfid_unreadable.pop(printer_id, None)
         return tried
 
-    def _say_rfid_preread(self, printer_id: int, item_id: int, detail: str) -> None:
+    def _say_rfid_preread(self, printer_id: int, item_id: int | None, detail: str) -> None:
         """Log one pre-read evaluation, at info unless it repeats what it said.
 
         The stamp bounds the fixed-printer branch to one evaluation per item,
@@ -4436,13 +4508,32 @@ class PrintScheduler:
         items are the normal shape of that, so the item is deliberately not
         part of what counts as a repeat: the same printer reporting the same
         masks and the same verdict is the same news whoever asked.
+
+        An after-print round (``item_id`` None) is never deduplicated. It runs
+        once per finished print, a handful of times a day, and every one of
+        them is a fresh event somebody may be looking for -- the whole reason
+        this feature exists is that its predecessor left no evidence it ran.
         """
         message = f"{_rfid_preread_tag(printer_id, item_id)}: {detail}"
-        if self._rfid_preread_said.get(printer_id) == detail:
+        if item_id is not None and self._rfid_preread_said.get(printer_id) == detail:
             logger.debug("%s", message)
             return
         self._rfid_preread_said[printer_id] = detail
         logger.info("%s", message)
+
+    def _printing_again(self, printer_id: int) -> bool:
+        """Has a print taken *printer_id* back while a read round was running?"""
+        return _is_printing(printer_manager.get_status(printer_id))
+
+    def _reserve_for_rfid_reread(self, printer_id: int, item_id: int | None) -> None:
+        """Take *printer_id* out of the queue's reach for the length of a read.
+
+        Both rounds reserve the same way -- the queue must not dispatch into a
+        moving AMS whichever of them asked for it -- and
+        ``_release_rfid_reread_hold`` is the only thing that undoes it.
+        """
+        self._dispatch_holds[printer_id] = (time.monotonic(), _RFID_REREAD_HOLD_MARKER, None)
+        self._rfid_rereads[printer_id] = item_id
 
     def _start_rfid_reread(self, printer_id: int, item_id: int, slots: list[tuple[int, int]]) -> None:
         """Reserve *printer_id* for *item_id* and spawn the task that reads *slots*.
@@ -4450,15 +4541,71 @@ class PrintScheduler:
         The line announcing the round was already written by the evaluation
         that chose these slots, which is the one place that knows why.
         """
-        self._dispatch_holds[printer_id] = (time.monotonic(), _RFID_REREAD_HOLD_MARKER, None)
-        self._rfid_rereads[printer_id] = item_id
+        self._reserve_for_rfid_reread(printer_id, item_id)
         spawn_background_task(
             self._reread_unknown_slots(printer_id, item_id, slots),
             name=f"rfid-reread-{printer_id}-{item_id}",
         )
 
+    async def read_unidentified_slots_after_print(self, printer_id: int) -> None:
+        """Read the AMS slots *printer_id* cannot name, now that its print has ended.
+
+        The other end of the pre-dispatch read (``queue_rfid_reread_before_start``),
+        and the one that gets to run on a farm that is actually busy: a printer
+        that has just finished -- completed or failed, both leave it idle -- is
+        free, the AMS can move filament, and no job is waiting on the answer.
+        The queue then finds the slots identified instead of having to stop and
+        ask. Off by default; both reads stay, they are two ends of one idea.
+
+        Three orderings this depends on:
+
+        * The plate-clear gate is deliberately NOT consulted. A finished print
+          still on the bed is exactly the window this exists for, and the
+          confirmation is about starting a *print*, not about moving filament
+          inside the AMS. ``_is_printer_idle`` would refuse every printer whose
+          plate nobody has released yet, which on the farm this was written for
+          was most of them, most of the time. Do not "fix" that back.
+        * Auto-off waits for this round rather than the other way round: see
+          ``on_print_complete`` in main.py, which gates ``[AUTO-OFF-BG]`` on the
+          task running this and bounds the wait with
+          ``RFID_AFTER_PRINT_MAX_WAIT``.
+        * A print that starts anyway wins: the round checks before every slot
+          and while waiting for one, and gives the printer straight back.
+
+        Awaited by its caller, not spawned: the caller's task *is* the round,
+        and auto-off waits on that task.
+        """
+        tag = _rfid_preread_tag(printer_id, None)
+        async with async_session() as db:
+            enabled = await self._get_bool_setting(db, "ams_read_unidentified_after_print", default=False)
+        if not enabled:
+            logger.debug("%s: setting off", tag)
+            return
+        if self._printing_again(printer_id):
+            self._say_rfid_preread(printer_id, None, "setting=on already printing again, nothing read")
+            return
+        if self._printer_in_dispatch_hold(printer_id):
+            # Somebody else has the printer reserved -- a dispatch on its way
+            # out, or the pre-dispatch read already doing this very job. Asked
+            # through the hold's own accessor so a hold that has already run
+            # out is dropped here rather than standing the round down.
+            self._say_rfid_preread(printer_id, None, "setting=on printer reserved elsewhere, nothing read")
+            return
+        slots = self._slots_to_reread(printer_id, None)
+        if slots is None:
+            # `_slots_to_reread` says which of the two at debug. A round that
+            # reads nothing still has to say so once, and this is the path
+            # that would otherwise be silent.
+            self._say_rfid_preread(printer_id, None, "setting=on printer not reporting, nothing read")
+            return
+        if not slots:
+            # The evaluation has already said why, at info.
+            return
+        self._reserve_for_rfid_reread(printer_id, None)
+        await self._reread_unknown_slots(printer_id, None, slots)
+
     def _release_rfid_reread_hold(self, printer_id: int) -> None:
-        """Hand *printer_id* back to the queue after its pre-dispatch RFID read.
+        """Hand *printer_id* back to the queue after an RFID read of either kind.
 
         Only a hold the read placed is dropped: a post-dispatch hold that
         somehow replaced it belongs to the watchdog.
@@ -4468,7 +4615,7 @@ class PrintScheduler:
             self._dispatch_holds.pop(printer_id, None)
         self._rfid_rereads.pop(printer_id, None)
 
-    async def _reread_unknown_slots(self, printer_id: int, item_id: int, slots: list[tuple[int, int]]) -> None:
+    async def _reread_unknown_slots(self, printer_id: int, item_id: int | None, slots: list[tuple[int, int]]) -> None:
         """Read *slots* one at a time, then release the printer to the queue.
 
         Sequential because the AMS reads one tag at a time. A refused slot
@@ -4477,8 +4624,11 @@ class PrintScheduler:
         re-apply the manual Re-read RFID button triggers. A slot the AMS
         still puts no identity on when its turn is over is remembered, so the
         next job does not ask about it again. The reservation is dropped on
-        every exit -- success, ceiling, printer gone, exception -- so the next
-        pass always dispatches the item.
+        every exit -- success, ceiling, printer gone, print started, exception
+        -- so the next pass always dispatches the item.
+
+        ``item_id`` is None for the round a finished print schedules; the only
+        difference is what the lines call it, because there is no item.
         """
         from backend.app.api.routes.printers import _apply_pa_after_refresh
 
@@ -4501,6 +4651,20 @@ class PrintScheduler:
                 if client is None or state is None:
                     not_attempted = slots[index:]
                     logger.info("%s: printer gone, not reading %s", tag, _rfid_slot_labels(not_attempted))
+                    break
+                # A print that started while this was running owns the machine.
+                # The AMS is about to move filament for it, every further
+                # ams_get_rfid would be refused, and nothing is waiting on the
+                # answer -- so give the printer back rather than hold the queue
+                # behind a round that has been overtaken.
+                if _is_printing(state):
+                    not_attempted = slots[index:]
+                    logger.info(
+                        "%s: printing again (state=%s), not reading %s",
+                        tag,
+                        getattr(state, "state", None),
+                        _rfid_slot_labels(not_attempted),
+                    )
                     break
                 before = slot_identity(state, ams_id, slot_id)
                 done_before = slot_read_done(state, ams_id, slot_id)
@@ -4535,20 +4699,25 @@ class PrintScheduler:
                     # when the printer stops reporting, and a line claiming
                     # 25 s of AMS silence sends the reader after the AMS.
                     logger.info("%s: %s ams_get_rfid accepted (%s), no read after %.0f s", tag, label, message, waited)
-                if not identified:
+                # A slot the print took back never got its fair attempt, so it
+                # is not remembered as unreadable: the round that follows the
+                # next print has to be free to ask about it again.
+                if not identified and not self._printing_again(printer_id):
                     self._rfid_unreadable.setdefault(printer_id, set()).add((ams_id, slot_id))
         except Exception as e:
             logger.warning("%s: aborted: %s", tag, e, exc_info=True)
         finally:
             self._release_rfid_reread_hold(printer_id)
             logger.info(
-                "%s: finished — read %d, refused %d, no read %d, not attempted %d; "
-                "the job dispatches on the next queue pass",
+                "%s: finished — read %d, refused %d, no read %d, not attempted %d; %s",
                 tag,
                 len(reread),
                 len(refused),
                 len(timed_out),
                 len(not_attempted),
+                "the job dispatches on the next queue pass"
+                if item_id is not None
+                else "the printer is back with the queue",
             )
 
     def _slot_identified(self, printer_id: int, ams_id: int, slot_id: int) -> bool:
@@ -4589,6 +4758,11 @@ class PrintScheduler:
             await asyncio.sleep(_RFID_REREAD_POLL_INTERVAL)
             state = printer_manager.get_status(printer_id)
             if state is None:
+                return time.monotonic() - started, False
+            # A print took the printer back mid-read. Stop waiting on an
+            # answer the AMS is no longer free to give; the round ends on the
+            # same check one level up.
+            if _is_printing(state):
                 return time.monotonic() - started, False
             if slot_identity(state, ams_id, slot_id) != before:
                 return time.monotonic() - started, True
