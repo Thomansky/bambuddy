@@ -194,15 +194,56 @@ class TestLibraryZipDownload:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_stored_path_escaping_base_dir_is_skipped(self, async_client: AsyncClient, file_factory):
-        """A row whose path resolves outside base_dir is dropped, not served."""
+    async def test_stored_relative_path_escaping_base_dir_is_skipped(
+        self, async_client: AsyncClient, file_factory, library_root
+    ):
+        """A row whose *relative* path climbs out of base_dir is dropped, not served.
+
+        Only relative paths are contained: ``to_absolute_path`` returns a
+        stored absolute path verbatim, which is how external-folder rows work.
+        The bytes have to really exist outside the root, otherwise the row is
+        dropped by the missing-file check and the containment guard this test
+        is named for is never reached.
+        """
+        outside = library_root.parent / "escaped-by-traversal.pdf"
+        outside.write_bytes(b"secret")
         good = await file_factory("kept.pdf", b"kept")
-        escaped = await file_factory("escaped.pdf", b"x", file_path="../escaped.pdf")
+        escaped = await file_factory("escaped.pdf", b"secret", file_path=f"../{outside.name}")
+        assert (library_root / escaped.file_path).is_file(), "the escaping path must resolve to real bytes"
 
         response = await async_client.post(FILES_ZIP_URL, json={"file_ids": [good.id, escaped.id]})
 
         with _open_zip(response) as archive:
             assert archive.namelist() == ["kept.pdf"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_pre_flight_walk_runs_off_the_event_loop(self, async_client: AsyncClient, file_factory, monkeypatch):
+        """The walk is one stat per candidate, up to ZIP_MAX_FILES of them.
+
+        External folders sit on mounts where a stat costs milliseconds, so on
+        the loop this would hold up printer MQTT traffic and every other
+        request on the Pi for as long as it ran.
+        """
+        import threading
+
+        from backend.app.api.routes import library as library_routes
+
+        test_thread = threading.current_thread()
+        original = library_routes._collect_zip_members
+        ran_on: dict[str, bool] = {}
+
+        def spy(*args, **kwargs):
+            ran_on["same_thread"] = threading.current_thread() is test_thread
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(library_routes, "_collect_zip_members", spy)
+        model = await file_factory("part.3mf")
+
+        response = await async_client.post(FILES_ZIP_URL, json={"file_ids": [model.id]})
+
+        assert response.status_code == 200
+        assert ran_on["same_thread"] is False
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -314,6 +355,30 @@ class TestLibraryZipDownload:
 
         assert response.status_code == 413
         assert "limit is 1" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_folder_walk_stops_one_row_past_the_cap(self, db_session, folder_factory, file_factory, library_root):
+        """The cap has to bound the query, not just the answer.
+
+        An external folder can point at a share with six figures of files.
+        Materialising every LibraryFile row -- each with its parsed 3MF
+        metadata -- only to answer 413 is how the guard would become the
+        outage it exists to prevent.
+        """
+        from backend.app.api.routes.library import _folder_zip_candidates
+
+        root = await folder_factory("RAFI")
+        job = await folder_factory("N1125035", parent_id=root.id)
+        for index in range(4):
+            await file_factory(f"top-{index}.pdf", folder_id=root.id)
+            await file_factory(f"sub-{index}.pdf", folder_id=job.id)
+
+        bounded = await _folder_zip_candidates(db_session, root, True, 2)
+        complete = await _folder_zip_candidates(db_session, root, True, 100)
+
+        assert len(bounded) == 3
+        assert len(complete) == 8
 
 
 class TestLibraryZipDownloadOwnership:

@@ -217,7 +217,14 @@ async function request<T>(
  *  Shared by the library bulk-download helpers so a caller never has to know
  *  how a download is started. Errors become `ApiError` rather than a bare
  *  `Error`: the backend's cap refusal is a 413 whose detail is meant to be
- *  shown verbatim, and the status is what tells a caller apart from a 404. */
+ *  shown verbatim, and the status is what tells a caller apart from a 404.
+ *
+ *  The archive is streamed by the server but buffered here: `blob()` holds the
+ *  whole thing in the tab before the save starts, so the practical ceiling is
+ *  the tab's memory, well under the backend's ZIP_MAX_TOTAL_BYTES. Streaming
+ *  straight to disk needs showSaveFilePicker(), which is Chromium-only and
+ *  must be called on the click itself, before the fetch — a change to this
+ *  contract, not to this function. */
 async function saveZipResponse(response: Response, fallbackFilename: string): Promise<void> {
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));

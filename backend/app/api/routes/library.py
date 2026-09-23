@@ -15,6 +15,7 @@ import zipfile
 from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
+from stat import S_ISREG
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse as FastAPIFileResponse, StreamingResponse
@@ -5274,21 +5275,30 @@ def _unique_zip_name(arcname: str, taken: set[str]) -> str:
         counter += 1
 
 
-def _zip_member_path(file: LibraryFile) -> Path | None:
-    """Absolute on-disk path for a ZIP member, or None when it is unusable.
+def _zip_member_source(file: LibraryFile) -> tuple[Path, int] | None:
+    """Absolute path and size for a ZIP member, or None when it is unusable.
 
     Mirrors ``download_file``'s resolution so a file that streams singly also
     streams in bulk. A legacy row whose relative path escapes ``base_dir`` makes
-    ``to_absolute_path`` raise; that row is skipped rather than failing the
-    whole archive.
+    ``to_absolute_path`` raise, and a row whose bytes are gone -- or whose NFS
+    mount blinked -- makes ``stat`` raise; either way the row is skipped rather
+    than failing the whole archive. One ``stat`` answers both "is this a file"
+    and "how big", because ``is_file()`` followed by ``stat()`` is two syscalls
+    per candidate and there can be ``ZIP_MAX_FILES`` of them on a cold mount.
     """
     try:
         abs_path = to_absolute_path(file.file_path)
     except ValueError:
         return None
-    if not abs_path or not abs_path.is_file():
+    if not abs_path:
         return None
-    return abs_path
+    try:
+        info = abs_path.stat()
+    except OSError:
+        return None
+    if not S_ISREG(info.st_mode):
+        return None
+    return abs_path, info.st_size
 
 
 def _collect_zip_members(
@@ -5303,6 +5313,9 @@ def _collect_zip_members(
     so a ZIP can never contain a file its requester could not have fetched one
     at a time. Unreadable rows and rows missing on disk are skipped: one dead
     row must not cost the user the other nine files.
+
+    Blocking: one ``stat`` per candidate, so callers hand it to a thread rather
+    than walking a NAS mount on the event loop.
     """
     members: list[tuple[str, Path]] = []
     taken: set[str] = set()
@@ -5313,21 +5326,35 @@ def _collect_zip_members(
             _ensure_library_file_visible(file, user, can_read_all)
         except HTTPException:
             continue
-        abs_path = _zip_member_path(file)
-        if abs_path is None:
+        source = _zip_member_source(file)
+        if source is None:
             continue
+        abs_path, size = source
         name = _zip_entry_name(file.filename, fallback=f"file-{file.id}")
         members.append((_unique_zip_name("/".join((*prefix, name)), taken), abs_path))
-        total_bytes += abs_path.stat().st_size
+        total_bytes += size
 
     return members, total_bytes
 
 
-def _zip_member_timestamp(path: Path) -> tuple[int, int, int, int, int, int]:
-    """Member mtime as a ZIP date tuple, clamped to the format's 1980 epoch."""
-    stamp = datetime.fromtimestamp(path.stat().st_mtime)
+ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
+
+
+def _zip_member_timestamp(mtime: float) -> tuple[int, int, int, int, int, int]:
+    """``mtime`` as a ZIP date tuple, clamped to the format's 1980 epoch.
+
+    A scanned external file can carry an mtime the format cannot hold, and on
+    Windows ``fromtimestamp`` raises OSError for a negative one rather than
+    returning a pre-1980 date to clamp. A nonsense timestamp is not a reason to
+    drop the file, let alone the archive, so anything unconvertible becomes the
+    epoch too.
+    """
+    try:
+        stamp = datetime.fromtimestamp(mtime)
+    except (OSError, OverflowError, ValueError):
+        return ZIP_EPOCH
     if stamp.year < 1980:
-        return (1980, 1, 1, 0, 0, 0)
+        return ZIP_EPOCH
     return (stamp.year, stamp.month, stamp.day, stamp.hour, stamp.minute, stamp.second)
 
 
@@ -5342,10 +5369,22 @@ def _stream_zip(members: list[tuple[str, Path]]) -> Iterator[bytes]:
     sink = _ZipStreamSink()
     with zipfile.ZipFile(sink, "w", zipfile.ZIP_STORED) as archive:
         for arcname, path in members:
-            info = zipfile.ZipInfo(arcname, date_time=_zip_member_timestamp(path))
-            info.compress_type = zipfile.ZIP_STORED
-            info.external_attr = 0o644 << 16
             try:
+                # Everything that touches the filesystem is inside the guard,
+                # the stat included: the response is already on the wire, so a
+                # member that went away since the pre-flight walk has to cost
+                # the user that member, not the rest of the archive.
+                member_stat = path.stat()
+                info = zipfile.ZipInfo(arcname, date_time=_zip_member_timestamp(member_stat.st_mtime))
+                info.compress_type = zipfile.ZIP_STORED
+                info.external_attr = 0o644 << 16
+                # Without a size up front, ZipFile writes every member in the
+                # 32-bit layout and then raises RuntimeError from the entry's
+                # close() once one passes ZIP64_LIMIT (2 GiB) -- after its bytes
+                # are on the wire, where the 200 can no longer be taken back.
+                # Declaring it picks ZIP64 per member exactly as ZipFile.write()
+                # does, and close() rewrites the field with what was copied.
+                info.file_size = member_stat.st_size
                 # Source first: a file that disappeared between its stat() and
                 # now is then left out entirely, rather than adding an empty
                 # entry the user would have to open to discover was empty.
@@ -5355,9 +5394,8 @@ def _stream_zip(members: list[tuple[str, Path]]) -> Iterator[bytes]:
                         if pending := sink.drain():
                             yield pending
             except OSError:
-                # The row passed its stat() moments ago; if the bytes vanished
-                # since then the response is already on the wire and the status
-                # code is spent. Log it and keep the rest of the archive.
+                # Nothing better is available once the status code is spent:
+                # log it and keep the rest of the archive.
                 logger.warning("ZIP download: skipping unreadable file %s", path)
             if pending := sink.drain():
                 yield pending
@@ -5390,12 +5428,17 @@ def _format_zip_bytes(size: int) -> str:
     raise AssertionError("unreachable")  # pragma: no cover
 
 
-def _enforce_zip_file_cap(file_count: int) -> None:
-    """Refuse too many entries, in a message the UI can show verbatim."""
+def _enforce_zip_file_cap(file_count: int, *, exact: bool = True) -> None:
+    """Refuse too many entries, in a message the UI can show verbatim.
+
+    ``exact=False`` is the folder walk, which stops one row past the cap instead
+    of counting a whole share, so it can only report that the cap was passed.
+    """
     if file_count > ZIP_MAX_FILES:
+        asked = f"{file_count} requested" if exact else f"more than {ZIP_MAX_FILES} in this folder"
         raise HTTPException(
             status_code=413,
-            detail=f"Too many files for one ZIP: {file_count} requested, limit is {ZIP_MAX_FILES}.",
+            detail=f"Too many files for one ZIP: {asked}, limit is {ZIP_MAX_FILES}.",
         )
 
 
@@ -5415,6 +5458,7 @@ async def _folder_zip_candidates(
     db: AsyncSession,
     folder: LibraryFolder,
     recursive: bool,
+    limit: int,
 ) -> list[tuple[LibraryFile, tuple[str, ...]]]:
     """Files under ``folder`` paired with their directory inside the archive.
 
@@ -5422,6 +5466,12 @@ async def _folder_zip_candidates(
     one directory instead of scattering its contents into the current one.
     Subfolders and files are walked in name order, so the same folder always
     produces the same archive.
+
+    The walk stops at ``limit + 1`` rows -- one past the cap is all the caller
+    needs to refuse the request. An external folder can point at a share with
+    six figures of files, and loading every matching row (each one a full
+    ``LibraryFile`` with its parsed 3MF metadata) just to discover the request
+    was over the cap is how the guard would become the outage it prevents.
     """
     root = (_zip_entry_name(folder.name, fallback=f"folder-{folder.id}"),)
     collected: list[tuple[LibraryFile, tuple[str, ...]]] = []
@@ -5431,7 +5481,7 @@ async def _folder_zip_candidates(
     # the cost of a set.
     seen: set[int] = set()
 
-    while pending:
+    while pending and len(collected) <= limit:
         folder_id, prefix = pending.pop(0)
         if folder_id in seen:
             continue
@@ -5443,6 +5493,7 @@ async def _folder_zip_candidates(
                     LibraryFile.active()
                     .where(LibraryFile.folder_id == folder_id)
                     .order_by(LibraryFile.filename, LibraryFile.id)
+                    .limit(limit + 1 - len(collected))
                 )
             )
             .scalars()
@@ -5528,7 +5579,7 @@ async def download_files_zip(
     # the database happened to return rows in.
     ordered = [(by_id[file_id], ()) for file_id in dict.fromkeys(request.file_ids) if file_id in by_id]
 
-    members, total_bytes = _collect_zip_members(ordered, user, can_read_all)
+    members, total_bytes = await asyncio.to_thread(_collect_zip_members, ordered, user, can_read_all)
     if not members:
         raise HTTPException(status_code=404, detail="None of the requested files are available for download")
     _enforce_zip_size_cap(total_bytes)
@@ -5555,10 +5606,14 @@ async def download_folder_zip(
     if folder is None:
         raise HTTPException(status_code=404, detail="Folder not found")
 
-    candidates = await _folder_zip_candidates(db, folder, recursive)
-    _enforce_zip_file_cap(len(candidates))
+    candidates = await _folder_zip_candidates(db, folder, recursive, ZIP_MAX_FILES)
+    _enforce_zip_file_cap(len(candidates), exact=False)
 
-    members, total_bytes = _collect_zip_members(candidates, user, can_read_all)
+    # The pre-flight walk is one stat per candidate, up to ZIP_MAX_FILES of
+    # them, and an external folder's files live on a mount where that is
+    # milliseconds rather than microseconds. On the loop it would hold up the
+    # printers' MQTT traffic for as long as it ran.
+    members, total_bytes = await asyncio.to_thread(_collect_zip_members, candidates, user, can_read_all)
     if not members:
         raise HTTPException(status_code=404, detail="No downloadable files in this folder")
     _enforce_zip_size_cap(total_bytes)
