@@ -3,54 +3,12 @@ import { useTranslation } from 'react-i18next';
 import { Download, Loader2, Mail, Paperclip, X } from 'lucide-react';
 import { api, getAuthToken } from '../api/client';
 import { formatFileSize } from '../utils/file';
-import { rtfToText } from '../utils/rtfToText';
+import { parseMsgFile } from '../utils/msgFile';
+import type { MsgAttachment, MsgFields, MsgRecipient, ParsedMsg } from '../utils/msgFile';
 
 // An .msg with attachments is parsed fully in memory — anything over this
 // size shows a notice instead of stalling the tab (same cap as PDF).
 export const MSG_PREVIEW_MAX_BYTES = 50 * 1024 * 1024;
-
-// Structural types for the parts of @kenjiuno/msgreader we consume — the
-// library is loaded dynamically, so its own types never enter the bundle.
-interface MsgRecipient {
-  name?: string;
-  email?: string;
-  smtpAddress?: string;
-  recipType?: string;
-}
-
-interface MsgAttachment {
-  fileName?: string;
-  contentLength?: number;
-}
-
-interface MsgFields {
-  subject?: string;
-  senderName?: string;
-  senderEmail?: string;
-  body?: string;
-  compressedRtf?: Uint8Array;
-  recipients?: MsgRecipient[];
-  attachments?: MsgAttachment[];
-  messageDeliveryTime?: string;
-  clientSubmitTime?: string;
-  creationTime?: string;
-  /** Set by msgreader instead of throwing when the file is not a message. */
-  error?: string;
-}
-
-interface MsgReaderLike {
-  getFileData(): MsgFields;
-  getAttachment(att: MsgAttachment): { fileName: string; content: Uint8Array };
-}
-
-interface ParsedMsg {
-  fields: MsgFields;
-  bodyText: string;
-  // The body was recovered from compressed RTF, not stored as plain text —
-  // shown as a note because the conversion drops formatting.
-  bodyFromRtf: boolean;
-  reader: MsgReaderLike;
-}
 
 interface MsgPreviewModalProps {
   libraryFileId: number;
@@ -150,38 +108,17 @@ export function MsgPreviewModal({ libraryFileId, filename, fileSize, onClose, on
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const buffer = await res.arrayBuffer();
 
-      // msgreader is loaded on demand so it stays out of the main bundle.
-      const MsgReader = (await import('@kenjiuno/msgreader')).default;
-      const reader = new MsgReader(buffer) as unknown as MsgReaderLike;
-      const fields = reader.getFileData();
-      // msgreader reports unreadable input via `error` (or a fully empty
-      // result) rather than throwing — surface both as the preview error.
-      const isEmpty = !fields.subject && !fields.body && !fields.compressedRtf
-        && !fields.senderName && !(fields.recipients?.length) && !(fields.attachments?.length);
-      if (fields.error || isEmpty) throw new Error(fields.error || 'empty message');
-
-      let bodyText = fields.body ?? '';
-      let bodyFromRtf = false;
-      if (!bodyText && fields.compressedRtf) {
-        try {
-          const { decompressRTF } = await import('@kenjiuno/decompressrtf');
-          const rtfBytes = decompressRTF(Array.from(fields.compressedRtf));
-          bodyText = rtfToText(new TextDecoder('latin1').decode(Uint8Array.from(rtfBytes)));
-          bodyFromRtf = bodyText.length > 0;
-        } catch {
-          // Fall through to the no-body notice; headers still render.
-        }
-      }
-
+      const parsedMsg = await parseMsgFile(buffer);
       if (cancelled) return;
-      setParsed({ fields, bodyText, bodyFromRtf, reader });
+      setParsed(parsedMsg);
 
       if (onSnapshotRef.current && !snapshotSentRef.current) {
         snapshotSentRef.current = true;
-        const blob = await drawMsgSnapshot(fields, bodyText);
+        const blob = await drawMsgSnapshot(parsedMsg.fields, parsedMsg.bodyText);
         if (blob && !cancelled) onSnapshotRef.current?.(blob);
       }
-    })().catch(() => {
+    })().catch((err: unknown) => {
+      console.error('[msg-preview] load failed', err);
       if (!cancelled) setError(t('fileManager.preview.error'));
     });
 
