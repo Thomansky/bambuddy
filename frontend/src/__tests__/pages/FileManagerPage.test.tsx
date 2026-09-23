@@ -1073,6 +1073,74 @@ describe('FileManagerPage', () => {
       expect(screen.queryByTestId('selection-actions')).not.toBeInTheDocument();
     });
 
+    // The id-based actions (Move / Delete / tags / Clear) never had a problem
+    // here; the two that need the file OBJECT read the selected folder's query,
+    // which an ancestor column's file is not in.
+    it('offers Print and Group as versions for files ticked in an ancestor column', async () => {
+      const user = userEvent.setup();
+      const slicedInParent = [
+        {
+          id: 21,
+          filename: 'plate_1.gcode.3mf',
+          file_path: '/library/functional/plate_1.gcode.3mf',
+          file_size: 262144,
+          file_type: 'gcode.3mf',
+          folder_id: 1,
+          thumbnail_path: null,
+          print_name: 'Plate One',
+          print_time_seconds: 600,
+          print_count: 0,
+          duplicate_count: 0,
+          created_at: '2024-03-01T00:00:00Z',
+        },
+        {
+          id: 22,
+          filename: 'plate_2.gcode.3mf',
+          file_path: '/library/functional/plate_2.gcode.3mf',
+          file_size: 262144,
+          file_type: 'gcode.3mf',
+          folder_id: 1,
+          thumbnail_path: null,
+          print_name: 'Plate Two',
+          print_time_seconds: 700,
+          print_count: 0,
+          duplicate_count: 0,
+          created_at: '2024-03-02T00:00:00Z',
+        },
+      ];
+      server.use(
+        http.get('/api/v1/library/files', ({ request }) => {
+          const folderId = new URL(request.url).searchParams.get('folder_id');
+          if (folderId === '1') return HttpResponse.json(slicedInParent);
+          if (folderId === '2') return HttpResponse.json([]);
+          return HttpResponse.json(filesForRequest(request));
+        })
+      );
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await user.click(screen.getByTitle('Column view'));
+      const columns = within(screen.getByTestId('columns-view'));
+      await user.click(columns.getByText('Functional Parts'));
+      await user.click(await columns.findByText('Brackets'));
+
+      // Brackets is the selected folder, so the main query holds nothing:
+      // everything ticked below lives in the parent column.
+      const level = within(screen.getByTestId('columns-level-folder-1'));
+      await user.click(await level.findByText('Plate One'));
+
+      const actions = () => within(screen.getByTestId('selection-actions'));
+      expect(actions().getByText('1 selected')).toBeInTheDocument();
+      expect(actions().getByText('Print')).toBeInTheDocument();
+
+      // A second sliced file turns it into the cross-model print (#671) and
+      // arms Group as versions.
+      await user.click(level.getByText('Plate Two'));
+      expect(actions().getByText('2 selected')).toBeInTheDocument();
+      expect(actions().getByText('Print (2 alternatives)')).toBeInTheDocument();
+      expect(actions().getByText('Group as versions')).toBeInTheDocument();
+    });
+
     it('drops the selection when the folder changes, so no action points off screen', async () => {
       const user = userEvent.setup();
       render(<FileManagerPage />);
@@ -1361,6 +1429,59 @@ describe('FileManagerPage', () => {
       expect(contentNav().getByText('Brackets')).toBeInTheDocument();
     });
 
+    // Hiding the tree must move folder management, not remove it: the
+    // preference is persisted, so a capability lost here stays lost across
+    // reloads with nothing on screen to connect the two.
+    it('keeps rename, link and delete on the folders it draws', async () => {
+      const user = userEvent.setup();
+      getItemMock.mockImplementation(storedHidden);
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      const tile = contentNav().getByText('Art Projects').closest('[data-folder-id]') as HTMLElement;
+      await user.click(within(tile).getByTitle('Actions'));
+
+      expect(within(tile).getByRole('button', { name: 'Rename' })).toBeInTheDocument();
+      // Art Projects is linked to a project, so the link entry offers a change.
+      expect(within(tile).getByRole('button', { name: 'Change Link...' })).toBeInTheDocument();
+      expect(within(tile).getByRole('button', { name: 'Delete' })).toBeInTheDocument();
+
+      // Opening the menu is not navigation.
+      expect(currentCrumb()).toHaveTextContent('All Files');
+
+      await user.click(within(tile).getByRole('button', { name: 'Rename' }));
+      expect(await screen.findByDisplayValue('Art Projects')).toBeInTheDocument();
+    });
+
+    it('keeps the folder kebab on the list-view rows too', async () => {
+      const user = userEvent.setup();
+      getItemMock.mockImplementation(storedHidden);
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await user.click(screen.getByTitle('List view'));
+
+      const row = contentNav().getByText('Functional Parts').closest('[data-folder-id]') as HTMLElement;
+      await user.click(within(row).getByTitle('Actions'));
+      expect(within(row).getByRole('button', { name: 'Rename' })).toBeInTheDocument();
+      expect(within(row).getByRole('button', { name: 'Delete' })).toBeInTheDocument();
+    });
+
+    // The icon is the only part of the control a sighted user reads, so it
+    // must say the same thing as aria-pressed.
+    it('draws the icon from the layout the sidebar is actually in', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      expect(toggle().querySelector('svg.lucide-panel-left-close')).toBeTruthy();
+
+      await user.click(toggle());
+      expect(toggle()).toHaveAttribute('aria-pressed', 'false');
+      expect(toggle().querySelector('svg.lucide-panel-left-open')).toBeTruthy();
+      expect(toggle().querySelector('svg.lucide-panel-left-close')).toBeNull();
+    });
+
     it('remembers the choice across a remount', async () => {
       const user = userEvent.setup();
       const { unmount } = render(<FileManagerPage />);
@@ -1387,15 +1508,28 @@ describe('FileManagerPage', () => {
 
       await user.click(screen.getByTitle('Column view'));
 
-      expect(toggle()).toBeDisabled();
+      // aria-disabled, not `disabled`: a disabled button is out of the tab
+      // order, so the tooltip that explains why it is inert would never reach
+      // a keyboard or screen-reader user.
+      expect(toggle()).toHaveAttribute('aria-disabled', 'true');
+      expect(toggle()).not.toBeDisabled();
+      toggle().focus();
+      expect(document.activeElement).toBe(toggle());
       expect(toggle()).toHaveAttribute(
         'title',
         'The columns view already replaces the folder sidebar'
       );
+      // Reachable but inert: clicking must not rewrite the preference.
+      await user.click(toggle());
+      expect(setItemMock).not.toHaveBeenCalledWith('library-sidebar-hidden', expect.anything());
       // The preference does not reach the columns view's own layout.
       expect(screen.getByTestId('folder-sidebar')).toBeInTheDocument();
       // …so the announced state must follow the layout, not the preference.
       expect(toggle()).toHaveAttribute('aria-pressed', 'true');
+      // …and so must the icon: "open the sidebar" beside an open sidebar
+      // tells a sighted user the opposite of what is on screen.
+      expect(toggle().querySelector('svg.lucide-panel-left-close')).toBeTruthy();
+      expect(toggle().querySelector('svg.lucide-panel-left-open')).toBeNull();
       // The columns view draws its own folder panes; no second nav.
       expect(screen.queryByTestId('content-folder-nav')).not.toBeInTheDocument();
     });
@@ -1415,6 +1549,25 @@ describe('FileManagerPage', () => {
     });
   });
 
+  // The header carries eight controls at full permission and the labels are
+  // long in several locales. Without these two classes the overflow is
+  // absorbed by each Button breaking its own label over two or three lines,
+  // which makes the header taller than a wrapped row would be.
+  describe('header toolbar', () => {
+    it('wraps whole buttons instead of breaking their labels', async () => {
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      const actions = screen.getByTestId('file-manager-actions');
+      expect(actions.className).toContain('flex-wrap');
+
+      for (const label of ['Generate Thumbnails', 'Link External', 'New Folder', 'Manage tags', 'Upload']) {
+        const button = within(actions).getByText(label).closest('button')!;
+        expect(button.className).toContain('whitespace-nowrap');
+      }
+    });
+  });
+
   describe('move dialog', () => {
     const openMoveDialog = async (user: ReturnType<typeof userEvent.setup>) => {
       await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
@@ -1423,13 +1576,26 @@ describe('FileManagerPage', () => {
       return screen.getByTestId('move-folder-list');
     };
 
+    // jsdom does no layout, so these assert the exact classes that do the
+    // sizing. `flex-1 min-h-0` on the list bounds nothing by itself — it only
+    // works because the modal root is a capped flex column — so the root's
+    // classes are part of the contract, not an implementation detail.
     it('bounds the folder list by the viewport, not by a fixed 256px box', async () => {
       const user = userEvent.setup();
       render(<FileManagerPage />);
       const list = await openMoveDialog(user);
+      const root = screen.getByTestId('move-files-modal');
+
+      expect(root.className).toContain('max-h-[90vh]');
+      expect(root.className).toContain('flex-col');
+      expect(root.className).not.toContain('max-w-sm');
 
       expect(list.className).toContain('flex-1');
       expect(list.className).toContain('min-h-0');
+      // The list is the box that scrolls, and it has a cap of its own so a
+      // tall screen does not stretch the dialog to the full 90vh.
+      expect(list.className).toContain('overflow-y-auto');
+      expect(list.className).toContain('max-h-[min(60vh,32rem)]');
       expect(list.className).not.toContain('max-h-64');
     });
 
@@ -1447,6 +1613,25 @@ describe('FileManagerPage', () => {
       expect(within(list).getByText('Brackets')).toBeInTheDocument();
       expect(within(list).getByText('Functional Parts')).toBeInTheDocument();
       expect(within(list).queryByText('Art Projects')).not.toBeInTheDocument();
+    });
+
+    // The other direction of the same rule: narrowing to a customer has to
+    // leave that customer's job folders on the list, because those are the
+    // destinations the user is filtering in order to reach.
+    it('keeps the subtree of a folder that matches', async () => {
+      const user = userEvent.setup();
+      server.use(http.get('/api/v1/library/folders', () => HttpResponse.json(deepFolders)));
+      render(<FileManagerPage />);
+      const list = await openMoveDialog(user);
+
+      await user.type(screen.getByPlaceholderText('Filter folders...'), 'RAFI');
+
+      // The ancestor that carries the hit…
+      expect(within(list).getByText('Kunden')).toBeInTheDocument();
+      expect(within(list).getByText('RAFI')).toBeInTheDocument();
+      // …and everything under the hit, which is where the files actually go.
+      expect(within(list).getByText('N1125035')).toBeInTheDocument();
+      expect(within(list).getByText('Revision A')).toBeInTheDocument();
     });
 
     it('restores the full list when the filter is cleared', async () => {
@@ -1486,6 +1671,18 @@ describe('FileManagerPage', () => {
       const dialog = within(screen.getByTestId('move-files-modal'));
       expect(dialog.getByText('Cancel')).toBeInTheDocument();
       expect(dialog.getByText('Move')).toBeInTheDocument();
+
+      // Rendered is not the same as reachable: the row of buttons must be the
+      // part of the column that cannot be squeezed, or a long list pushes it
+      // off the bottom of a short screen.
+      expect(screen.getByTestId('move-dialog-actions').className).toContain('flex-shrink-0');
+      // …and the list must be the only scrolling box in the dialog, so the
+      // overflow lands there rather than on the dialog itself.
+      const scrollers = screen
+        .getByTestId('move-files-modal')
+        .querySelectorAll('.overflow-y-auto');
+      expect(scrollers).toHaveLength(1);
+      expect(scrollers[0]).toBe(list);
     });
 
     it('arms Move only at a destination the filtered list is showing', async () => {
@@ -1504,9 +1701,10 @@ describe('FileManagerPage', () => {
       await user.click(within(list).getByText('Brackets'));
       expect(moveButton()).toBeEnabled();
 
-      // Filtering the picked folder away disarms it again.
+      // Filtering the picked folder away disarms it again. The query has to
+      // miss Brackets' ancestors too — a folder that matches keeps its subtree.
       await user.clear(screen.getByPlaceholderText('Filter folders...'));
-      await user.type(screen.getByPlaceholderText('Filter folders...'), 'art');
+      await user.type(screen.getByPlaceholderText('Filter folders...'), 'projects');
       expect(within(list).queryByText('Brackets')).not.toBeInTheDocument();
       expect(moveButton()).toBeDisabled();
     });
