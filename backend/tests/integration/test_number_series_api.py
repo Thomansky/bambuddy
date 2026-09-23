@@ -48,6 +48,20 @@ async def _next_value(db: AsyncSession, key: str) -> int:
     return (await db.execute(select(NumberSeries.next_value).where(NumberSeries.key == key))).scalar_one()
 
 
+def _watch_for_locking_reads(db: AsyncSession, monkeypatch) -> list:
+    """Record every statement this session runs that asks for a row lock."""
+    locked: list = []
+    original = db.execute
+
+    async def _spy(statement, *args, **kwargs):
+        if getattr(statement, "_for_update_arg", None) is not None:
+            locked.append(statement)
+        return await original(statement, *args, **kwargs)
+
+    monkeypatch.setattr(db, "execute", _spy)
+    return locked
+
+
 class TestRendering:
     def test_prefix_padding_and_suffix_are_all_applied(self):
         assert render_number("A-", 35, 5, "/26") == "A-00035/26"
@@ -152,24 +166,80 @@ class TestConcurrency:
             assert await _next_value(db, SERIES_PROJECT) == 1 + len(handed_out)
 
     @pytest.mark.asyncio
-    async def test_an_allocation_against_a_stale_read_cannot_reuse_the_number(self, concurrent_db):
-        """The exact hazard: one session reads the counter, another consumes it
-        and commits, and the first then tries to allocate from what it read."""
-        async with concurrent_db() as stale:
-            # Open a transaction whose snapshot predates the other session's commit.
-            await stale.execute(select(NumberSeries.next_value).where(NumberSeries.key == SERIES_PROJECT))
+    async def test_a_counter_that_moves_between_the_read_and_the_write_is_not_reused(
+        self, concurrent_db, tmp_path, monkeypatch
+    ):
+        """The exact hazard the compare-and-swap exists for: a caller reads the
+        counter, someone else consumes that very value and commits, and the
+        caller then writes its advance against what it read.
 
-            winner = await self._allocate(concurrent_db)
-            assert winner == "A-0001"
+        The competing commit is wedged into that window deliberately.  Left to
+        timing it never lands there: a bare SELECT on pysqlite does not even
+        open a transaction, so a session that reads first just re-reads the new
+        value and the window is never entered -- which is how the earlier
+        version of this test passed without the guard ever being exercised.
+        """
+        import sqlite3
 
-            try:
-                loser = await allocate_number(stale, SERIES_PROJECT)
-                await stale.commit()
-            except OperationalError:
-                await stale.rollback()
-                loser = None
+        import backend.app.services.number_series as number_series
 
-            assert loser != winner, "a stale read handed out a number that was already taken"
+        real_render = number_series.render_number
+        read_values: list[int] = []
+
+        def _render_then_let_the_other_caller_in(prefix, value, padding, suffix):
+            # Called between the read and the compare-and-swap, once: the
+            # second lap has to find the counter where the other caller left it.
+            if not read_values:
+                read_values.append(value)
+                raw = sqlite3.connect(tmp_path / "series.db")
+                try:
+                    raw.execute(
+                        "UPDATE number_series SET next_value = ? WHERE key = ? AND next_value = ?",
+                        (value + 1, SERIES_PROJECT, value),
+                    )
+                    raw.commit()
+                finally:
+                    raw.close()
+            return real_render(prefix, value, padding, suffix)
+
+        monkeypatch.setattr(number_series, "render_number", _render_then_let_the_other_caller_in)
+
+        async with concurrent_db() as db:
+            number = await allocate_number(db, SERIES_PROJECT)
+            await db.commit()
+
+        assert read_values == [1], "the competing commit never landed inside the window"
+        # A-0001 was taken while this caller held it, so the write against that
+        # read has to be refused and the allocation come back with the next one.
+        assert number == "A-0002"
+        async with concurrent_db() as db:
+            assert await _next_value(db, SERIES_PROJECT) == 3
+
+    @pytest.mark.asyncio
+    async def test_a_disabled_series_is_never_locked(self, db_session, monkeypatch):
+        """A PostgreSQL ``FOR UPDATE`` row lock is held until the caller's
+        transaction ends, not until the statement ends. Both series ship
+        disabled, so locking before reading ``enabled`` would queue every
+        project create and every queue add behind one row on installs that
+        never switched the feature on."""
+        monkeypatch.setattr("backend.app.services.number_series.is_sqlite", lambda: False)
+        await _seed_series(db_session, SERIES_PROJECT, enabled=False)
+        locked = _watch_for_locking_reads(db_session, monkeypatch)
+
+        assert await allocate_number(db_session, SERIES_PROJECT) is None
+
+        assert locked == [], "a disabled series was locked FOR UPDATE"
+
+    @pytest.mark.asyncio
+    async def test_an_enabled_series_is_still_locked(self, db_session, monkeypatch):
+        """The other half: the lock has not simply been dropped."""
+        monkeypatch.setattr("backend.app.services.number_series.is_sqlite", lambda: False)
+        await _seed_series(db_session, SERIES_PROJECT, prefix="A-", padding=4, next_value=1)
+        locked = _watch_for_locking_reads(db_session, monkeypatch)
+
+        assert await allocate_number(db_session, SERIES_PROJECT) == "A-0001"
+
+        assert len(locked) == 1
 
 
 class TestSeriesAPI:
@@ -321,18 +391,116 @@ class TestProjectNumbers:
         assert made.json()["number"] == "P-002"
 
     @pytest.mark.asyncio
-    async def test_a_failed_create_does_not_burn_a_number(self, async_client: AsyncClient, db_session):
-        """The create is rejected after the number was taken, so the counter has
-        to come back with the rolled-back transaction."""
+    async def test_a_number_already_on_a_project_is_stepped_over(self, async_client: AsyncClient, db_session):
+        """The create takes the next free number and keeps the counter past the
+        taken one.
+
+        Answering 409 instead would roll the advance back with the failed
+        create, so the next create would be handed the same taken number and
+        fail the same way — project creation would stay dead until an admin
+        raised the start number by hand.
+        """
+        await _seed_series(db_session, SERIES_PROJECT, prefix="P-", padding=3, next_value=4)
+        typed = await async_client.post("/api/v1/projects/", json={"name": "By hand", "number": "P-004"})
+        assert typed.status_code == 200
+
+        created = await async_client.post("/api/v1/projects/", json={"name": "Auto"})
+
+        assert created.status_code == 200
+        assert created.json()["number"] == "P-005"
+        assert await _next_value(db_session, SERIES_PROJECT) == 6
+
+    @pytest.mark.asyncio
+    async def test_a_whole_block_of_legacy_numbers_is_stepped_over(self, async_client: AsyncClient, db_session):
+        """A farm types its old numbers onto existing projects, then switches
+        the series on at the start of that block."""
+        await _seed_series(db_session, SERIES_PROJECT, enabled=False)
+        for n in range(4, 9):
+            typed = await async_client.post("/api/v1/projects/", json={"name": f"Legacy {n}", "number": f"P-{n:03d}"})
+            assert typed.status_code == 200
+        await _seed_series(db_session, SERIES_PROJECT, prefix="P-", padding=3, next_value=4)
+
+        created = await async_client.post("/api/v1/projects/", json={"name": "First new one"})
+
+        assert created.json()["number"] == "P-009"
+        assert await _next_value(db_session, SERIES_PROJECT) == 10
+
+    @pytest.mark.asyncio
+    async def test_a_project_from_a_template_steps_over_a_taken_number(self, async_client: AsyncClient, db_session):
+        await _seed_series(db_session, SERIES_PROJECT, prefix="P-", padding=3, next_value=1)
+        source = await async_client.post("/api/v1/projects/", json={"name": "Source", "number": "P-002"})
+        template = await async_client.post(f"/api/v1/projects/{source.json()['id']}/create-template")
+
+        made = await async_client.post(f"/api/v1/projects/from-template/{template.json()['id']}")
+
+        assert made.status_code == 200
+        assert made.json()["number"] == "P-001"
+        second = await async_client.post(f"/api/v1/projects/from-template/{template.json()['id']}")
+        assert second.json()["number"] == "P-003"
+
+    @pytest.mark.asyncio
+    async def test_a_run_of_taken_numbers_longer_than_the_step_limit_says_which_series_is_stuck(
+        self, async_client: AsyncClient, db_session, monkeypatch
+    ):
+        """Stepping is bounded — a create has to answer. The 409 names the
+        series rather than a number the caller never sent."""
+        monkeypatch.setattr("backend.app.services.number_series.MAX_COLLISION_SKIPS", 2)
+        await _seed_series(db_session, SERIES_PROJECT, enabled=False)
+        for n in range(1, 6):
+            await async_client.post("/api/v1/projects/", json={"name": f"Legacy {n}", "number": f"P-{n:03d}"})
+        await _seed_series(db_session, SERIES_PROJECT, prefix="P-", padding=3, next_value=1)
+
+        rejected = await async_client.post("/api/v1/projects/", json={"name": "No room"})
+
+        assert rejected.status_code == 409
+        assert "series" in rejected.json()["detail"]
+        # Every number it stepped over came back with the rejected create, so
+        # giving the series room by hand is all the admin has to do.
+        assert await _next_value(db_session, SERIES_PROJECT) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_create_that_fails_after_the_number_was_taken_gives_it_back(
+        self, async_client: AsyncClient, db_session, monkeypatch
+    ):
+        """The counter advance rides in the create's own transaction, so a
+        create that dies once the number is in hand has to give it back.
+
+        The failure is forced at the flush because that is the real one: the
+        unique index is what actually guards the column, and two creates that
+        both passed the pre-check meet there. Rejecting before the allocator
+        runs -- an unknown parent, a bad payload -- proves nothing about this,
+        because the allocator was never reached.
+        """
+        from fastapi import HTTPException
+
+        await _seed_series(db_session, SERIES_PROJECT, prefix="P-", padding=3, next_value=4)
+
+        async def _the_index_says_no(db, number):
+            raise HTTPException(status_code=409, detail=f"Project number '{number}' is already in use")
+
+        monkeypatch.setattr("backend.app.api.routes.projects._flush_project_number", _the_index_says_no)
+
+        rejected = await async_client.post("/api/v1/projects/", json={"name": "Loser"})
+
+        assert rejected.status_code == 409
+        assert "P-004" in rejected.json()["detail"], "the create got as far as taking a number"
+        monkeypatch.undo()
+        assert await _next_value(db_session, SERIES_PROJECT) == 4
+        # And the number that was almost handed out is still the next one.
+        created = await async_client.post("/api/v1/projects/", json={"name": "Next"})
+        assert created.json()["number"] == "P-004"
+
+    @pytest.mark.asyncio
+    async def test_a_create_rejected_before_the_allocator_never_reaches_the_counter(
+        self, async_client: AsyncClient, db_session
+    ):
+        """The parent lookup runs first, so a bad parent costs nothing at all."""
         await _seed_series(db_session, SERIES_PROJECT, prefix="P-", padding=3, next_value=4)
 
         rejected = await async_client.post("/api/v1/projects/", json={"name": "Orphan", "parent_id": 999_999})
 
         assert rejected.status_code == 400
         assert await _next_value(db_session, SERIES_PROJECT) == 4
-        # And the number that was almost handed out is still the next one.
-        created = await async_client.post("/api/v1/projects/", json={"name": "Next"})
-        assert created.json()["number"] == "P-004"
 
 
 class TestQueueJobNumbers:
@@ -395,17 +563,93 @@ class TestQueueJobNumbers:
         assert response.json()["job_number"] == "J0042"
 
     @pytest.mark.asyncio
-    async def test_the_print_log_carries_the_archives_job_number(self, async_client: AsyncClient, db_session, archive):
-        from backend.app.models.print_log import PrintLogEntry
+    async def test_every_run_of_one_archive_reaches_the_log_under_its_own_number(
+        self, async_client: AsyncClient, db_session, archive
+    ):
+        """A quantity>1 order is several runs of one archive, each with its own
+        number. The archive can only carry one of them, so reading the log's
+        number back off the archive filed every copy under the first copy's
+        number — a run invoiced as J0003 displayed and searched as J0001.
+        """
+        from backend.app.services.print_log import write_log_entry
 
-        archive.job_number = "J0042"
-        db_session.add(PrintLogEntry(archive_id=archive.id, print_name="Benchy", status="completed"))
+        await _seed_series(db_session, SERIES_QUEUE_JOB, prefix="J", padding=4, next_value=1)
+        await async_client.post("/api/v1/queue/", json={"archive_id": archive.id, "quantity": 3})
+        queued = sorted((await async_client.get("/api/v1/queue/")).json(), key=lambda i: i["job_number"])
+
+        for item in queued:
+            await write_log_entry(
+                db_session,
+                status="completed",
+                archive_id=archive.id,
+                queue_item_id=item["id"],
+                print_name="Benchy",
+            )
+        await db_session.commit()
+
+        listed = (
+            await async_client.get("/api/v1/print-log/", params={"sort_by": "job_number", "sort_dir": "asc"})
+        ).json()
+        assert [row["job_number"] for row in listed["items"]] == ["J0001", "J0002", "J0003"]
+
+    @pytest.mark.asyncio
+    async def test_a_later_run_is_not_relabelled_with_the_first_runs_number(
+        self, async_client: AsyncClient, db_session, archive
+    ):
+        """A reprint reuses the source archive row on purpose (#730), so the
+        archive keeps the number it first printed under while the reprint's own
+        number is the one the log has to show."""
+        from backend.app.models.print_queue import PrintQueueItem
+        from backend.app.services.print_log import write_log_entry
+
+        archive.job_number = "J0001"
+        reprint = PrintQueueItem(archive_id=archive.id, status="pending", job_number="J0099")
+        db_session.add(reprint)
+        await db_session.commit()
+
+        await write_log_entry(
+            db_session,
+            status="completed",
+            archive_id=archive.id,
+            queue_item_id=reprint.id,
+            print_name="Benchy",
+        )
         await db_session.commit()
 
         response = await async_client.get("/api/v1/print-log/")
 
-        assert response.status_code == 200
-        assert response.json()["items"][0]["job_number"] == "J0042"
+        assert response.json()["items"][0]["job_number"] == "J0099"
+
+    @pytest.mark.asyncio
+    async def test_the_number_outlives_the_queue_row_and_the_archive(
+        self, async_client: AsyncClient, db_session, archive
+    ):
+        """Both rows it was read from are deleted in the normal course of
+        things; the number is what the paperwork is filed under, so it has to
+        survive them."""
+        from backend.app.models.archive import PrintArchive
+        from backend.app.models.print_queue import PrintQueueItem
+        from backend.app.services.print_log import write_log_entry
+
+        item = PrintQueueItem(archive_id=archive.id, status="pending", job_number="J0007")
+        db_session.add(item)
+        await db_session.commit()
+        await write_log_entry(
+            db_session,
+            status="completed",
+            archive_id=archive.id,
+            queue_item_id=item.id,
+            print_name="Benchy",
+        )
+        await db_session.commit()
+
+        await db_session.delete(await db_session.get(PrintQueueItem, item.id))
+        await db_session.delete(await db_session.get(PrintArchive, archive.id))
+        await db_session.commit()
+
+        response = await async_client.get("/api/v1/print-log/")
+
+        assert [row["job_number"] for row in response.json()["items"]] == ["J0007"]
 
     @pytest.mark.asyncio
     async def test_the_print_log_can_be_searched_and_sorted_by_job_number(
@@ -413,8 +657,9 @@ class TestQueueJobNumbers:
     ):
         from backend.app.models.print_log import PrintLogEntry
 
-        archive.job_number = "J0042"
-        db_session.add(PrintLogEntry(archive_id=archive.id, print_name="Benchy", status="completed"))
+        db_session.add(
+            PrintLogEntry(archive_id=archive.id, print_name="Benchy", status="completed", job_number="J0042")
+        )
         db_session.add(PrintLogEntry(archive_id=None, print_name="Something else", status="completed"))
         await db_session.commit()
 
@@ -426,14 +671,15 @@ class TestQueueJobNumbers:
         assert sorted_rows.status_code == 200
 
     @pytest.mark.asyncio
-    async def test_a_log_row_whose_archive_is_gone_still_comes_back(self, async_client: AsyncClient, db_session):
-        """The join must not drop orphan rows — the log outlives its archives."""
-        from backend.app.models.print_log import PrintLogEntry
+    async def test_a_printer_started_run_has_no_number_to_show(self, async_client: AsyncClient, db_session, archive):
+        """No queue row, no job -- and nothing to borrow from the archive."""
+        from backend.app.services.print_log import write_log_entry
 
-        db_session.add(PrintLogEntry(archive_id=None, print_name="Orphan", status="completed"))
+        archive.job_number = "J0001"
+        await db_session.commit()
+        await write_log_entry(db_session, status="completed", archive_id=archive.id, print_name="Benchy")
         await db_session.commit()
 
         response = await async_client.get("/api/v1/print-log/")
 
-        assert [item["print_name"] for item in response.json()["items"]] == ["Orphan"]
         assert response.json()["items"][0]["job_number"] is None

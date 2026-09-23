@@ -14,7 +14,6 @@ from backend.app.core.auth import (
 from backend.app.core.config import settings
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
-from backend.app.models.archive import PrintArchive
 from backend.app.models.print_log import PrintLogEntry
 from backend.app.models.user import User
 from backend.app.schemas.print_log import PrintLogEntrySchema, PrintLogEntryUpdate, PrintLogResponse
@@ -45,9 +44,10 @@ _SORTABLE_COLUMNS = {
     "cost": PrintLogEntry.cost,
     "energy": PrintLogEntry.energy_kwh,
     "energy_cost": PrintLogEntry.energy_cost,
-    # Lives on the archive, not on the log row — the query below joins it in,
-    # so the column is sortable like every other one the table offers.
-    "job_number": PrintArchive.job_number,
+    # The run's own number, not the archive's: several runs share one
+    # archive, so sorting or searching through the archive would file every
+    # copy of a quantity order under the first copy's number (#2603).
+    "job_number": PrintLogEntry.job_number,
 }
 
 
@@ -73,17 +73,8 @@ async def get_print_log(
 ):
     """Get the print log."""
     user, can_read_all = auth_result
-    # Outer join: a run whose archive has been deleted keeps its log row, and
-    # must keep coming back from this endpoint — just without a job number.
-    query = select(PrintLogEntry, PrintArchive.job_number).outerjoin(
-        PrintArchive, PrintArchive.id == PrintLogEntry.archive_id
-    )
-    # The count joins too, so the `search` filter below can name the same
-    # columns in both and the total still matches the rows. archive_id points at
-    # a primary key, so the join can never multiply a row.
-    count_query = select(func.count(PrintLogEntry.id)).outerjoin(
-        PrintArchive, PrintArchive.id == PrintLogEntry.archive_id
-    )
+    query = select(PrintLogEntry)
+    count_query = select(func.count(PrintLogEntry.id))
     if user is not None and not can_read_all:
         query = query.where(PrintLogEntry.created_by_id == user.id)
         count_query = count_query.where(PrintLogEntry.created_by_id == user.id)
@@ -101,7 +92,7 @@ async def get_print_log(
         # Name or job number — the Archives page feeds this endpoint the same
         # search box that filters the cards, and a farm looks a print up by
         # whichever of the two it has to hand.
-        matches = PrintLogEntry.print_name.ilike(f"%{search}%") | PrintArchive.job_number.ilike(f"%{search}%")
+        matches = PrintLogEntry.print_name.ilike(f"%{search}%") | PrintLogEntry.job_number.ilike(f"%{search}%")
         query = query.where(matches)
         count_query = count_query.where(matches)
     if date_from:
@@ -135,7 +126,7 @@ async def get_print_log(
     # a row as the user pages through.
     query = query.offset(offset).limit(limit)
     result = await db.execute(query)
-    rows = result.all()
+    rows = result.scalars().all()
 
     # Validate straight off the ORM rows rather than naming each field: the
     # hand-written version dropped whatever it forgot to mention, and a
@@ -143,13 +134,8 @@ async def get_print_log(
     # It lost failure_reason that way (#1687 part 4), then cost / energy_kwh /
     # energy_cost, which were written to the table but never sent — so the
     # Print Log's cost and energy columns read empty for every run (#2636).
-    def _to_item(entry: PrintLogEntry, job_number: str | None) -> PrintLogEntrySchema:
-        item = PrintLogEntrySchema.model_validate(entry)
-        item.job_number = job_number
-        return item
-
     return PrintLogResponse(
-        items=[_to_item(entry, job_number) for entry, job_number in rows],
+        items=[PrintLogEntrySchema.model_validate(entry) for entry in rows],
         total=total,
     )
 
@@ -351,11 +337,5 @@ async def update_print_log_entry(
 
     # Same field-by-field trap as the list route: this one also omitted cost
     # and the energy pair, so the row the client merged back after an edit
-    # blanked whichever columns it was showing for them. job_number is the one
-    # field that isn't on the row, so it is fetched rather than validated.
-    item = PrintLogEntrySchema.model_validate(entry)
-    if entry.archive_id is not None:
-        item.job_number = (
-            await db.execute(select(PrintArchive.job_number).where(PrintArchive.id == entry.archive_id))
-        ).scalar_one_or_none()
-    return item
+    # blanked whichever columns it was showing for them.
+    return PrintLogEntrySchema.model_validate(entry)

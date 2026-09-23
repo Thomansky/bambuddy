@@ -31,6 +31,11 @@ class PrintLogEntry(Base):
     queue_item_id: Mapped[int | None] = mapped_column(
         ForeignKey("print_queue.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # The running number of the queue job this run came from, copied at the
+    # moment the run is logged (#2603). Per run rather than read back from the
+    # archive: several runs — a multi-quantity order, a plain reprint — share
+    # one archive row, and each of them carries its own number.
+    job_number: Mapped[str | None] = mapped_column(String(32), nullable=True)
     print_name: Mapped[str | None] = mapped_column(String(255))
     printer_name: Mapped[str | None] = mapped_column(String(255))
     printer_id: Mapped[int | None] = mapped_column(Integer)

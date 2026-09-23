@@ -854,7 +854,7 @@ export interface ArchiveSlim {
 export interface PrintLogEntry {
   id: number;
   archive_id: number | null;
-  // Read from the run's archive, not stored on the log row itself
+  // This run's own number, copied from its queue row when the run was logged
   job_number: string | null;
   print_name: string | null;
   printer_name: string | null;

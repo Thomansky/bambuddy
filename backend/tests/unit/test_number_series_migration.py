@@ -1,8 +1,8 @@
 """``run_migrations`` builds the number-series schema on an upgrade, twice over.
 
 The columns arrive on databases that predate them, so the table, its unique key
-and the three number columns all have to appear without create_all's help — and
-a second startup must be a no-op rather than an error.
+and all four number columns have to appear without create_all's help — and a
+second startup must be a no-op rather than an error.
 """
 
 import importlib
@@ -57,6 +57,7 @@ async def test_migrations_build_the_schema_and_re_run_cleanly(tmp_path, force_sq
             await conn.execute(text("ALTER TABLE projects DROP COLUMN number"))
             await conn.execute(text("ALTER TABLE print_queue DROP COLUMN job_number"))
             await conn.execute(text("ALTER TABLE print_archives DROP COLUMN job_number"))
+            await conn.execute(text("ALTER TABLE print_log_entries DROP COLUMN job_number"))
 
         async with engine.begin() as conn:
             await run_migrations(conn)
@@ -65,6 +66,7 @@ async def test_migrations_build_the_schema_and_re_run_cleanly(tmp_path, force_sq
             assert "number" in await _columns(conn, "projects")
             assert "job_number" in await _columns(conn, "print_queue")
             assert "job_number" in await _columns(conn, "print_archives")
+            assert "job_number" in await _columns(conn, "print_log_entries")
             assert (await conn.execute(text("SELECT COUNT(*) FROM number_series"))).scalar() == 0
 
         # A further startup re-runs migrations: idempotent, not an error.

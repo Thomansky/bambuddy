@@ -10,6 +10,7 @@ compare-and-swap inside the caller's transaction — see its docstring.
 """
 
 import logging
+from collections.abc import Awaitable, Callable
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,6 +37,25 @@ MAX_RENDERED_LENGTH = 32
 # one happen at all; one extra lap is already more than that needs.
 _ALLOCATE_ATTEMPTS = 3
 
+# How many taken numbers :func:`allocate_unused_number` steps over before it
+# gives up. A farm that typed its legacy numbers onto existing rows and then
+# switched the series on leaves a run of them in the way; stepping over one
+# costs a single query, and the whole run is stepped over once.
+MAX_COLLISION_SKIPS = 50
+
+
+class NumbersAlreadyInUse(Exception):
+    """Every number the series offered is already on a row.
+
+    Carries the last number tried so the caller can say which series is stuck
+    and on roughly what.
+    """
+
+    def __init__(self, key: str, last_tried: str):
+        self.key = key
+        self.last_tried = last_tried
+        super().__init__(f"Series {key!r} reached {last_tried!r} and every number up to it is already in use")
+
 
 def render_number(prefix: str, value: int, padding: int, suffix: str) -> str:
     """Render *value* the way the series would.
@@ -59,9 +79,10 @@ async def allocate_number(db: AsyncSession, key: str) -> str | None:
     Runs inside the **caller's** transaction and never commits: a create that
     rolls back afterwards gives the number back instead of burning it.
 
-    Two concurrent creates must never receive the same number. The row is taken
-    ``FOR UPDATE`` on PostgreSQL, which makes the second caller wait and then
-    re-read; SQLite has no row locks but serialises writers, so the loser of the
+    Two concurrent creates must never receive the same number. An enabled
+    series' row is taken ``FOR UPDATE`` on PostgreSQL, which makes the second
+    caller wait and then re-read; SQLite has no row locks but serialises
+    writers, so the loser of the
     race cannot commit an update written against a snapshot the winner has
     already moved. The advance is a compare-and-swap on the value that was read
     either way, so the counter can only move one step per allocation even on a
@@ -77,12 +98,19 @@ async def allocate_number(db: AsyncSession, key: str) -> str | None:
             NumberSeries.next_value,
             NumberSeries.padding,
         ).where(NumberSeries.key == key)
-        if not is_sqlite():
-            stmt = stmt.with_for_update()
         row = (await db.execute(stmt)).first()
-
         if row is None or not row.enabled:
             return None
+
+        # The lock is taken only once the series is known to be on. PostgreSQL
+        # holds a FOR UPDATE row lock until the caller's transaction ends, not
+        # until the statement ends, and both series ship disabled — locking
+        # first would serialise every project create and every queue add on one
+        # row for a feature the install never switched on.
+        if not is_sqlite():
+            row = (await db.execute(stmt.with_for_update())).first()
+            if row is None or not row.enabled:
+                return None
 
         rendered = render_number(row.prefix, row.next_value, row.padding, row.suffix)
         if len(rendered) > MAX_RENDERED_LENGTH:
@@ -108,3 +136,32 @@ async def allocate_number(db: AsyncSession, key: str) -> str | None:
         logger.warning("Number series %r was advanced concurrently, retrying allocation", key)
 
     raise RuntimeError(f"Could not allocate a number from series {key!r} — the counter kept moving under us")
+
+
+async def allocate_unused_number(
+    db: AsyncSession,
+    key: str,
+    is_taken: Callable[[str], Awaitable[bool]],
+) -> str | None:
+    """Allocate from series *key*, stepping over numbers *is_taken* rejects.
+
+    For a column that is unique. The counter advance and the create it belongs
+    to are one transaction, so answering "that number is taken" would roll the
+    advance back with it and hand the very next create the same taken number —
+    the series would be parked on it until someone raised it by hand in
+    Settings. Consuming the number instead is what keeps creates working, and
+    it is why a hand-typed number that collides with the series costs exactly
+    one number rather than the whole endpoint.
+
+    Returns ``None`` when the series is disabled or unknown. Raises
+    :class:`NumbersAlreadyInUse` when the run of taken numbers is longer than
+    :data:`MAX_COLLISION_SKIPS` — there is nothing sensible left to hand out,
+    and stepping for ever would be a create that never answers.
+    """
+    number = None
+    for _ in range(MAX_COLLISION_SKIPS + 1):
+        number = await allocate_number(db, key)
+        if number is None or not await is_taken(number):
+            return number
+        logger.warning("Number series %r reached %r, which is already in use — taking the next one", key, number)
+    raise NumbersAlreadyInUse(key, number)

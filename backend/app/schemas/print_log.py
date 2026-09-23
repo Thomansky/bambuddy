@@ -14,10 +14,9 @@ class PrintLogEntrySchema(BaseModel):
 
     id: int
     archive_id: int | None = None
-    # Not a column on this table: read from the run's archive, which is where
-    # the queue item's running number was copied at dispatch. None once that
-    # archive is deleted, which is also when the rest of the run's provenance
-    # goes.
+    # The running number of the queue job this run came from. Its own column
+    # rather than the archive's copy: a quantity order and every reprint share
+    # one archive row but each run has its own number (#2603).
     job_number: str | None = None
     print_name: str | None = None
     printer_name: str | None = None

@@ -46,6 +46,14 @@ const QUEUE_ITEMS = [
   { ...BASE_ITEM, id: 3, archive_id: 3, position: 3, job_number: null, archive_name: 'Older job' },
 ];
 
+// Three numbered rows where a search can hide the first one, so a reorder of
+// what's left has something to collide with.
+const SEARCHABLE_QUEUE = [
+  { ...BASE_ITEM, id: 1, archive_id: 1, position: 1, job_number: 'B-01125', archive_name: 'Bracket' },
+  { ...BASE_ITEM, id: 2, archive_id: 2, position: 2, job_number: 'A-01126', archive_name: 'Spacer' },
+  { ...BASE_ITEM, id: 3, archive_id: 3, position: 3, job_number: 'A-01127', archive_name: 'Flange' },
+];
+
 const PRINTERS = [
   {
     id: 1,
@@ -104,5 +112,36 @@ describe('Print queue job numbers', () => {
 
     await waitFor(() => expect(screen.queryByText('Bracket')).not.toBeInTheDocument());
     expect(screen.getByText('Older job')).toBeInTheDocument();
+  });
+
+  // Looking a job up by its number and then nudging it up the queue is the
+  // workflow the search box exists for, and a reorder renumbers positions —
+  // which the rows the search is hiding still hold.
+  it('renumbers the rows the search is hiding as well', async () => {
+    let reorderBody: { items: { id: number; position: number }[] } | null = null;
+    server.use(
+      http.get('/api/v1/queue/', () => HttpResponse.json(SEARCHABLE_QUEUE)),
+      http.post('/api/v1/queue/reorder', async ({ request }) => {
+        reorderBody = (await request.json()) as typeof reorderBody;
+        return HttpResponse.json({ message: 'ok' });
+      }),
+    );
+    render(<QueuePage />);
+    await waitFor(() => expect(screen.getByText('Bracket')).toBeInTheDocument());
+
+    await userEvent.type(screen.getByLabelText('Search by name or number'), 'A-0112');
+    await waitFor(() => expect(screen.queryByText('Bracket')).not.toBeInTheDocument());
+
+    // Spacer (position 2) drops below Flange (position 3).
+    await userEvent.click(screen.getAllByTitle('Move Up')[1]);
+
+    await waitFor(() => expect(reorderBody).not.toBeNull());
+    // Bracket is out of sight but still holds position 1; sending 1 and 2 for
+    // the two visible rows would have handed its number away.
+    expect(reorderBody!.items).toEqual([
+      { id: 1, position: 1 },
+      { id: 3, position: 2 },
+      { id: 2, position: 3 },
+    ]);
   });
 });

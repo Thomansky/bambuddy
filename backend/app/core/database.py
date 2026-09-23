@@ -5002,6 +5002,7 @@ async def run_migrations(conn):
     await _safe_execute(conn, "ALTER TABLE projects ADD COLUMN number VARCHAR(32)")
     await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN job_number VARCHAR(32)")
     await _safe_execute(conn, "ALTER TABLE print_archives ADD COLUMN job_number VARCHAR(32)")
+    await _safe_execute(conn, "ALTER TABLE print_log_entries ADD COLUMN job_number VARCHAR(32)")
     # A project number is what a quote and an invoice are filed under, so two
     # projects must never share one. Both backends treat NULLs as distinct in a
     # unique index, so the unnumbered projects an upgrade starts with do not

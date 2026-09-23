@@ -45,7 +45,11 @@ from backend.app.schemas.project import (
     ProjectUpdate,
     TimelineEvent,
 )
-from backend.app.services.number_series import SERIES_PROJECT, allocate_number
+from backend.app.services.number_series import (
+    SERIES_PROJECT,
+    NumbersAlreadyInUse,
+    allocate_unused_number,
+)
 from backend.app.utils.http import build_content_disposition
 from backend.app.utils.safe_path import safe_join_under
 
@@ -399,17 +403,42 @@ async def _flush_project_number(db: AsyncSession, number: str | None) -> None:
         raise HTTPException(status_code=409, detail=f"Project number '{number}' is already in use") from None
 
 
+async def _project_number_taken(db: AsyncSession, number: str, exclude_id: int | None = None) -> bool:
+    query = select(Project.id).where(Project.number == number)
+    if exclude_id is not None:
+        query = query.where(Project.id != exclude_id)
+    return (await db.execute(query.limit(1))).scalar_one_or_none() is not None
+
+
 async def _assert_project_number_free(db: AsyncSession, number: str, exclude_id: int | None = None) -> None:
     """Answer 409 before writing, so the common case keeps its transaction.
 
     Racy on its own — two creates can both pass it — which is why the unique
     index and :func:`_flush_project_number` are the actual guard.
     """
-    query = select(Project.id).where(Project.number == number)
-    if exclude_id is not None:
-        query = query.where(Project.id != exclude_id)
-    if (await db.execute(query.limit(1))).scalar_one_or_none() is not None:
+    if await _project_number_taken(db, number, exclude_id):
         raise HTTPException(status_code=409, detail=f"Project number '{number}' is already in use")
+
+
+async def _allocate_project_number(db: AsyncSession) -> str | None:
+    """Take the next project number the table does not already hold.
+
+    A number the series reaches can already be on a project — someone typed
+    their legacy numbers by hand, or lowered the start number to begin a year
+    again. Answering 409 there would roll the counter back with the failed
+    create and park the series on that number for good, so the number is
+    consumed and the next one taken instead (#2603).
+    """
+    try:
+        return await allocate_unused_number(db, SERIES_PROJECT, lambda number: _project_number_taken(db, number))
+    except NumbersAlreadyInUse as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"The project number series has run into numbers that are already in use "
+                f"(last tried '{exc.last_tried}') — raise its next number in Settings"
+            ),
+        ) from None
 
 
 @router.get("", response_model=list[ProjectListResponse])
@@ -561,7 +590,7 @@ async def create_project(
     if number:
         await _assert_project_number_free(db, number)
     else:
-        number = await allocate_number(db, SERIES_PROJECT)
+        number = await _allocate_project_number(db)
 
     project = Project(
         name=data.name,
@@ -682,7 +711,7 @@ async def create_project_from_template(
     # Create new project. The template's own number is deliberately not copied:
     # a template is a shape to start from, and every project made from it is a
     # different job with a different number.
-    number = await allocate_number(db, SERIES_PROJECT)
+    number = await _allocate_project_number(db)
 
     project = Project(
         name=name or template.name.replace(" (Template)", ""),
