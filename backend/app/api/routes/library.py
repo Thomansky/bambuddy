@@ -62,6 +62,7 @@ from backend.app.schemas.library import (
     FolderResponse,
     FolderTreeItem,
     FolderUpdate,
+    PendingPreviewThumbnail,
     TagSummary,
     ZipExtractError,
     ZipExtractResponse,
@@ -2752,6 +2753,48 @@ async def extract_zip_file(
 
 
 # ============ STL / PDF Thumbnail Batch Generation ============
+
+
+@router.get("/files/pending-preview-thumbnails", response_model=list[PendingPreviewThumbnail])
+async def list_pending_preview_thumbnails(
+    limit: int = 200,
+    db: AsyncSession = Depends(get_db),
+    _: tuple[User | None, bool] = Depends(
+        require_ownership_permission(
+            Permission.LIBRARY_READ_ALL,
+            Permission.LIBRARY_READ_OWN,
+        )
+    ),
+):
+    """Files whose thumbnail only a browser can produce, and that have none yet.
+
+    The counterpart to ``/generate-stl-thumbnails``: that route covers what the
+    server can render on its own, this one names what is left over so the File
+    Manager can render those in the page and post the results back through
+    ``/files/{id}/preview-thumbnail`` (#2976). Derived from
+    ``CLIENT_THUMBNAIL_TYPES`` rather than a second list, so a type added there
+    is picked up here without a second edit.
+    """
+    limit = max(1, min(limit, 500))
+    result = await db.execute(
+        LibraryFile.active()
+        .where(
+            LibraryFile.file_type.in_(CLIENT_THUMBNAIL_TYPES),
+            LibraryFile.thumbnail_path.is_(None),
+        )
+        .order_by(LibraryFile.id)
+        .limit(limit)
+    )
+    return [
+        PendingPreviewThumbnail(
+            id=f.id,
+            filename=f.filename,
+            file_type=f.file_type,
+            file_size=f.file_size or 0,
+            created_by_id=f.created_by_id,
+        )
+        for f in result.scalars().all()
+    ]
 
 
 @router.post("/generate-stl-thumbnails", response_model=BatchThumbnailResponse)

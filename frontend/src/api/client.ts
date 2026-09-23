@@ -7492,6 +7492,11 @@ export const api = {
       body: JSON.stringify({ file_ids: fileIds, folder_ids: folderIds }),
     }),
   getLibraryStats: () => request<LibraryStats>('/library/stats'),
+  // The leftovers of the batch above: files whose picture only a browser can
+  // draw (#2976). The File Manager renders these in the page and posts each
+  // result back through uploadLibraryPreviewThumbnail.
+  listPendingPreviewThumbnails: (limit = 200) =>
+    request<PendingPreviewThumbnail[]>(`/library/files/pending-preview-thumbnails?limit=${limit}`),
   batchGenerateStlThumbnails: (options: {
     file_ids?: number[];
     folder_id?: number;
@@ -8230,6 +8235,14 @@ export interface BatchThumbnailResult {
   filename: string;
   success: boolean;
   error?: string | null;
+}
+
+export interface PendingPreviewThumbnail {
+  id: number;
+  filename: string;
+  file_type: string;
+  file_size: number;
+  created_by_id: number | null;
 }
 
 export interface BatchThumbnailResponse {
