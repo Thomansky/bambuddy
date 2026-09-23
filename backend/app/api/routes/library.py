@@ -12,11 +12,12 @@ import re
 import shutil
 import uuid
 import zipfile
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
-from fastapi.responses import FileResponse as FastAPIFileResponse
+from fastapi.responses import FileResponse as FastAPIFileResponse, StreamingResponse
 from sqlalchemy import distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -61,6 +62,7 @@ from backend.app.schemas.library import (
     FolderResponse,
     FolderTreeItem,
     FolderUpdate,
+    LibraryZipRequest,
     TagSummary,
     ZipExtractError,
     ZipExtractResponse,
@@ -90,6 +92,7 @@ from backend.app.utils.filename import (
     safe_path_component,
     validate_print_filename,
 )
+from backend.app.utils.http import build_content_disposition
 from backend.app.utils.printer_models import is_gcode_compatible
 from backend.app.utils.safe_path import PathTraversalError, assert_under, safe_join_under
 from backend.app.utils.threemf_tools import (
@@ -5198,6 +5201,275 @@ async def delete_file(
 
 # ============ File Content Endpoints ============
 
+# Bulk-download guards. Both refuse with 413 before a single byte is streamed,
+# because a StreamingResponse cannot change its status once it has started.
+# 2000 entries covers the largest real job folder by a wide margin and keeps the
+# pre-flight stat() walk bounded.
+ZIP_MAX_FILES = 2000
+# 20 GiB. The archive is streamed, so this is not a memory limit -- it is the
+# point past which one request would hold the Pi's disk and uplink long enough
+# to look like an outage to everyone else on the farm.
+ZIP_MAX_TOTAL_BYTES = 20 * 1024 * 1024 * 1024
+# Bytes moved per read() while copying a member into the archive.
+ZIP_STREAM_CHUNK_BYTES = 256 * 1024
+
+
+class _ZipStreamSink:
+    """Non-seekable sink handing whatever ``ZipFile`` writes to the caller.
+
+    ``zipfile`` needs a file-like object, not a generator; this is the adapter
+    between the two. Chunks accumulate here only until the next ``drain()``,
+    which runs after every read, so peak memory is one chunk rather than the
+    whole archive.
+    """
+
+    def __init__(self) -> None:
+        self._chunks: list[bytes] = []
+
+    def write(self, data: bytes) -> int:
+        self._chunks.append(bytes(data))
+        return len(data)
+
+    def flush(self) -> None:
+        """No-op: ``ZipFile.close()`` calls this on the object it was given."""
+
+    def drain(self) -> bytes:
+        data = b"".join(self._chunks)
+        self._chunks.clear()
+        return data
+
+
+def _zip_entry_name(name: str, fallback: str) -> str:
+    """Reduce a stored name to exactly one archive path component.
+
+    ``LibraryFile.filename`` and ``LibraryFolder.name`` are user-controlled, and
+    an external scan copies whatever the filesystem had, so either can carry a
+    drive letter, a separator or a ``..`` segment. ``safe_path_component``
+    replaces the separator/reserved set and strips leading dots, leaving a name
+    that can neither introduce a level nor climb out of the archive root.
+    """
+    return safe_path_component(name, fallback=fallback)
+
+
+def _unique_zip_name(arcname: str, taken: set[str]) -> str:
+    """Disambiguate ``arcname`` against names already in the archive.
+
+    Two folders may each hold a ``drawing.pdf`` and a flat multi-file ZIP puts
+    both at the root. A ZIP can repeat an entry name, but extractors then
+    silently overwrite, so the second copy becomes ``drawing (2).pdf``.
+    """
+    if arcname not in taken:
+        taken.add(arcname)
+        return arcname
+
+    parent, _, base = arcname.rpartition("/")
+    prefix = f"{parent}/" if parent else ""
+    stem, dot, suffix = base.partition(".")
+    counter = 2
+    while True:
+        candidate = f"{prefix}{stem} ({counter}){dot}{suffix}"
+        if candidate not in taken:
+            taken.add(candidate)
+            return candidate
+        counter += 1
+
+
+def _zip_member_path(file: LibraryFile) -> Path | None:
+    """Absolute on-disk path for a ZIP member, or None when it is unusable.
+
+    Mirrors ``download_file``'s resolution so a file that streams singly also
+    streams in bulk. A legacy row whose relative path escapes ``base_dir`` makes
+    ``to_absolute_path`` raise; that row is skipped rather than failing the
+    whole archive.
+    """
+    try:
+        abs_path = to_absolute_path(file.file_path)
+    except ValueError:
+        return None
+    if not abs_path or not abs_path.is_file():
+        return None
+    return abs_path
+
+
+def _collect_zip_members(
+    candidates: list[tuple[LibraryFile, tuple[str, ...]]],
+    user: User | None,
+    can_read_all: bool,
+) -> tuple[list[tuple[str, Path]], int]:
+    """Turn candidate rows into ``(arcname, path)`` pairs plus their total size.
+
+    Every row goes through ``_ensure_library_file_visible`` -- the same gate
+    ``download_file`` uses -- rather than a second copy of the ownership rules,
+    so a ZIP can never contain a file its requester could not have fetched one
+    at a time. Unreadable rows and rows missing on disk are skipped: one dead
+    row must not cost the user the other nine files.
+    """
+    members: list[tuple[str, Path]] = []
+    taken: set[str] = set()
+    total_bytes = 0
+
+    for file, prefix in candidates:
+        try:
+            _ensure_library_file_visible(file, user, can_read_all)
+        except HTTPException:
+            continue
+        abs_path = _zip_member_path(file)
+        if abs_path is None:
+            continue
+        name = _zip_entry_name(file.filename, fallback=f"file-{file.id}")
+        members.append((_unique_zip_name("/".join((*prefix, name)), taken), abs_path))
+        total_bytes += abs_path.stat().st_size
+
+    return members, total_bytes
+
+
+def _zip_member_timestamp(path: Path) -> tuple[int, int, int, int, int, int]:
+    """Member mtime as a ZIP date tuple, clamped to the format's 1980 epoch."""
+    stamp = datetime.fromtimestamp(path.stat().st_mtime)
+    if stamp.year < 1980:
+        return (1980, 1, 1, 0, 0, 0)
+    return (stamp.year, stamp.month, stamp.day, stamp.hour, stamp.minute, stamp.second)
+
+
+def _stream_zip(members: list[tuple[str, Path]]) -> Iterator[bytes]:
+    """Yield a ZIP of ``members`` chunk by chunk.
+
+    ZIP_STORED, not DEFLATE: 3MF, STEP, JPEG and PDF are already compressed, so
+    deflating them buys close to nothing and costs the Pi's CPU on every
+    download. Nothing is held beyond the current chunk, so a 4 GB folder never
+    becomes 4 GB of RSS.
+    """
+    sink = _ZipStreamSink()
+    with zipfile.ZipFile(sink, "w", zipfile.ZIP_STORED) as archive:
+        for arcname, path in members:
+            info = zipfile.ZipInfo(arcname, date_time=_zip_member_timestamp(path))
+            info.compress_type = zipfile.ZIP_STORED
+            info.external_attr = 0o644 << 16
+            try:
+                # Source first: a file that disappeared between its stat() and
+                # now is then left out entirely, rather than adding an empty
+                # entry the user would have to open to discover was empty.
+                with open(path, "rb") as source, archive.open(info, "w") as entry:
+                    while chunk := source.read(ZIP_STREAM_CHUNK_BYTES):
+                        entry.write(chunk)
+                        if pending := sink.drain():
+                            yield pending
+            except OSError:
+                # The row passed its stat() moments ago; if the bytes vanished
+                # since then the response is already on the wire and the status
+                # code is spent. Log it and keep the rest of the archive.
+                logger.warning("ZIP download: skipping unreadable file %s", path)
+            if pending := sink.drain():
+                yield pending
+    if pending := sink.drain():
+        yield pending
+
+
+def _zip_archive_filename(stem: str | None) -> str:
+    """``<folder name>-YYYY-MM-DD.zip``, sanitised like any other entry name."""
+    base = _zip_entry_name(stem, fallback="bambuddy-files") if stem else "bambuddy-files"
+    return f"{base}-{datetime.now().strftime('%Y-%m-%d')}.zip"
+
+
+def _zip_response(members: list[tuple[str, Path]], filename: str) -> StreamingResponse:
+    return StreamingResponse(
+        _stream_zip(members),
+        media_type="application/zip",
+        headers={"Content-Disposition": build_content_disposition(filename)},
+    )
+
+
+def _format_zip_bytes(size: int) -> str:
+    """Byte count in the largest unit that keeps it readable."""
+    unit_size = 1.0
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if size < unit_size * 1024 or unit == "GiB":
+            value = size / unit_size
+            return f"{int(value)} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        unit_size *= 1024
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _enforce_zip_file_cap(file_count: int) -> None:
+    """Refuse too many entries, in a message the UI can show verbatim."""
+    if file_count > ZIP_MAX_FILES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Too many files for one ZIP: {file_count} requested, limit is {ZIP_MAX_FILES}.",
+        )
+
+
+def _enforce_zip_size_cap(total_bytes: int) -> None:
+    """Refuse an oversized archive, in a message the UI can show verbatim."""
+    if total_bytes > ZIP_MAX_TOTAL_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"ZIP too large: {_format_zip_bytes(total_bytes)} requested, "
+                f"limit is {_format_zip_bytes(ZIP_MAX_TOTAL_BYTES)}."
+            ),
+        )
+
+
+async def _folder_zip_candidates(
+    db: AsyncSession,
+    folder: LibraryFolder,
+    recursive: bool,
+) -> list[tuple[LibraryFile, tuple[str, ...]]]:
+    """Files under ``folder`` paired with their directory inside the archive.
+
+    The requested folder is the archive's own top level, so extracting produces
+    one directory instead of scattering its contents into the current one.
+    Subfolders and files are walked in name order, so the same folder always
+    produces the same archive.
+    """
+    root = (_zip_entry_name(folder.name, fallback=f"folder-{folder.id}"),)
+    collected: list[tuple[LibraryFile, tuple[str, ...]]] = []
+    pending: list[tuple[int, tuple[str, ...]]] = [(folder.id, root)]
+    # The API refuses to make a folder its own ancestor, so a cycle here would
+    # mean the table is already corrupt -- but hanging a request is worse than
+    # the cost of a set.
+    seen: set[int] = set()
+
+    while pending:
+        folder_id, prefix = pending.pop(0)
+        if folder_id in seen:
+            continue
+        seen.add(folder_id)
+
+        files = (
+            (
+                await db.execute(
+                    LibraryFile.active()
+                    .where(LibraryFile.folder_id == folder_id)
+                    .order_by(LibraryFile.filename, LibraryFile.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        collected.extend((file, prefix) for file in files)
+
+        if not recursive:
+            continue
+
+        children = (
+            (
+                await db.execute(
+                    select(LibraryFolder)
+                    .where(LibraryFolder.parent_id == folder_id)
+                    .order_by(LibraryFolder.name, LibraryFolder.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        pending.extend(
+            (child.id, (*prefix, _zip_entry_name(child.name, fallback=f"folder-{child.id}"))) for child in children
+        )
+
+    return collected
+
 
 @router.get("/files/{file_id}/download")
 async def download_file(
@@ -5224,6 +5496,74 @@ async def download_file(
         filename=file.filename,
         media_type="application/octet-stream",
     )
+
+
+@router.post("/files/download-zip")
+async def download_files_zip(
+    request: LibraryZipRequest,
+    db: AsyncSession = Depends(get_db),
+    auth_result: tuple[User | None, bool] = Depends(
+        require_ownership_permission(
+            Permission.LIBRARY_READ_ALL,
+            Permission.LIBRARY_READ_OWN,
+        )
+    ),
+):
+    """Stream the requested files as one ZIP.
+
+    A job folder is a drawing plus a STEP plus a quote plus the 3MF, and
+    fetching that one click at a time is the most-repeated annoyance in the
+    File Manager. Files the caller may not read, and rows whose bytes are gone,
+    are skipped -- only an empty result is an error.
+    """
+    user, can_read_all = auth_result
+
+    # Checked against the raw request, not the surviving set: the point is to
+    # refuse an unbounded id list before it becomes an unbounded query.
+    _enforce_zip_file_cap(len(request.file_ids))
+
+    result = await db.execute(LibraryFile.active().where(LibraryFile.id.in_(request.file_ids)))
+    by_id = {file.id: file for file in result.scalars().all()}
+    # Request order, de-duplicated -- the archive must not depend on the order
+    # the database happened to return rows in.
+    ordered = [(by_id[file_id], ()) for file_id in dict.fromkeys(request.file_ids) if file_id in by_id]
+
+    members, total_bytes = _collect_zip_members(ordered, user, can_read_all)
+    if not members:
+        raise HTTPException(status_code=404, detail="None of the requested files are available for download")
+    _enforce_zip_size_cap(total_bytes)
+
+    return _zip_response(members, _zip_archive_filename(None))
+
+
+@router.get("/folders/{folder_id}/download-zip")
+async def download_folder_zip(
+    folder_id: int,
+    recursive: bool = Query(True, description="Include subfolders, keeping their structure in the archive"),
+    db: AsyncSession = Depends(get_db),
+    auth_result: tuple[User | None, bool] = Depends(
+        require_ownership_permission(
+            Permission.LIBRARY_READ_ALL,
+            Permission.LIBRARY_READ_OWN,
+        )
+    ),
+):
+    """Stream a folder -- by default its whole subtree -- as one ZIP."""
+    user, can_read_all = auth_result
+
+    folder = (await db.execute(select(LibraryFolder).where(LibraryFolder.id == folder_id))).scalar_one_or_none()
+    if folder is None:
+        raise HTTPException(status_code=404, detail="Folder not found")
+
+    candidates = await _folder_zip_candidates(db, folder, recursive)
+    _enforce_zip_file_cap(len(candidates))
+
+    members, total_bytes = _collect_zip_members(candidates, user, can_read_all)
+    if not members:
+        raise HTTPException(status_code=404, detail="No downloadable files in this folder")
+    _enforce_zip_size_cap(total_bytes)
+
+    return _zip_response(members, _zip_archive_filename(folder.name))
 
 
 @router.post("/files/{file_id}/slicer-token")

@@ -318,6 +318,16 @@ class BulkDeleteResponse(BaseModel):
     deleted_folders: int
 
 
+class LibraryZipRequest(BaseModel):
+    """Files to bundle into one streamed ZIP download.
+
+    Ids the caller may not read are skipped rather than rejected, so this only
+    has to refuse a request that names nothing at all.
+    """
+
+    file_ids: list[int] = Field(..., min_length=1)
+
+
 # ============ Queue Operations ============
 
 
