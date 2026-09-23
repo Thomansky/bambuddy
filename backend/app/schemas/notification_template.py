@@ -25,6 +25,7 @@ class EventType(StrEnum):
     AMS_HUMIDITY_HIGH = "ams_humidity_high"
     AMS_TEMPERATURE_HIGH = "ams_temperature_high"
     AMS_DRYING_SUSPENDED = "ams_drying_suspended"
+    PA_CALIBRATION = "pa_calibration"
     BED_COOLED = "bed_cooled"
     HA_SENSOR_ALERT = "ha_sensor_alert"
     TEST = "test"
@@ -91,6 +92,7 @@ EVENT_VARIABLES: dict[str, list[str]] = {
         "timestamp",
         "app_name",
     ],
+    "pa_calibration": ["printer", "filament", "event", "k_value", "detail", "timestamp", "app_name"],
     "bed_cooled": ["printer", "bed_temp", "threshold", "filename", "timestamp", "app_name"],
     "ha_sensor_alert": ["printer", "sensor", "state", "timestamp", "app_name"],
     "location_ha_sensor_alert": ["location", "sensor", "state", "timestamp", "app_name"],
@@ -236,6 +238,15 @@ SAMPLE_DATA: dict[str, dict[str, str]] = {
         "humidity": "16",
         "threshold": "14",
         "cycles": "2",
+        "timestamp": "2024-01-15 14:30",
+        "app_name": "Bambuddy",
+    },
+    "pa_calibration": {
+        "printer": "Bambu H2S",
+        "filament": "Bambu PLA Matte",
+        "event": "awaiting_confirmation",
+        "k_value": "0.019",
+        "detail": "",
         "timestamp": "2024-01-15 14:30",
         "app_name": "Bambuddy",
     },

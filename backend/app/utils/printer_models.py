@@ -514,3 +514,42 @@ def normalize_printer_model(raw_model: str | None) -> str | None:
     # Strip "Bambu Lab " prefix for unknown models
     stripped = raw_model.replace("Bambu Lab ", "").strip()
     return stripped or None
+
+
+# Models where Bambuddy can measure pressure advance by printing the vendor's
+# own calibration job (Decision 1 of the flow-dynamics feature). Membership
+# means three things have been verified on real hardware for that model:
+#
+#   1. its bundled machine preset's ``machine_start_gcode`` carries the
+#      ``M1002 judge_flag extrude_cali_flag`` gate with an ``M983.3`` inside it,
+#      so a slice with ``extrude_cali_flag: 1`` actually measures something;
+#   2. ``extrusion_cali_get_result`` returns one entry per calibrated filament
+#      and it is unambiguous which extruder that entry belongs to;
+#   3. the slot -> ``extruder_id`` mapping used for the write is known.
+#
+# H2D / H2D Pro are deliberately absent until (2) and (3) are measured on a
+# dual-nozzle machine: guessing the extruder there writes a correct K value to
+# the wrong nozzle, silently. The X1/P1/A1 family calibrates through the
+# ``extrusion_cali`` MQTT command instead, which is a different feature — an
+# H2 answers it ``result: "fail", reason: "Unsupport"`` (measured on an H2S,
+# 2026-09-20), so there is no fallback between the two paths.
+#
+# Short display names only; ``supports_sliced_pa_calibration`` resolves the
+# internal codes (O1S, ...) through PRINTER_MODEL_ID_MAP first.
+PA_CALIBRATION_MODELS: frozenset[str] = frozenset({"H2S"})
+
+
+def supports_sliced_pa_calibration(model: str | None) -> bool:
+    """Return True if this model can measure pressure advance via a sliced print.
+
+    Accepts a display name ("H2S", "Bambu Lab H2S") or the internal model id
+    the printer reports in ``slice_info.config`` ("O1S"), because the printer
+    row carries whichever the discovery path happened to store — the same
+    reason ``is_nozzle_rack_model`` accepts both.
+    """
+    if not model:
+        return False
+    raw = model.strip()
+    resolved = normalize_printer_model_id(raw) or raw
+    resolved = normalize_printer_model(resolved) or resolved
+    return resolved.strip().upper().replace(" ", "").replace("-", "") in PA_CALIBRATION_MODELS

@@ -51,6 +51,7 @@ const WAITING_REASON_KEYS: Record<string, string> = {
   printer_offline: 'printers.drying.waitingOffline',
   printer_busy: 'printers.drying.waitingPrinterBusy',
   already_drying: 'printers.drying.waitingAlreadyDrying',
+  pa_calibration_hold: 'printers.drying.waitingPaCalibration',
   interrupted: 'printers.drying.waitingInterrupted',
 };
 
@@ -175,6 +176,9 @@ import { depreciationFieldFromApi, depreciationFieldToApi } from '../utils/depre
 import { getCurrencySymbol } from '../utils/currency';
 import { AssignSpoolModal } from '../components/AssignSpoolModal';
 import { ConfigureAmsSlotModal } from '../components/ConfigureAmsSlotModal';
+import { PaCalibrationModal } from '../components/PaCalibrationModal';
+import { PaCalibrationCard } from '../components/PaCalibrationCard';
+import { paCalibrationBlockedKey, supportsPaCalibration } from '../utils/paCalibration';
 import { useToast } from '../contexts/ToastContext';
 import { ChamberLight } from '../components/icons/ChamberLight';
 import { PlateClearedIcon } from '../components/icons/PlateClearedIcon';
@@ -2315,6 +2319,11 @@ function PrinterCard({
     extruderId?: number;
     caliIdx?: number | null;
     savedPresetId?: string;
+  } | null>(null);
+  const [paCalibrationModal, setPaCalibrationModal] = useState<{
+    amsId: number;
+    slotId: number;
+    slotLabel: string;
   } | null>(null);
   const [showFirmwareModal, setShowFirmwareModal] = useState(false);
   const [plateCheckResult, setPlateCheckResult] = useState<{
@@ -5782,6 +5791,21 @@ function PrinterCard({
                                             isAssigned: !!assignment || isBambuLabSpool(tray),
                                           };
                                         })()}
+                                        calibratePa={{
+                                          enabled: hasPermission('printers:control') && supportsPaCalibration(printer.model),
+                                          disabledReason: (() => {
+                                            const key = paCalibrationBlockedKey({
+                                              model: printer.model,
+                                              canControl: hasPermission('printers:control'),
+                                            });
+                                            return key ? t(key) : undefined;
+                                          })(),
+                                          onCalibrate: () => setPaCalibrationModal({
+                                            amsId: ams.id,
+                                            slotId: slotIdx,
+                                            slotLabel: `${getAmsLabel(ams.id, ams.tray.length)} ${slotIdx + 1}`,
+                                          }),
+                                        }}
                                         configureSlot={{
                                           enabled: hasPermission('printers:control'),
                                           onConfigure: () => setConfigureSlotModal({
@@ -6189,6 +6213,21 @@ function PrinterCard({
                                         isAssigned: !!assignment || isBambuLabSpool(tray),
                                       };
                                     })()}
+                                    calibratePa={{
+                                      enabled: hasPermission('printers:control') && supportsPaCalibration(printer.model),
+                                      disabledReason: (() => {
+                                        const key = paCalibrationBlockedKey({
+                                          model: printer.model,
+                                          canControl: hasPermission('printers:control'),
+                                        });
+                                        return key ? t(key) : undefined;
+                                      })(),
+                                      onCalibrate: () => setPaCalibrationModal({
+                                        amsId: ams.id,
+                                        slotId: htSlotId,
+                                        slotLabel: getAmsLabel(ams.id, ams.tray.length),
+                                      }),
+                                    }}
                                     configureSlot={{
                                       enabled: hasPermission('printers:control'),
                                       onConfigure: () => setConfigureSlotModal({
@@ -6481,6 +6520,21 @@ function PrinterCard({
                                           isAssigned: !!assignment || isBambuLabSpool(extTray),
                                         };
                                       })()}
+                                      calibratePa={{
+                                        enabled: hasPermission('printers:control') && supportsPaCalibration(printer.model),
+                                        disabledReason: (() => {
+                                          const key = paCalibrationBlockedKey({
+                                            model: printer.model,
+                                            canControl: hasPermission('printers:control'),
+                                          });
+                                          return key ? t(key) : undefined;
+                                        })(),
+                                        onCalibrate: () => setPaCalibrationModal({
+                                          amsId: 255,
+                                          slotId: slotTrayId,
+                                          slotLabel: extLabel || t('printers.external'),
+                                        }),
+                                      }}
                                       configureSlot={{
                                         enabled: hasPermission('printers:control'),
                                         onConfigure: () => setConfigureSlotModal({
@@ -6756,6 +6810,15 @@ function PrinterCard({
           dryingActive={amsData.some(a => (a.dry_time ?? 0) > 0)}
           timeFormat={timeFormat}
         />
+
+        {/* A flow-dynamics run outlives the modal that started it: seven
+            minutes of printing and then a wait for a person, so the card polls
+            the run row rather than holding the state the modal left behind. */}
+        {supportsPaCalibration(printer.model) && (
+          <div className="mt-2">
+            <PaCalibrationCard printerId={printer.id} />
+          </div>
+        )}
       </CardContent>
 
       {/* File Manager Modal */}
@@ -7331,6 +7394,22 @@ function PrinterCard({
             queryClient.invalidateQueries({ queryKey: ['slotPresets', printer.id] });
             // Printer status will update automatically via WebSocket when AMS data changes
             queryClient.invalidateQueries({ queryKey: ['printerStatus', printer.id] });
+          }}
+        />
+      )}
+
+      {/* Flow-dynamics (pressure advance) calibration for one slot */}
+      {paCalibrationModal && (
+        <PaCalibrationModal
+          isOpen={!!paCalibrationModal}
+          printerId={printer.id}
+          printerName={printer.name}
+          amsId={paCalibrationModal.amsId}
+          slotId={paCalibrationModal.slotId}
+          slotLabel={paCalibrationModal.slotLabel}
+          onClose={() => setPaCalibrationModal(null)}
+          onStarted={() => {
+            queryClient.invalidateQueries({ queryKey: ['pa-calibration-runs', printer.id] });
           }}
         />
       )}

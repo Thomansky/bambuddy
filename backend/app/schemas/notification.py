@@ -62,6 +62,11 @@ class NotificationProviderBase(BaseModel):
         default=True, description="Notify when automatic drying gives up on an AMS unit"
     )
 
+    # Event triggers - flow-dynamics (pressure advance) calibration
+    on_pa_calibration: bool = Field(
+        default=True, description="Notify when a flow-dynamics calibration has a result, or ends"
+    )
+
     # Event triggers - AMS-HT environmental alarms
     on_ams_ht_humidity_high: bool = Field(default=False, description="Notify when AMS-HT humidity exceeds threshold")
     on_ams_ht_temperature_high: bool = Field(
@@ -188,6 +193,7 @@ class NotificationProviderUpdate(BaseModel):
     on_ams_humidity_high: bool | None = None
     on_ams_temperature_high: bool | None = None
     on_ams_drying_suspended: bool | None = None
+    on_pa_calibration: bool | None = None
 
     # Event triggers - AMS-HT environmental alarms
     on_ams_ht_humidity_high: bool | None = None

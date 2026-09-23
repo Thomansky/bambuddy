@@ -148,6 +148,12 @@ DEFAULT_TEMPLATES = [
         ),
     },
     {
+        "event_type": "pa_calibration",
+        "name": "Flow Dynamics Calibration",
+        "title_template": "Flow Dynamics Calibration",
+        "body_template": "{printer} - {filament}: {event} {k_value} {detail}",
+    },
+    {
         "event_type": "bed_cooled",
         "name": "Bed Cooled",
         "title_template": "Bed Cooled",
