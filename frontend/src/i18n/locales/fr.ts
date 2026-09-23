@@ -3843,6 +3843,7 @@ export default {
     folderFilter: {
       placeholder: 'Filtrer les dossiers...',
       noMatches: 'Aucun dossier ne correspond à ce filtre.',
+      pickTarget: 'Choisissez une destination dans la liste',
     },
     linkFolder: 'Lier le dossier',
     linkFolderDescription: 'Lier "{{name}}" à un projet ou archive.',
@@ -3903,6 +3904,7 @@ export default {
     folderSortByActivity: 'Par activité récente',
     dragToResizeTooltip: 'Glisser pour redimensionner, double-clic reset',
     sidebarToggle: {
+      label: 'Volet des dossiers',
       hide: 'Masquer le volet des dossiers',
       show: 'Afficher le volet des dossiers',
       columnsDisabled: 'La vue en colonnes remplace déjà le volet des dossiers',

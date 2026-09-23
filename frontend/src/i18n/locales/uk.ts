@@ -3882,6 +3882,7 @@ export default {
     folderFilter: {
       placeholder: "Фільтр папок...",
       noMatches: "Немає папок, що відповідають цьому фільтру.",
+      pickTarget: "Виберіть теку призначення зі списку",
     },
     linkFolder: "Пов’язати папку",
     linkFolderDescription: "Пов’язати «{{name}}» із проєктом або архівом для швидкого доступу.",
@@ -3942,6 +3943,7 @@ export default {
     folderSortByActivity: "За останніми діями",
     dragToResizeTooltip: "Перетягніть, щоб змінити розмір, двічі клацніть, щоб скинути",
     sidebarToggle: {
+      label: "Панель папок",
       hide: "Сховати панель папок",
       show: "Показати панель папок",
       columnsDisabled: "Вигляд колонок уже замінює панель папок",

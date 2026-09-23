@@ -3854,6 +3854,7 @@ export default {
     folderFilter: {
       placeholder: 'Ordner filtern ...',
       noMatches: 'Kein Ordner passt zu diesem Filter.',
+      pickTarget: 'Ziel aus der Liste auswählen',
     },
     linkFolder: 'Ordner verknüpfen',
     linkFolderDescription: '"{{name}}" mit einem Projekt oder Archiv verknüpfen für schnellen Zugriff.',
@@ -3914,6 +3915,7 @@ export default {
     folderSortByActivity: 'Nach letzter Aktivität',
     dragToResizeTooltip: 'Ziehen zum Ändern der Größe, Doppelklick zum Zurücksetzen',
     sidebarToggle: {
+      label: 'Ordnerleiste',
       hide: 'Ordnerleiste ausblenden',
       show: 'Ordnerleiste einblenden',
       columnsDisabled: 'Die Spaltenansicht ersetzt die Ordnerleiste bereits',

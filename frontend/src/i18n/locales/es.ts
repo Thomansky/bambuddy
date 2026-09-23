@@ -3856,6 +3856,7 @@ export default {
     folderFilter: {
       placeholder: 'Filtrar carpetas...',
       noMatches: 'Ninguna carpeta coincide con este filtro.',
+      pickTarget: 'Elige un destino de la lista',
     },
     linkFolder: 'Vincular carpeta',
     linkFolderDescription: 'Vincule "{{name}}" a un proyecto o archivo para un acceso rápido.',
@@ -3916,6 +3917,7 @@ export default {
     folderSortByActivity: 'Por actividad reciente',
     dragToResizeTooltip: 'Arrastre para redimensionar, doble clic para restablecer',
     sidebarToggle: {
+      label: 'Barra de carpetas',
       hide: 'Ocultar la barra de carpetas',
       show: 'Mostrar la barra de carpetas',
       columnsDisabled: 'La vista de columnas ya sustituye a la barra de carpetas',

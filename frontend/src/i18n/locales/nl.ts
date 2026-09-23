@@ -3884,6 +3884,7 @@ export default {
     folderFilter: {
       placeholder: 'Mappen filteren...',
       noMatches: 'Geen map komt overeen met dit filter.',
+      pickTarget: 'Kies een bestemming uit de lijst',
     },
     linkFolder: 'Map koppelen',
     linkFolderDescription: 'Koppel "{{name}}" aan een project of archief voor snelle toegang.',
@@ -3944,6 +3945,7 @@ export default {
     folderSortByActivity: 'Op recente activiteit',
     dragToResizeTooltip: 'Sleep om grootte te wijzigen, dubbelklik om te resetten',
     sidebarToggle: {
+      label: 'Mappenbalk',
       hide: 'Mappenbalk verbergen',
       show: 'Mappenbalk tonen',
       columnsDisabled: 'De kolomweergave vervangt de mappenbalk al',

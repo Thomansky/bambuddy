@@ -3656,6 +3656,7 @@ export default {
     folderFilter: {
       placeholder: "Фильтр папок...",
       noMatches: "Нет папок, соответствующих этому фильтру.",
+      pickTarget: "Выберите папку назначения из списка",
     },
     linkFolder: "Связать папку",
     linkFolderDescription: "Связать «{{name}}» с проектом или архивом для быстрого доступа.",
@@ -3716,6 +3717,7 @@ export default {
     folderSortByActivity: "По последней активности",
     dragToResizeTooltip: "Перетащите для изменения размера, двойной щелчок — сброс",
     sidebarToggle: {
+      label: "Панель папок",
       hide: "Скрыть панель папок",
       show: "Показать панель папок",
       columnsDisabled: "Режим колонок уже заменяет панель папок",

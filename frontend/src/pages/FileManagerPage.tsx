@@ -400,7 +400,10 @@ function RenameModal({ type, currentName, onClose, onSave, isLoading, t }: Renam
 interface MoveFilesModalProps {
   folders: LibraryFolderTree[];
   selectedFiles: number[];
-  currentFolderId: number | null;
+  // The folder the selected files actually sit in, not the folder the page has
+  // selected: every column can tick a file, so the two differ. `undefined` when
+  // the selection spans several folders and no single row is "current".
+  currentFolderId: number | null | undefined;
   onClose: () => void;
   onMove: (folderId: number | null) => void;
   isLoading: boolean;
@@ -438,6 +441,14 @@ function MoveFilesModal({ folders, selectedFiles, currentFolderId, onClose, onMo
         ...flattenFolders(filterTree(folders)),
       ]
     : [rootEntry, ...flattenFolders(folders)];
+
+  // Move may only fire at a row the list is offering right now. The filter can
+  // drop the highlighted row — including the "Root (No Folder)" one the dialog
+  // opens on — and firing at an invisible target would silently take the files
+  // out of every folder.
+  const targetSelectable = flatFolders.some(
+    (folder) => folder.id === targetFolder && folder.id !== currentFolderId
+  );
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
@@ -489,7 +500,11 @@ function MoveFilesModal({ folders, selectedFiles, currentFolderId, onClose, onMo
             <Button type="button" variant="secondary" onClick={onClose}>
               {t('common.cancel')}
             </Button>
-            <Button onClick={() => onMove(targetFolder)} disabled={isLoading}>
+            <Button
+              onClick={() => onMove(targetFolder)}
+              disabled={isLoading || !targetSelectable}
+              title={targetSelectable ? undefined : t('fileManager.folderFilter.pickTarget')}
+            >
               {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : t('common.move')}
             </Button>
           </div>
@@ -1521,6 +1536,119 @@ function PathBar({ rootLabel, rootIsExternal, path, onSelectRoot, onSelectFolder
   );
 }
 
+// Folder navigation for the content area, rendered when the folder sidebar is
+// switched off. The path bar only ever walks up, and neither the grid nor the
+// list draws a folder, so without this the hidden sidebar takes the top-level
+// buckets and every way down with it.
+interface ContentFolderNavProps {
+  folders: LibraryFolderTree[];
+  variant: 'grid' | 'list';
+  showBuckets: boolean;
+  bucketIsExternal: boolean;
+  atRoot: boolean;
+  onSelectFolder: (id: number) => void;
+  onSelectBucket: (view: 'internal' | 'external') => void;
+  t: TFunction;
+}
+
+function ContentFolderNav({
+  folders,
+  variant,
+  showBuckets,
+  bucketIsExternal,
+  atRoot,
+  onSelectFolder,
+  onSelectBucket,
+  t,
+}: ContentFolderNavProps) {
+  if (!showBuckets && folders.length === 0) return null;
+
+  const folderIcon = (folder: LibraryFolderTree) =>
+    folder.is_external ? (
+      <FolderSymlink className="w-4 h-4 flex-shrink-0 text-purple-600 dark:text-purple-400" />
+    ) : (
+      <FolderOpen className="w-4 h-4 flex-shrink-0 text-bambu-green" />
+    );
+
+  const bucketClass = (active: boolean) =>
+    `inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-sm border transition-colors ${
+      active
+        ? 'bg-bambu-green/20 text-bambu-green border-bambu-green/40'
+        : 'bg-bambu-dark-secondary text-bambu-gray border-bambu-dark-tertiary hover:text-white hover:border-bambu-green/40'
+    }`;
+
+  return (
+    // Matches the sidebar's own `hidden lg:flex`: below lg the folders are a
+    // <select> that is always on screen, and the toggle does not exist there.
+    <nav
+      aria-label={t('fileManager.folders')}
+      data-testid="content-folder-nav"
+      className="hidden lg:block mb-4"
+    >
+      {showBuckets && (
+        <div className="flex flex-wrap items-center gap-2 mb-2">
+          <button
+            type="button"
+            onClick={() => onSelectBucket('internal')}
+            aria-pressed={atRoot && !bucketIsExternal}
+            className={bucketClass(atRoot && !bucketIsExternal)}
+          >
+            <FileBox className="w-4 h-4 flex-shrink-0" />
+            {t('fileManager.allFiles')}
+          </button>
+          <button
+            type="button"
+            onClick={() => onSelectBucket('external')}
+            aria-pressed={atRoot && bucketIsExternal}
+            className={bucketClass(atRoot && bucketIsExternal)}
+          >
+            <FolderSymlink className="w-4 h-4 flex-shrink-0" />
+            {t('fileManager.allExternal')}
+          </button>
+        </div>
+      )}
+      {folders.length > 0 &&
+        (variant === 'grid' ? (
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
+            {folders.map((folder) => (
+              <button
+                key={folder.id}
+                type="button"
+                onClick={() => onSelectFolder(folder.id)}
+                title={folder.name}
+                className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-bambu-dark-secondary border border-bambu-dark-tertiary text-left hover:bg-bambu-dark hover:border-bambu-green/40 transition-colors"
+              >
+                {folderIcon(folder)}
+                <span className="min-w-0 flex-1 truncate text-sm text-white">{folder.name}</span>
+                {folder.file_count > 0 && (
+                  <span className="text-xs text-bambu-gray flex-shrink-0">{folder.file_count}</span>
+                )}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="bg-bambu-dark-secondary rounded-lg border border-bambu-dark-tertiary divide-y divide-bambu-dark-tertiary overflow-hidden">
+            {folders.map((folder) => (
+              <button
+                key={folder.id}
+                type="button"
+                onClick={() => onSelectFolder(folder.id)}
+                title={folder.name}
+                className="w-full flex items-center gap-3 px-3 py-2 text-left hover:bg-bambu-dark transition-colors"
+              >
+                {folderIcon(folder)}
+                <span className="min-w-0 flex-1 truncate text-sm text-white">{folder.name}</span>
+                {folder.file_count > 0 && (
+                  <span className="text-xs text-bambu-gray flex-shrink-0">{folder.file_count}</span>
+                )}
+              </button>
+            ))}
+          </div>
+        ))}
+    </nav>
+  );
+}
+
 export function FileManagerPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -1597,9 +1725,10 @@ export function FileManagerPage() {
   const [isResizing, setIsResizing] = useState(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
 
-  // The tree can be switched off entirely. In a deep customer/job tree it
-  // repeats the folders the tiles already show, one nesting level apart, and
-  // the path bar now covers getting back up. Defaults to shown.
+  // The tree can be switched off entirely to give a deep customer/job tree the
+  // full width. The content area then grows its own folder navigation
+  // (ContentFolderNav) and the path bar covers getting back up. Defaults to
+  // shown.
   const [sidebarHidden, setSidebarHidden] = useState(() => {
     return localStorage.getItem('library-sidebar-hidden') === 'true';
   });
@@ -2258,6 +2387,16 @@ export function FileManagerPage() {
   const currentBucketIsExternal =
     folderPath.length > 0 ? Boolean(folderPath[0].is_external) : topLevelView === 'external';
 
+  // The folders one level below where the user is standing — the bucket's
+  // top-level folders at the root, otherwise the selected folder's children.
+  // This is what the content area offers when the sidebar is switched off.
+  const currentFolderChildren = useMemo(() => {
+    if (selectedFolderId === null) {
+      return (sortedFolders ?? []).filter((f) => Boolean(f.is_external) === currentBucketIsExternal);
+    }
+    return folderPath[folderPath.length - 1]?.children ?? [];
+  }, [sortedFolders, selectedFolderId, currentBucketIsExternal, folderPath]);
+
   // One column per level: the top-level bucket, then the children of each
   // folder along the path. `folderId` is the folder the column is the inside
   // of (null = the library root), which is what its file list is keyed on.
@@ -2342,6 +2481,25 @@ export function FileManagerPage() {
           .find((list) => list?.some((f) => f.id === columnsFocusedFileId));
   const focusedFileList = focusedFileColumnList ?? filteredAndSortedFiles;
 
+  // Where the selected files actually live. A file can be ticked in any
+  // column, so this is not the same as selectedFolderId — the move dialog
+  // needs the files' own folder to know which row is the no-op destination.
+  // `undefined` when the selection spans several folders or none of the rows
+  // is on screen any more: nothing is then marked current.
+  const selectionSourceFolderId = (() => {
+    if (selectedFiles.length === 0) return undefined;
+    const byId = new Map<number, number | null>();
+    for (const file of filteredAndSortedFiles) byId.set(file.id, file.folder_id);
+    for (const entry of columnFiles.values()) {
+      for (const file of entry.files) byId.set(file.id, file.folder_id);
+    }
+    const folderIds = new Set<number | null>();
+    for (const id of selectedFiles) {
+      if (byId.has(id)) folderIds.add(byId.get(id) ?? null);
+    }
+    return folderIds.size === 1 ? [...folderIds][0] : undefined;
+  })();
+
   // Folder name matches for the active search. The tree is already in memory,
   // so this needs no endpoint; a tree that has not loaded simply matches
   // nothing. `path` is the ancestor chain, shown under the name.
@@ -2387,6 +2545,15 @@ export function FileManagerPage() {
   const selectPathRoot = () => {
     setColumnsFocusedFileId(null);
     setTopLevelView(currentBucketIsExternal ? 'external' : 'internal');
+    setSelectedFolderId(null);
+  };
+
+  // The two top-level buckets, same as the sidebar's own entries. Without the
+  // sidebar these are the only way to cross between managed storage and the
+  // linked external folders.
+  const selectTopLevelBucket = (view: 'internal' | 'external') => {
+    setColumnsFocusedFileId(null);
+    setTopLevelView(view);
     setSelectedFolderId(null);
   };
 
@@ -2650,13 +2817,17 @@ export function FileManagerPage() {
             </button>
           </div>
           {/* Sidebar toggle. Only offered from lg upwards, which is where the
-              tree exists at all — below it the folders are a <select>. */}
+              tree exists at all — below it the folders are a <select>.
+              Toggle-button pattern: the name stays constant and aria-pressed
+              carries the state, so "pressed" means the sidebar is on screen —
+              which in the columns view it is, whatever the stored preference
+              says. The title still names the action the click performs. */}
           <button
             type="button"
             onClick={handleToggleSidebar}
             disabled={viewMode === 'columns'}
-            aria-pressed={sidebarHidden}
-            aria-label={sidebarHidden ? t('fileManager.sidebarToggle.show') : t('fileManager.sidebarToggle.hide')}
+            aria-pressed={folderSidebarVisible}
+            aria-label={t('fileManager.sidebarToggle.label')}
             title={
               viewMode === 'columns'
                 ? t('fileManager.sidebarToggle.columnsDisabled')
@@ -3326,6 +3497,21 @@ export function FileManagerPage() {
             t={t}
           />
 
+          {/* With the tree switched off the content area carries the way down
+              (and the bucket switch) — the path bar only ever walks up. */}
+          {!folderSidebarVisible && (
+            <ContentFolderNav
+              folders={currentFolderChildren}
+              variant={viewMode === 'list' ? 'list' : 'grid'}
+              showBuckets={Boolean(folders?.some((f) => f.is_external))}
+              bucketIsExternal={currentBucketIsExternal}
+              atRoot={selectedFolderId === null}
+              onSelectFolder={selectFolderFromChrome}
+              onSelectBucket={selectTopLevelBucket}
+              t={t}
+            />
+          )}
+
           {/* Folder hits for the active search, above the file results. A
               folder whose name matched used to be invisible, which is exactly
               wrong when the thing you are looking for IS a folder. */}
@@ -3791,7 +3977,7 @@ export function FileManagerPage() {
         <MoveFilesModal
           folders={folders}
           selectedFiles={selectedFiles}
-          currentFolderId={selectedFolderId}
+          currentFolderId={selectionSourceFolderId}
           onClose={() => setShowMoveModal(false)}
           onMove={(folderId) => moveFilesMutation.mutate({ fileIds: selectedFiles, folderId })}
           isLoading={moveFilesMutation.isPending}

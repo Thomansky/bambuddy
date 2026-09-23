@@ -3854,6 +3854,7 @@ export default {
     folderFilter: {
       placeholder: 'フォルダを絞り込み...',
       noMatches: 'この絞り込みに一致するフォルダはありません。',
+      pickTarget: 'リストから移動先を選択してください',
     },
     linkFolder: 'フォルダをリンク',
     linkFolderDescription: '「{{name}}」をプロジェクトまたはアーカイブにリンクしてすばやくアクセス。',
@@ -3914,6 +3915,7 @@ export default {
     folderSortByActivity: '最終更新順',
     dragToResizeTooltip: 'ドラッグしてリサイズ、ダブルクリックでリセット',
     sidebarToggle: {
+      label: 'フォルダサイドバー',
       hide: 'フォルダサイドバーを隠す',
       show: 'フォルダサイドバーを表示',
       columnsDisabled: 'カラム表示はすでにフォルダサイドバーの代わりになっています',

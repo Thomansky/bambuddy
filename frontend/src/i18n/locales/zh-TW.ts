@@ -3842,6 +3842,7 @@ export default {
     folderFilter: {
       placeholder: '篩選資料夾...',
       noMatches: '沒有資料夾符合此篩選條件。',
+      pickTarget: '請從清單中選擇目標資料夾',
     },
     linkFolder: '連結資料夾',
     linkFolderDescription: '將"{{name}}"連結到專案或歸檔以便快速存取。',
@@ -3902,6 +3903,7 @@ export default {
     folderSortByActivity: '依最近活動',
     dragToResizeTooltip: '拖曳調整大小，雙擊重設',
     sidebarToggle: {
+      label: '資料夾側欄',
       hide: '隱藏資料夾側欄',
       show: '顯示資料夾側欄',
       columnsDisabled: '分欄檢視已經取代了資料夾側欄',

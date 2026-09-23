@@ -3842,6 +3842,7 @@ export default {
     folderFilter: {
       placeholder: '筛选文件夹...',
       noMatches: '没有文件夹匹配此筛选条件。',
+      pickTarget: '请从列表中选择目标文件夹',
     },
     linkFolder: '链接文件夹',
     linkFolderDescription: '将"{{name}}"链接到项目或归档以便快速访问。',
@@ -3902,6 +3903,7 @@ export default {
     folderSortByActivity: '按最近活动',
     dragToResizeTooltip: '拖动调整大小，双击重置',
     sidebarToggle: {
+      label: '文件夹侧栏',
       hide: '隐藏文件夹侧栏',
       show: '显示文件夹侧栏',
       columnsDisabled: '分栏视图已经取代了文件夹侧栏',

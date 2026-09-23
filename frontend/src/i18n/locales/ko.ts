@@ -3664,6 +3664,7 @@ export default {
     folderFilter: {
       placeholder: '폴더 필터...',
       noMatches: '이 필터와 일치하는 폴더가 없습니다.',
+      pickTarget: '목록에서 대상 폴더를 선택하세요',
     },
     linkFolder: '폴더 연결',
     linkFolderDescription: '"{{name}}"을(를) 프로젝트 또는 아카이브에 연결하여 빠른 접근.',
@@ -3724,6 +3725,7 @@ export default {
     folderSortByActivity: '최근 활동순',
     dragToResizeTooltip: '드래그하여 크기 조정, 더블클릭하여 초기화',
     sidebarToggle: {
+      label: '폴더 사이드바',
       hide: '폴더 사이드바 숨기기',
       show: '폴더 사이드바 표시',
       columnsDisabled: '열 보기가 이미 폴더 사이드바를 대신합니다',

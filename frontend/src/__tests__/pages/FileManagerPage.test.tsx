@@ -1249,24 +1249,116 @@ describe('FileManagerPage', () => {
       setItemMock.mockReset();
     });
 
-    it('hides the tree and leaves the content area working', async () => {
+    const contentNav = () => within(screen.getByTestId('content-folder-nav'));
+
+    it('hides the tree and hands folder navigation to the content area', async () => {
       const user = userEvent.setup();
       render(<FileManagerPage />);
       await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
 
       expect(screen.getByTestId('folder-sidebar')).toBeInTheDocument();
-      expect(toggle()).toHaveAttribute('aria-pressed', 'false');
+      // Pressed = the sidebar is on screen, so the state matches the layout.
+      expect(toggle()).toHaveAttribute('aria-pressed', 'true');
+      // While the tree is there the content area does not repeat it.
+      expect(screen.queryByTestId('content-folder-nav')).not.toBeInTheDocument();
 
       await user.click(toggle());
 
       expect(screen.queryByTestId('folder-sidebar')).not.toBeInTheDocument();
-      expect(toggle()).toHaveAttribute('aria-pressed', 'true');
-      // Navigation carries on without the tree: files and the path bar stay.
+      expect(toggle()).toHaveAttribute('aria-pressed', 'false');
+      // Files and the path bar stay…
       expect(screen.getByText('Benchy')).toBeInTheDocument();
       expect(currentCrumb()).toHaveTextContent('All Files');
+      // …and the way DOWN is in the content area now.
+      expect(contentNav().getByText('Functional Parts')).toBeInTheDocument();
+      expect(contentNav().getByText('Art Projects')).toBeInTheDocument();
+
+      await user.click(contentNav().getByText('Functional Parts'));
+      await waitFor(() => expect(currentCrumb()).toHaveTextContent('Functional Parts'));
+      expect(await screen.findByText('Spacer')).toBeInTheDocument();
+
+      // The child of the folder we just entered is offered in turn.
+      await user.click(contentNav().getByText('Brackets'));
+      await waitFor(() => expect(currentCrumb()).toHaveTextContent('Brackets'));
 
       await user.click(toggle());
       expect(screen.getByTestId('folder-sidebar')).toBeInTheDocument();
+      expect(screen.queryByTestId('content-folder-nav')).not.toBeInTheDocument();
+    });
+
+    it('keeps the way down open in a folder that holds only subfolders', async () => {
+      const user = userEvent.setup();
+      getItemMock.mockImplementation(storedHidden);
+      server.use(http.get('/api/v1/library/folders', () => HttpResponse.json(deepFolders)));
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await user.click(contentNav().getByText('Kunden'));
+      // An organisational folder: no files of its own, so the file area shows
+      // the empty state — which used to be the whole page.
+      await waitFor(() => expect(screen.getByText('Folder is empty')).toBeInTheDocument());
+
+      expect(contentNav().getByText('RAFI')).toBeInTheDocument();
+      await user.click(contentNav().getByText('RAFI'));
+      await waitFor(() => expect(currentCrumb()).toHaveTextContent('RAFI'));
+      expect(contentNav().getByText('N1125035')).toBeInTheDocument();
+    });
+
+    it('offers the top-level buckets the hidden sidebar took with it', async () => {
+      const user = userEvent.setup();
+      getItemMock.mockImplementation(storedHidden);
+      server.use(
+        http.get('/api/v1/library/folders', () =>
+          HttpResponse.json([
+            ...mockFolders,
+            {
+              id: 99,
+              name: 'NAS Library',
+              parent_id: null,
+              file_count: 200,
+              project_id: null,
+              archive_id: null,
+              project_name: null,
+              archive_name: null,
+              is_external: true,
+              external_readonly: false,
+              external_path: '/mnt/nas',
+              children: [],
+            },
+          ])
+        )
+      );
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      // Internal bucket: only the managed folders are offered.
+      expect(contentNav().getByText('Functional Parts')).toBeInTheDocument();
+      expect(contentNav().queryByText('NAS Library')).not.toBeInTheDocument();
+
+      await user.click(contentNav().getByRole('button', { name: /External/ }));
+
+      await waitFor(() => expect(currentCrumb()).toHaveTextContent('External'));
+      expect(contentNav().getByText('NAS Library')).toBeInTheDocument();
+      expect(contentNav().queryByText('Functional Parts')).not.toBeInTheDocument();
+
+      await user.click(contentNav().getByRole('button', { name: /All Files/ }));
+      await waitFor(() => expect(currentCrumb()).toHaveTextContent('All Files'));
+      expect(contentNav().getByText('Functional Parts')).toBeInTheDocument();
+    });
+
+    it('lists the folders as rows in the list view', async () => {
+      const user = userEvent.setup();
+      getItemMock.mockImplementation(storedHidden);
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await user.click(screen.getByTitle('List view'));
+
+      // Same folders, laid out as rows next to the file rows.
+      expect(contentNav().getByText('Art Projects')).toBeInTheDocument();
+      await user.click(contentNav().getByText('Functional Parts'));
+      await waitFor(() => expect(currentCrumb()).toHaveTextContent('Functional Parts'));
+      expect(contentNav().getByText('Brackets')).toBeInTheDocument();
     });
 
     it('remembers the choice across a remount', async () => {
@@ -1283,7 +1375,7 @@ describe('FileManagerPage', () => {
       render(<FileManagerPage />);
       await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
       expect(screen.queryByTestId('folder-sidebar')).not.toBeInTheDocument();
-      expect(toggle()).toHaveAttribute('aria-pressed', 'true');
+      expect(toggle()).toHaveAttribute('aria-pressed', 'false');
     });
 
     it('is disabled in the columns view, which keeps its own layout', async () => {
@@ -1302,6 +1394,24 @@ describe('FileManagerPage', () => {
       );
       // The preference does not reach the columns view's own layout.
       expect(screen.getByTestId('folder-sidebar')).toBeInTheDocument();
+      // …so the announced state must follow the layout, not the preference.
+      expect(toggle()).toHaveAttribute('aria-pressed', 'true');
+      // The columns view draws its own folder panes; no second nav.
+      expect(screen.queryByTestId('content-folder-nav')).not.toBeInTheDocument();
+    });
+
+    it('keeps one accessible name and lets aria-pressed carry the state', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      // The name must not swap with the state — "Show folder sidebar, pressed"
+      // announces the opposite of what is on screen.
+      expect(screen.getByRole('button', { name: 'Folder sidebar' })).toBe(toggle());
+      await user.click(toggle());
+      expect(screen.getByRole('button', { name: 'Folder sidebar' })).toBe(toggle());
+      // The tooltip still names the action a click performs.
+      expect(toggle()).toHaveAttribute('title', 'Show folder sidebar');
     });
   });
 
@@ -1376,6 +1486,56 @@ describe('FileManagerPage', () => {
       const dialog = within(screen.getByTestId('move-files-modal'));
       expect(dialog.getByText('Cancel')).toBeInTheDocument();
       expect(dialog.getByText('Move')).toBeInTheDocument();
+    });
+
+    it('arms Move only at a destination the filtered list is showing', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      const list = await openMoveDialog(user);
+      const moveButton = () => within(screen.getByTestId('move-files-modal')).getByText('Move').closest('button')!;
+
+      // The files are in the root, so the root row is the no-op destination.
+      await user.type(screen.getByPlaceholderText('Filter folders...'), 'brack');
+      expect(within(list).queryByText('Root (No Folder)')).not.toBeInTheDocument();
+      // Nothing visible is picked — Move must not fall back to the root and
+      // take the files out of every folder.
+      expect(moveButton()).toBeDisabled();
+
+      await user.click(within(list).getByText('Brackets'));
+      expect(moveButton()).toBeEnabled();
+
+      // Filtering the picked folder away disarms it again.
+      await user.clear(screen.getByPlaceholderText('Filter folders...'));
+      await user.type(screen.getByPlaceholderText('Filter folders...'), 'art');
+      expect(within(list).queryByText('Brackets')).not.toBeInTheDocument();
+      expect(moveButton()).toBeDisabled();
+    });
+
+    it('marks the folder the ticked files live in, not the pane selection', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      // Stand in Brackets, but tick a file that lives in its parent.
+      await user.click(screen.getByTitle('Column view'));
+      const columns = within(screen.getByTestId('columns-view'));
+      await user.click(columns.getByText('Functional Parts'));
+      await user.click(await columns.findByText('Brackets'));
+      const level = within(screen.getByTestId('columns-level-folder-1'));
+      await user.click(await level.findByText('Spacer'));
+
+      await user.click(within(screen.getByTestId('selection-actions')).getByText('Move'));
+      const list = within(screen.getByTestId('move-folder-list'));
+
+      // Spacer's own folder is the no-op destination…
+      const source = list.getByText('Functional Parts');
+      expect(source).toBeDisabled();
+      expect(source).toHaveTextContent('(current)');
+      // …and the folder the user is standing in is a legal one.
+      const target = list.getByText('Brackets');
+      expect(target).toBeEnabled();
+      await user.click(target);
+      expect(within(screen.getByTestId('move-files-modal')).getByText('Move').closest('button')!).toBeEnabled();
     });
   });
 

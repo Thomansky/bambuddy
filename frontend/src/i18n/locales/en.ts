@@ -3884,6 +3884,7 @@ export default {
     folderFilter: {
       placeholder: 'Filter folders...',
       noMatches: 'No folder matches this filter.',
+      pickTarget: 'Pick a destination from the list',
     },
     linkFolder: 'Link Folder',
     linkFolderDescription: 'Link "{{name}}" to a project or archive for quick access.',
@@ -3944,6 +3945,7 @@ export default {
     folderSortByActivity: 'By recent activity',
     dragToResizeTooltip: 'Drag to resize, double-click to reset',
     sidebarToggle: {
+      label: 'Folder sidebar',
       hide: 'Hide folder sidebar',
       show: 'Show folder sidebar',
       columnsDisabled: 'The columns view already replaces the folder sidebar',
