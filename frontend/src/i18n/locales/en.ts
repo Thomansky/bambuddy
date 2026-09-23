@@ -920,6 +920,7 @@ export default {
       bodyFtpTransferFailed: 'The sliced file was on the printer\'s card and the printer served it, but the transfer did not finish in the time allowed. At print start the printer is also handling its camera, its status messages and the job upload, and a large 3MF does not always get through against all that. Those prints are still archived with their name and timing, just without a thumbnail or slicer metadata. This is not a slicer setting and not something you changed. Bambuddy comes back for the file three times over the following ten minutes, so most of these fill themselves in; a card still empty means every attempt ran out of time too. If it keeps happening, raise Connection Timeout under Settings > Network > FTP Retry.',
     },
     searchPlaceholder: 'Search archives...',
+    jobNumber: 'Job number',
     filterByPrinter: 'Filter by printer',
     filterByStatus: 'Filter by status',
     sortBy: 'Sort by',
@@ -1196,6 +1197,7 @@ export default {
       energy: 'Energy',
       energyCost: 'Energy Cost',
       completedAt: 'Finished',
+      jobNumber: 'Job No.',
       columns: 'Columns',
       sortBy: 'Sort by {{column}}',
       allPrinters: 'All Printers',
@@ -1313,6 +1315,8 @@ export default {
   queue: {
     title: 'Print Queue',
     subtitle: 'Schedule and manage your print jobs',
+    jobNumber: 'Job number',
+    searchPlaceholder: 'Search by name or number',
     filamentShort: {
       rowBadge: 'Insufficient filament for the assigned spool',
       rowTooltip: 'The dispatch scheduler flagged this item. Click Play to see the per-slot deficit and decide whether to print anyway.',
@@ -2950,6 +2954,24 @@ export default {
     // Slicer Pipeline limits (#1425 PR C). Admin-tunable cap that constrains
     // the copies input in the Run-with-pipeline modal. Lives on the Workflow
     // tab's Queue & Dispatch sub-tab.
+
+    // Running numbers handed to new projects and queued jobs. Lives on
+    // the Workflow tab's Queue & Dispatch sub-tab.
+    numberSeries: {
+      title: 'Number series',
+      description: 'Give every new project and every queued job a running number. Nothing that already exists is renumbered.',
+      project: 'Projects',
+      queueJob: 'Queue jobs',
+      enable: 'Hand out numbers',
+      prefix: 'Prefix',
+      suffix: 'Suffix',
+      nextNumber: 'Next number',
+      padding: 'Digits',
+      preview: 'next: {{value}}',
+      lowerHint: 'Lowering the next number can hand out one that has already been used.',
+      loadError: 'Could not load the number series.',
+      saveError: 'Could not save the number series.',
+    },
     pipelineLimits: {
       title: 'Slicer Pipeline limits',
       maxCopiesLabel: 'Max copies per run',
@@ -4085,6 +4107,9 @@ export default {
     editProject: 'Edit Project',
     deleteProject: 'Delete Project',
     projectName: 'Project Name',
+    number: 'Number',
+    numberPlaceholder: 'Assigned automatically',
+    numberTaken: 'That number is already used by another project.',
     description: 'Description',
     noProjects: 'No projects yet',
     noProjectsFiltered: 'No {{status}} projects',

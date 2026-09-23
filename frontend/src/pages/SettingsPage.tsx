@@ -21,6 +21,7 @@ import { PreheatFilamentTargetsEditor } from '../components/PreheatFilamentTarge
 import type { APIKey, AppSettings, AppSettingsUpdate, PrinterHASensor, LocationHASensor, LocationHASensorReading, SmartPlug, SmartPlugStatus, NotificationProvider, NotificationTemplate, UpdateStatus, GitHubBackupStatus, CloudAuthStatus, UserCreate, UserUpdate, UserResponse, StorageUsageResponse, CalibrationMode } from '../api/client';
 import { Card, CardContent, CardDensityProvider, CardHeader } from '../components/Card';
 import { SlicerPipelinesPanel } from '../components/SlicerPipelinesPanel';
+import { NumberSeriesSettings } from '../components/NumberSeriesSettings';
 import { CameraTokensSection } from './CameraTokensPage';
 import { StreamOverlayBuilder } from '../components/StreamOverlayBuilder';
 import { Collapsible } from '../components/Collapsible';
@@ -5314,6 +5315,11 @@ export function SettingsPage() {
           </div>
           {/* Right Column */}
           <div className="lg:w-1/2 space-y-3">
+
+          {/* Running numbers for projects and queued jobs. Its own
+              component because it persists through its own endpoint, not
+              through the settings key-value table this page saves. */}
+          <NumberSeriesSettings />
 
           {/* Slicer Pipelines (#1425 PR C). Cap on the copies input in
               the Run-with-pipeline modal to prevent fat-fingered queue

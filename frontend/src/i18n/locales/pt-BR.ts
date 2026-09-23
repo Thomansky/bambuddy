@@ -915,6 +915,7 @@ export default {
       dismissLabel: 'Dispensar este aviso',
     },
     searchPlaceholder: 'Pesquisar arquivos...',
+    jobNumber: 'Número do trabalho',
     filterByPrinter: 'Filtrar por impressora',
     filterByStatus: 'Filtrar por status',
     sortBy: 'Ordenar por',
@@ -1191,6 +1192,7 @@ export default {
       energy: 'Energia',
       energyCost: 'Custo de energia',
       completedAt: 'Concluído',
+      jobNumber: 'N.º trabalho',
       columns: 'Colunas',
       sortBy: 'Ordenar por {{column}}',
       allPrinters: 'Todas as Impressoras',
@@ -1316,6 +1318,8 @@ export default {
     },
     title: 'Fila de Impressão',
     subtitle: 'Agende e gerencie seus trabalhos de impressão',
+    jobNumber: 'Número do trabalho',
+    searchPlaceholder: 'Buscar por nome ou número',
     // Print modal
     editQueueItem: 'Editar Item da Fila',
     selectAllPlates: 'Selecionar todas as {{count}} placas',
@@ -2915,6 +2919,24 @@ export default {
       commandError: 'Falha ao enviar comando',
     },
 
+
+    // Running numbers handed to new projects and queued jobs. Lives on
+    // the Workflow tab's Queue & Dispatch sub-tab.
+    numberSeries: {
+      title: 'Série de numeração',
+      description: 'Dá um número sequencial a cada novo projeto e a cada trabalho na fila. Nada do que já existe é renumerado.',
+      project: 'Projetos',
+      queueJob: 'Trabalhos na fila',
+      enable: 'Atribuir números',
+      prefix: 'Prefixo',
+      suffix: 'Sufixo',
+      nextNumber: 'Próximo número',
+      padding: 'Dígitos',
+      preview: 'próximo: {{value}}',
+      lowerHint: 'Reduzir o próximo número pode reatribuir um número que já foi usado.',
+      loadError: 'Não foi possível carregar as séries de numeração.',
+      saveError: 'Não foi possível salvar a série de numeração.',
+    },
     pipelineLimits: {
       title: 'Limites de pipelines do slicer',
       maxCopiesLabel: 'Cópias máximas por execução',
@@ -4043,6 +4065,9 @@ export default {
     editProject: 'Editar Projeto',
     deleteProject: 'Excluir Projeto',
     projectName: 'Nome do Projeto',
+    number: 'Número',
+    numberPlaceholder: 'Atribuído automaticamente',
+    numberTaken: 'Esse número já é usado por outro projeto.',
     description: 'Descrição',
     noProjects: 'Nenhum projeto ainda',
     noProjectsFiltered: 'Nenhum projeto {{status}}',

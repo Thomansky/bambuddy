@@ -915,6 +915,7 @@ export default {
       dismissLabel: 'Descartar este aviso',
     },
     searchPlaceholder: 'Buscar archivos...',
+    jobNumber: 'Número de trabajo',
     filterByPrinter: 'Filtrar por impresora',
     filterByStatus: 'Filtrar por estado',
     sortBy: 'Ordenar por',
@@ -1191,6 +1192,7 @@ export default {
       energy: 'Energía',
       energyCost: 'Coste de energía',
       completedAt: 'Finalizado',
+      jobNumber: 'N.º trabajo',
       columns: 'Columnas',
       sortBy: 'Ordenar por {{column}}',
       allPrinters: 'Todas las impresoras',
@@ -1316,6 +1318,8 @@ export default {
     },
     title: 'Cola de impresión',
     subtitle: 'Programe y gestione sus trabajos de impresión',
+    jobNumber: 'Número de trabajo',
+    searchPlaceholder: 'Buscar por nombre o número',
     // Print modal
     editQueueItem: 'Editar elemento de la cola',
     selectAllPlates: 'Seleccionar las {{count}} camas',
@@ -2929,6 +2933,24 @@ export default {
     },
 
 
+
+    // Running numbers handed to new projects and queued jobs. Lives on
+    // the Workflow tab's Queue & Dispatch sub-tab.
+    numberSeries: {
+      title: 'Serie de numeración',
+      description: 'Asigna un número correlativo a cada proyecto nuevo y a cada trabajo en cola. Nada de lo que ya existe se renumera.',
+      project: 'Proyectos',
+      queueJob: 'Trabajos en cola',
+      enable: 'Asignar números',
+      prefix: 'Prefijo',
+      suffix: 'Sufijo',
+      nextNumber: 'Siguiente número',
+      padding: 'Dígitos',
+      preview: 'siguiente: {{value}}',
+      lowerHint: 'Si reduces el siguiente número, puede volver a asignarse uno que ya se ha usado.',
+      loadError: 'No se pudieron cargar las series de numeración.',
+      saveError: 'No se pudo guardar la serie de numeración.',
+    },
     pipelineLimits: {
       title: 'Límites de pipelines del cortador',
       maxCopiesLabel: 'Copias máximas por ejecución',
@@ -4057,6 +4079,9 @@ export default {
     editProject: 'Editar proyecto',
     deleteProject: 'Eliminar proyecto',
     projectName: 'Nombre del proyecto',
+    number: 'Número',
+    numberPlaceholder: 'Se asigna automáticamente',
+    numberTaken: 'Ese número ya lo usa otro proyecto.',
     description: 'Descripción',
     noProjects: 'Aún no hay proyectos',
     noProjectsFiltered: 'No hay proyectos {{status}}',

@@ -920,6 +920,7 @@ export default {
       bodyFtpTransferFailed: 'Het gesliced bestand stond op de kaart van de printer en de printer leverde het ook aan, maar de overdracht was niet binnen de toegestane tijd klaar. Bij de start van een print bedient de printer ook zijn camera, zijn statusberichten en de upload van de opdracht, en een grote 3MF komt daar niet altijd doorheen. Die prints zijn nog steeds gearchiveerd met naam en tijden, alleen zonder miniatuur of slicergegevens. Dit is geen slicerinstelling en niets dat u hebt gewijzigd. Bambuddy haalt het bestand in de tien minuten daarna nog drie keer op, dus de meeste gevallen lossen zichzelf op; een kaart die leeg blijft betekent dat ook al die pogingen te lang duurden. Als het vaker gebeurt, verhoog dan Verbindingstime-out onder Instellingen > Netwerk > FTP opnieuw proberen.',
     },
     searchPlaceholder: 'Archieven zoeken...',
+    jobNumber: 'Opdrachtnummer',
     filterByPrinter: 'Filteren op printer',
     filterByStatus: 'Filteren op status',
     sortBy: 'Sorteren op',
@@ -1196,6 +1197,7 @@ export default {
       energy: 'Energie',
       energyCost: 'Energiekosten',
       completedAt: 'Voltooid',
+      jobNumber: 'Opdrachtnr.',
       columns: 'Kolommen',
       sortBy: 'Sorteren op {{column}}',
       allPrinters: 'Alle printers',
@@ -1313,6 +1315,8 @@ export default {
   queue: {
     title: 'Afdrukwachtrij',
     subtitle: 'Plan en beheer je afdruktaken',
+    jobNumber: 'Opdrachtnummer',
+    searchPlaceholder: 'Zoeken op naam of nummer',
     filamentShort: {
       rowBadge: 'Onvoldoende filament op de toegewezen spoel',
       rowTooltip: 'De verzendscheduler heeft dit item gemarkeerd. Klik op Afspelen om het tekort per sleuf te bekijken en te bepalen of je toch wilt afdrukken.',
@@ -2950,6 +2954,24 @@ export default {
     // Slicer Pipeline limits (#1425 PR C). Admin-tunable cap that constrains
     // the copies input in the Run-with-pipeline modal. Lives on the Workflow
     // tab's Queue & Dispatch sub-tab.
+
+    // Running numbers handed to new projects and queued jobs. Lives on
+    // the Workflow tab's Queue & Dispatch sub-tab.
+    numberSeries: {
+      title: 'Nummerreeks',
+      description: 'Geeft elk nieuw project en elke nieuwe wachtrijtaak een doorlopend nummer. Wat er al is, wordt niet opnieuw genummerd.',
+      project: 'Projecten',
+      queueJob: 'Wachtrijtaken',
+      enable: 'Nummers uitgeven',
+      prefix: 'Voorvoegsel',
+      suffix: 'Achtervoegsel',
+      nextNumber: 'Volgend nummer',
+      padding: 'Cijfers',
+      preview: 'volgende: {{value}}',
+      lowerHint: 'Een lager volgend nummer kan een nummer opnieuw uitgeven dat al gebruikt is.',
+      loadError: 'De nummerreeksen konden niet worden geladen.',
+      saveError: 'De nummerreeks kon niet worden opgeslagen.',
+    },
     pipelineLimits: {
       title: 'Limieten slicerpipeline',
       maxCopiesLabel: 'Max. kopieën per run',
@@ -4085,6 +4107,9 @@ export default {
     editProject: 'Project bewerken',
     deleteProject: 'Project verwijderen',
     projectName: 'Projectnaam',
+    number: 'Nummer',
+    numberPlaceholder: 'Wordt automatisch toegekend',
+    numberTaken: 'Dat nummer is al in gebruik bij een ander project.',
     description: 'Beschrijving',
     noProjects: 'Nog geen projecten',
     noProjectsFiltered: 'Geen {{status}} projecten',

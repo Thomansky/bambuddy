@@ -915,6 +915,7 @@ export default {
       dismissLabel: '关闭此通知',
     },
     searchPlaceholder: '搜索归档...',
+    jobNumber: '作业编号',
     filterByPrinter: '按打印机筛选',
     filterByStatus: '按状态筛选',
     sortBy: '排序方式',
@@ -1191,6 +1192,7 @@ export default {
       energy: '电量',
       energyCost: '电费',
       completedAt: '完成时间',
+      jobNumber: '作业编号',
       columns: '列',
       sortBy: '按{{column}}排序',
       allPrinters: '所有打印机',
@@ -1316,6 +1318,8 @@ export default {
     },
     title: '打印队列',
     subtitle: '排程和管理您的打印任务',
+    jobNumber: '作业编号',
+    searchPlaceholder: '按名称或编号搜索',
     // Print modal
     editQueueItem: '编辑队列项目',
     selectAllPlates: '选择全部 {{count}} 个热床',
@@ -2915,6 +2919,24 @@ export default {
     },
 
 
+
+    // Running numbers handed to new projects and queued jobs. Lives on
+    // the Workflow tab's Queue & Dispatch sub-tab.
+    numberSeries: {
+      title: '编号规则',
+      description: '为每个新建项目和每个入队作业分配一个流水号。已有数据不会被重新编号。',
+      project: '项目',
+      queueJob: '队列作业',
+      enable: '分配编号',
+      prefix: '前缀',
+      suffix: '后缀',
+      nextNumber: '下一个编号',
+      padding: '位数',
+      preview: '下一个：{{value}}',
+      lowerHint: '调低下一个编号可能会再次分配已经使用过的编号。',
+      loadError: '无法加载编号规则。',
+      saveError: '无法保存编号规则。',
+    },
     pipelineLimits: {
       title: '切片机流水线限制',
       maxCopiesLabel: '每次运行最大副本数',
@@ -4043,6 +4065,9 @@ export default {
     editProject: '编辑项目',
     deleteProject: '删除项目',
     projectName: '项目名称',
+    number: '编号',
+    numberPlaceholder: '自动分配',
+    numberTaken: '该编号已被其他项目占用。',
     description: '描述',
     noProjects: '暂无项目',
     noProjectsFiltered: '没有{{status}}项目',

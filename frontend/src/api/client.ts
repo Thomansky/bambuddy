@@ -790,6 +790,7 @@ export interface Archive {
   original_archive_id: number | null;  // ID of the first/original archive
   object_count: number | null;
   print_name: string | null;
+  job_number: string | null;  // Queue item's running number, copied at dispatch
   plate_id: number | null;  // Selected plate of a multi-plate 3MF (#2603)
   print_time_seconds: number | null;
   actual_time_seconds: number | null;  // Computed from started_at/completed_at
@@ -853,6 +854,8 @@ export interface ArchiveSlim {
 export interface PrintLogEntry {
   id: number;
   archive_id: number | null;
+  // Read from the run's archive, not stored on the log row itself
+  job_number: string | null;
   print_name: string | null;
   printer_name: string | null;
   printer_id: number | null;
@@ -1035,6 +1038,7 @@ export interface ProjectChildPreview {
 export interface Project {
   id: number;
   name: string;
+  number: string | null;  // Running number from the `project` series
   description: string | null;
   color: string | null;
   status: string;  // active, completed, archived
@@ -1088,6 +1092,7 @@ export interface ArchivePreview {
 export interface ProjectListItem {
   id: number;
   name: string;
+  number: string | null;  // The shared edit dialog seeds itself from this too
   description: string | null;
   color: string | null;
   status: string;
@@ -1114,6 +1119,7 @@ export interface ProjectListItem {
 
 export interface ProjectCreate {
   name: string;
+  number?: string | null;  // Omitted or empty = let the series decide
   description?: string;
   color?: string;
   target_count?: number;
@@ -1130,6 +1136,7 @@ export interface ProjectCreate {
 
 export interface ProjectUpdate {
   name?: string;
+  number?: string | null;  // Explicit null (or '') clears the number
   description?: string;
   color?: string;
   status?: string;
@@ -2529,6 +2536,7 @@ export interface DiscoveredTasmotaDevice {
 // Print Queue types
 export interface PrintQueueItem {
   id: number;
+  job_number: string | null;  // Running number from the `queue_job` series
   printer_id: number | null;  // null = unassigned
   target_model: string | null;  // Target printer model for model-based assignment
   target_location: string | null;  // Target location filter for model-based assignment
@@ -3894,6 +3902,39 @@ export interface MaintenanceSummary {
     due_count: number;
     warning_count: number;
   }>;
+}
+
+// Running numbers handed to new projects and queued jobs
+export interface NumberSeries {
+  key: string;  // 'project' | 'queue_job'
+  enabled: boolean;
+  prefix: string;
+  suffix: string;
+  next_value: number;
+  padding: number;
+  updated_at: string | null;
+  // What the next create will receive, rendered by the backend
+  preview: string;
+}
+
+export interface NumberSeriesUpdate {
+  enabled?: boolean;
+  prefix?: string;
+  suffix?: string;
+  next_value?: number;
+  padding?: number;
+}
+
+/** The backend's `render_number`, mirrored so the settings card can preview a
+ *  value the user is still typing. `padStart` matches Python's `zfill`: it
+ *  never truncates, so a counter that outgrows its padding just gets wider. */
+export function renderSeriesNumber(
+  prefix: string,
+  value: number,
+  padding: number,
+  suffix: string,
+): string {
+  return `${prefix}${String(value).padStart(Math.max(padding, 0), '0')}${suffix}`;
 }
 
 // External Links (sidebar)
@@ -6960,6 +7001,13 @@ export const api = {
   },
 
   // External Links
+  getNumberSeries: () => request<NumberSeries[]>('/number-series/'),
+  updateNumberSeries: (key: string, data: NumberSeriesUpdate) =>
+    request<NumberSeries>(`/number-series/${key}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+
   getExternalLinks: () => request<ExternalLink[]>('/external-links/'),
   getExternalLink: (id: number) => request<ExternalLink>(`/external-links/${id}`),
   createExternalLink: (data: ExternalLinkCreate) =>

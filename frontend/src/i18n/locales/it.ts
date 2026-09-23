@@ -915,6 +915,7 @@ export default {
       dismissLabel: 'Chiudi questo avviso',
     },
     searchPlaceholder: 'Cerca archivi...',
+    jobNumber: 'Numero lavoro',
     filterByPrinter: 'Filtra per stampante',
     filterByStatus: 'Filtra per stato',
     sortBy: 'Ordina per',
@@ -1191,6 +1192,7 @@ export default {
       energy: 'Energia',
       energyCost: 'Costo energia',
       completedAt: 'Completato',
+      jobNumber: 'N. lavoro',
       columns: 'Colonne',
       sortBy: 'Ordina per {{column}}',
       allPrinters: 'Tutte le stampanti',
@@ -1316,6 +1318,8 @@ export default {
     },
     title: 'Coda di stampa',
     subtitle: 'Programma e gestisci i tuoi lavori di stampa',
+    jobNumber: 'Numero lavoro',
+    searchPlaceholder: 'Cerca per nome o numero',
     // Print modal
     editQueueItem: 'Modifica elemento coda',
     selectAllPlates: 'Seleziona tutte le {{count}} piastre',
@@ -2915,6 +2919,24 @@ export default {
       commandError: 'Invio comando non riuscito',
     },
 
+
+    // Running numbers handed to new projects and queued jobs. Lives on
+    // the Workflow tab's Queue & Dispatch sub-tab.
+    numberSeries: {
+      title: 'Serie di numerazione',
+      description: 'Assegna un numero progressivo a ogni nuovo progetto e a ogni lavoro in coda. Nulla di ciò che esiste già viene rinumerato.',
+      project: 'Progetti',
+      queueJob: 'Lavori in coda',
+      enable: 'Assegna numeri',
+      prefix: 'Prefisso',
+      suffix: 'Suffisso',
+      nextNumber: 'Prossimo numero',
+      padding: 'Cifre',
+      preview: 'prossimo: {{value}}',
+      lowerHint: 'Abbassare il prossimo numero può riassegnare un numero già usato.',
+      loadError: 'Impossibile caricare le serie di numerazione.',
+      saveError: 'Impossibile salvare la serie di numerazione.',
+    },
     pipelineLimits: {
       title: 'Limiti pipeline dello slicer',
       maxCopiesLabel: 'Copie massime per esecuzione',
@@ -4043,6 +4065,9 @@ export default {
     editProject: 'Modifica progetto',
     deleteProject: 'Elimina progetto',
     projectName: 'Nome progetto',
+    number: 'Numero',
+    numberPlaceholder: 'Assegnato automaticamente',
+    numberTaken: 'Questo numero è già usato da un altro progetto.',
     description: 'Descrizione',
     noProjects: 'Nessun progetto ancora',
     noProjectsFiltered: 'Nessun progetto {{status}}',

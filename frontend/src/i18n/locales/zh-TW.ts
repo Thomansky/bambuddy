@@ -915,6 +915,7 @@ export default {
       dismissLabel: '關閉此通知',
     },
     searchPlaceholder: '搜尋歸檔...',
+    jobNumber: '工作編號',
     filterByPrinter: '按印表機篩選',
     filterByStatus: '按狀態篩選',
     sortBy: '排序方式',
@@ -1191,6 +1192,7 @@ export default {
       energy: '電量',
       energyCost: '電費',
       completedAt: '完成時間',
+      jobNumber: '工作編號',
       columns: '欄位',
       sortBy: '依{{column}}排序',
       allPrinters: '所有印表機',
@@ -1316,6 +1318,8 @@ export default {
     },
     title: '列印佇列',
     subtitle: '排程和管理您的列印任務',
+    jobNumber: '工作編號',
+    searchPlaceholder: '依名稱或編號搜尋',
     // Print modal
     editQueueItem: '編輯佇列項目',
     selectAllPlates: '選擇全部 {{count}} 個熱床',
@@ -2915,6 +2919,24 @@ export default {
     },
 
 
+
+    // Running numbers handed to new projects and queued jobs. Lives on
+    // the Workflow tab's Queue & Dispatch sub-tab.
+    numberSeries: {
+      title: '編號規則',
+      description: '為每個新建專案和每個排入佇列的工作分配流水號。既有資料不會重新編號。',
+      project: '專案',
+      queueJob: '佇列工作',
+      enable: '分配編號',
+      prefix: '前綴',
+      suffix: '後綴',
+      nextNumber: '下一個編號',
+      padding: '位數',
+      preview: '下一個：{{value}}',
+      lowerHint: '調低下一個編號可能會再次分配已經使用過的編號。',
+      loadError: '無法載入編號規則。',
+      saveError: '無法儲存編號規則。',
+    },
     pipelineLimits: {
       title: '切片機管線限制',
       maxCopiesLabel: '每次執行最大副本數',
@@ -4043,6 +4065,9 @@ export default {
     editProject: '編輯專案',
     deleteProject: '刪除專案',
     projectName: '專案名稱',
+    number: '編號',
+    numberPlaceholder: '自動分配',
+    numberTaken: '該編號已被其他專案使用。',
     description: '描述',
     noProjects: '尚無專案',
     noProjectsFiltered: '沒有{{status}}專案',

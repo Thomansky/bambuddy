@@ -914,6 +914,7 @@ export default {
       dismissLabel: 'この通知を閉じる',
     },
     searchPlaceholder: 'アーカイブを検索...',
+    jobNumber: 'ジョブ番号',
     filterByPrinter: 'プリンターで絞り込み',
     filterByStatus: 'ステータスで絞り込み',
     sortBy: '並べ替え',
@@ -1190,6 +1191,7 @@ export default {
       energy: '電力量',
       energyCost: '電力コスト',
       completedAt: '終了',
+      jobNumber: 'ジョブ番号',
       columns: '列',
       sortBy: '{{column}} で並べ替え',
       allPrinters: '全プリンター',
@@ -1315,6 +1317,8 @@ export default {
     },
     title: '印刷キュー',
     subtitle: '印刷ジョブのスケジュールと管理',
+    jobNumber: 'ジョブ番号',
+    searchPlaceholder: '名前または番号で検索',
     // Print modal
     editQueueItem: 'キューアイテムを編集',
     selectAllPlates: '全{{count}}プレートを選択',
@@ -2927,6 +2931,24 @@ export default {
     },
 
 
+
+    // Running numbers handed to new projects and queued jobs. Lives on
+    // the Workflow tab's Queue & Dispatch sub-tab.
+    numberSeries: {
+      title: '採番ルール',
+      description: '新しいプロジェクトとキューに入れたジョブに連番を割り当てます。既存のデータに番号が振り直されることはありません。',
+      project: 'プロジェクト',
+      queueJob: 'キューのジョブ',
+      enable: '番号を割り当てる',
+      prefix: '接頭辞',
+      suffix: '接尾辞',
+      nextNumber: '次の番号',
+      padding: '桁数',
+      preview: '次: {{value}}',
+      lowerHint: '次の番号を小さくすると、すでに使われている番号が再び割り当てられることがあります。',
+      loadError: '採番ルールを読み込めませんでした。',
+      saveError: '採番ルールを保存できませんでした。',
+    },
     pipelineLimits: {
       title: 'スライサーパイプラインの上限',
       maxCopiesLabel: '実行あたりの最大コピー数',
@@ -4055,6 +4077,9 @@ export default {
     editProject: 'プロジェクトを編集',
     deleteProject: 'プロジェクトを削除',
     projectName: 'プロジェクト名',
+    number: '番号',
+    numberPlaceholder: '自動で割り当てられます',
+    numberTaken: 'その番号はすでに別のプロジェクトで使われています。',
     description: '説明',
     noProjects: 'プロジェクトはまだありません',
     noProjectsFiltered: '{{status}}のプロジェクトはありません',
