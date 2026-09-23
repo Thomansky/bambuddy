@@ -212,6 +212,32 @@ async function request<T>(
   return await response.json();
 }
 
+/** Hand a streamed ZIP response to the browser's save dialog.
+ *
+ *  Shared by the library bulk-download helpers so a caller never has to know
+ *  how a download is started. Errors become `ApiError` rather than a bare
+ *  `Error`: the backend's cap refusal is a 413 whose detail is meant to be
+ *  shown verbatim, and the status is what tells a caller apart from a 404. */
+async function saveZipResponse(response: Response, fallbackFilename: string): Promise<void> {
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    const detail = error?.detail;
+    const message = typeof detail === 'string' ? detail : detail?.message;
+    throw new ApiError(message || `HTTP ${response.status}`, response.status);
+  }
+  const disposition = response.headers.get('Content-Disposition');
+  const filename = parseContentDispositionFilename(disposition) || fallbackFilename;
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(url);
+}
+
 /** Upload a CSV to the spool import endpoint (#1576). Multipart, so it bypasses
  *  `request<T>()` (which sends JSON): the browser must set the form-data
  *  boundary itself. `dryRun` toggles preview-only vs. real import. */
@@ -7468,6 +7494,34 @@ export const api = {
     a.click();
     document.body.removeChild(a);
     window.URL.revokeObjectURL(url);
+  },
+  /** Download several library files as one ZIP. Files the caller may not read,
+   *  or whose bytes are missing, are skipped by the backend; a request where
+   *  nothing survives is a 404. */
+  downloadLibraryFilesZip: async (fileIds: number[]): Promise<void> => {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (authToken) {
+      headers['Authorization'] = `Bearer ${authToken}`;
+    }
+    const response = await fetch(`${API_BASE}/library/files/download-zip`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ file_ids: fileIds }),
+    });
+    await saveZipResponse(response, 'bambuddy-files.zip');
+  },
+  /** Download a folder as one ZIP; by default its whole subtree, with the
+   *  subfolder structure kept inside the archive. */
+  downloadLibraryFolderZip: async (folderId: number, recursive = true): Promise<void> => {
+    const headers: Record<string, string> = {};
+    if (authToken) {
+      headers['Authorization'] = `Bearer ${authToken}`;
+    }
+    const response = await fetch(
+      `${API_BASE}/library/folders/${folderId}/download-zip?recursive=${recursive}`,
+      { headers },
+    );
+    await saveZipResponse(response, `folder_${folderId}.zip`);
   },
   getLibraryFileThumbnailUrl: (id: number) => withMediaToken(`${API_BASE}/library/files/${id}/thumbnail`),
   getLibraryFilePlateThumbnail: (id: number, plateIndex: number) =>
