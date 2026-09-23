@@ -183,7 +183,7 @@ export function BulkTagsPickerModal({ open, fileIds, onClose }: BulkTagsPickerMo
           />
         </div>
 
-        <div className="overflow-y-auto flex-1 min-h-[8rem] max-h-[24rem]">
+        <div className="overflow-y-auto flex-1 min-h-[8rem] max-h-[min(60vh,32rem)]">
           {isLoading ? (
             <div className="flex items-center justify-center py-12 text-bambu-gray">
               <Loader2 className="w-5 h-5 animate-spin mr-2" />

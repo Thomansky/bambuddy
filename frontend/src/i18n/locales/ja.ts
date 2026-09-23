@@ -4036,6 +4036,11 @@ export default {
     moveFiles: '{{count}}件のファイルを移動',
     rootNoFolder: 'ルート（フォルダなし）',
     current: '（現在）',
+    folderFilter: {
+      placeholder: 'フォルダを絞り込み...',
+      noMatches: 'この絞り込みに一致するフォルダはありません。',
+      pickTarget: 'リストから移動先を選択してください',
+    },
     linkFolder: 'フォルダをリンク',
     linkFolderDescription: '「{{name}}」をプロジェクトまたはアーカイブにリンクしてすばやくアクセス。',
     project: 'プロジェクト',
@@ -4095,6 +4100,12 @@ export default {
     folderSortByName: '名前順',
     folderSortByActivity: '最終更新順',
     dragToResizeTooltip: 'ドラッグしてリサイズ、ダブルクリックでリセット',
+    sidebarToggle: {
+      label: 'フォルダサイドバー',
+      hide: 'フォルダサイドバーを隠す',
+      show: 'フォルダサイドバーを表示',
+      columnsDisabled: 'カラム表示はすでにフォルダサイドバーの代わりになっています',
+    },
     searchFiles: 'ファイルを検索...',
     searchSubfoldersHint: 'サブフォルダーを含む',
     pathBar: {

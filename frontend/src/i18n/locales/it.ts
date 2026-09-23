@@ -4023,6 +4023,11 @@ export default {
     moveFiles: 'Sposta {{count}} file',
     rootNoFolder: 'Root (nessuna cartella)',
     current: 'corrente',
+    folderFilter: {
+      placeholder: 'Filtra cartelle...',
+      noMatches: 'Nessuna cartella corrisponde a questo filtro.',
+      pickTarget: 'Scegli una destinazione nell’elenco',
+    },
     linkFolder: 'Collega cartella',
     linkFolderDescription: 'Collega "{{name}}" a un progetto o archivio per accesso rapido.',
     project: 'Progetto',
@@ -4082,6 +4087,12 @@ export default {
     folderSortByName: 'Per nome',
     folderSortByActivity: 'Per attività recente',
     dragToResizeTooltip: 'Trascina per ridimensionare, doppio clic per reset',
+    sidebarToggle: {
+      label: 'Barra delle cartelle',
+      hide: 'Nascondi la barra delle cartelle',
+      show: 'Mostra la barra delle cartelle',
+      columnsDisabled: 'La vista a colonne sostituisce già la barra delle cartelle',
+    },
     searchFiles: 'Cerca file...',
     searchSubfoldersHint: 'Sottocartelle incluse',
     pathBar: {

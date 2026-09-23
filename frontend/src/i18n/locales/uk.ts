@@ -4062,6 +4062,11 @@ export default {
     moveFiles: "Перемістити файли: {{count}}",
     rootNoFolder: "Корінь (без папки)",
     current: "поточний",
+    folderFilter: {
+      placeholder: "Фільтр папок...",
+      noMatches: "Немає папок, що відповідають цьому фільтру.",
+      pickTarget: "Виберіть теку призначення зі списку",
+    },
     linkFolder: "Пов’язати папку",
     linkFolderDescription: "Пов’язати «{{name}}» із проєктом або архівом для швидкого доступу.",
     project: "Проєкт",
@@ -4121,6 +4126,12 @@ export default {
     folderSortByName: "За назвою",
     folderSortByActivity: "За останніми діями",
     dragToResizeTooltip: "Перетягніть, щоб змінити розмір, двічі клацніть, щоб скинути",
+    sidebarToggle: {
+      label: "Панель папок",
+      hide: "Сховати панель папок",
+      show: "Показати панель папок",
+      columnsDisabled: "Вигляд колонок уже замінює панель папок",
+    },
     searchFiles: "Пошук файлів...",
     searchSubfoldersHint: "Включаючи вкладені папки",
     pathBar: {

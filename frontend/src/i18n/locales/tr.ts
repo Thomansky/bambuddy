@@ -4029,6 +4029,11 @@ export default {
     moveFiles: '{{count}} Dosyayı Taşı',
     rootNoFolder: 'Kök (Klasör Yok)',
     current: 'mevcut',
+    folderFilter: {
+      placeholder: 'Klasörleri filtrele...',
+      noMatches: 'Bu filtreyle eşleşen klasör yok.',
+      pickTarget: 'Listeden bir hedef seçin',
+    },
     linkFolder: 'Klasörü Bağla',
     linkFolderDescription: 'Hızlı erişim için "{{name}}" klasörünü bir projeye veya arşive bağla.',
     project: 'Proje',
@@ -4088,6 +4093,12 @@ export default {
     folderSortByName: 'Ada göre',
     folderSortByActivity: 'Son etkinliğe göre',
     dragToResizeTooltip: 'Yeniden boyutlandırmak için sürükleyin, sıfırlamak için çift tıklayın',
+    sidebarToggle: {
+      label: 'Klasör çubuğu',
+      hide: 'Klasör çubuğunu gizle',
+      show: 'Klasör çubuğunu göster',
+      columnsDisabled: 'Sütun görünümü klasör çubuğunun yerini zaten alıyor',
+    },
     searchFiles: 'Dosyalarda ara...',
     searchSubfoldersHint: 'Alt klasörler dahil',
     pathBar: {

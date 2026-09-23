@@ -56,6 +56,8 @@ import {
   Camera,
   Eye,
   MoreHorizontal,
+  PanelLeftClose,
+  PanelLeftOpen,
   type LucideIcon,
 } from 'lucide-react';
 import { api } from '../api/client';
@@ -544,7 +546,10 @@ function RenameModal({ type, currentName, onClose, onSave, isLoading, t }: Renam
 interface MoveFilesModalProps {
   folders: LibraryFolderTree[];
   selectedFiles: number[];
-  currentFolderId: number | null;
+  // The folder the selected files actually sit in, not the folder the page has
+  // selected: every column can tick a file, so the two differ. `undefined` when
+  // the selection spans several folders and no single row is "current".
+  currentFolderId: number | null | undefined;
   onClose: () => void;
   onMove: (folderId: number | null) => void;
   isLoading: boolean;
@@ -553,6 +558,7 @@ interface MoveFilesModalProps {
 
 function MoveFilesModal({ folders, selectedFiles, currentFolderId, onClose, onMove, isLoading, t }: MoveFilesModalProps) {
   const [targetFolder, setTargetFolder] = useState<number | null>(null);
+  const [folderFilter, setFolderFilter] = useState('');
 
   const flattenFolders = (items: LibraryFolderTree[], depth = 0): { id: number | null; name: string; depth: number }[] => {
     const result: { id: number | null; name: string; depth: number }[] = [];
@@ -565,16 +571,54 @@ function MoveFilesModal({ folders, selectedFiles, currentFolderId, onClose, onMo
     return result;
   };
 
-  const flatFolders = [{ id: null, name: t('fileManager.rootNoFolder'), depth: 0 }, ...flattenFolders(folders)];
+  // A folder survives the filter when its own name matches or one of its
+  // descendants does: dropping the parent of a hit would leave the hit
+  // indented under nothing.
+  const query = folderFilter.trim().toLowerCase();
+  const matchesQuery = (item: LibraryFolderTree): boolean =>
+    item.name.toLowerCase().includes(query) || item.children.some(matchesQuery);
+  const filterTree = (items: LibraryFolderTree[]): LibraryFolderTree[] =>
+    items.filter(matchesQuery).map((item) => ({ ...item, children: filterTree(item.children) }));
+
+  const rootEntry = { id: null, name: t('fileManager.rootNoFolder'), depth: 0 };
+  const flatFolders = query
+    ? [
+        ...(rootEntry.name.toLowerCase().includes(query) ? [rootEntry] : []),
+        ...flattenFolders(filterTree(folders)),
+      ]
+    : [rootEntry, ...flattenFolders(folders)];
+
+  // Move may only fire at a row the list is offering right now. The filter can
+  // drop the highlighted row — including the "Root (No Folder)" one the dialog
+  // opens on — and firing at an invisible target would silently take the files
+  // out of every folder.
+  const targetSelectable = flatFolders.some(
+    (folder) => folder.id === targetFolder && folder.id !== currentFolderId
+  );
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-      <div className="bg-bambu-dark-secondary rounded-lg w-full max-w-sm border border-bambu-dark-tertiary">
-        <div className="p-4 border-b border-bambu-dark-tertiary">
+      {/* Grows with the window instead of staying a 384x256 peephole, but
+          stays a flex column so the header and the buttons keep their place
+          on a short laptop screen and only the list scrolls. */}
+      <div
+        className="bg-bambu-dark-secondary rounded-lg w-full max-w-lg max-h-[90vh] flex flex-col border border-bambu-dark-tertiary"
+        data-testid="move-files-modal"
+      >
+        <div className="p-4 border-b border-bambu-dark-tertiary flex-shrink-0">
           <h2 className="text-lg font-semibold text-white">{t('fileManager.moveFiles', { count: selectedFiles.length })}</h2>
         </div>
-        <div className="p-4 space-y-4">
-          <div className="max-h-64 overflow-y-auto space-y-1">
+        <div className="p-4 flex flex-col gap-4 min-h-0 flex-1">
+          <input
+            type="text"
+            value={folderFilter}
+            onChange={(e) => setFolderFilter(e.target.value)}
+            placeholder={t('fileManager.folderFilter.placeholder')}
+            aria-label={t('fileManager.folderFilter.placeholder')}
+            autoFocus
+            className="w-full flex-shrink-0 bg-bambu-dark border border-bambu-dark-tertiary rounded px-3 py-2 text-sm text-white placeholder-bambu-gray focus:outline-none focus:border-bambu-green"
+          />
+          <div className="flex-1 min-h-0 max-h-[min(60vh,32rem)] overflow-y-auto space-y-1" data-testid="move-folder-list">
             {flatFolders.map((folder) => (
               <button
                 key={folder.id ?? 'root'}
@@ -594,12 +638,19 @@ function MoveFilesModal({ folders, selectedFiles, currentFolderId, onClose, onMo
                 {folder.id === currentFolderId && <span className="text-xs text-bambu-gray ml-auto">({t('fileManager.current')})</span>}
               </button>
             ))}
+            {flatFolders.length === 0 && (
+              <p className="text-sm text-bambu-gray text-center py-4">{t('fileManager.folderFilter.noMatches')}</p>
+            )}
           </div>
-          <div className="flex justify-end gap-2 pt-2">
+          <div className="flex justify-end gap-2 pt-2 flex-shrink-0">
             <Button type="button" variant="secondary" onClick={onClose}>
               {t('common.cancel')}
             </Button>
-            <Button onClick={() => onMove(targetFolder)} disabled={isLoading}>
+            <Button
+              onClick={() => onMove(targetFolder)}
+              disabled={isLoading || !targetSelectable}
+              title={targetSelectable ? undefined : t('fileManager.folderFilter.pickTarget')}
+            >
               {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : t('common.move')}
             </Button>
           </div>
@@ -669,8 +720,8 @@ function LinkFolderModal({ folder, onClose, onLink, isLoading, t }: LinkFolderMo
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-      <div className="bg-bambu-dark-secondary rounded-lg w-full max-w-md border border-bambu-dark-tertiary">
-        <div className="p-4 border-b border-bambu-dark-tertiary flex items-center justify-between">
+      <div className="bg-bambu-dark-secondary rounded-lg w-full max-w-md max-h-[90vh] flex flex-col border border-bambu-dark-tertiary">
+        <div className="p-4 border-b border-bambu-dark-tertiary flex items-center justify-between flex-shrink-0">
           <h2 className="text-lg font-semibold text-white flex items-center gap-2">
             <Link2 className="w-5 h-5 text-bambu-green" />
             {t('fileManager.linkFolder')}
@@ -680,7 +731,7 @@ function LinkFolderModal({ folder, onClose, onLink, isLoading, t }: LinkFolderMo
           </button>
         </div>
 
-        <div className="p-4 space-y-4">
+        <div className="p-4 space-y-4 flex flex-col min-h-0 flex-1">
           <p className="text-sm text-bambu-gray">
             {t('fileManager.linkFolderDescription', { name: folder.name })}
           </p>
@@ -712,7 +763,7 @@ function LinkFolderModal({ folder, onClose, onLink, isLoading, t }: LinkFolderMo
           </div>
 
           {/* Selection list */}
-          <div className="max-h-64 overflow-y-auto space-y-1 bg-bambu-dark rounded-lg p-2">
+          <div className="flex-1 min-h-0 max-h-[min(60vh,32rem)] overflow-y-auto space-y-1 bg-bambu-dark rounded-lg p-2">
             {linkType === 'project' ? (
               projects && projects.length > 0 ? (
                 projects.map((project) => (
@@ -758,7 +809,7 @@ function LinkFolderModal({ folder, onClose, onLink, isLoading, t }: LinkFolderMo
           </div>
         </div>
 
-        <div className="p-4 border-t border-bambu-dark-tertiary flex justify-between">
+        <div className="p-4 border-t border-bambu-dark-tertiary flex justify-between flex-shrink-0">
           {isLinked && (
             <Button variant="danger" onClick={handleUnlink} disabled={isLoading}>
               <Unlink className="w-4 h-4 mr-2" />
@@ -1715,6 +1766,119 @@ function PathBar({ rootLabel, rootIsExternal, path, onSelectRoot, onSelectFolder
   );
 }
 
+// Folder navigation for the content area, rendered when the folder sidebar is
+// switched off. The path bar only ever walks up, and neither the grid nor the
+// list draws a folder, so without this the hidden sidebar takes the top-level
+// buckets and every way down with it.
+interface ContentFolderNavProps {
+  folders: LibraryFolderTree[];
+  variant: 'grid' | 'list';
+  showBuckets: boolean;
+  bucketIsExternal: boolean;
+  atRoot: boolean;
+  onSelectFolder: (id: number) => void;
+  onSelectBucket: (view: 'internal' | 'external') => void;
+  t: TFunction;
+}
+
+function ContentFolderNav({
+  folders,
+  variant,
+  showBuckets,
+  bucketIsExternal,
+  atRoot,
+  onSelectFolder,
+  onSelectBucket,
+  t,
+}: ContentFolderNavProps) {
+  if (!showBuckets && folders.length === 0) return null;
+
+  const folderIcon = (folder: LibraryFolderTree) =>
+    folder.is_external ? (
+      <FolderSymlink className="w-4 h-4 flex-shrink-0 text-purple-600 dark:text-purple-400" />
+    ) : (
+      <FolderOpen className="w-4 h-4 flex-shrink-0 text-bambu-green" />
+    );
+
+  const bucketClass = (active: boolean) =>
+    `inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-sm border transition-colors ${
+      active
+        ? 'bg-bambu-green/20 text-bambu-green border-bambu-green/40'
+        : 'bg-bambu-dark-secondary text-bambu-gray border-bambu-dark-tertiary hover:text-white hover:border-bambu-green/40'
+    }`;
+
+  return (
+    // Matches the sidebar's own `hidden lg:flex`: below lg the folders are a
+    // <select> that is always on screen, and the toggle does not exist there.
+    <nav
+      aria-label={t('fileManager.folders')}
+      data-testid="content-folder-nav"
+      className="hidden lg:block mb-4"
+    >
+      {showBuckets && (
+        <div className="flex flex-wrap items-center gap-2 mb-2">
+          <button
+            type="button"
+            onClick={() => onSelectBucket('internal')}
+            aria-pressed={atRoot && !bucketIsExternal}
+            className={bucketClass(atRoot && !bucketIsExternal)}
+          >
+            <FileBox className="w-4 h-4 flex-shrink-0" />
+            {t('fileManager.allFiles')}
+          </button>
+          <button
+            type="button"
+            onClick={() => onSelectBucket('external')}
+            aria-pressed={atRoot && bucketIsExternal}
+            className={bucketClass(atRoot && bucketIsExternal)}
+          >
+            <FolderSymlink className="w-4 h-4 flex-shrink-0" />
+            {t('fileManager.allExternal')}
+          </button>
+        </div>
+      )}
+      {folders.length > 0 &&
+        (variant === 'grid' ? (
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
+            {folders.map((folder) => (
+              <button
+                key={folder.id}
+                type="button"
+                onClick={() => onSelectFolder(folder.id)}
+                title={folder.name}
+                className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-bambu-dark-secondary border border-bambu-dark-tertiary text-left hover:bg-bambu-dark hover:border-bambu-green/40 transition-colors"
+              >
+                {folderIcon(folder)}
+                <span className="min-w-0 flex-1 truncate text-sm text-white">{folder.name}</span>
+                {folder.file_count > 0 && (
+                  <span className="text-xs text-bambu-gray flex-shrink-0">{folder.file_count}</span>
+                )}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="bg-bambu-dark-secondary rounded-lg border border-bambu-dark-tertiary divide-y divide-bambu-dark-tertiary overflow-hidden">
+            {folders.map((folder) => (
+              <button
+                key={folder.id}
+                type="button"
+                onClick={() => onSelectFolder(folder.id)}
+                title={folder.name}
+                className="w-full flex items-center gap-3 px-3 py-2 text-left hover:bg-bambu-dark transition-colors"
+              >
+                {folderIcon(folder)}
+                <span className="min-w-0 flex-1 truncate text-sm text-white">{folder.name}</span>
+                {folder.file_count > 0 && (
+                  <span className="text-xs text-bambu-gray flex-shrink-0">{folder.file_count}</span>
+                )}
+              </button>
+            ))}
+          </div>
+        ))}
+    </nav>
+  );
+}
+
 export function FileManagerPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -1795,6 +1959,14 @@ export function FileManagerPage() {
   });
   const [isResizing, setIsResizing] = useState(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
+
+  // The tree can be switched off entirely to give a deep customer/job tree the
+  // full width. The content area then grows its own folder navigation
+  // (ContentFolderNav) and the path bar covers getting back up. Defaults to
+  // shown.
+  const [sidebarHidden, setSidebarHidden] = useState(() => {
+    return localStorage.getItem('library-sidebar-hidden') === 'true';
+  });
 
   // Handle sidebar resize
   useEffect(() => {
@@ -2440,6 +2612,18 @@ export function FileManagerPage() {
     localStorage.setItem('library-view-mode', mode);
   };
 
+  const handleToggleSidebar = useCallback(() => {
+    setSidebarHidden((prev) => {
+      const next = !prev;
+      localStorage.setItem('library-sidebar-hidden', String(next));
+      return next;
+    });
+  }, []);
+
+  // The columns view already replaces the tree with its own panes, so it keeps
+  // its layout and the toggle is inert (and disabled) while it is active.
+  const folderSidebarVisible = !sidebarHidden || viewMode === 'columns';
+
   // Shared by the list row and the columns view (see FileActionStrip).
   const fileActionProps = {
     onPrint: setPrintFile,
@@ -2530,6 +2714,16 @@ export function FileManagerPage() {
   const currentBucketIsExternal =
     folderPath.length > 0 ? Boolean(folderPath[0].is_external) : topLevelView === 'external';
 
+  // The folders one level below where the user is standing — the bucket's
+  // top-level folders at the root, otherwise the selected folder's children.
+  // This is what the content area offers when the sidebar is switched off.
+  const currentFolderChildren = useMemo(() => {
+    if (selectedFolderId === null) {
+      return (sortedFolders ?? []).filter((f) => Boolean(f.is_external) === currentBucketIsExternal);
+    }
+    return folderPath[folderPath.length - 1]?.children ?? [];
+  }, [sortedFolders, selectedFolderId, currentBucketIsExternal, folderPath]);
+
   // One column per level: the top-level bucket, then the children of each
   // folder along the path. `folderId` is the folder the column is the inside
   // of (null = the library root), which is what its file list is keyed on.
@@ -2614,6 +2808,25 @@ export function FileManagerPage() {
           .find((list) => list?.some((f) => f.id === columnsFocusedFileId));
   const focusedFileList = focusedFileColumnList ?? filteredAndSortedFiles;
 
+  // Where the selected files actually live. A file can be ticked in any
+  // column, so this is not the same as selectedFolderId — the move dialog
+  // needs the files' own folder to know which row is the no-op destination.
+  // `undefined` when the selection spans several folders or none of the rows
+  // is on screen any more: nothing is then marked current.
+  const selectionSourceFolderId = (() => {
+    if (selectedFiles.length === 0) return undefined;
+    const byId = new Map<number, number | null>();
+    for (const file of filteredAndSortedFiles) byId.set(file.id, file.folder_id);
+    for (const entry of columnFiles.values()) {
+      for (const file of entry.files) byId.set(file.id, file.folder_id);
+    }
+    const folderIds = new Set<number | null>();
+    for (const id of selectedFiles) {
+      if (byId.has(id)) folderIds.add(byId.get(id) ?? null);
+    }
+    return folderIds.size === 1 ? [...folderIds][0] : undefined;
+  })();
+
   // Folder name matches for the active search. The tree is already in memory,
   // so this needs no endpoint; a tree that has not loaded simply matches
   // nothing. `path` is the ancestor chain, shown under the name.
@@ -2659,6 +2872,15 @@ export function FileManagerPage() {
   const selectPathRoot = () => {
     setColumnsFocusedFileId(null);
     setTopLevelView(currentBucketIsExternal ? 'external' : 'internal');
+    setSelectedFolderId(null);
+  };
+
+  // The two top-level buckets, same as the sidebar's own entries. Without the
+  // sidebar these are the only way to cross between managed storage and the
+  // linked external folders.
+  const selectTopLevelBucket = (view: 'internal' | 'external') => {
+    setColumnsFocusedFileId(null);
+    setTopLevelView(view);
     setSelectedFolderId(null);
   };
 
@@ -2921,6 +3143,30 @@ export function FileManagerPage() {
               <Columns className="w-4 h-4" />
             </button>
           </div>
+          {/* Sidebar toggle. Only offered from lg upwards, which is where the
+              tree exists at all — below it the folders are a <select>.
+              Toggle-button pattern: the name stays constant and aria-pressed
+              carries the state, so "pressed" means the sidebar is on screen —
+              which in the columns view it is, whatever the stored preference
+              says. The title still names the action the click performs. */}
+          <button
+            type="button"
+            onClick={handleToggleSidebar}
+            disabled={viewMode === 'columns'}
+            aria-pressed={folderSidebarVisible}
+            aria-label={t('fileManager.sidebarToggle.label')}
+            title={
+              viewMode === 'columns'
+                ? t('fileManager.sidebarToggle.columnsDisabled')
+                : sidebarHidden
+                ? t('fileManager.sidebarToggle.show')
+                : t('fileManager.sidebarToggle.hide')
+            }
+            data-testid="toggle-folder-sidebar"
+            className="hidden lg:flex items-center p-2 rounded-lg bg-bambu-dark text-bambu-gray hover:text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-bambu-gray"
+          >
+            {sidebarHidden ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
+          </button>
           <Button
             variant="secondary"
             onClick={() => batchThumbnailMutation.mutate()}
@@ -3087,7 +3333,10 @@ export function FileManagerPage() {
           </select>
         </div>
 
-        {/* Folder sidebar - resizable, hidden on mobile */}
+        {/* Folder sidebar - resizable, hidden on mobile, and switchable off
+            from the toolbar. Body left at its original indentation so the
+            toggle stays a two-line diff in a file several branches touch. */}
+        {folderSidebarVisible && (
         <div
           ref={sidebarRef}
           data-testid="folder-sidebar"
@@ -3240,6 +3489,7 @@ export function FileManagerPage() {
             ))}
           </div>
         </div>
+        )}
 
         {/* Files area + README rail (#2520 item 2). On wide screens the
             README docks as a collapsible right-hand column (rendered after
@@ -3594,6 +3844,21 @@ export function FileManagerPage() {
             onSelectFolder={selectFolderFromChrome}
             t={t}
           />
+
+          {/* With the tree switched off the content area carries the way down
+              (and the bucket switch) — the path bar only ever walks up. */}
+          {!folderSidebarVisible && (
+            <ContentFolderNav
+              folders={currentFolderChildren}
+              variant={viewMode === 'list' ? 'list' : 'grid'}
+              showBuckets={Boolean(folders?.some((f) => f.is_external))}
+              bucketIsExternal={currentBucketIsExternal}
+              atRoot={selectedFolderId === null}
+              onSelectFolder={selectFolderFromChrome}
+              onSelectBucket={selectTopLevelBucket}
+              t={t}
+            />
+          )}
 
           {/* Folder hits for the active search, above the file results. A
               folder whose name matched used to be invisible, which is exactly
@@ -4135,7 +4400,7 @@ export function FileManagerPage() {
         <MoveFilesModal
           folders={folders}
           selectedFiles={selectedFiles}
-          currentFolderId={selectedFolderId}
+          currentFolderId={selectionSourceFolderId}
           onClose={() => setShowMoveModal(false)}
           onMove={(folderId) => moveFilesMutation.mutate({ fileIds: selectedFiles, folderId })}
           isLoading={moveFilesMutation.isPending}

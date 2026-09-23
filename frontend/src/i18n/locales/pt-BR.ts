@@ -4022,6 +4022,11 @@ export default {
     moveFiles: 'Mover {{count}} Arquivo(s)',
     rootNoFolder: 'Raiz (Sem Pasta)',
     current: 'Atual',
+    folderFilter: {
+      placeholder: 'Filtrar pastas...',
+      noMatches: 'Nenhuma pasta corresponde a este filtro.',
+      pickTarget: 'Escolha um destino na lista',
+    },
     linkFolder: 'Vincular Pasta',
     linkFolderDescription: 'Vincular "{{name}}" a um projeto ou arquivo para acesso rápido.',
     project: 'Projeto',
@@ -4081,6 +4086,12 @@ export default {
     folderSortByName: 'Por nome',
     folderSortByActivity: 'Por atividade recente',
     dragToResizeTooltip: 'Arraste para redimensionar, clique duas vezes para redefinir',
+    sidebarToggle: {
+      label: 'Barra de pastas',
+      hide: 'Ocultar a barra de pastas',
+      show: 'Mostrar a barra de pastas',
+      columnsDisabled: 'A visualização em colunas já substitui a barra de pastas',
+    },
     searchFiles: 'Pesquisar arquivos...',
     searchSubfoldersHint: 'Incluindo subpastas',
     pathBar: {
