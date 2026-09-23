@@ -4097,6 +4097,17 @@ export default {
     dragToResizeTooltip: 'ドラッグしてリサイズ、ダブルクリックでリセット',
     searchFiles: 'ファイルを検索...',
     searchSubfoldersHint: 'サブフォルダーを含む',
+    pathBar: {
+      label: '場所',
+      showHidden: '省略されたフォルダを表示',
+    },
+    search: {
+      foldersHeading: 'フォルダ ({{count}})',
+      filesHeading: 'ファイル ({{count}})',
+      resultsCount: 'フォルダ: {{folders}} · ファイル: {{total}}件中{{showing}}件',
+      noMatches: '一致するファイルやフォルダがありません',
+      noMatchesDescription: '現在の検索またはフィルター条件に一致するファイルもフォルダもありません。',
+    },
     readme: {
       truncated: '切り詰め',
       show: 'READMEを表示',
@@ -4106,7 +4117,7 @@ export default {
     tags: {
       title: 'タグ',
       subtitle: 'ファイルに横断的なフィルタ用のラベルを付けます — おもちゃ、子ども向け、PETGのみ、など。',
-      manage: 'タグ',
+      manage: 'タグを管理',
       manageTitle: 'タグカタログを管理',
       add: '新しいタグ',
       edit: 'タグの名前を変更',
@@ -4130,7 +4141,7 @@ export default {
       applyRemoveSuccess: '{{files}}個のファイルから{{count}}個のタグを削除しました。',
       actionAdd: '選択したファイルに追加',
       actionRemove: '選択したファイルから削除',
-      tagAction: 'タグ付け',
+      tagAction: 'タグを割り当て',
       bulkTitle: '選択した{{count}}個のファイルにタグ付け',
       bulkTooltip: '選択したすべてのファイルでタグを追加・削除します。',
       noPermission: 'ファイルにタグを付ける権限がありません。',

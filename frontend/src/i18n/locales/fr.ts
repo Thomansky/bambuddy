@@ -4084,6 +4084,17 @@ export default {
     dragToResizeTooltip: 'Glisser pour redimensionner, double-clic reset',
     searchFiles: 'Chercher fichiers...',
     searchSubfoldersHint: 'Sous-dossiers inclus',
+    pathBar: {
+      label: 'Emplacement',
+      showHidden: 'Afficher les dossiers masqués',
+    },
+    search: {
+      foldersHeading: 'Dossiers ({{count}})',
+      filesHeading: 'Fichiers ({{count}})',
+      resultsCount: 'Dossiers : {{folders}} · Fichiers : {{showing}} sur {{total}}',
+      noMatches: 'Aucun fichier ni dossier correspondant',
+      noMatchesDescription: 'Aucun fichier ni dossier ne correspond à votre recherche ou à vos filtres actuels.',
+    },
     readme: {
       truncated: 'Tronqué',
       show: 'Afficher le README',
@@ -4093,7 +4104,7 @@ export default {
     tags: {
       title: 'Étiquettes',
       subtitle: 'Étiquetez les fichiers pour des filtres transversaux — jouets, adapté aux enfants, PETG uniquement, etc.',
-      manage: 'Étiquettes',
+      manage: 'Gérer les étiquettes',
       manageTitle: 'Gérer le catalogue d\'étiquettes',
       add: 'Nouvelle étiquette',
       edit: 'Renommer l\'étiquette',
@@ -4117,7 +4128,7 @@ export default {
       applyRemoveSuccess: '{{count}} étiquette(s) retirée(s) sur {{files}} fichier(s).',
       actionAdd: 'Ajouter aux fichiers sélectionnés',
       actionRemove: 'Retirer des fichiers sélectionnés',
-      tagAction: 'Étiqueter',
+      tagAction: 'Attribuer des étiquettes',
       bulkTitle: 'Étiqueter {{count}} fichier(s) sélectionné(s)',
       bulkTooltip: 'Ajouter ou retirer des étiquettes sur chaque fichier sélectionné.',
       noPermission: 'Vous n\'avez pas la permission d\'étiqueter les fichiers.',

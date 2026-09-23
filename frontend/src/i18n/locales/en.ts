@@ -4129,6 +4129,17 @@ export default {
     dragToResizeTooltip: 'Drag to resize, double-click to reset',
     searchFiles: 'Search files...',
     searchSubfoldersHint: 'Including subfolders',
+    pathBar: {
+      label: 'Location',
+      showHidden: 'Show hidden folders',
+    },
+    search: {
+      foldersHeading: 'Folders ({{count}})',
+      filesHeading: 'Files ({{count}})',
+      resultsCount: 'Folders: {{folders}} · Files: {{showing}} of {{total}}',
+      noMatches: 'No matching files or folders',
+      noMatchesDescription: 'No file or folder matches your current search or filter criteria.',
+    },
     readme: {
       truncated: 'Truncated',
       show: 'Show README',
@@ -4138,7 +4149,7 @@ export default {
     tags: {
       title: 'Tags',
       subtitle: 'Label files for cross-cutting filtering — toys, kid-safe, PETG-only, anything.',
-      manage: 'Tags',
+      manage: 'Manage tags',
       manageTitle: 'Manage tag catalog',
       add: 'New tag',
       edit: 'Rename tag',
@@ -4162,7 +4173,7 @@ export default {
       applyRemoveSuccess: 'Removed {{count}} tag(s) across {{files}} file(s).',
       actionAdd: 'Add to selected files',
       actionRemove: 'Remove from selected files',
-      tagAction: 'Tag',
+      tagAction: 'Assign tags',
       bulkTitle: 'Tag {{count}} selected file(s)',
       bulkTooltip: 'Add or remove tags on every selected file.',
       noPermission: 'You do not have permission to tag files.',

@@ -4123,6 +4123,17 @@ export default {
     dragToResizeTooltip: "Перетягніть, щоб змінити розмір, двічі клацніть, щоб скинути",
     searchFiles: "Пошук файлів...",
     searchSubfoldersHint: "Включаючи вкладені папки",
+    pathBar: {
+      label: "Розташування",
+      showHidden: "Показати приховані папки",
+    },
+    search: {
+      foldersHeading: "Папки ({{count}})",
+      filesHeading: "Файли ({{count}})",
+      resultsCount: "Папки: {{folders}} · Файли: {{showing}} з {{total}}",
+      noMatches: "Немає відповідних файлів або папок",
+      noMatchesDescription: "Жоден файл і жодна папка не відповідає вашим поточним критеріям пошуку чи фільтру.",
+    },
     readme: {
       truncated: "Усічений",
       show: "Показати README",
@@ -4132,7 +4143,7 @@ export default {
     tags: {
       title: "Теги",
       subtitle: "Файли міток для наскрізної фільтрації — іграшки, безпечні для дітей, лише PETG, будь-що.",
-      manage: "Теги",
+      manage: "Керування тегами",
       manageTitle: "Керувати каталогом тегів",
       add: "Новий тег",
       edit: "Перейменувати тег",
@@ -4156,7 +4167,7 @@ export default {
       applyRemoveSuccess: "Видалено теги {{count}} у файлах {{files}}.",
       actionAdd: "Додати до вибраних файлів",
       actionRemove: "Видалити з вибраних файлів",
-      tagAction: "Тег",
+      tagAction: "Призначити теги",
       bulkTitle: "Позначити вибрані файли ({{count}})",
       bulkTooltip: "Додати або видалити теги для кожного вибраного файлу.",
       noPermission: "Ви не маєте дозволу позначати файли тегами.",

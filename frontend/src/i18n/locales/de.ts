@@ -4098,6 +4098,17 @@ export default {
     dragToResizeTooltip: 'Ziehen zum Ändern der Größe, Doppelklick zum Zurücksetzen',
     searchFiles: 'Dateien suchen...',
     searchSubfoldersHint: 'Inklusive Unterordner',
+    pathBar: {
+      label: 'Pfad',
+      showHidden: 'Ausgeblendete Ordner anzeigen',
+    },
+    search: {
+      foldersHeading: 'Ordner ({{count}})',
+      filesHeading: 'Dateien ({{count}})',
+      resultsCount: 'Ordner: {{folders}} · Dateien: {{showing}} von {{total}}',
+      noMatches: 'Keine passenden Dateien oder Ordner',
+      noMatchesDescription: 'Keine Datei und kein Ordner entspricht Ihren aktuellen Such- oder Filterkriterien.',
+    },
     readme: {
       truncated: 'Gekürzt',
       show: 'README anzeigen',
@@ -4107,7 +4118,7 @@ export default {
     tags: {
       title: 'Tags',
       subtitle: 'Dateien mit Labels versehen — Spielzeug, kindersicher, nur PETG, was immer du willst.',
-      manage: 'Tags',
+      manage: 'Tags verwalten',
       manageTitle: 'Tag-Katalog verwalten',
       add: 'Neuer Tag',
       edit: 'Tag umbenennen',
@@ -4131,7 +4142,7 @@ export default {
       applyRemoveSuccess: '{{count}} Tag(s) von {{files}} Datei(en) entfernt.',
       actionAdd: 'Zu ausgewählten Dateien hinzufügen',
       actionRemove: 'Von ausgewählten Dateien entfernen',
-      tagAction: 'Tag',
+      tagAction: 'Tags zuweisen',
       bulkTitle: '{{count}} ausgewählte Datei(en) taggen',
       bulkTooltip: 'Tags für alle ausgewählten Dateien hinzufügen oder entfernen.',
       noPermission: 'Du hast keine Berechtigung, Dateien zu taggen.',

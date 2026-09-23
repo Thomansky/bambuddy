@@ -4100,6 +4100,17 @@ export default {
     dragToResizeTooltip: 'Arrastre para redimensionar, doble clic para restablecer',
     searchFiles: 'Buscar archivos...',
     searchSubfoldersHint: 'Incluyendo subcarpetas',
+    pathBar: {
+      label: 'Ubicación',
+      showHidden: 'Mostrar carpetas ocultas',
+    },
+    search: {
+      foldersHeading: 'Carpetas ({{count}})',
+      filesHeading: 'Archivos ({{count}})',
+      resultsCount: 'Carpetas: {{folders}} · Archivos: {{showing}} de {{total}}',
+      noMatches: 'No hay archivos ni carpetas coincidentes',
+      noMatchesDescription: 'Ningún archivo ni carpeta coincide con su búsqueda o los criterios de filtro actuales.',
+    },
     readme: {
       truncated: 'Truncado',
       show: 'Mostrar README',
@@ -4109,7 +4120,7 @@ export default {
     tags: {
       title: 'Etiquetas',
       subtitle: 'Etiqueta archivos para filtros transversales — juguetes, apto para niños, solo PETG, lo que necesites.',
-      manage: 'Etiquetas',
+      manage: 'Gestionar etiquetas',
       manageTitle: 'Gestionar el catálogo de etiquetas',
       add: 'Nueva etiqueta',
       edit: 'Renombrar etiqueta',
@@ -4133,7 +4144,7 @@ export default {
       applyRemoveSuccess: 'Se quitaron {{count}} etiqueta(s) en {{files}} archivo(s).',
       actionAdd: 'Añadir a los archivos seleccionados',
       actionRemove: 'Quitar de los archivos seleccionados',
-      tagAction: 'Etiquetar',
+      tagAction: 'Asignar etiquetas',
       bulkTitle: 'Etiquetar {{count}} archivo(s) seleccionado(s)',
       bulkTooltip: 'Añadir o quitar etiquetas en cada archivo seleccionado.',
       noPermission: 'No tienes permiso para etiquetar archivos.',

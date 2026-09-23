@@ -4084,6 +4084,17 @@ export default {
     dragToResizeTooltip: 'Trascina per ridimensionare, doppio clic per reset',
     searchFiles: 'Cerca file...',
     searchSubfoldersHint: 'Sottocartelle incluse',
+    pathBar: {
+      label: 'Posizione',
+      showHidden: 'Mostra le cartelle nascoste',
+    },
+    search: {
+      foldersHeading: 'Cartelle ({{count}})',
+      filesHeading: 'File ({{count}})',
+      resultsCount: 'Cartelle: {{folders}} · File: {{showing}} di {{total}}',
+      noMatches: 'Nessun file o cartella corrispondente',
+      noMatchesDescription: 'Nessun file e nessuna cartella corrisponde ai criteri di ricerca o filtro.',
+    },
     readme: {
       truncated: 'Troncato',
       show: 'Mostra README',
@@ -4093,7 +4104,7 @@ export default {
     tags: {
       title: 'Etichette',
       subtitle: 'Etichetta i file per filtri trasversali — giocattoli, sicuri per bambini, solo PETG, qualunque cosa serva.',
-      manage: 'Etichette',
+      manage: 'Gestisci etichette',
       manageTitle: 'Gestisci il catalogo delle etichette',
       add: 'Nuova etichetta',
       edit: 'Rinomina etichetta',
@@ -4117,7 +4128,7 @@ export default {
       applyRemoveSuccess: 'Rimosse {{count}} etichetta/e da {{files}} file.',
       actionAdd: 'Aggiungi ai file selezionati',
       actionRemove: 'Rimuovi dai file selezionati',
-      tagAction: 'Etichetta',
+      tagAction: 'Assegna etichette',
       bulkTitle: 'Etichetta {{count}} file selezionato/i',
       bulkTooltip: 'Aggiungi o rimuovi etichette su ogni file selezionato.',
       noPermission: 'Non hai il permesso per etichettare i file.',

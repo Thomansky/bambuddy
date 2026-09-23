@@ -4083,6 +4083,17 @@ export default {
     dragToResizeTooltip: '拖动调整大小，双击重置',
     searchFiles: '搜索文件...',
     searchSubfoldersHint: '包含子文件夹',
+    pathBar: {
+      label: '位置',
+      showHidden: '显示折叠的文件夹',
+    },
+    search: {
+      foldersHeading: '文件夹 ({{count}})',
+      filesHeading: '文件 ({{count}})',
+      resultsCount: '文件夹：{{folders}} · 文件：{{showing}} / {{total}}',
+      noMatches: '没有匹配的文件或文件夹',
+      noMatchesDescription: '没有文件或文件夹匹配您当前的搜索或筛选条件。',
+    },
     readme: {
       truncated: '已截断',
       show: '显示 README',
@@ -4092,7 +4103,7 @@ export default {
     tags: {
       title: '标签',
       subtitle: '为文件添加跨目录的标签 —— 玩具、儿童安全、仅 PETG 等等。',
-      manage: '标签',
+      manage: '管理标签',
       manageTitle: '管理标签目录',
       add: '新建标签',
       edit: '重命名标签',
@@ -4116,7 +4127,7 @@ export default {
       applyRemoveSuccess: '已从 {{files}} 个文件移除 {{count}} 个标签。',
       actionAdd: '添加到所选文件',
       actionRemove: '从所选文件移除',
-      tagAction: '标签',
+      tagAction: '分配标签',
       bulkTitle: '为所选的 {{count}} 个文件加标签',
       bulkTooltip: '在每个所选文件上添加或移除标签。',
       noPermission: '您没有为文件加标签的权限。',

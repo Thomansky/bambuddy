@@ -4090,6 +4090,17 @@ export default {
     dragToResizeTooltip: 'Yeniden boyutlandırmak için sürükleyin, sıfırlamak için çift tıklayın',
     searchFiles: 'Dosyalarda ara...',
     searchSubfoldersHint: 'Alt klasörler dahil',
+    pathBar: {
+      label: 'Konum',
+      showHidden: 'Gizlenen klasörleri göster',
+    },
+    search: {
+      foldersHeading: 'Klasörler ({{count}})',
+      filesHeading: 'Dosyalar ({{count}})',
+      resultsCount: 'Klasörler: {{folders}} · Dosyalar: {{total}} dosyadan {{showing}}',
+      noMatches: 'Eşleşen dosya veya klasör yok',
+      noMatchesDescription: 'Mevcut arama veya filtre kriterlerinizle eşleşen dosya ya da klasör yok.',
+    },
     readme: {
       truncated: 'Kısaltıldı',
       show: 'README’yi göster',
@@ -4099,7 +4110,7 @@ export default {
     tags: {
       title: 'Etiketler',
       subtitle: 'Çapraz filtreleme için dosyaları etiketleyin — oyuncak, çocuklar için güvenli, sadece PETG, ne isterseniz.',
-      manage: 'Etiketler',
+      manage: 'Etiketleri yönet',
       manageTitle: 'Etiket kataloğunu yönet',
       add: 'Yeni etiket',
       edit: 'Etiketi yeniden adlandır',
@@ -4123,7 +4134,7 @@ export default {
       applyRemoveSuccess: '{{files}} dosyadan {{count}} etiket kaldırıldı.',
       actionAdd: 'Seçili dosyalara ekle',
       actionRemove: 'Seçili dosyalardan kaldır',
-      tagAction: 'Etiketle',
+      tagAction: 'Etiket ata',
       bulkTitle: 'Seçili {{count}} dosyayı etiketle',
       bulkTooltip: 'Seçili her dosyaya etiket ekleyin veya kaldırın.',
       noPermission: 'Dosyaları etiketleme izniniz yok.',

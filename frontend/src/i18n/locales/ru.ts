@@ -3897,6 +3897,17 @@ export default {
     dragToResizeTooltip: "Перетащите для изменения размера, двойной щелчок — сброс",
     searchFiles: "Поиск файлов...",
     searchSubfoldersHint: "С учётом вложенных папок",
+    pathBar: {
+      label: "Расположение",
+      showHidden: "Показать скрытые папки",
+    },
+    search: {
+      foldersHeading: "Папки ({{count}})",
+      filesHeading: "Файлы ({{count}})",
+      resultsCount: "Папки: {{folders}} · Файлы: {{showing}} из {{total}}",
+      noMatches: "Подходящие файлы и папки не найдены",
+      noMatchesDescription: "Нет файлов и папок, соответствующих текущему поиску или фильтрам.",
+    },
     readme: {
       truncated: "Показано не полностью",
       show: "Показать README",
@@ -3906,7 +3917,7 @@ export default {
     tags: {
       title: "Метки",
       subtitle: "Помечайте файлы для сквозной фильтрации: игрушки, безопасно для детей, только PETG и что угодно ещё.",
-      manage: "Метки",
+      manage: "Управление метками",
       manageTitle: "Управление каталогом меток",
       add: "Новая метка",
       edit: "Переименовать метку",
@@ -3930,7 +3941,7 @@ export default {
       applyRemoveSuccess: "Удалено меток: {{count}}; обработано файлов: {{files}}.",
       actionAdd: "Добавить к выбранным файлам",
       actionRemove: "Удалить с выбранных файлов",
-      tagAction: "Метки",
+      tagAction: "Назначить метки",
       bulkTitle: "Метки для выбранных файлов ({{count}})",
       bulkTooltip: "Добавить или удалить метки у всех выбранных файлов.",
       noPermission: "У вас нет прав на изменение меток файлов.",

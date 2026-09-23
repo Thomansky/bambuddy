@@ -4128,6 +4128,17 @@ export default {
     dragToResizeTooltip: 'Sleep om grootte te wijzigen, dubbelklik om te resetten',
     searchFiles: 'Bestanden zoeken...',
     searchSubfoldersHint: 'Inclusief submappen',
+    pathBar: {
+      label: 'Locatie',
+      showHidden: 'Verborgen mappen tonen',
+    },
+    search: {
+      foldersHeading: 'Mappen ({{count}})',
+      filesHeading: 'Bestanden ({{count}})',
+      resultsCount: 'Mappen: {{folders}} · Bestanden: {{showing}} van {{total}}',
+      noMatches: 'Geen overeenkomende bestanden of mappen',
+      noMatchesDescription: 'Geen bestand of map komt overeen met je huidige zoek- of filtercriteria.',
+    },
     readme: {
       truncated: 'Afgekapt',
       show: 'README tonen',
@@ -4137,7 +4148,7 @@ export default {
     tags: {
       title: 'Tags',
       subtitle: 'Label bestanden voor flexibele filtering — speelgoed, kindveilig, alleen PETG, wat je maar wilt.',
-      manage: 'Tags',
+      manage: 'Tags beheren',
       manageTitle: 'Tagcatalogus beheren',
       add: 'Nieuwe tag',
       edit: 'Tag hernoemen',
@@ -4161,7 +4172,7 @@ export default {
       applyRemoveSuccess: '{{count}} tag(s) verwijderd van {{files}} bestand(en).',
       actionAdd: 'Toevoegen aan geselecteerde bestanden',
       actionRemove: 'Verwijderen van geselecteerde bestanden',
-      tagAction: 'Tag',
+      tagAction: 'Tags toewijzen',
       bulkTitle: '{{count}} geselecteerde bestand(en) taggen',
       bulkTooltip: 'Tags toevoegen aan of verwijderen van elk geselecteerd bestand.',
       noPermission: 'Je hebt geen toestemming om bestanden te taggen.',

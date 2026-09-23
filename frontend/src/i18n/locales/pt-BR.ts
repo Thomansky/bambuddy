@@ -4083,6 +4083,17 @@ export default {
     dragToResizeTooltip: 'Arraste para redimensionar, clique duas vezes para redefinir',
     searchFiles: 'Pesquisar arquivos...',
     searchSubfoldersHint: 'Incluindo subpastas',
+    pathBar: {
+      label: 'Local',
+      showHidden: 'Mostrar pastas ocultas',
+    },
+    search: {
+      foldersHeading: 'Pastas ({{count}})',
+      filesHeading: 'Arquivos ({{count}})',
+      resultsCount: 'Pastas: {{folders}} · Arquivos: {{showing}} de {{total}}',
+      noMatches: 'Nenhum arquivo ou pasta correspondente',
+      noMatchesDescription: 'Nenhum arquivo ou pasta corresponde aos seus critérios de pesquisa ou filtro.',
+    },
     readme: {
       truncated: 'Truncado',
       show: 'Mostrar README',
@@ -4092,7 +4103,7 @@ export default {
     tags: {
       title: 'Tags',
       subtitle: 'Rotule arquivos para filtros transversais — brinquedos, seguro para crianças, somente PETG, o que precisar.',
-      manage: 'Tags',
+      manage: 'Gerenciar tags',
       manageTitle: 'Gerenciar catálogo de tags',
       add: 'Nova tag',
       edit: 'Renomear tag',
@@ -4116,7 +4127,7 @@ export default {
       applyRemoveSuccess: '{{count}} tag(s) removida(s) em {{files}} arquivo(s).',
       actionAdd: 'Adicionar aos arquivos selecionados',
       actionRemove: 'Remover dos arquivos selecionados',
-      tagAction: 'Marcar',
+      tagAction: 'Atribuir tags',
       bulkTitle: 'Marcar {{count}} arquivo(s) selecionado(s)',
       bulkTooltip: 'Adicionar ou remover tags em cada arquivo selecionado.',
       noPermission: 'Você não tem permissão para marcar arquivos.',

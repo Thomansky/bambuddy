@@ -3905,6 +3905,17 @@ export default {
     dragToResizeTooltip: '드래그하여 크기 조정, 더블클릭하여 초기화',
     searchFiles: '파일 검색...',
     searchSubfoldersHint: '하위 폴더 포함',
+    pathBar: {
+      label: '위치',
+      showHidden: '생략된 폴더 표시',
+    },
+    search: {
+      foldersHeading: '폴더 ({{count}})',
+      filesHeading: '파일 ({{count}})',
+      resultsCount: '폴더: {{folders}} · 파일: 전체 {{total}}개 중 {{showing}}개',
+      noMatches: '일치하는 파일 또는 폴더 없음',
+      noMatchesDescription: '현재 검색 또는 필터 조건과 일치하는 파일이나 폴더가 없습니다.',
+    },
     readme: {
       truncated: '잘림',
       show: 'README 표시',
@@ -3914,7 +3925,7 @@ export default {
     tags: {
       title: '태그',
       subtitle: '파일에 가로지르는 필터용 라벨을 붙이세요 — 장난감, 어린이용, PETG 전용 등.',
-      manage: '태그',
+      manage: '태그 관리',
       manageTitle: '태그 카탈로그 관리',
       add: '새 태그',
       edit: '태그 이름 변경',
@@ -3938,7 +3949,7 @@ export default {
       applyRemoveSuccess: '{{files}}개 파일에서 태그 {{count}}개를 제거했습니다.',
       actionAdd: '선택한 파일에 추가',
       actionRemove: '선택한 파일에서 제거',
-      tagAction: '태그',
+      tagAction: '태그 지정',
       bulkTitle: '선택한 {{count}}개 파일에 태그 지정',
       bulkTooltip: '선택한 모든 파일에 태그를 추가하거나 제거합니다.',
       noPermission: '파일에 태그를 붙일 권한이 없습니다.',
