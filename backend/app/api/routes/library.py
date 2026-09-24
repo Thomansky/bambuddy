@@ -129,6 +129,12 @@ router = APIRouter(prefix="/library", tags=["library"])
 # Path of the embedded slicer config inside a BambuStudio/OrcaSlicer 3MF.
 _PROJECT_SETTINGS_PATH = "Metadata/project_settings.config"
 
+# How many rows the File Manager's "recent" start view lists. It is a start
+# page, not a listing: a hundred rows already outlast anyone's scrolling, and
+# an uncapped query is exactly the whole-library fetch this view exists to
+# replace.
+RECENT_ROOT_FILE_LIMIT = 100
+
 
 def _ensure_library_file_visible(
     library_file: LibraryFile | None,
@@ -2248,6 +2254,7 @@ async def list_files(
     internal_only: bool = False,
     external_only: bool = False,
     recursive: bool = False,
+    recent: bool = False,
     tag_ids: list[int] = Query(default_factory=list),
     db: AsyncSession = Depends(get_db),
     auth_result: tuple[User | None, bool] = Depends(
@@ -2275,6 +2282,12 @@ async def list_files(
                    that walks ``library_folders.parent_id``. Default off so
                    existing callers (folder browsing, etc.) keep their narrow
                    single-folder semantics.
+        recent: The File Manager's "recent" root. Drops the folder scoping
+                entirely and answers with the whole library ordered by
+                ``COALESCE(fs_modified_at, created_at)`` descending, capped at
+                ``RECENT_ROOT_FILE_LIMIT``. A flag on this route rather than a
+                route of its own so the ownership gate, the internal/external
+                scoping and the response shape stay the tested ones.
         tag_ids: Restrict the listing to files carrying ALL of these tags
                  (AND semantics, #1268). When non-empty the folder filter is
                  intentionally bypassed — tags are cross-cutting and the user
@@ -2308,6 +2321,11 @@ async def list_files(
             .group_by(LibraryFile.id)
             .having(func.count(distinct(LibraryFileTag.tag_id)) == len(unique_tag_ids))
         )
+    elif recent:
+        # No folder scoping at all: "recent" is a view over the whole library,
+        # the same way an empty tag filter is not. internal_only / external_only
+        # below still apply, so the root's two buckets keep their own listing.
+        pass
     elif folder_id is not None and recursive:
         # Walk the subtree starting at folder_id and collect every descendant
         # id. Recursive CTE works on both SQLite (>=3.8.3, shipped 2014) and
@@ -2331,7 +2349,16 @@ async def list_files(
     elif external_only:
         query = query.where(LibraryFile.is_external.is_(True))
 
-    query = query.order_by(LibraryFile.filename)
+    if recent:
+        # Newest first by the same timestamp the "date" sort uses (#2680): the
+        # on-disk mtime where there is one, the upload time otherwise. The id
+        # breaks ties so the cap cuts the list at a stable place.
+        query = query.order_by(
+            func.coalesce(LibraryFile.fs_modified_at, LibraryFile.created_at).desc(),
+            LibraryFile.id.desc(),
+        ).limit(RECENT_ROOT_FILE_LIMIT)
+    else:
+        query = query.order_by(LibraryFile.filename)
     result = await db.execute(query)
     files = result.scalars().unique().all() if tag_ids else result.scalars().all()
 
