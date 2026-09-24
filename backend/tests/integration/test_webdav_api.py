@@ -147,6 +147,7 @@ def file_factory(db_session, library_root):
         folder_id: int | None = None,
         created_by_id: int | None = None,
         on_disk: bool = True,
+        is_external: bool = False,
         deleted_at=None,
     ):
         from backend.app.models.library import LibraryFile
@@ -165,6 +166,7 @@ def file_factory(db_session, library_root):
             file_size=len(content),
             folder_id=folder_id,
             created_by_id=created_by_id,
+            is_external=is_external,
             deleted_at=deleted_at,
         )
         db_session.add(row)
@@ -252,6 +254,39 @@ class TestPropfindTree:
         rows = _responses(after.content)
         assert set(rows) == {"/webdav/", "/webdav/Files/", "/webdav/External/"}
         assert _is_collection(rows["/webdav/External/"])
+
+    async def test_the_two_buckets_keep_managed_and_external_apart(
+        self, async_client: AsyncClient, enable_webdav, admin_auth, folder_factory, file_factory
+    ):
+        """Including the loose files, which the File Manager counts per bucket too."""
+        await folder_factory("Kunden")
+        await folder_factory("NAS", is_external=True)
+        await file_factory("managed-loose.3mf")
+        await file_factory("scanned-loose.3mf", is_external=True)
+
+        managed = await async_client.request("PROPFIND", f"{WEBDAV}/Files", headers={**admin_auth, "Depth": "1"})
+        external = await async_client.request("PROPFIND", f"{WEBDAV}/External", headers={**admin_auth, "Depth": "1"})
+
+        assert set(_responses(managed.content)) == {
+            "/webdav/Files/",
+            "/webdav/Files/Kunden/",
+            "/webdav/Files/managed-loose.3mf",
+        }
+        assert set(_responses(external.content)) == {
+            "/webdav/External/",
+            "/webdav/External/NAS/",
+            "/webdav/External/scanned-loose.3mf",
+        }
+
+    async def test_loose_external_files_alone_still_open_the_external_bucket(
+        self, async_client: AsyncClient, enable_webdav, admin_auth, file_factory
+    ):
+        """With no external folder at all, those files would have no path."""
+        await file_factory("scanned-loose.3mf", is_external=True)
+
+        response = await async_client.request("PROPFIND", f"{WEBDAV}/", headers={**admin_auth, "Depth": "1"})
+
+        assert "/webdav/External/" in _responses(response.content)
 
     async def test_depth_1_on_a_folder_lists_subfolders_and_files(
         self, async_client: AsyncClient, enable_webdav, admin_auth, folder_factory, file_factory

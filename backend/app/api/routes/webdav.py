@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import base64
 import binascii
-import logging
 import mimetypes
 import os
 import xml.etree.ElementTree as ET
@@ -31,6 +30,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import format_datetime
 from pathlib import Path
+from stat import S_ISREG
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -50,8 +50,6 @@ from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
 from backend.app.models.library import LibraryFile, LibraryFolder
 from backend.app.models.user import User
-
-logger = logging.getLogger(__name__)
 
 # include_in_schema=False for the whole router: PROPFIND is not an OpenAPI
 # operation, and a /webdav entry in the API docs would suggest a REST surface
@@ -236,11 +234,23 @@ def _root_entry() -> _Entry:
     )
 
 
-async def _has_external_roots(db: AsyncSession) -> bool:
-    result = await db.execute(
+async def _has_external_content(db: AsyncSession) -> bool:
+    """Whether the ``External`` bucket is worth showing at all.
+
+    Either an external folder at the top level, or a file in no folder that
+    came from an external scan — the File Manager counts those separately
+    (``unfoldered_external_files``) and so must this, or an install whose only
+    external content is loose files would have no path to it.
+    """
+    folder = await db.execute(
         select(LibraryFolder.id).where(LibraryFolder.parent_id.is_(None), LibraryFolder.is_external.is_(True)).limit(1)
     )
-    return result.scalar_one_or_none() is not None
+    if folder.scalar_one_or_none() is not None:
+        return True
+    loose = await db.execute(
+        LibraryFile.active().where(LibraryFile.folder_id.is_(None), LibraryFile.is_external.is_(True)).limit(1)
+    )
+    return loose.scalars().first() is not None
 
 
 async def _visible_files(
@@ -249,7 +259,7 @@ async def _visible_files(
     user: User,
     can_read_all: bool,
     *,
-    managed_only: bool = False,
+    external: bool | None = None,
 ) -> list[LibraryFile]:
     """Non-trashed files of one folder the caller is allowed to see.
 
@@ -259,8 +269,8 @@ async def _visible_files(
     it exists from the directory it sits in.
     """
     query = LibraryFile.active().where(LibraryFile.folder_id == folder_id).order_by(LibraryFile.id)
-    if managed_only:
-        query = query.where(LibraryFile.is_external.is_(False))
+    if external is not None:
+        query = query.where(LibraryFile.is_external.is_(external))
     rows = (await db.execute(query)).scalars().all()
     visible: list[LibraryFile] = []
     for row in rows:
@@ -294,27 +304,24 @@ async def _children(db: AsyncSession, entry: _Entry, user: User, can_read_all: b
 
     if entry.bucket == "":
         children.append(_bucket_entry(BUCKET_MANAGED))
-        if await _has_external_roots(db):
+        if await _has_external_content(db):
             children.append(_bucket_entry(BUCKET_EXTERNAL))
         return children
 
-    if entry.bucket == BUCKET_EXTERNAL:
-        for folder in await _subfolders(db, None, external=True):
-            children.append(_folder_entry(folder, _label(folder.name, f"folder-{folder.id}", taken)))
-        return children
-
-    if entry.bucket == BUCKET_MANAGED:
-        for folder in await _subfolders(db, None, external=False):
+    if entry.bucket in (BUCKET_MANAGED, BUCKET_EXTERNAL):
+        is_external = entry.bucket == BUCKET_EXTERNAL
+        for folder in await _subfolders(db, None, external=is_external):
             children.append(_folder_entry(folder, _label(folder.name, f"folder-{folder.id}", taken)))
         # Files belonging to no folder would otherwise have no path at all.
-        # They sit directly in the bucket rather than behind the File
-        # Manager's synthetic "No folder" entry, which is a UI affordance and
-        # not a directory anyone would want to type.
-        for file in await _visible_files(db, None, user, can_read_all, managed_only=True):
+        # They sit directly in the bucket rather than behind the File Manager's
+        # synthetic "No folder" entry, which is a UI affordance and not a
+        # directory anyone would want to type.
+        for file in await _visible_files(db, None, user, can_read_all, external=is_external):
             children.append(_file_entry(file, _label(file.filename, f"file-{file.id}", taken)))
         return children
 
-    assert entry.folder is not None
+    if entry.folder is None:  # pragma: no cover - every collection is a bucket or a folder
+        return children
     for folder in await _subfolders(db, entry.folder.id):
         children.append(_folder_entry(folder, _label(folder.name, f"folder-{folder.id}", taken)))
     for file in await _visible_files(db, entry.folder.id, user, can_read_all):
@@ -387,7 +394,12 @@ def _multistatus(rows: Sequence[tuple[str, _Entry]]) -> Response:
     multistatus = ET.Element(f"{{{DAV_NS}}}multistatus")
     for href, entry in rows:
         _response_element(multistatus, href, entry)
-    body = b'<?xml version="1.0" encoding="utf-8"?>\n' + ET.tostring(multistatus, encoding="utf-8")
+    # xml_declaration=False explicitly: whether ``encoding="utf-8"`` alone emits
+    # a declaration has changed between Python versions, and a body carrying two
+    # of them is not XML at all — every client would show an empty drive.
+    body = b'<?xml version="1.0" encoding="utf-8"?>\n' + ET.tostring(
+        multistatus, encoding="utf-8", xml_declaration=False
+    )
     return Response(content=body, status_code=207, media_type='application/xml; charset="utf-8"')
 
 
@@ -413,7 +425,9 @@ def _resolved_bytes(file: LibraryFile) -> tuple[Path, os.stat_result]:
         info = abs_path.stat()
     except OSError:
         raise _not_found()
-    if not abs_path.is_file():
+    # One stat answers both "is this a file" and "how big", and is handed to
+    # FileResponse so the bytes are not stat-ed a second time.
+    if not S_ISREG(info.st_mode):
         raise _not_found()
     return abs_path, info
 
