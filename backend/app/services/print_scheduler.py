@@ -60,9 +60,11 @@ from backend.app.services.printer_manager import (
 )
 from backend.app.services.smart_plug_manager import smart_plug_manager
 from backend.app.utils.ams_humidity import ams_humidity_percent
+from backend.app.utils.archive_paths import archive_photos_dir
 from backend.app.utils.color_utils import perceptual_color_distance
 from backend.app.utils.filament_types import canonical_filament_type
 from backend.app.utils.filename import derive_remote_filename
+from backend.app.utils.library_paths import move_library_photos
 from backend.app.utils.local_time import utcnow_naive
 from backend.app.utils.printer_models import (
     is_dual_nozzle_model,
@@ -6452,6 +6454,18 @@ class PrintScheduler:
                             archive_id=archive.id,
                             dispatched_item_id=item.id,
                         )
+                        # The photos follow the file into the archive that
+                        # replaces it, for the same reason the siblings do
+                        # (#3077). Leaving them behind orphaned the directory
+                        # on disk and lost the pictures of a print that still
+                        # has a record.
+                        carried_photos = move_library_photos(
+                            consumed_library_file_id,
+                            library_file.photos or [],
+                            archive_photos_dir(archive),
+                        )
+                        if carried_photos:
+                            archive.photos = list(archive.photos or []) + carried_photos
                         await db.delete(library_file)
                         file_path = settings.base_dir / archive.file_path
                         filename = archive.filename

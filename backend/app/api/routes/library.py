@@ -2042,6 +2042,10 @@ async def scan_external_folder(
                         abs_thumb.unlink()
                 except OSError:
                     pass
+            # The row is gone for good — external files skip the trash — so
+            # its photos go with it rather than being orphaned under an id
+            # nothing points at any more (#3077).
+            remove_library_photos_dir(db_file.id)
             await db.delete(db_file)
             removed += 1
 

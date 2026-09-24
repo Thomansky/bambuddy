@@ -284,3 +284,97 @@ class TestPhotos:
         assert response.status_code == 200
         assert response.json()["trashed"] is False
         assert not photos_dir.exists()
+
+
+class TestPhotoDirectoryCleanup:
+    """Every path that hard-deletes a library row takes its photos with it.
+
+    The upload/delete round-trip, the trash purge and the external single-file
+    delete are covered above; these are the remaining ones — folder delete,
+    bulk delete, and the external-folder scan that drops rows for files that
+    vanished from the share.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_folder_delete_removes_photo_dir(self, async_client: AsyncClient, file_factory, isolated_storage):
+        folder = await async_client.post("/api/v1/library/folders", json={"name": "Brackets"})
+        assert folder.status_code == 200
+        folder_id = folder.json()["id"]
+        library_file = await file_factory(folder_id=folder_id)
+        assert (await _upload(async_client, library_file.id)).status_code == 200
+        photos_dir = library_photos_dir(library_file.id)
+        assert photos_dir.is_dir()
+
+        response = await async_client.delete(f"/api/v1/library/folders/{folder_id}")
+        assert response.status_code == 200
+        assert not photos_dir.exists()
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_bulk_delete_removes_photo_dir_of_hard_deleted_file(
+        self, async_client: AsyncClient, file_factory, isolated_storage
+    ):
+        # External files bypass the trash, so bulk delete hard-deletes them;
+        # a managed file is only soft-deleted and keeps its photos until the
+        # sweeper runs.
+        external = await file_factory(is_external=True, file_path="/mnt/nas/ext.stl", file_type="stl")
+        managed = await file_factory()
+        for library_file in (external, managed):
+            assert (await _upload(async_client, library_file.id)).status_code == 200
+
+        response = await async_client.post(
+            "/api/v1/library/bulk-delete",
+            json={"file_ids": [external.id, managed.id], "folder_ids": []},
+        )
+        assert response.status_code == 200
+        assert response.json()["deleted_files"] == 2
+        assert not library_photos_dir(external.id).exists()
+        assert library_photos_dir(managed.id).is_dir()
+
+    @pytest.fixture
+    def external_share(self, monkeypatch, tmp_path):
+        """Bambuddy's data dir and an opted-in external share, as siblings.
+
+        The share cannot live under ``base_dir`` — ``_validate_external_path``
+        refuses to mount a Bambuddy-managed directory, and the module's
+        ``isolated_storage`` points ``base_dir`` at ``tmp_path`` itself.
+        """
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        monkeypatch.setattr(app_settings, "base_dir", data_dir)
+        monkeypatch.setattr(app_settings, "archive_dir", data_dir / "archive")
+        share = tmp_path / "share"
+        share.mkdir()
+        monkeypatch.setenv("BAMBUDDY_EXTERNAL_ROOTS", str(share))
+        return share
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_external_scan_removes_photo_dir_of_vanished_file(self, async_client: AsyncClient, external_share):
+        share = external_share
+        (share / "bracket.stl").write_bytes(b"fakestl")
+
+        folder = await async_client.post(
+            "/api/v1/library/folders/external",
+            json={"name": "Share", "external_path": str(share), "readonly": True, "show_hidden": False},
+        )
+        assert folder.status_code == 200
+        folder_id = folder.json()["id"]
+
+        scan = await async_client.post(f"/api/v1/library/folders/{folder_id}/scan")
+        assert scan.status_code == 200
+        assert scan.json()["added"] == 1
+
+        listing = await async_client.get(f"/api/v1/library/files?folder_id={folder_id}")
+        file_id = listing.json()[0]["id"]
+        assert (await _upload(async_client, file_id)).status_code == 200
+        photos_dir = library_photos_dir(file_id)
+        assert photos_dir.is_dir()
+
+        (share / "bracket.stl").unlink()
+
+        rescan = await async_client.post(f"/api/v1/library/folders/{folder_id}/scan")
+        assert rescan.status_code == 200
+        assert rescan.json()["removed"] == 1
+        assert not photos_dir.exists()

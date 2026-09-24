@@ -15,6 +15,8 @@ from backend.app.models.library import LibraryFile
 from backend.app.models.print_queue import PrintQueueItem, PrintQueueVariant
 from backend.app.models.printer import Printer
 from backend.app.services.print_scheduler import PrintScheduler
+from backend.app.utils.archive_paths import archive_photos_dir
+from backend.app.utils.library_paths import library_photos_dir
 from backend.tests._fixtures.background_tasks import discarding_spawn_patch
 
 
@@ -27,12 +29,13 @@ async def queue_factory(tmp_path):
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
     case_counter = 0
 
-    async def make_case(*, cleanup=True, is_external=False, thumbnail_path=None, siblings=()):
+    async def make_case(*, cleanup=True, is_external=False, thumbnail_path=None, siblings=(), photos=()):
         nonlocal case_counter
         case_counter += 1
 
         base_dir = tmp_path / f"case-{case_counter}"
         base_dir.mkdir()
+        archive_dir = base_dir / "archive"
         source_path = base_dir / "library" / f"source-{case_counter}.3mf"
         source_path.parent.mkdir()
         source_path.write_bytes(b"library source")
@@ -70,9 +73,20 @@ async def queue_factory(tmp_path):
                 thumbnail_path=thumbnail_db_path,
                 file_metadata=None,
                 is_external=is_external,
+                photos=list(photos) or None,
             )
             db.add_all([printer, library_file])
             await db.flush()
+
+            # Photos of the printed result (#3077). Written through the real
+            # helper so the test cannot drift from the layout the code uses.
+            photos_dir = None
+            if photos:
+                with patch.object(scheduler_module.settings, "archive_dir", archive_dir):
+                    photos_dir = library_photos_dir(library_file.id)
+                photos_dir.mkdir(parents=True, exist_ok=True)
+                for name in photos:
+                    (photos_dir / name).write_bytes(f"photo {name}".encode())
 
             item = PrintQueueItem(
                 printer_id=printer.id,
@@ -152,7 +166,10 @@ async def queue_factory(tmp_path):
             return SimpleNamespace(
                 session_maker=session_maker,
                 base_dir=base_dir,
+                archive_dir=archive_dir,
                 source_path=source_path,
+                photos_dir=photos_dir,
+                photo_names=list(photos),
                 thumbnail_path=thumbnail_actual_path,
                 printer_id=printer.id,
                 library_file_id=library_file.id,
@@ -213,6 +230,7 @@ async def _dispatch_library_item(ctx, *, archive_failure=False, unlink_side_effe
 
     patches = [
         patch.object(scheduler_module.settings, "base_dir", ctx.base_dir),
+        patch.object(scheduler_module.settings, "archive_dir", ctx.archive_dir),
         patch("backend.app.services.archive.ArchiveService.archive_print", new=archive_print),
         patch("backend.app.services.print_scheduler.printer_manager.is_connected", MagicMock(return_value=True)),
         patch("backend.app.services.print_scheduler.printer_manager.get_status", MagicMock(return_value=None)),
@@ -277,6 +295,52 @@ async def test_external_library_file_skips_cleanup(queue_factory):
     assert item.archive_id == archive.id
     assert library_file is not None
     assert ctx.source_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_moves_the_photos_into_the_archive(queue_factory):
+    """Photos follow the consumed file into the archive that replaces it (#3077).
+
+    The row is hard-deleted here, so leaving the photo directory alone
+    orphaned it under an id nothing points at any more — and the pictures
+    of a print that still has a record disappeared from the UI.
+    """
+    ctx = await queue_factory(cleanup=True, photos=["a1b2c3d4.jpg", "e5f6a7b8.png"])
+
+    await _dispatch_library_item(ctx)
+
+    _, library_file, archive = await _queue_snapshot(ctx)
+    assert library_file is None
+    assert not ctx.photos_dir.exists()
+    assert archive.photos == ctx.photo_names
+    with patch.object(scheduler_module.settings, "base_dir", ctx.base_dir):
+        destination = archive_photos_dir(archive)
+    for name in ctx.photo_names:
+        assert (destination / name).read_bytes() == f"photo {name}".encode()
+
+
+@pytest.mark.asyncio
+async def test_external_library_file_keeps_its_photos(queue_factory):
+    ctx = await queue_factory(cleanup=True, is_external=True, photos=["a1b2c3d4.jpg"])
+
+    await _dispatch_library_item(ctx)
+
+    _, library_file, archive = await _queue_snapshot(ctx)
+    assert library_file is not None
+    assert (ctx.photos_dir / "a1b2c3d4.jpg").is_file()
+    assert archive.photos is None
+
+
+@pytest.mark.asyncio
+async def test_archive_creation_failure_keeps_the_photos(queue_factory):
+    ctx = await queue_factory(cleanup=True, photos=["a1b2c3d4.jpg"])
+
+    await _dispatch_library_item(ctx, archive_failure=True)
+
+    _, library_file, archive = await _queue_snapshot(ctx)
+    assert archive is None
+    assert library_file is not None
+    assert (ctx.photos_dir / "a1b2c3d4.jpg").is_file()
 
 
 @pytest.mark.asyncio
