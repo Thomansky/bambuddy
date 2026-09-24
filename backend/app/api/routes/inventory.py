@@ -6,7 +6,7 @@ import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import delete, func, select
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -2224,11 +2224,15 @@ async def get_material_number_stats(
     if date_to:
         usage_filters.append(SpoolUsageHistory.created_at <= datetime.combine(date_to, time.max, tzinfo=timezone.utc))
 
+    # Clamped PER SPOOL, like every other remaining-weight computation in the
+    # codebase: a spool whose weight_used overshot its label_weight holds 0 g,
+    # it does not subtract from the other spools sharing the number.
+    per_spool_remaining = func.coalesce(Spool.label_weight, 0) - func.coalesce(Spool.weight_used, 0)
     inventory_rows = await db.execute(
         select(
             Spool.material_number,
             func.count(Spool.id),
-            func.sum(Spool.label_weight - Spool.weight_used),
+            func.sum(case((per_spool_remaining > 0, per_spool_remaining), else_=0.0)),
         )
         .where(has_number, Spool.archived_at.is_(None))
         .group_by(Spool.material_number)
@@ -2250,7 +2254,7 @@ async def get_material_number_stats(
         stats[number] = MaterialNumberStats(
             material_number=number,
             spool_count=count,
-            remaining_g=max(0.0, float(remaining or 0)),
+            remaining_g=float(remaining or 0),
             consumed_g=0.0,
             cost=0.0,
         )

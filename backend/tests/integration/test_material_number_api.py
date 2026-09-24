@@ -290,6 +290,28 @@ class TestMaterialNumberStats:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    async def test_an_over_consumed_spool_does_not_eat_its_siblings_stock(
+        self, async_client: AsyncClient, spool_factory
+    ):
+        """Remaining stock is clamped per spool, not once over the group.
+
+        weight_used above label_weight is reachable (a scale reading, an AMS
+        sync, or a plain PATCH), and every other remaining-weight computation
+        in the codebase clamps each spool at 0. Summing the raw difference
+        first would subtract the overshoot from the other spools of the same
+        number and report less stock than the inventory list does.
+        """
+        await spool_factory(material_number="15", label_weight=1000, weight_used=0)
+        await spool_factory(material_number="15", color_name="Black", label_weight=1000, weight_used=1200)
+
+        resp = await async_client.get("/api/v1/inventory/stats/material-numbers")
+        assert resp.status_code == 200
+        row = resp.json()[0]
+        assert row["spool_count"] == 2
+        assert row["remaining_g"] == pytest.approx(1000)
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_archived_spools_keep_their_recorded_consumption(
         self, async_client: AsyncClient, spool_factory, db_session: AsyncSession
     ):
@@ -395,12 +417,32 @@ class TestMaterialNumberStatsTimeframe:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_ties_sort_by_number_so_the_order_is_stable(self, async_client: AsyncClient, spool_factory):
-        await spool_factory(material_number="16", color_name="Black")
-        await spool_factory(material_number="15")
+    async def test_ties_sort_by_number_so_the_order_is_stable(
+        self, async_client: AsyncClient, spool_factory, db_session: AsyncSession
+    ):
+        """Equal consumption has to fall back to the number, not to row order.
+
+        The response is assembled in two passes — active spools first, then
+        the numbers that only appear in usage history — so "16" (which has a
+        live spool) is seeded before "15" (archived, usage only). Without the
+        number tie-break the endpoint hands that seeding order straight back.
+        """
+        from datetime import datetime, timezone
+
+        live = await spool_factory(material_number="16", color_name="Black")
+        archived = await spool_factory(material_number="15", archived_at=datetime.now(timezone.utc))
+        db_session.add_all(
+            [
+                SpoolUsageHistory(spool_id=live.id, weight_used=100, percent_used=10, status="completed", cost=2.0),
+                SpoolUsageHistory(spool_id=archived.id, weight_used=100, percent_used=10, status="completed", cost=2.0),
+            ]
+        )
+        await db_session.commit()
 
         resp = await async_client.get("/api/v1/inventory/stats/material-numbers")
-        assert [r["material_number"] for r in resp.json()] == ["15", "16"]
+        rows = resp.json()
+        assert [r["consumed_g"] for r in rows] == [pytest.approx(100), pytest.approx(100)]
+        assert [r["material_number"] for r in rows] == ["15", "16"]
 
 
 class TestMaterialNumberCsv:

@@ -37,18 +37,21 @@ const EMPTY_STATS = {
 
 let materialNumberRequests: URL[] = [];
 
-function setupHandlers(spoolmanEnabled: boolean) {
+function setupHandlers(spoolmanEnabled: boolean, spoolmanGate?: Promise<void>) {
   server.use(
     http.get('/api/v1/archives/stats', () => HttpResponse.json(EMPTY_STATS)),
     http.get('/api/v1/printers/', () => HttpResponse.json([])),
     http.get('/api/v1/archives/slim', () => HttpResponse.json([])),
     http.get('/api/v1/settings/', () => HttpResponse.json({ currency: 'USD' })),
-    http.get('/api/v1/settings/spoolman', () =>
-      HttpResponse.json({
+    http.get('/api/v1/settings/spoolman', async () => {
+      // A gate lets a test hold the settings response back while the rest of
+      // the dashboard renders, which is the ordering the widget has to survive.
+      if (spoolmanGate) await spoolmanGate;
+      return HttpResponse.json({
         spoolman_enabled: spoolmanEnabled ? 'true' : 'false',
         spoolman_url: spoolmanEnabled ? 'http://spoolman.local' : '',
-      })
-    ),
+      });
+    }),
     http.get('/api/v1/archives/analysis/failures', () =>
       HttpResponse.json({
         period_days: 30,
@@ -131,5 +134,53 @@ describe('StatsPage material-number widget', () => {
 
     expect(screen.queryByText('By Material Number')).toBeNull();
     expect(materialNumberRequests).toHaveLength(0);
+  });
+
+  // #2870: the mode decision has to wait for the settings response. Deriving
+  // it from `undefined` treats "not loaded yet" as "internal mode", so a
+  // Spoolman install flashed the card and fired the aggregate request before
+  // the setting arrived.
+  it('holds the widget back until the Spoolman setting has resolved', async () => {
+    let openGate = () => {};
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    setupHandlers(true, gate);
+    render(<StatsPage />);
+
+    // The dashboard is fully up on the archive response alone.
+    await waitFor(() => {
+      expect(screen.getByText('Filament Trends')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('By Material Number')).toBeNull();
+    expect(materialNumberRequests).toHaveLength(0);
+
+    openGate();
+    await waitFor(() => {
+      expect(screen.queryByText('By Material Number')).toBeNull();
+    });
+    expect(materialNumberRequests).toHaveLength(0);
+  });
+
+  it('shows the widget once the setting says this is not Spoolman mode', async () => {
+    let openGate = () => {};
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    setupHandlers(false, gate);
+    render(<StatsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Filament Trends')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('By Material Number')).toBeNull();
+
+    openGate();
+    await waitFor(() => {
+      expect(screen.getByText('By Material Number')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(materialNumberRequests.length).toBeGreaterThan(0);
+    });
   });
 });

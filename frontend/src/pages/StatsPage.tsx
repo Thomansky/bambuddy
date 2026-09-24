@@ -1058,11 +1058,15 @@ export function StatsPage() {
   // empty in Spoolman mode — there the number is Spoolman's filament-level
   // article_number and lives in Spoolman. Rather than show a permanently
   // empty card next to an inventory that does display numbers, drop it (#2870).
-  const { data: spoolmanSettings } = useQuery({
+  const { data: spoolmanSettings, isPending: spoolmanSettingsPending } = useQuery({
     queryKey: ['spoolman-settings'],
     queryFn: api.getSpoolmanSettings,
     staleTime: 5 * 60 * 1000,
   });
+  // The rest of the dashboard renders off the archive response, so the card
+  // would otherwise mount — and hit the aggregate endpoint — while the mode
+  // is still unknown. "Not loaded yet" is not "internal mode".
+  const spoolmanModeReady = !spoolmanSettingsPending;
   const spoolmanMode =
     spoolmanSettings?.spoolman_enabled === 'true' && !!spoolmanSettings?.spoolman_url;
 
@@ -1190,7 +1194,7 @@ export function StatsPage() {
       component: <FilamentTrendsWidget archives={archives || []} currency={currency} dateFrom={effectiveDateRange.dateFrom} dateTo={effectiveDateRange.dateTo} />,
       defaultSize: 4,
     },
-    ...(spoolmanMode ? [] : ([{
+    ...(!spoolmanModeReady || spoolmanMode ? [] : ([{
       id: 'material-numbers',
       title: t('stats.materialNumbers.title'),
       component: <MaterialNumberStats currency={currency} dateFrom={effectiveDateRange.dateFrom} dateTo={effectiveDateRange.dateTo} />,
