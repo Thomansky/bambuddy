@@ -3928,7 +3928,6 @@ export default {
       label: "Панель папок",
       hide: "Скрыть панель папок",
       show: "Показать панель папок",
-      columnsDisabled: "Режим колонок уже заменяет панель папок",
     },
     searchFiles: "Поиск файлов...",
     searchSubfoldersHint: "С учётом вложенных папок",

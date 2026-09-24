@@ -4121,7 +4121,6 @@ export default {
       label: 'Klasör çubuğu',
       hide: 'Klasör çubuğunu gizle',
       show: 'Klasör çubuğunu göster',
-      columnsDisabled: 'Sütun görünümü klasör çubuğunun yerini zaten alıyor',
     },
     searchFiles: 'Dosyalarda ara...',
     searchSubfoldersHint: 'Alt klasörler dahil',

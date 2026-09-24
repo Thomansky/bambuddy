@@ -4128,7 +4128,6 @@ export default {
       label: 'フォルダサイドバー',
       hide: 'フォルダサイドバーを隠す',
       show: 'フォルダサイドバーを表示',
-      columnsDisabled: 'カラム表示はすでにフォルダサイドバーの代わりになっています',
     },
     searchFiles: 'ファイルを検索...',
     searchSubfoldersHint: 'サブフォルダーを含む',

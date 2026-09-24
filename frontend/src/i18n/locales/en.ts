@@ -4160,7 +4160,6 @@ export default {
       label: 'Folder sidebar',
       hide: 'Hide folder sidebar',
       show: 'Show folder sidebar',
-      columnsDisabled: 'The columns view already replaces the folder sidebar',
     },
     searchFiles: 'Search files...',
     searchSubfoldersHint: 'Including subfolders',

@@ -1576,7 +1576,7 @@ describe('FileManagerPage', () => {
       expect(toggle()).toHaveAttribute('aria-pressed', 'false');
     });
 
-    it('is disabled in the columns view, which keeps its own layout', async () => {
+    it('works in the columns view too, where the tree is most redundant', async () => {
       const user = userEvent.setup();
       getItemMock.mockImplementation(storedHidden);
       render(<FileManagerPage />);
@@ -1585,29 +1585,29 @@ describe('FileManagerPage', () => {
 
       await user.click(screen.getByTitle('Column view'));
 
-      // aria-disabled, not `disabled`: a disabled button is out of the tab
-      // order, so the tooltip that explains why it is inert would never reach
-      // a keyboard or screen-reader user.
-      expect(toggle()).toHaveAttribute('aria-disabled', 'true');
-      expect(toggle()).not.toBeDisabled();
-      toggle().focus();
-      expect(document.activeElement).toBe(toggle());
-      expect(toggle()).toHaveAttribute(
-        'title',
-        'The columns view already replaces the folder sidebar'
-      );
-      // Reachable but inert: clicking must not rewrite the preference.
+      // The stored preference carries into this view rather than being
+      // overridden by it: the columns are the way down, so the tree beside
+      // them is the thing worth reclaiming the width from.
+      expect(screen.queryByTestId('folder-sidebar')).not.toBeInTheDocument();
+      expect(toggle()).not.toHaveAttribute('aria-disabled');
+      expect(toggle()).toHaveAttribute('aria-pressed', 'false');
+
       await user.click(toggle());
-      expect(setItemMock).not.toHaveBeenCalledWith('library-sidebar-hidden', expect.anything());
-      // The preference does not reach the columns view's own layout.
-      expect(screen.getByTestId('folder-sidebar')).toBeInTheDocument();
-      // …so the announced state must follow the layout, not the preference.
+      expect(setItemMock).toHaveBeenCalledWith('library-sidebar-hidden', 'false');
+      expect(await screen.findByTestId('folder-sidebar')).toBeInTheDocument();
       expect(toggle()).toHaveAttribute('aria-pressed', 'true');
-      // …and so must the icon: "open the sidebar" beside an open sidebar
-      // tells a sighted user the opposite of what is on screen.
-      expect(toggle().querySelector('svg.lucide-panel-left-close')).toBeTruthy();
-      expect(toggle().querySelector('svg.lucide-panel-left-open')).toBeNull();
-      // The columns view draws its own folder panes; no second nav.
+    });
+
+    it('does not add the content folder nav to the columns view', async () => {
+      const user = userEvent.setup();
+      getItemMock.mockImplementation(storedHidden);
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+      // Grid view with the tree off needs the stand-in; the columns do not.
+      expect(screen.getByTestId('content-folder-nav')).toBeInTheDocument();
+
+      await user.click(screen.getByTitle('Column view'));
+
       expect(screen.queryByTestId('content-folder-nav')).not.toBeInTheDocument();
     });
 

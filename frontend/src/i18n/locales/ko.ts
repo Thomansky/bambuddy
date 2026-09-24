@@ -3936,7 +3936,6 @@ export default {
       label: '폴더 사이드바',
       hide: '폴더 사이드바 숨기기',
       show: '폴더 사이드바 표시',
-      columnsDisabled: '열 보기가 이미 폴더 사이드바를 대신합니다',
     },
     searchFiles: '파일 검색...',
     searchSubfoldersHint: '하위 폴더 포함',

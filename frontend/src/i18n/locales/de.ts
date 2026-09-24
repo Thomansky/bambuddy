@@ -4129,7 +4129,6 @@ export default {
       label: 'Ordnerleiste',
       hide: 'Ordnerleiste ausblenden',
       show: 'Ordnerleiste einblenden',
-      columnsDisabled: 'Die Spaltenansicht ersetzt die Ordnerleiste bereits',
     },
     searchFiles: 'Dateien suchen...',
     searchSubfoldersHint: 'Inklusive Unterordner',

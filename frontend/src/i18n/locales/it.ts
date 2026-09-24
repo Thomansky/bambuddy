@@ -4115,7 +4115,6 @@ export default {
       label: 'Barra delle cartelle',
       hide: 'Nascondi la barra delle cartelle',
       show: 'Mostra la barra delle cartelle',
-      columnsDisabled: 'La vista a colonne sostituisce già la barra delle cartelle',
     },
     searchFiles: 'Cerca file...',
     searchSubfoldersHint: 'Sottocartelle incluse',

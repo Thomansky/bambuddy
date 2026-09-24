@@ -4114,7 +4114,6 @@ export default {
       label: '資料夾側欄',
       hide: '隱藏資料夾側欄',
       show: '顯示資料夾側欄',
-      columnsDisabled: '分欄檢視已經取代了資料夾側欄',
     },
     searchFiles: '搜尋檔案...',
     searchSubfoldersHint: '包含子資料夾',

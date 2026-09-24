@@ -4154,7 +4154,6 @@ export default {
       label: "Панель папок",
       hide: "Сховати панель папок",
       show: "Показати панель папок",
-      columnsDisabled: "Вигляд колонок уже замінює панель папок",
     },
     searchFiles: "Пошук файлів...",
     searchSubfoldersHint: "Включаючи вкладені папки",

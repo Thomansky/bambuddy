@@ -4114,7 +4114,6 @@ export default {
       label: '文件夹侧栏',
       hide: '隐藏文件夹侧栏',
       show: '显示文件夹侧栏',
-      columnsDisabled: '分栏视图已经取代了文件夹侧栏',
     },
     searchFiles: '搜索文件...',
     searchSubfoldersHint: '包含子文件夹',

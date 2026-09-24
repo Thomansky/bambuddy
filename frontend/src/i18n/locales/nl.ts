@@ -4159,7 +4159,6 @@ export default {
       label: 'Mappenbalk',
       hide: 'Mappenbalk verbergen',
       show: 'Mappenbalk tonen',
-      columnsDisabled: 'De kolomweergave vervangt de mappenbalk al',
     },
     searchFiles: 'Bestanden zoeken...',
     searchSubfoldersHint: 'Inclusief submappen',

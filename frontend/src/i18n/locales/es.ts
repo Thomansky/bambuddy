@@ -4131,7 +4131,6 @@ export default {
       label: 'Barra de carpetas',
       hide: 'Ocultar la barra de carpetas',
       show: 'Mostrar la barra de carpetas',
-      columnsDisabled: 'La vista de columnas ya sustituye a la barra de carpetas',
     },
     searchFiles: 'Buscar archivos...',
     searchSubfoldersHint: 'Incluyendo subcarpetas',

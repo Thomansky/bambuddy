@@ -2803,13 +2803,10 @@ export function FileManagerPage() {
     });
   }, []);
 
-  // The columns view already replaces the tree with its own panes, so it keeps
-  // its layout and the toggle is inert while it is active. `aria-disabled`
-  // rather than `disabled`: the explanation lives in the tooltip, and a
-  // `disabled` button is out of the tab order, so a keyboard or screen-reader
-  // user would meet an unreachable control with no reason given.
-  const sidebarToggleInert = viewMode === 'columns';
-  const folderSidebarVisible = !sidebarHidden || viewMode === 'columns';
+  // The columns view is where the tree is most redundant — the first column
+  // lists the same folders — so that is the view where switching it off buys
+  // the most width. It used to be the one view where the toggle did nothing.
+  const folderSidebarVisible = !sidebarHidden;
 
   // "Copy path" (tree and columns kebab, the file actions, the path bar). An
   // external folder copies the real directory it was linked from — the string
@@ -3449,28 +3446,13 @@ export function FileManagerPage() {
               says. The title still names the action the click performs. */}
           <button
             type="button"
-            onClick={sidebarToggleInert ? undefined : handleToggleSidebar}
-            aria-disabled={sidebarToggleInert || undefined}
+            onClick={handleToggleSidebar}
             aria-pressed={folderSidebarVisible}
             aria-label={t('fileManager.sidebarToggle.label')}
-            title={
-              sidebarToggleInert
-                ? t('fileManager.sidebarToggle.columnsDisabled')
-                : folderSidebarVisible
-                ? t('fileManager.sidebarToggle.hide')
-                : t('fileManager.sidebarToggle.show')
-            }
+            title={folderSidebarVisible ? t('fileManager.sidebarToggle.hide') : t('fileManager.sidebarToggle.show')}
             data-testid="toggle-folder-sidebar"
-            className={`hidden lg:flex items-center p-2 rounded-lg bg-bambu-dark transition-colors ${
-              sidebarToggleInert
-                ? 'opacity-40 cursor-not-allowed text-bambu-gray'
-                : 'text-bambu-gray hover:text-white'
-            }`}
+            className="hidden lg:flex items-center p-2 rounded-lg bg-bambu-dark text-bambu-gray hover:text-white transition-colors"
           >
-            {/* Keyed off the effective visibility, like aria-pressed: in the
-                columns view the tree is on screen whatever the stored
-                preference says, and an "open the sidebar" icon beside an open
-                sidebar reads as the opposite of the truth. */}
             {folderSidebarVisible ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
           </button>
           <Button
@@ -4166,8 +4148,9 @@ export function FileManagerPage() {
           />
 
           {/* With the tree switched off the content area carries the way down
-              (and the bucket switch) — the path bar only ever walks up. */}
-          {!folderSidebarVisible && (
+              (and the bucket switch) — the path bar only ever walks up. The
+              columns view needs none of it: its own panes are the way down. */}
+          {!folderSidebarVisible && viewMode !== 'columns' && (
             <ContentFolderNav
               folders={currentFolderChildren}
               variant={viewMode === 'list' ? 'list' : 'grid'}
