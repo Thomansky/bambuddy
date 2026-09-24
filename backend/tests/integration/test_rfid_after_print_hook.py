@@ -16,6 +16,7 @@ about the wiring around it.
 """
 
 import asyncio
+import logging
 from contextlib import ExitStack
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -140,9 +141,31 @@ class TestAutoOffWaitsForTheRound:
         plug.on_print_complete.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_the_wait_is_bounded(self):
-        """A task killed before its ``finally`` must not keep a printer
-        powered for ever, so the gate is a ceiling and not a promise."""
-        from backend.app.main import RFID_AFTER_PRINT_MAX_WAIT
+    async def test_a_round_that_never_ends_is_given_up_on(self, caplog):
+        """A task killed before its ``finally`` -- shutdown, a cancelled task --
+        never sets the gate. The gate is a ceiling and not a promise: a printer
+        left powered for ever because nobody released a flag is a worse bug
+        than one powered down a little early."""
 
-        assert 0 < RFID_AFTER_PRINT_MAX_WAIT <= 600
+        async def never_ends(printer_id):
+            await asyncio.Event().wait()
+
+        tasks_before = set(asyncio.all_tasks())
+        with ExitStack() as stack:
+            _scheduler, plug = _setup(stack, read_after_print=AsyncMock(side_effect=never_ends))
+            stack.enter_context(patch("backend.app.main.RFID_AFTER_PRINT_MAX_WAIT", 0.05))
+            with caplog.at_level(logging.WARNING, logger="backend.app.main"):
+                await _fire()
+                await _drain(tasks_before, wait=5)
+
+        plug.on_print_complete.assert_awaited_once()
+        assert any("still running after" in r.getMessage() for r in caplog.records)
+
+    def test_the_ceiling_outlasts_a_round_that_runs_its_full_budget(self):
+        """The ceiling only has a job if it is longer than the round it waits
+        for; set below ``_RFID_REREAD_TASK_TIMEOUT`` it would cut every slow
+        round short instead of catching the ones that died."""
+        from backend.app.main import RFID_AFTER_PRINT_MAX_WAIT
+        from backend.app.services.print_scheduler import _RFID_REREAD_TASK_TIMEOUT
+
+        assert RFID_AFTER_PRINT_MAX_WAIT > _RFID_REREAD_TASK_TIMEOUT

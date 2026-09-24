@@ -2479,7 +2479,7 @@ export default {
     rfidRereadLabel: '開始工作前重新讀取未識別的 AMS 線材卷',
     rfidRereadDescription: '印表機忙碌時放入的線材卷不會被 AMS 識別。開啟後，佇列會在工作對應並啟動之前，要求 AMS 讀取每個已佔用但未識別的槽位——每個工作只執行一次，且無論結果如何工作都會啟動。',
     rfidAfterPrintLabel: '列印結束後讀取未識別的 AMS 線材卷',
-    rfidAfterPrintDescription: '同一讀取動作放在另一端：列印結束時印表機閒置，AMS 可以移動線材，也沒有工作在等結果。無論列印成功或失敗都會執行，會跳過仍裝載在噴嘴中的線材卷，一旦有新列印開始就立即停止。自動斷電會等待讀取完成。',
+    rfidAfterPrintDescription: '同一讀取動作放在另一端：列印結束時印表機閒置，AMS 可以移動線材，也沒有工作在等結果。無論列印成功或失敗都會執行。AMS 只有在沒有裝載線材時才能讀取（印表機結束時通常會退料），因此噴嘴中仍有線材卷的印表機會留到下一次列印之後再讀。一旦有新列印開始就立即停止，自動斷電會等待讀取完成。',
     staggeredStart: '錯開啟動',
     staggeredStartDescription: '多台印表機批次啟動時的預設群組大小與間隔。可在列印對話框中逐批覆寫。',
     preheatTitle: '預熱與熱保溫',

@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
@@ -19,6 +20,11 @@ if TYPE_CHECKING:
     from backend.app.models.smart_plug import SmartPlug
 
 logger = logging.getLogger(__name__)
+
+# How often a pending turn-off re-asks whether the AMS is still reading. The
+# round it waits on lasts seconds, not minutes; a second of granularity costs
+# nothing and keeps the poll out of the way of everything else.
+AMS_READ_WAIT_POLL_INTERVAL = 1.0
 
 
 class SmartPlugManager:
@@ -307,6 +313,46 @@ class SmartPlugManager:
 
             self._schedule_off_per_mode(plug, printer_id)
 
+    async def _wait_for_ams_read(self, plug_id: int, printer_id: int) -> None:
+        """Hold a turn-off back while an AMS RFID read has filament moving.
+
+        ``ams_read_unidentified_after_print`` reads the spools a printer cannot
+        name in the seconds after a print ends, and the AMS feeds filament to
+        its reader to do it. Power cut in those seconds strands the filament
+        part way to the tag and the AMS needs clearing by hand.
+
+        The wait lives here, at the point power is actually switched, because
+        the per-job ``auto_off_after`` toggle reaches
+        :meth:`schedule_off_after_queue_job` from three different call sites --
+        one of them a thousand lines before the print-complete callback even
+        creates its own gate -- and an ``off_delay_minutes`` of 0 is a legal
+        setting. Gating the callers would leave holes; gating the switch does
+        not.
+
+        Bounded by the round's own ceiling: a printer nobody ever powers down
+        is a worse failure than one powered down a few seconds early.
+        """
+        from backend.app.services.print_scheduler import RFID_AFTER_PRINT_MAX_WAIT, scheduler as print_scheduler
+
+        if not print_scheduler.rfid_read_in_flight(printer_id):
+            return
+        logger.info(
+            "Auto-off for plug %s waiting: printer %s is reading its unidentified AMS spools",
+            plug_id,
+            printer_id,
+        )
+        deadline = time.monotonic() + RFID_AFTER_PRINT_MAX_WAIT
+        while print_scheduler.rfid_read_in_flight(printer_id):
+            if time.monotonic() >= deadline:
+                logger.warning(
+                    "Auto-off for plug %s: printer %s still reading its AMS after %ss, powering down anyway",
+                    plug_id,
+                    printer_id,
+                    RFID_AFTER_PRINT_MAX_WAIT,
+                )
+                return
+            await asyncio.sleep(AMS_READ_WAIT_POLL_INTERVAL)
+
     def _schedule_off_per_mode(self, plug: "SmartPlug", printer_id: int):
         """Schedule an auto-off using the plug's configured off strategy.
 
@@ -440,6 +486,8 @@ class SmartPlugManager:
         try:
             await asyncio.sleep(delay_seconds)
 
+            await self._wait_for_ams_read(plug_id, printer_id)
+
             # #1890: never cut power while a print is loaded / running. The
             # delay fires unconditionally after N minutes, so if the user
             # re-started (or reprinted) in the meantime, the printer is active
@@ -567,6 +615,8 @@ class SmartPlugManager:
                         )
 
                     if max_nozzle_temp < temp_threshold:
+                        await self._wait_for_ams_read(plug_id, printer_id)
+
                         # #1890: the nozzle can dip below the threshold between
                         # a finished print and a fresh one starting (e.g. a
                         # touchscreen reprint during the PREPARE/heating phase).

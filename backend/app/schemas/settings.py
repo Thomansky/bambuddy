@@ -501,7 +501,8 @@ class AppSettings(BaseModel):
         description=(
             "When a print ends — completed or failed — ask the AMS to read every occupied slot it has "
             "not identified yet, while the printer is idle and nobody is waiting on the answer. The "
-            "slots still loaded in a hotend are left alone, and a new print takes the printer back at "
+            "AMS can only read with nothing loaded, so a printer that has not retracted its filament "
+            "is left until after the next print that does; a new print takes the printer back at "
             "once. Auto-off waits for the read to finish."
         ),
     )

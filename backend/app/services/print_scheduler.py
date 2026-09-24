@@ -345,19 +345,19 @@ def _is_printing(state: Any) -> bool:
     return getattr(state, "state", None) in printer_manager.ACTIVE_PRINT_STATES
 
 
-def _loaded_ams_slots(state: Any) -> set[tuple[int, int]]:
-    """The slots whose filament is currently in a hotend.
+def _hotend_loaded_slots(state: Any) -> set[tuple[int, int]]:
+    """The slots holding filament that ``tray_now`` does not already account for.
 
-    The AMS has to pull filament back to reach a tag and refuses to do that for
-    a loaded slot, so a round leaves these alone rather than spending a refusal
-    on each. ``tray_now`` is the global tray id (``ams_id * 4 + slot_id``) and
-    names one slot for the whole printer; a dual-nozzle machine can hold two,
-    and only ``extruder_slots`` says which (see ``ExtruderSlot``).
+    ``tray_now`` is deliberately not decoded here. It stands the whole round
+    down instead: ``BambuMQTTClient.ams_refresh_tray`` refuses on that single
+    value for the printer as a whole ("Please unload filament first"), not per
+    slot, so a round that dropped only the slot it names would be refused on
+    every other one as well -- and would have reserved the printer to collect
+    those refusals. What is left for this to catch is the second hotend of a
+    dual-nozzle machine, which one global tray id cannot describe and only
+    ``extruder_slots`` reports (see ``ExtruderSlot``).
     """
     loaded: set[tuple[int, int]] = set()
-    tray_now = getattr(state, "tray_now", 255)
-    if isinstance(tray_now, int) and not isinstance(tray_now, bool) and 0 <= tray_now <= 253:
-        loaded.add((tray_now // 4, tray_now % 4))
     for slot in (getattr(state, "extruder_slots", None) or {}).values():
         ams_id = getattr(slot, "ams_id", None)
         slot_id = getattr(slot, "slot_id", None)
@@ -4393,13 +4393,14 @@ class PrintScheduler:
         loaded (the AMS has to move filament to reach a tag), or nothing left
         after the slots an earlier read already proved unreadable.
 
-        ``item_id`` is None for the round a finished print schedules, and that
-        round is evaluated differently in exactly one way: filament left in a
-        hotend is the normal state of a machine that has just finished, so
-        instead of standing the whole round down it drops the loaded slots and
-        reads the rest. Before dispatch the printer is idle and loaded filament
-        means somebody else is using it, which is a reason to keep out of the
-        way entirely.
+        ``item_id`` is None for the round a finished print schedules. It is
+        evaluated by the same rules as the pre-dispatch read, ``tray_now``
+        included: the transport refuses ``ams_get_rfid`` on that one value for
+        the whole printer, so a round that kept going with filament loaded
+        would hold the machine and collect one refusal per slot instead of
+        reading anything. A printer that has finished normally reports 255 --
+        it retracts -- and one that does not is read after the next print that
+        leaves it unloaded.
 
         Every outcome says so in the log, once, with the masks exactly as
         firmware sent them: when this decides wrongly on somebody's printer,
@@ -4427,7 +4428,7 @@ class PrintScheduler:
             slot for slot in self._forget_readable_slots(printer_id, state) if reasons.get(slot) == UNREAD_NO_IDENTITY
         }
         slots = [slot for slot in reasons if slot not in skipped]
-        loaded = _loaded_ams_slots(state) if after_print else set()
+        loaded = _hotend_loaded_slots(state)
         in_hotend = [slot for slot in slots if slot in loaded]
         if in_hotend:
             slots = [slot for slot in slots if slot not in loaded]
@@ -4446,7 +4447,7 @@ class PrintScheduler:
             tail = f" ({'; '.join(notes)})" if notes else ""
             self._say_rfid_preread(printer_id, item_id, f"{evaluated} -> 0 unread slot(s){tail}")
             return []
-        if not after_print and state.tray_now != 255:
+        if state.tray_now != 255:
             self._say_rfid_preread(
                 printer_id, item_id, f"{evaluated} -> {len(slots)} unread slot(s), skipped: filament loaded"
             )
@@ -4565,10 +4566,16 @@ class PrintScheduler:
           inside the AMS. ``_is_printer_idle`` would refuse every printer whose
           plate nobody has released yet, which on the farm this was written for
           was most of them, most of the time. Do not "fix" that back.
-        * Auto-off waits for this round rather than the other way round: see
-          ``on_print_complete`` in main.py, which gates ``[AUTO-OFF-BG]`` on the
-          task running this and bounds the wait with
-          ``RFID_AFTER_PRINT_MAX_WAIT``.
+        * Auto-off waits for this round rather than the other way round, in two
+          places because there are two ways power gets cut. ``on_print_complete``
+          in main.py gates ``[AUTO-OFF-BG]`` on the task running this; and every
+          scheduled off waits on ``rfid_read_in_flight`` in
+          ``smart_plug_manager`` just before it switches the plug, which is what
+          covers the per-job ``auto_off_after`` toggle -- that one is scheduled
+          from three different call sites, one of them a thousand lines earlier
+          in the same callback. Both waits are bounded by
+          ``RFID_AFTER_PRINT_MAX_WAIT``: a printer nobody powers down is worse
+          than one powered down a little early.
         * A print that starts anyway wins: the round checks before every slot
           and while waiting for one, and gives the printer straight back.
 
@@ -4578,17 +4585,21 @@ class PrintScheduler:
         tag = _rfid_preread_tag(printer_id, None)
         async with async_session() as db:
             enabled = await self._get_bool_setting(db, "ams_read_unidentified_after_print", default=False)
-        if not enabled:
-            logger.debug("%s: setting off", tag)
-            return
+            if not enabled:
+                logger.debug("%s: setting off", tag)
+                return
+            reserved = await self._queue_reserved_printers(db)
         if self._printing_again(printer_id):
             self._say_rfid_preread(printer_id, None, "setting=on already printing again, nothing read")
             return
-        if self._printer_in_dispatch_hold(printer_id):
-            # Somebody else has the printer reserved -- a dispatch on its way
-            # out, or the pre-dispatch read already doing this very job. Asked
-            # through the hold's own accessor so a hold that has already run
-            # out is dropped here rather than standing the round down.
+        if printer_id in reserved:
+            # Somebody else has the printer: an item already dispatched to it,
+            # an upload still in flight, or the pre-dispatch read already doing
+            # this very job. All three are what `_queue_reserved_printers`
+            # answers and the round has to honour every one of them -- the
+            # dispatch hold alone is taken only once the print command has gone
+            # out, which would leave a round free to move the AMS of a printer
+            # whose 3MF is half uploaded.
             self._say_rfid_preread(printer_id, None, "setting=on printer reserved elsewhere, nothing read")
             return
         slots = self._slots_to_reread(printer_id, None)
@@ -4601,8 +4612,50 @@ class PrintScheduler:
         if not slots:
             # The evaluation has already said why, at info.
             return
+        if self._printer_claimed_in_memory(printer_id):
+            # Asked once more with nothing awaited since, because the database
+            # read above did await: a dispatch launched while this round was
+            # deciding is already in `_inflight` by now.
+            self._say_rfid_preread(printer_id, None, "setting=on printer taken while deciding, nothing read")
+            return
+        # Nothing between this and the read task suspends, so the reservation
+        # cannot be stranded by a cancellation landing in between: the task
+        # releases it in its own `finally`.
         self._reserve_for_rfid_reread(printer_id, None)
         await self._reread_unknown_slots(printer_id, None, slots)
+
+    def _printer_claimed_in_memory(self, printer_id: int) -> bool:
+        """The queue's claims on *printer_id* that need no database read.
+
+        The half of ``_queue_reserved_printers`` that can change with nothing
+        awaited: ``_launch_uploads`` registers every upload it starts in
+        ``_inflight`` synchronously, and a dispatch hold is taken synchronously
+        too. Asking again just before a round reserves the printer is what
+        keeps it out of a dispatch that started while it was reading the
+        database.
+        """
+        if any(pid == printer_id for (_task, pid) in self._inflight.values()):
+            return True
+        return self._printer_in_dispatch_hold(printer_id)
+
+    def rfid_read_in_flight(self, printer_id: int) -> bool:
+        """Is an RFID read round moving filament on *printer_id* right now?
+
+        Asked by the smart-plug auto-off paths before they cut mains power: a
+        round has the AMS feeding a spool to the reader for a few seconds, and
+        a plug that fires in those seconds leaves the filament stranded part
+        way to the tag with the machine needing recovery by hand.
+
+        Read off the reservation itself rather than a flag of its own, so it
+        cannot outlive the round: ``_release_rfid_reread_hold`` drops the hold
+        in the round's ``finally``, and ``_printer_in_dispatch_hold`` expires
+        it on ``_dispatch_max_hold`` even for a task that died before reaching
+        that ``finally``.
+        """
+        entry = self._dispatch_holds.get(printer_id)
+        if entry is None or entry[1] != _RFID_REREAD_HOLD_MARKER:
+            return False
+        return self._printer_in_dispatch_hold(printer_id)
 
     def _release_rfid_reread_hold(self, printer_id: int) -> None:
         """Hand *printer_id* back to the queue after an RFID read of either kind.

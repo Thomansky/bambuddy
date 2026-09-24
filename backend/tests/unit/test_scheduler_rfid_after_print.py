@@ -16,10 +16,13 @@ The contract these tests pin:
 - on: one round per finished print, reading the occupied slots the AMS cannot
   name, with the same rules, the same cap and the same per-slot memory as the
   pre-dispatch read;
-- the slots still loaded in a hotend are left out of the round -- but they do
-  not stand the whole round down, which is the difference from the
-  pre-dispatch read: filament in the hotend is what a printer that has just
-  finished normally looks like;
+- filament loaded stands the whole round down, because that is the rule the
+  transport enforces: ``ams_refresh_tray`` refuses every slot on the printer
+  while ``tray_now`` says anything is loaded. A printer that has finished
+  normally has retracted and reports 255; one that has not is read after the
+  next print that does;
+- the second hotend of a dual-nozzle machine, which ``tray_now`` cannot
+  describe, is dropped from the round by ``extruder_slots``;
 - the plate-clear gate is NOT consulted: a finished plate nobody has released
   is exactly the window this exists for;
 - a print that takes the printer back ends the round at once, and a slot it
@@ -39,12 +42,15 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import backend.app.models  # noqa: F401 - populate Base.metadata
 from backend.app.core.database import Base
+from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer import Printer
 from backend.app.models.settings import Settings
+from backend.app.services.bambu_mqtt import BambuMQTTClient
 from backend.app.services.print_scheduler import _RFID_REREAD_HOLD_MARKER, PrintScheduler
 from backend.tests.unit.test_scheduler_rfid_preread import _add_item, _Harness, _item, _printer_state, _tray
 
@@ -91,8 +97,22 @@ def _finished(*, state="FINISH", tray_now=255, unread=(3,), exist="f", extruder_
     """A printer that has just come off a print, with *unread* slots occupied."""
     report = _printer_state(tray_now=tray_now, unread=unread, exist=exist)
     report.state = state
+    report.connected = True
     report.extruder_slots = extruder_slots or {}
     return report
+
+
+def _transport(state) -> BambuMQTTClient:
+    """A real MQTT client reporting *state*, with its socket mocked out.
+
+    Real on purpose. ``ams_refresh_tray`` has a gate of its own and it is the
+    one the round has to agree with; a stub that always accepts would let a
+    round that cannot send a single command pass for one that reads.
+    """
+    client = BambuMQTTClient(ip_address="10.0.0.1", serial_number="X1C0001", access_code="x", model="X1C")
+    client._client = MagicMock()
+    client.state = state
+    return client
 
 
 class _Round:
@@ -102,11 +122,28 @@ class _Round:
         self.scheduler = scheduler
         self.state = state
         self.connected = connected
+        self.transport = _transport(state) if client else None
         self.client = MagicMock() if client else None
         if self.client is not None:
-            self.client.ams_refresh_tray = refresh or MagicMock(return_value=(True, "Refreshing"))
+            self.client.ams_refresh_tray = MagicMock(side_effect=self._refresh(refresh))
         self.tasks: list[asyncio.Task] = []
         self.pa_applied = AsyncMock()
+
+    def _refresh(self, hook):
+        """The real gate first; *hook* is what the printer does once it is past.
+
+        Every ``refresh=`` a test passes describes an accepted command -- the
+        tag arriving, a print starting, the session dying. None of them gets to
+        decide whether the command was accepted in the first place.
+        """
+
+        def call(ams_id, slot_id):
+            ok, message = self.transport.ams_refresh_tray(ams_id, slot_id)
+            if ok and hook is not None:
+                return hook(ams_id, slot_id)
+            return ok, message
+
+        return call
 
     def _spawn(self, coro, *, name=None):
         task = asyncio.ensure_future(coro)
@@ -226,25 +263,76 @@ class TestAPrintThatEnded:
 
 
 class TestTheLoadedTray:
+    """The transport refuses per printer, not per slot, so a round stands down.
+
+    ``BambuMQTTClient.ams_refresh_tray`` reads one value -- ``state.tray_now``
+    -- and refuses every slot on the machine while it says anything is loaded.
+    A round that dropped only the slot that value names and kept the rest would
+    reserve the printer, hold the queue off it, gate auto-off, and then collect
+    one refusal per slot: a feature that reads as working and identifies
+    nothing. The printer this is for has retracted by the time it reports
+    FINISH; the ones that have not are read after the next print that does.
+    """
+
     @pytest.mark.asyncio
-    async def test_it_is_left_out_while_the_rest_are_read(self, ctx):
-        """The difference from the pre-dispatch read. Filament still in the
-        hotend is what a printer that has just finished looks like; standing
-        the whole round down for it would mean the feature never runs."""
+    @pytest.mark.parametrize("tray_now", [0, 1, 5, 128, 254])
+    async def test_a_round_stands_down_while_anything_is_loaded(self, ctx, tray_now):
+        """128 is an AMS-HT dry box and 254 the external spool. Neither is an
+        ``ams_id * 4 + slot_id`` tray, so neither can be dropped slot-wise --
+        and the transport refuses on both just the same."""
+        await _enable(ctx)
+        scheduler = PrintScheduler()
+
+        r = await _Round(scheduler, _finished(tray_now=tray_now, unread=(1, 3))).run(ctx)
+
+        assert r.refreshed == []
+        assert scheduler._dispatch_holds == {}
+        assert scheduler._rfid_rereads == {}
+
+    @pytest.mark.asyncio
+    async def test_the_stand_down_says_how_much_it_did_not_read(self, ctx, caplog):
         await _enable(ctx)
 
-        r = await _Round(PrintScheduler(), _finished(tray_now=1, unread=(1, 3))).run(ctx)
+        with caplog.at_level(logging.INFO, logger="backend.app.services.print_scheduler"):
+            await _Round(PrintScheduler(), _finished(tray_now=1, unread=(1, 3))).run(ctx)
 
-        assert r.refreshed == [(0, 3)]
+        assert any("2 unread slot(s), skipped: filament loaded" in line for line in _lines(caplog))
+
+    @pytest.mark.parametrize("tray_now", [0, 1, 5, 128, 254])
+    def test_the_stand_down_is_the_rule_the_transport_itself_enforces(self, tray_now):
+        """Pinned against the real client. The round stands down because
+        ``ams_refresh_tray`` refuses for the whole printer; if that ever became
+        a per-slot gate, this is the test that says the round may read the
+        slots the loaded one does not name."""
+        transport = _transport(_finished(tray_now=tray_now))
+
+        for ams_id, slot_id in ((0, 0), (0, 3), (1, 2)):
+            ok, message = transport.ams_refresh_tray(ams_id, slot_id)
+            assert not ok
+            assert "unload filament first" in message
+        assert transport._client.publish.call_count == 0
+
+    def test_nothing_loaded_is_what_lets_a_round_read_at_all(self):
+        transport = _transport(_finished(tray_now=255))
+
+        ok, _message = transport.ams_refresh_tray(0, 3)
+
+        assert ok
+        assert transport._client.publish.call_count == 1
+
+
+class TestTheSecondHotend:
+    """What ``tray_now`` cannot say, and ``extruder_slots`` can.
+
+    One global tray id names one slot for the whole printer, so on a dual-nozzle
+    machine holding two spools it can only ever cover one of them. The other is
+    dropped here, because the transport's gate will not catch it.
+    """
 
     @pytest.mark.asyncio
-    async def test_both_hotends_of_a_dual_nozzle_printer_are_left_out(self, ctx):
-        """``tray_now`` names one slot for the whole printer, so on an H2 it
-        can only ever cover one of two loaded spools -- ``extruder_slots`` is
-        what says which."""
+    async def test_the_slot_tray_now_cannot_name_is_left_out(self, ctx):
         await _enable(ctx)
         state = _finished(
-            tray_now=1,
             unread=(1, 2, 3),
             extruder_slots={
                 0: SimpleNamespace(ams_id=0, slot_id=1, has_filament=True),
@@ -271,9 +359,13 @@ class TestTheLoadedTray:
     @pytest.mark.asyncio
     async def test_a_round_with_nothing_left_to_read_says_which_slots_were_loaded(self, ctx, caplog):
         await _enable(ctx)
+        state = _finished(
+            unread=(3,),
+            extruder_slots={0: SimpleNamespace(ams_id=0, slot_id=3, has_filament=True)},
+        )
 
         with caplog.at_level(logging.INFO, logger="backend.app.services.print_scheduler"):
-            r = await _Round(PrintScheduler(), _finished(tray_now=3, unread=(3,))).run(ctx)
+            r = await _Round(PrintScheduler(), state).run(ctx)
 
         assert r.refreshed == []
         assert any("0 unread slot(s) (1 skipped: loaded (AMS0-T3))" in line for line in _lines(caplog))
@@ -354,6 +446,56 @@ class TestANewPrintWins:
 
         assert r.refreshed == []
         assert any("printer reserved elsewhere, nothing read" in line for line in _lines(caplog))
+
+    @pytest.mark.asyncio
+    async def test_an_upload_still_in_flight_is_a_reservation_too(self, ctx, caplog):
+        """The dispatch hold is taken only once the print command has gone out.
+        For the whole upload before it -- a large 3MF over FTP is the better
+        part of a minute -- the queue's claim on the printer is ``_inflight``,
+        and the printer still reports FINISH. A round that asked about the hold
+        alone would start moving the AMS into the beginning of a print."""
+        await _enable(ctx)
+        scheduler = PrintScheduler()
+        scheduler._inflight[7] = (MagicMock(), 1)
+
+        with caplog.at_level(logging.INFO, logger="backend.app.services.print_scheduler"):
+            r = await _Round(scheduler, _finished()).run(ctx)
+
+        assert r.refreshed == []
+        assert scheduler._dispatch_holds == {}
+        assert any("printer reserved elsewhere, nothing read" in line for line in _lines(caplog))
+
+    @pytest.mark.asyncio
+    async def test_a_dispatch_that_starts_while_the_round_decides_still_wins(self, ctx, caplog):
+        """Reading the reservations awaits the database, and a dispatch tick is
+        synchronous: one can register itself in that gap. The claims that need
+        no database read are asked again with nothing awaited since, which is
+        the last moment a round can still stand down."""
+        await _enable(ctx)
+        scheduler = PrintScheduler()
+        scheduler._queue_reserved_printers = AsyncMock(return_value=set())
+        scheduler._inflight[7] = (MagicMock(), 1)
+
+        with caplog.at_level(logging.INFO, logger="backend.app.services.print_scheduler"):
+            r = await _Round(scheduler, _finished()).run(ctx)
+
+        assert r.refreshed == []
+        assert scheduler._dispatch_holds == {}
+        assert any("printer taken while deciding, nothing read" in line for line in _lines(caplog))
+
+    @pytest.mark.asyncio
+    async def test_an_item_already_printing_on_it_is_a_reservation_too(self, ctx):
+        """The third of the three the queue counts: the row says the job is on
+        this printer even in the seconds before its state catches up."""
+        await _enable(ctx)
+        item_id = await _add_item(ctx)
+        async with ctx.session_maker() as db:
+            await db.execute(update(PrintQueueItem).where(PrintQueueItem.id == item_id).values(status="printing"))
+            await db.commit()
+
+        r = await _Round(PrintScheduler(), _finished()).run(ctx)
+
+        assert r.refreshed == []
 
 
 class TestTheReservation:

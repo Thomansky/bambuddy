@@ -6986,6 +6986,11 @@ async def on_print_complete(printer_id: int, data: dict):
             # power on a loaded print (#1890). Previously an inline block here
             # hardcoded a 50°C / 600s cooldown wait and powered off on the
             # timeout regardless of print state — cutting a touchscreen reprint.
+            #
+            # This runs long before the [RFID-BG] gate further down exists, and
+            # `off_delay_minutes` may be 0. The AMS read is not gated here but
+            # in `_wait_for_ams_read`, which every scheduled off passes through
+            # right before it switches the plug — this call site only schedules.
             if queue_auto_off:
                 try:
                     async with async_session() as db:
@@ -7840,6 +7845,12 @@ async def on_print_complete(printer_id: int, data: dict):
     # either task exists: a gate the reader armed itself would be checked by
     # auto-off before it was there, and a round that loses its printer mid-way
     # is the one way this feature quietly does nothing.
+    #
+    # It gates this callback's own auto-off only. The off a queue item's
+    # `auto_off_after` schedules was handed to the smart-plug manager a
+    # thousand lines up, so the wait that covers every path is the one in
+    # `SmartPlugManager._wait_for_ams_read`; this one keeps [AUTO-OFF-BG] from
+    # even asking the plugs while the AMS is still busy.
     rfid_read_done = asyncio.Event()
 
     async def _background_rfid_read():

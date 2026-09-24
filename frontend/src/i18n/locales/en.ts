@@ -2501,7 +2501,7 @@ export default {
     rfidRereadLabel: 'Re-read unidentified AMS spools before starting a job',
     rfidRereadDescription: 'Spools inserted while the printer was busy are not identified by the AMS. With this on, the queue asks the AMS to read every occupied but unidentified slot before the job is mapped and started — once per job, and the job starts regardless of the result.',
     rfidAfterPrintLabel: 'Read unidentified AMS spools after a print',
-    rfidAfterPrintDescription: 'The same read at the other end: when a print ends the printer is idle, the AMS is free to move filament and no job is waiting for the answer. Runs after every print, whether it completed or failed, skips the spools still loaded in a hotend, and stops at once if a new print starts. Auto-off waits for it to finish.',
+    rfidAfterPrintDescription: 'The same read at the other end: when a print ends the printer is idle, the AMS is free to move filament and no job is waiting for the answer. Runs after every print, whether it completed or failed. The AMS can only read with nothing loaded — printers normally retract when they finish — so one that still has a spool in a nozzle is left until after the next print. Stops at once if a new print starts, and auto-off waits for it to finish.',
     staggeredStart: 'Staggered Start',
     staggeredStartDescription: 'Default group size and interval when staggering multi-printer batch starts. Can be overridden per batch in the print modal.',
     preheatTitle: 'Preheat & Heat Soak',
