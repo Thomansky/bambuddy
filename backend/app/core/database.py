@@ -4975,6 +4975,11 @@ async def run_migrations(conn):
     await _safe_execute(conn, "ALTER TABLE library_files ADD COLUMN external_url VARCHAR(500)")
     await _safe_execute(conn, "ALTER TABLE library_files ADD COLUMN photos JSON")
 
+    # Migration: a library row whose bytes have not arrived yet (#3152 write
+    # half). A WebDAV client creates a file empty before it writes into it, so
+    # the row exists one request before its content does.
+    await _safe_execute(conn, "ALTER TABLE library_files ADD COLUMN ingest_pending BOOLEAN DEFAULT FALSE")
+
     # Migration: actionable maintenance — scheduled printer calibration (#3127).
     # JSON and VARCHAR are spelled identically on SQLite and Postgres. The
     # maintenance_runs table is new; create_all() builds it on the paths that
