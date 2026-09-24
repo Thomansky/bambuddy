@@ -289,6 +289,32 @@ def has_vision_encoder(model: str | None) -> bool:
     return normalized in VISION_ENCODER_MODELS
 
 
+# The Micro Lidar sits under the toolhead of the X1 series only; no other model
+# has the hardware. Bambu Studio offers the calibration exclusively there, and
+# BambuMQTTClient.start_calibration has said "(X1 series)" about bit 0 since it
+# was written -- the gate was simply never applied to the options the UI offers.
+MICRO_LIDAR_MODELS = frozenset(
+    [
+        # Display names (uppercase, no spaces)
+        "X1",
+        "X1C",
+        "X1E",
+        # Internal codes
+        "C11",  # X1C
+        "C12",  # X1
+        "C13",  # X1E
+    ]
+)
+
+
+def has_micro_lidar(model: str | None) -> bool:
+    """Return True if the model carries a Micro Lidar (X1 series)."""
+    if not model:
+        return False
+    normalized = model.strip().upper().replace(" ", "").replace("-", "")
+    return normalized in MICRO_LIDAR_MODELS
+
+
 # Models where Bambu's own firmware/UI names the enclosure fan (big_fan2 /
 # airduct part id 3) "Exhaust" rather than "Chamber". On these the printer's
 # touchscreen and Bambu Studio both call it the exhaust fan, and on the P2S it

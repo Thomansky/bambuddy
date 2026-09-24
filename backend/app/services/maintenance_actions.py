@@ -40,7 +40,7 @@ from backend.app.models.maintenance import MaintenanceHistory, MaintenanceRun, M
 from backend.app.models.printer import Printer
 from backend.app.utils.local_time import local_zone, utcnow_naive
 from backend.app.utils.print_jobs import action_for_job
-from backend.app.utils.printer_models import has_vision_encoder, is_dual_nozzle_model
+from backend.app.utils.printer_models import has_micro_lidar, has_vision_encoder, is_dual_nozzle_model
 
 logger = logging.getLogger(__name__)
 
@@ -414,14 +414,19 @@ def run_options(action: str | None, options: dict | None) -> dict[str, bool] | N
 def available_calibration_options(printer_model: str | None) -> list[str]:
     """Flags the card should offer for this model.
 
-    Nozzle offset only exists on dual-nozzle printers. The other flags are
-    offered everywhere: the firmware ignores bits the machine has no hardware
-    for, and there is no model table for the Micro Lidar or the
-    high-temperature bed to hide them by.
+    Nozzle offset only exists on dual-nozzle printers, and the Micro Lidar only
+    on the X1 series -- offering either elsewhere asks for a calibration the
+    machine cannot run. The remaining flags are offered everywhere: the
+    firmware ignores bits for hardware it does not have, and unlike those two
+    there is no model list to hide them by. The high-temperature bed is the
+    open one: it is a P2S/H2 feature in practice, but not from any source
+    solid enough to gate on.
     """
     flags = list(CALIBRATION_FLAGS)
     if not is_dual_nozzle_model(printer_model):
         flags.remove("nozzle_offset")
+    if not has_micro_lidar(printer_model):
+        flags.remove("micro_lidar")
     return flags
 
 

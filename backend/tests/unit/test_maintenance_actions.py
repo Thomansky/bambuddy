@@ -52,9 +52,17 @@ class TestOptions:
         assert "nozzle_offset" not in available_calibration_options("X1C")
         assert "nozzle_offset" not in available_calibration_options(None)
 
+    def test_micro_lidar_only_on_the_x1_series(self):
+        # The lidar sits under the X1's toolhead and nowhere else; offering the
+        # box on a P1S asks for a calibration that machine cannot run.
+        for model in ("X1C", "X1", "X1E", "C11"):
+            assert "micro_lidar" in available_calibration_options(model)
+        for model in ("P1S", "A1", "H2D", "H2S", None):
+            assert "micro_lidar" not in available_calibration_options(model)
+
     def test_the_other_flags_are_offered_everywhere(self):
         offered = available_calibration_options("P1S")
-        for flag in ("bed_leveling", "vibration", "motor_noise", "high_temp_heatbed", "micro_lidar", "nozzle_clumping"):
+        for flag in ("bed_leveling", "vibration", "motor_noise", "high_temp_heatbed", "nozzle_clumping"):
             assert flag in offered
 
 
