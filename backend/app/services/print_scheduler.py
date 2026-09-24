@@ -311,14 +311,236 @@ _RFID_REREAD_TASK_TIMEOUT = 120.0
 _RFID_REREAD_POLL_INTERVAL = 1.0
 _RFID_REREAD_MAX_SLOTS = 8
 
+# An unload is a different order of magnitude from a tag read: the printer
+# heats the nozzle and pulls the strand back out of it before the slot reports
+# free. Two hotends is the most any machine Bambuddy speaks to has, and the cap
+# is what stops a payload claiming more from making a round unbounded.
+_RFID_UNLOAD_TIMEOUT = 90.0
+_RFID_UNLOAD_MAX_HOTENDS = 2
 
-def _rfid_preread_tag(printer_id: int, item_id: int) -> str:
-    """The prefix every pre-read log line shares, so one grep finds the lot."""
-    return f"RFID pre-read [printer {printer_id}, item {item_id}]"
+# `extruder_slots` and `tray_now` come out of different parts of a payload and
+# are not refreshed together: `_parse_extruder_slots` deliberately keeps its
+# previous answer whenever a payload omits `device.extruder.info`, while
+# `tray_now` rides the far more frequent `print.ams` deltas. Either can be the
+# stale one, so when they disagree the round asks the printer for a full push
+# and gives it this long to agree with itself. Both directions of the
+# disagreement cost something real: an unload sent on the strength of a stale
+# extruder block heats a nozzle on an already-empty machine, and a `tray_now`
+# that has not caught up aborts a round whose filament has already moved.
+_RFID_UNLOAD_SETTLE = 8.0
+
+# The tray ids `BambuMQTTClient.ams_unload_filament` can decode back to a unit
+# and a slot, mirroring `_is_valid_load_tray_id` in routes/printers.py: a
+# regular AMS (0-15), the A2L Lite normalised to unit 6 (24-27) and the
+# external spool (254). An AMS-HT dry box shares its unit id (128-135) and does
+# not divide by four, and NEITHER form of the command reaches one: the
+# unaddressed form re-derives its unit from `tray_now`, which for a hotend fed
+# from an AMS-HT is that same 128-135 id, so both forms publish
+# `ams_id = 128 // 4 = 32` at a unit that does not exist. A hotend fed from one
+# cannot be unloaded at all, and the round says so instead of sending a command
+# that lands nowhere and then waiting 90 s for it.
+_UNLOAD_ADDRESSABLE_TRAYS = frozenset(range(16)) | frozenset(range(24, 28)) | {254}
+
+# The longest one round can run: a settle, an unload per hotend, the settle
+# after them, then the read. Everything that has to outlast a round is derived
+# from this rather than written out again -- the numbers drifting apart is
+# exactly how the reservation came to expire mid-round once already.
+_RFID_REREAD_ROUND_BUDGET = (
+    _RFID_UNLOAD_SETTLE * 2 + _RFID_UNLOAD_TIMEOUT * _RFID_UNLOAD_MAX_HOTENDS + _RFID_REREAD_TASK_TIMEOUT
+)
+
+# The hard ceiling on a read round's reservation, and the one thing about it
+# that differs from `_dispatch_max_hold`. That one bounds a printer digesting a
+# command; this one bounds a printer moving filament, which takes as long as
+# the budget above allows. Expiring the reservation first would hand the
+# printer back to the queue and open both auto-off gates in the middle of a
+# retraction -- and silently, because nothing would have timed out. Still only
+# a net for a task that died before its `finally`.
+_RFID_REREAD_MAX_HOLD = _RFID_REREAD_ROUND_BUDGET + 30.0
+
+# How long a round announced by `expect_after_print_read` is waited for before
+# it is written off as never having started. `on_print_complete` hands the
+# queue's per-job auto-off to the smart-plug manager about a thousand lines
+# before it spawns the round, and `off_delay_minutes` of 0 is legal, so without
+# the marker that off can pass the gate in the gap. The round drops it in its
+# own `finally`, within milliseconds of starting or declining.
+_RFID_READ_PENDING_GRACE = 60.0
+
+# How long the post-print auto-off waits for an after-print read to hand the
+# printer back before it powers the machine down anyway. It has to outlast the
+# reservation's own ceiling, or the wait would end when the hold expired rather
+# than when this deadline passed -- and that ending is silent, with no
+# "powering down anyway" line to say power was cut early. A task killed before
+# its `finally` must not leave a printer powered forever, so this is a ceiling,
+# not a promise.
+RFID_AFTER_PRINT_MAX_WAIT = _RFID_REREAD_MAX_HOLD + 30.0
+
+
+def _rfid_preread_tag(printer_id: int, item_id: int | None) -> str:
+    """The prefix every pre-read log line shares, so one grep finds the lot.
+
+    ``item_id`` is None for the round a finished print schedules
+    (``ams_read_unidentified_after_print``): no job is waiting on that one, so
+    the tag says when it ran instead of naming an item it has nothing to do with.
+    """
+    who = f"item {item_id}" if item_id is not None else "after print"
+    return f"RFID pre-read [printer {printer_id}, {who}]"
 
 
 def _rfid_slot_labels(slots: list[tuple[int, int]] | tuple[tuple[int, int], ...]) -> str:
     return ", ".join(f"AMS{ams_id}-T{slot_id}" for ams_id, slot_id in slots)
+
+
+def _is_printing(state: Any) -> bool:
+    """Is this report one of a printer that currently has a print on it?
+
+    Read off the state alone rather than through ``is_print_active``, which
+    also insists on ``connected``: a read round already holds the report it
+    is deciding on, and a stale-looking connection flag must not be what
+    keeps it moving filament.
+    """
+    return getattr(state, "state", None) in printer_manager.ACTIVE_PRINT_STATES
+
+
+def _hotend_loaded_slots(state: Any) -> set[tuple[int, int]]:
+    """The slots holding filament that ``tray_now`` does not already account for.
+
+    ``tray_now`` is deliberately not decoded here. It stands the whole round
+    down instead: ``BambuMQTTClient.ams_refresh_tray`` refuses on that single
+    value for the printer as a whole ("Please unload filament first"), not per
+    slot, so a round that dropped only the slot it names would be refused on
+    every other one as well -- and would have reserved the printer to collect
+    those refusals. What is left for this to catch is the second hotend of a
+    dual-nozzle machine, which one global tray id cannot describe and only
+    ``extruder_slots`` reports (see ``ExtruderSlot``).
+    """
+    loaded: set[tuple[int, int]] = set()
+    for slot in (getattr(state, "extruder_slots", None) or {}).values():
+        ams_id = getattr(slot, "ams_id", None)
+        slot_id = getattr(slot, "slot_id", None)
+        if getattr(slot, "has_filament", False) and ams_id is not None and slot_id is not None:
+            loaded.add((ams_id, slot_id))
+    return loaded
+
+
+@dataclass(frozen=True, slots=True)
+class _LoadedHotend:
+    """One hotend holding filament, and how an unload command would address it.
+
+    ``extruder`` is the index ``extruder_slots`` reports it under, or None for
+    a hotend only ``tray_now`` knows about. ``tray_id`` is the global id
+    ``ams_unload_filament`` takes, or None for the unaddressed form, which
+    unloads whatever ``tray_now`` names.
+
+    ``unloadable`` is False when *neither* form of the command reaches this
+    hotend, because both decode a unit id by dividing by four and an AMS-HT
+    shares its unit id instead (see ``_UNLOAD_ADDRESSABLE_TRAYS``). A round
+    must not send anything at such a hotend: the command would publish at a
+    unit that does not exist and the wait for it would run out in full.
+    """
+
+    label: str
+    extruder: int | None
+    slot: tuple[int, int] | None
+    tray_id: int | None
+    unloadable: bool
+
+
+def _loaded_hotends(state: Any) -> list[_LoadedHotend]:
+    """Every hotend this printer reports filament in, in the order to unload them.
+
+    ``extruder_slots`` is the only per-hotend view there is, and on a
+    dual-nozzle machine the only thing that can describe the second hotend at
+    all: ``tray_now`` is one value for the whole printer, so it names at most
+    one of them. The list is therefore built from ``extruder_slots`` whenever
+    that reports anything loaded, and ``tray_now`` fills in only for the
+    printers that do not send the block -- otherwise a global id naming a
+    hotend already in the list would buy that hotend a second unload, which is
+    the one thing this round must never do.
+
+    An empty list means nothing is loaded and nothing needs unloading, which
+    is the common case: a printer that has finished normally has retracted.
+    """
+    tray_now = getattr(state, "tray_now", 255)
+    # The unaddressed command re-derives its unit from `tray_now`, so whether
+    # that form can reach anything is a property of `tray_now` alone.
+    unaddressed_reaches = tray_now in _UNLOAD_ADDRESSABLE_TRAYS
+    hotends: list[_LoadedHotend] = []
+    for extruder, slot in sorted((getattr(state, "extruder_slots", None) or {}).items()):
+        if not getattr(slot, "has_filament", False):
+            continue
+        ams_id = getattr(slot, "ams_id", None)
+        slot_id = getattr(slot, "slot_id", None)
+        if ams_id is None or slot_id is None:
+            # Filament in the hotend that no AMS slot is feeding -- an external
+            # spool, or a strand left behind. Only the unaddressed form is left,
+            # and it can do nothing for a printer whose `tray_now` says 255.
+            hotends.append(_LoadedHotend(f"extruder {extruder}", extruder, None, None, unaddressed_reaches))
+            continue
+        tray_id = pa_calibration.global_tray_id(ams_id, slot_id)
+        addressable = tray_id in _UNLOAD_ADDRESSABLE_TRAYS
+        hotends.append(
+            _LoadedHotend(
+                f"AMS{ams_id}-T{slot_id}",
+                extruder,
+                (ams_id, slot_id),
+                tray_id if addressable else None,
+                addressable,
+            )
+        )
+    if hotends:
+        return hotends[:_RFID_UNLOAD_MAX_HOTENDS]
+    if tray_now is not None and tray_now != 255:
+        # The single-nozzle shape: no `device.extruder` block, one loaded slot,
+        # and the unaddressed unload -- which reads `tray_now` itself -- is
+        # exactly what the manual button sends there.
+        return [_LoadedHotend(f"tray {tray_now}", None, None, None, unaddressed_reaches)]
+    return []
+
+
+def _loaded_signals_disagree(state: Any) -> bool:
+    """Do this printer's two loading signals tell different stories?
+
+    ``extruder_slots`` and ``tray_now`` are refreshed at different rates and
+    either can be the stale one (see ``_RFID_UNLOAD_SETTLE``). A dual-nozzle
+    machine loaded only on its idle hotend reports this same shape honestly --
+    ``tray_now`` follows the active hotend -- which is why the answer to a
+    disagreement is "ask the printer again", not "believe the other one".
+
+    Only ever asked of a printer that reports the extruder block at all: with
+    no block there is one signal and nothing to disagree with.
+    """
+    slots = (getattr(state, "extruder_slots", None) or {}).values()
+    if not slots:
+        return False
+    block_loaded = any(getattr(slot, "has_filament", False) for slot in slots)
+    tray_now = getattr(state, "tray_now", 255)
+    return block_loaded != (tray_now is not None and tray_now != 255)
+
+
+def _hotend_is_loaded(state: Any, hotend: _LoadedHotend) -> bool:
+    """Is *hotend* still holding filament, according to the latest report?
+
+    Asked immediately before every unload and again while waiting for one. A
+    hotend the printer no longer reports on is deliberately read as still
+    loaded: an answer that is missing is not an answer that it is free, and
+    the round gives up on a timeout rather than reading into a loaded machine.
+    """
+    if hotend.extruder is None:
+        tray_now = getattr(state, "tray_now", 255)
+        return tray_now is not None and tray_now != 255
+    slot = (getattr(state, "extruder_slots", None) or {}).get(hotend.extruder)
+    if slot is None:
+        return True
+    if not getattr(slot, "has_filament", False):
+        return False
+    if hotend.slot is None:
+        return True
+    return (getattr(slot, "ams_id", None), getattr(slot, "slot_id", None)) == hotend.slot
+
+
+def _hotend_labels(hotends: list[_LoadedHotend]) -> str:
+    return ", ".join(hotend.label for hotend in hotends)
 
 
 def _rfid_slot_report(slots: list[tuple[int, int]], reasons: Mapping[tuple[int, int], str]) -> str:
@@ -1003,15 +1225,25 @@ class PrintScheduler:
         # Hard timeout — drop the hold even if we never observed a transition,
         # so a lost MQTT session can't lock a printer out of the queue forever.
         # Matches the watchdog timeout (90 s) plus a safety margin so the
-        # watchdog runs first on the unhappy path.
+        # watchdog runs first on the unhappy path. An RFID read round's hold
+        # expires on `_RFID_REREAD_MAX_HOLD` instead: it bounds a printer
+        # moving filament, not one digesting a command.
         self._dispatch_max_hold = 180.0
-        # Printers whose unidentified AMS slots are being read before dispatch,
-        # printer_id -> the queue item that asked. The printer itself is
-        # reserved through `_dispatch_holds` (marker `_RFID_REREAD_HOLD_MARKER`)
-        # so everything that honours that hold stays off it; this map is what
-        # keeps the asking item's own row saying "reading" rather than "busy"
-        # on the passes in between. Both are dropped together by the read task.
-        self._rfid_rereads: dict[int, int] = {}
+        # Printers an after-print read round has been announced for but not yet
+        # taken its reservation on, printer_id -> the monotonic deadline the
+        # announcement expires at. Only the auto-off gates read this; the queue
+        # deliberately does not, because nothing has been reserved yet. See
+        # `expect_after_print_read`.
+        self._rfid_read_pending: dict[int, float] = {}
+        # Printers whose unidentified AMS slots are being read, printer_id ->
+        # the queue item that asked, or None for the round a finished print
+        # schedules (`ams_read_unidentified_after_print`), which nobody is
+        # waiting on. The printer itself is reserved through `_dispatch_holds`
+        # (marker `_RFID_REREAD_HOLD_MARKER`) so everything that honours that
+        # hold stays off it; this map is what keeps the asking item's own row
+        # saying "reading" rather than "busy" on the passes in between. Both
+        # are dropped together by the read task.
+        self._rfid_rereads: dict[int, int | None] = {}
         # printer_id -> the slots a pre-read already asked about and got no
         # identity out of. An unreadable spool -- a third-party roll, a torn
         # tag -- would otherwise be asked about before every single job, so it
@@ -1569,7 +1801,12 @@ class PrintScheduler:
             for held_printer_id in list(self._dispatch_holds.keys()):
                 if self._printer_in_dispatch_hold(held_printer_id):
                     if held_printer_id in self._rfid_rereads:
-                        mark_busy(held_printer_id, "reading unidentified AMS spools before dispatch")
+                        mark_busy(
+                            held_printer_id,
+                            "reading unidentified AMS spools before dispatch"
+                            if self._rfid_rereads[held_printer_id] is not None
+                            else "reading unidentified AMS spools after its print",
+                        )
                     else:
                         mark_busy(held_printer_id, "still inside its post-dispatch hold window")
 
@@ -4199,7 +4436,8 @@ class PrintScheduler:
         """True if ``printer_id`` is still inside its post-dispatch hold window.
 
         Returns False (and clears the hold) once any of these are true:
-          - hard timeout (``_dispatch_max_hold``) has elapsed
+          - hard timeout has elapsed — ``_dispatch_max_hold``, or
+            ``_RFID_REREAD_MAX_HOLD`` for a read round's hold
           - the printer has transitioned out of pre_state and we're past the
             minimum cooldown
           - the printer's subtask_id has advanced past pre_subtask_id and we're
@@ -4212,15 +4450,22 @@ class PrintScheduler:
         started_at, pre_state, pre_subtask_id = entry
         elapsed = time.monotonic() - started_at
 
-        if elapsed >= self._dispatch_max_hold:
+        # A read round gets its own hard timeout, and a longer one. This hold
+        # is not a printer digesting a command but a printer moving filament,
+        # for as long as `_RFID_REREAD_ROUND_BUDGET` allows; expiring it on the
+        # dispatch timeout would drop a live round's reservation, hand the
+        # printer back to the queue and open both auto-off gates mid-retraction
+        # without anything timing out to say so.
+        max_hold = _RFID_REREAD_MAX_HOLD if pre_state == _RFID_REREAD_HOLD_MARKER else self._dispatch_max_hold
+        if elapsed >= max_hold:
             self._dispatch_holds.pop(printer_id, None)
             self._rfid_rereads.pop(printer_id, None)
             return False
 
-        # A pre-dispatch RFID read owns its hold until the read task drops it;
-        # no state transition ends it early, and the task's own ceiling runs
-        # out well before the hard timeout above, which is only the net for a
-        # task that died without reaching its finally.
+        # An RFID read owns its hold until the read task drops it; no state
+        # transition ends it early, and the round's own budget runs out before
+        # the ceiling above, which is only the net for a task that died without
+        # reaching its finally.
         if pre_state == _RFID_REREAD_HOLD_MARKER:
             return True
 
@@ -4332,8 +4577,10 @@ class PrintScheduler:
             self._start_rfid_reread(printer_id, item.id, slots)
         return [printer_id for printer_id, _slots in to_read]
 
-    def _slots_to_reread(self, printer_id: int, item_id: int) -> list[tuple[int, int]] | None:
-        """The slots a pre-dispatch read on *printer_id* would ask about, capped.
+    def _slots_to_reread(
+        self, printer_id: int, item_id: int | None, *, unloading: bool = False
+    ) -> list[tuple[int, int]] | None:
+        """The slots a read on *printer_id* would ask about, capped.
 
         None when the printer cannot be asked at all (not connected, no
         client or status yet); an empty list when it can but there is
@@ -4341,11 +4588,31 @@ class PrintScheduler:
         loaded (the AMS has to move filament to reach a tag), or nothing left
         after the slots an earlier read already proved unreadable.
 
+        ``item_id`` is None for the round a finished print schedules. It is
+        evaluated by the same rules as the pre-dispatch read, ``tray_now``
+        included: the transport refuses ``ams_get_rfid`` on that one value for
+        the whole printer, so a round that kept going with filament loaded
+        would hold the machine and collect one refusal per slot instead of
+        reading anything. A printer that has finished normally reports 255 --
+        it retracts -- and one that does not is read after the next print that
+        leaves it unloaded.
+
+        ``unloading`` asks the other question: what would there be to read
+        *once* this printer has been retracted? It drops the two gates that
+        describe a loaded machine -- ``tray_now`` and the in-hotend slots --
+        because the round is deciding whether the retraction is worth doing at
+        all. Without it the evaluation can only run after the filament has
+        already moved, so a printer that ends every print loaded would nose-up
+        and retract after every one of them to discover there was nothing to
+        read. ``unread_ams_slot_reasons`` never consulted ``tray_now``, so the
+        answer costs nothing but asking earlier.
+
         Every outcome says so in the log, once, with the masks exactly as
         firmware sent them: when this decides wrongly on somebody's printer,
         the line is what tells us whether the detection or the firmware is
         the surprise.
         """
+        after_print = item_id is None
         if not printer_manager.is_connected(printer_id):
             logger.debug("%s: printer not connected", _rfid_preread_tag(printer_id, item_id))
             return None
@@ -4366,6 +4633,12 @@ class PrintScheduler:
             slot for slot in self._forget_readable_slots(printer_id, state) if reasons.get(slot) == UNREAD_NO_IDENTITY
         }
         slots = [slot for slot in reasons if slot not in skipped]
+        # A hotend that is about to be retracted is not a hotend that hides its
+        # slot: `unloading` is asking what the round will read afterwards.
+        loaded = set() if unloading else _hotend_loaded_slots(state)
+        in_hotend = [slot for slot in slots if slot in loaded]
+        if in_hotend:
+            slots = [slot for slot in slots if slot not in loaded]
         if skipped:
             logger.debug(
                 "%s: %s already tried, nothing readable there",
@@ -4373,10 +4646,15 @@ class PrintScheduler:
                 _rfid_slot_labels(sorted(skipped)),
             )
         if not slots:
-            tail = f" ({len(skipped)} skipped: already tried)" if skipped else ""
+            notes = []
+            if skipped:
+                notes.append(f"{len(skipped)} skipped: already tried")
+            if in_hotend:
+                notes.append(f"{len(in_hotend)} skipped: loaded ({_rfid_slot_labels(in_hotend)})")
+            tail = f" ({'; '.join(notes)})" if notes else ""
             self._say_rfid_preread(printer_id, item_id, f"{evaluated} -> 0 unread slot(s){tail}")
             return []
-        if state.tray_now != 255:
+        if state.tray_now != 255 and not unloading:
             self._say_rfid_preread(
                 printer_id, item_id, f"{evaluated} -> {len(slots)} unread slot(s), skipped: filament loaded"
             )
@@ -4384,10 +4662,15 @@ class PrintScheduler:
         capped = slots[:_RFID_REREAD_MAX_SLOTS]
         report = _rfid_slot_report(capped, reasons)
         reading = f"reading {report}" if len(capped) < len(slots) else report
+        loaded_note = f", {len(in_hotend)} skipped: loaded ({_rfid_slot_labels(in_hotend)})" if in_hotend else ""
+        if unloading:
+            held = " -> unloading first"
+        else:
+            held = " -> holding the printer while it reads" if after_print else " -> holding the item for one pass"
         self._say_rfid_preread(
             printer_id,
             item_id,
-            f"{evaluated} -> {len(slots)} unread slot(s): {reading} -> holding the item for one pass",
+            f"{evaluated} -> {len(slots)} unread slot(s){loaded_note}: {reading}{held}",
         )
         return capped
 
@@ -4426,7 +4709,7 @@ class PrintScheduler:
             self._rfid_unreadable.pop(printer_id, None)
         return tried
 
-    def _say_rfid_preread(self, printer_id: int, item_id: int, detail: str) -> None:
+    def _say_rfid_preread(self, printer_id: int, item_id: int | None, detail: str) -> None:
         """Log one pre-read evaluation, at info unless it repeats what it said.
 
         The stamp bounds the fixed-printer branch to one evaluation per item,
@@ -4436,13 +4719,32 @@ class PrintScheduler:
         items are the normal shape of that, so the item is deliberately not
         part of what counts as a repeat: the same printer reporting the same
         masks and the same verdict is the same news whoever asked.
+
+        An after-print round (``item_id`` None) is never deduplicated. It runs
+        once per finished print, a handful of times a day, and every one of
+        them is a fresh event somebody may be looking for -- the whole reason
+        this feature exists is that its predecessor left no evidence it ran.
         """
         message = f"{_rfid_preread_tag(printer_id, item_id)}: {detail}"
-        if self._rfid_preread_said.get(printer_id) == detail:
+        if item_id is not None and self._rfid_preread_said.get(printer_id) == detail:
             logger.debug("%s", message)
             return
         self._rfid_preread_said[printer_id] = detail
         logger.info("%s", message)
+
+    def _printing_again(self, printer_id: int) -> bool:
+        """Has a print taken *printer_id* back while a read round was running?"""
+        return _is_printing(printer_manager.get_status(printer_id))
+
+    def _reserve_for_rfid_reread(self, printer_id: int, item_id: int | None) -> None:
+        """Take *printer_id* out of the queue's reach for the length of a read.
+
+        Both rounds reserve the same way -- the queue must not dispatch into a
+        moving AMS whichever of them asked for it -- and
+        ``_release_rfid_reread_hold`` is the only thing that undoes it.
+        """
+        self._dispatch_holds[printer_id] = (time.monotonic(), _RFID_REREAD_HOLD_MARKER, None)
+        self._rfid_rereads[printer_id] = item_id
 
     def _start_rfid_reread(self, printer_id: int, item_id: int, slots: list[tuple[int, int]]) -> None:
         """Reserve *printer_id* for *item_id* and spawn the task that reads *slots*.
@@ -4450,15 +4752,443 @@ class PrintScheduler:
         The line announcing the round was already written by the evaluation
         that chose these slots, which is the one place that knows why.
         """
-        self._dispatch_holds[printer_id] = (time.monotonic(), _RFID_REREAD_HOLD_MARKER, None)
-        self._rfid_rereads[printer_id] = item_id
+        self._reserve_for_rfid_reread(printer_id, item_id)
         spawn_background_task(
             self._reread_unknown_slots(printer_id, item_id, slots),
             name=f"rfid-reread-{printer_id}-{item_id}",
         )
 
+    async def read_unidentified_slots_after_print(self, printer_id: int) -> None:
+        """Read the AMS slots *printer_id* cannot name, now that its print has ended.
+
+        The other end of the pre-dispatch read (``queue_rfid_reread_before_start``),
+        and the one that gets to run on a farm that is actually busy: a printer
+        that has just finished -- completed or failed, both leave it idle -- is
+        free, the AMS can move filament, and no job is waiting on the answer.
+        The queue then finds the slots identified instead of having to stop and
+        ask. Off by default; both reads stay, they are two ends of one idea.
+
+        The AMS has to move filament to reach a tag, so it can only read with
+        nothing loaded -- ``ams_refresh_tray`` refuses the whole printer
+        otherwise. The round therefore looks before it touches anything:
+
+        * Nothing loaded, which is what a machine that has retracted at the end
+          of its print reports, goes straight to the read and **no unload
+          command is sent at all**. That is the owner's explicit requirement
+          and the common case; an unload sent to an already-empty hotend is
+          the defect this shape exists to prevent.
+        * Something loaded that this round cannot clear -- because
+          ``ams_unload_before_after_print_read`` is off, or because no form of
+          the unload command reaches the unit feeding it -- falls back on what
+          the transport itself allows. ``ams_refresh_tray`` refuses on
+          ``tray_now`` alone, so a printer reporting 255 is read anyway, minus
+          the slots a hotend is holding; one reporting a loaded tray would be
+          refused slot by slot and stands the round down instead. Either way
+          the line says what was in the way.
+        * Something loaded and the setting on retracts every loaded hotend
+          first, waits for each to report free, and only then reads -- but only
+          once it knows there is something to read. Evaluating afterwards would
+          make a printer that ends every print loaded retract after every one
+          of them to find nothing. Nothing is reloaded afterwards: the next
+          print loads what it needs.
+
+        Three orderings this depends on:
+
+        * The plate-clear gate is deliberately NOT consulted. A finished print
+          still on the bed is exactly the window this exists for, and the
+          confirmation is about starting a *print*, not about moving filament
+          inside the AMS. ``_is_printer_idle`` would refuse every printer whose
+          plate nobody has released yet, which on the farm this was written for
+          was most of them, most of the time. Do not "fix" that back.
+        * Auto-off waits for this round rather than the other way round, in two
+          places because there are two ways power gets cut. ``on_print_complete``
+          in main.py gates ``[AUTO-OFF-BG]`` on the task running this; and every
+          scheduled off waits on ``rfid_read_in_flight`` in
+          ``smart_plug_manager`` just before it switches the plug, which is what
+          covers the per-job ``auto_off_after`` toggle -- that one is scheduled
+          from three different call sites, one of them a thousand lines earlier
+          in the same callback, which is why ``expect_after_print_read`` marks
+          the printer before that call rather than leaving the gap open. Both
+          waits are bounded by ``RFID_AFTER_PRINT_MAX_WAIT``, which outlasts
+          the reservation's own ceiling so that a wait which ends early says so:
+          a printer nobody powers down is worse than one powered down a little
+          early, but a power cut nothing logged is worse than both.
+        * A print that starts anyway wins: the round checks before every unload
+          and every slot, and while waiting for either, and gives the printer
+          straight back.
+
+        Awaited by its caller, not spawned: the caller's task *is* the round,
+        and auto-off waits on that task.
+        """
+        try:
+            await self._after_print_read_round(printer_id)
+        finally:
+            # `expect_after_print_read` only covers the gap before a round
+            # exists. Once this one has run -- or decided it has nothing to do
+            # -- the reservation is the only thing auto-off should wait on.
+            self._rfid_read_pending.pop(printer_id, None)
+
+    async def _after_print_read_round(self, printer_id: int) -> None:
+        """One after-print round, from the settings read to the last slot.
+
+        Split out so :meth:`read_unidentified_slots_after_print` can own the
+        ``finally`` that drops the announcement, whichever of the dozen exits
+        below this one takes.
+        """
+        tag = _rfid_preread_tag(printer_id, None)
+        async with async_session() as db:
+            enabled = await self._get_bool_setting(db, "ams_read_unidentified_after_print", default=False)
+            if not enabled:
+                logger.debug("%s: setting off", tag)
+                return
+            unload_first = await self._get_bool_setting(db, "ams_unload_before_after_print_read", default=False)
+            reserved = await self._queue_reserved_printers(db)
+        if self._printing_again(printer_id):
+            self._say_rfid_preread(printer_id, None, "setting=on already printing again, nothing read")
+            return
+        if printer_id in reserved:
+            # Somebody else has the printer: an item already dispatched to it,
+            # an upload still in flight, or the pre-dispatch read already doing
+            # this very job. All three are what `_queue_reserved_printers`
+            # answers and the round has to honour every one of them -- the
+            # dispatch hold alone is taken only once the print command has gone
+            # out, which would leave a round free to move the AMS of a printer
+            # whose 3MF is half uploaded.
+            self._say_rfid_preread(printer_id, None, "setting=on printer reserved elsewhere, nothing read")
+            return
+        state = printer_manager.get_status(printer_id)
+        can_send = (
+            state is not None
+            and printer_manager.is_connected(printer_id)
+            and printer_manager.get_client(printer_id) is not None
+        )
+        loaded = _loaded_hotends(state) if can_send else []
+        if loaded and _loaded_signals_disagree(state):
+            state, loaded = await self._settled_loaded_hotends(printer_id)
+        if loaded:
+            # What stops this round clearing the printer, if anything does.
+            blocked = [hotend for hotend in loaded if not hotend.unloadable]
+            if not unload_first:
+                why = "unload before reading is off"
+            elif blocked:
+                why = f"{_hotend_labels(blocked)} fed from a unit no unload command can address"
+            else:
+                why = ""
+            if why and getattr(state, "tray_now", 255) != 255:
+                # `ams_refresh_tray` refuses the whole printer on that one
+                # value, so with the filament staying where it is there is
+                # nothing left to try.
+                self._say_rfid_preread(
+                    printer_id, None, f"setting=on filament loaded ({_hotend_labels(loaded)}), {why}, nothing read"
+                )
+                return
+            if why:
+                # 255 is the state the transport accepts every slot in, whatever
+                # the extruder block says: a hotend only that block knows about
+                # hides its own slot and nothing else. Reading the rest is what
+                # this round did before it could unload at all, and turning the
+                # new setting off has to leave that untouched.
+                self._say_rfid_preread(
+                    printer_id,
+                    None,
+                    f"setting=on filament loaded ({_hotend_labels(loaded)}), {why}, reading the slots it does not hold",
+                )
+            else:
+                # Ask what there would be to read *after* the retraction, before
+                # spending one. A printer that ends every print loaded would
+                # otherwise nose-heat and retract after every one of them only to
+                # find every slot already identified.
+                slots = self._slots_to_reread(printer_id, None, unloading=True)
+                if slots is None:
+                    self._say_rfid_preread(printer_id, None, "setting=on printer not reporting, nothing read")
+                    return
+                if not slots:
+                    self._say_rfid_preread(
+                        printer_id,
+                        None,
+                        f"setting=on filament loaded ({_hotend_labels(loaded)}), nothing to read, not unloading",
+                    )
+                    return
+                if self._printer_claimed_in_memory(printer_id):
+                    self._say_rfid_preread(printer_id, None, "setting=on printer taken while deciding, nothing read")
+                    return
+                self._say_rfid_preread(
+                    printer_id,
+                    None,
+                    f"setting=on filament loaded ({_hotend_labels(loaded)}) "
+                    f"-> unloading {len(loaded)} hotend(s) before reading",
+                )
+                # As below: nothing suspends between here and the `try` that owns
+                # the release, so a cancellation cannot strand the reservation.
+                self._reserve_for_rfid_reread(printer_id, None)
+                await self._unload_then_read(printer_id, loaded)
+                return
+        slots = self._slots_to_reread(printer_id, None)
+        if slots is None:
+            # `_slots_to_reread` says which of the two at debug. A round that
+            # reads nothing still has to say so once, and this is the path
+            # that would otherwise be silent.
+            self._say_rfid_preread(printer_id, None, "setting=on printer not reporting, nothing read")
+            return
+        if not slots:
+            # The evaluation has already said why, at info.
+            return
+        if self._printer_claimed_in_memory(printer_id):
+            # Asked once more with nothing awaited since, because the database
+            # read above did await: a dispatch launched while this round was
+            # deciding is already in `_inflight` by now.
+            self._say_rfid_preread(printer_id, None, "setting=on printer taken while deciding, nothing read")
+            return
+        # Nothing between this and the read task suspends, so the reservation
+        # cannot be stranded by a cancellation landing in between: the task
+        # releases it in its own `finally`.
+        self._reserve_for_rfid_reread(printer_id, None)
+        await self._reread_unknown_slots(printer_id, None, slots)
+
+    async def _unload_then_read(self, printer_id: int, hotends: list[_LoadedHotend]) -> None:
+        """Retract *hotends*, then run the read round on the printer they freed.
+
+        Called with the reservation already taken, and holds it for the whole
+        of this: the queue must not dispatch into a printer mid-retraction any
+        more than into a moving AMS, and both auto-off gates wait on that same
+        hold, which matters more here because an unload makes a round longer.
+        Released on every exit that does not hand it to
+        :meth:`_reread_unknown_slots`, which releases it in its own ``finally``.
+
+        Nothing is reloaded afterwards, deliberately: the next print loads what
+        it needs, and a reload here would spend a second purge for nothing.
+        """
+        tag = _rfid_preread_tag(printer_id, None)
+        slots: list[tuple[int, int]] | None = None
+        try:
+            unloaded = await self._unload_loaded_hotends(printer_id, hotends)
+            if unloaded is None:
+                return
+            # An unload lands in the extruder block and in `tray_now` on
+            # different payloads, so the wait above can be satisfied by one of
+            # them while the other still reports the old answer. Giving up here
+            # is terminal for the round and the filament has already moved, so
+            # let the two signals meet before believing the worse one.
+            state, still_loaded = await self._settled_loaded_hotends(printer_id)
+            if state is None or still_loaded:
+                # Every unload landed and something is still loaded: the printer
+                # is reporting something this round does not understand, and
+                # `ams_get_rfid` would be refused slot by slot. Stop here rather
+                # than send more filament commands at it.
+                logger.info("%s: filament still loaded after %d unload(s), nothing read", tag, unloaded)
+                return
+            slots = self._slots_to_reread(printer_id, None)
+            if not slots:
+                slots = None
+                logger.info("%s: unloaded %d hotend(s), nothing left to read", tag, unloaded)
+                return
+            logger.info("%s: unloaded %d hotend(s), reading now", tag, unloaded)
+        except Exception as e:
+            slots = None
+            logger.warning("%s: unload aborted: %s", tag, e, exc_info=True)
+        finally:
+            if slots is None:
+                self._release_rfid_reread_hold(printer_id)
+        if slots is not None:
+            await self._reread_unknown_slots(printer_id, None, slots)
+
+    async def _settled_loaded_hotends(self, printer_id: int) -> tuple[Any, list[_LoadedHotend]]:
+        """``_loaded_hotends`` once this printer's two loading signals agree.
+
+        Asked on both sides of the unload phase, whenever
+        ``_loaded_signals_disagree`` says they do not. Before it, because a
+        stale ``extruder_slots`` block buys a nose heat-up and a retraction on
+        a machine that has already retracted; after it, because a ``tray_now``
+        that has not caught up with an unload that landed aborts the round with
+        the filament already moved. The printer is asked for a full push first:
+        the extruder block is only refreshed by a payload that carries it, and
+        nothing requests one when a print ends.
+
+        Returns the state it settled on -- None if the printer stopped
+        reporting -- and the hotends that state reports loaded. A disagreement
+        that outlasts the wait is answered by believing both signals, because a
+        dual-nozzle machine loaded only on its idle hotend reports exactly this
+        shape and is telling the truth.
+        """
+        state = printer_manager.get_status(printer_id)
+        if state is None:
+            return None, []
+        if not _loaded_signals_disagree(state):
+            return state, _loaded_hotends(state)
+        client = printer_manager.get_client(printer_id)
+        if client is not None:
+            client.request_status_update()
+        deadline = time.monotonic() + _RFID_UNLOAD_SETTLE
+        while time.monotonic() < deadline:
+            await asyncio.sleep(_RFID_REREAD_POLL_INTERVAL)
+            state = printer_manager.get_status(printer_id)
+            if state is None:
+                return None, []
+            if not _loaded_signals_disagree(state) or _is_printing(state):
+                break
+        return state, _loaded_hotends(state)
+
+    async def _unload_loaded_hotends(self, printer_id: int, hotends: list[_LoadedHotend]) -> int | None:
+        """Retract *hotends* one at a time. Returns how many, or None to give up.
+
+        An unload is only ever sent for a hotend the printer still reports as
+        loaded, asked again immediately before the command goes out. That check
+        is the whole point of the shape: the owner's machines usually retract
+        by themselves when a print ends, so the hotend this round decided to
+        unload may well be free by the time its turn comes, and a command sent
+        to an empty hotend is the defect he asked to be prevented.
+
+        Nothing is ever re-sent. A slot that does not report free inside
+        ``_RFID_UNLOAD_TIMEOUT`` ends the round: a printer that swallowed one
+        unload is one for somebody to look at, not one to send another at.
+
+        Every *hotends* entry is one the round has already established a
+        command can reach (``_LoadedHotend.unloadable``); a hotend fed from an
+        AMS-HT never gets this far.
+        """
+        tag = _rfid_preread_tag(printer_id, None)
+        unloaded = 0
+        for hotend in hotends:
+            state = printer_manager.get_status(printer_id)
+            client = printer_manager.get_client(printer_id)
+            if state is None or client is None:
+                logger.info("%s: printer gone, %s not unloaded", tag, hotend.label)
+                return None
+            if _is_printing(state):
+                logger.info(
+                    "%s: printing again (state=%s), %s not unloaded",
+                    tag,
+                    getattr(state, "state", None),
+                    hotend.label,
+                )
+                return None
+            if not _hotend_is_loaded(state, hotend):
+                logger.info("%s: %s came free on its own, no unload sent", tag, hotend.label)
+                continue
+            if not client.ams_unload_filament(tray_id=hotend.tray_id):
+                logger.info("%s: %s unload refused by the printer, giving up", tag, hotend.label)
+                return None
+            waited, landed = await self._wait_for_unload(printer_id, hotend, _RFID_UNLOAD_TIMEOUT)
+            if not landed:
+                if self._printing_again(printer_id):
+                    logger.info("%s: printing again, %s left loaded, nothing read", tag, hotend.label)
+                else:
+                    logger.info(
+                        "%s: %s still loaded %.0f s after its unload, not re-sent, giving up",
+                        tag,
+                        hotend.label,
+                        waited,
+                    )
+                return None
+            unloaded += 1
+            logger.info("%s: %s unloaded after %.0f s", tag, hotend.label, waited)
+        return unloaded
+
+    async def _wait_for_unload(self, printer_id: int, hotend: _LoadedHotend, timeout: float) -> tuple[float, bool]:
+        """Poll until the printer reports *hotend* free, or *timeout* passes.
+
+        Returns ``(seconds waited, free)``. Written like
+        :meth:`_wait_for_slot_read`: a printer that stops reporting, or a print
+        that starts, ends the wait instead of running it out -- and a wait that
+        ends without the hotend free never leads to a second command.
+
+        Whether the hotend came free is asked before either of those, because
+        a print starting does not un-retract filament: an unload that landed
+        is reported as landed, and the round then ends at the next loop head
+        with the reason it actually ended for.
+        """
+        started = time.monotonic()
+        deadline = started + timeout
+        while time.monotonic() < deadline:
+            await asyncio.sleep(_RFID_REREAD_POLL_INTERVAL)
+            state = printer_manager.get_status(printer_id)
+            if state is None:
+                return time.monotonic() - started, False
+            if not _hotend_is_loaded(state, hotend):
+                return time.monotonic() - started, True
+            if _is_printing(state):
+                return time.monotonic() - started, False
+        return time.monotonic() - started, False
+
+    def _printer_claimed_in_memory(self, printer_id: int) -> bool:
+        """The queue's claims on *printer_id* that need no database read.
+
+        The half of ``_queue_reserved_printers`` that can change with nothing
+        awaited: ``_launch_uploads`` registers every upload it starts in
+        ``_inflight`` synchronously, and a dispatch hold is taken synchronously
+        too. Asking again just before a round reserves the printer is what
+        keeps it out of a dispatch that started while it was reading the
+        database.
+        """
+        if any(pid == printer_id for (_task, pid) in self._inflight.values()):
+            return True
+        return self._printer_in_dispatch_hold(printer_id)
+
+    async def expect_after_print_read(self, printer_id: int) -> None:
+        """Announce a round that is about to be spawned for *printer_id*.
+
+        ``on_print_complete`` hands the queue's per-job ``auto_off_after`` to
+        the smart-plug manager about a thousand lines before it spawns the
+        round, with a stretch of awaited database and archive work in between.
+        ``off_delay_minutes`` of 0 is a legal setting, so that off reaches
+        :meth:`SmartPlugManager._wait_for_ams_read` an event-loop tick later,
+        finds no reservation -- the round has not started, let alone reserved
+        anything -- and switches the plug. The temperature branch behaves the
+        same way after a print that failed during heat-up.
+
+        This closes that gap from the front: the marker makes
+        :meth:`rfid_read_in_flight` true before the off is even scheduled, and
+        the round drops it in its own ``finally`` within milliseconds of
+        starting or of deciding it has nothing to do. Bounded by
+        ``_RFID_READ_PENDING_GRACE`` so a round that is never spawned at all
+        cannot leave a printer powered.
+
+        Only marks when the feature is on: an install that never reads after a
+        print must not pay a second of delay for a round that will not run.
+        The queue is deliberately not told -- nothing has been reserved, and a
+        printer this feature is not going to touch must stay dispatchable.
+        """
+        try:
+            async with async_session() as db:
+                if not await self._get_bool_setting(db, "ams_read_unidentified_after_print", default=False):
+                    return
+        except Exception as e:
+            logger.debug(
+                "%s: could not read the setting to announce a round: %s", _rfid_preread_tag(printer_id, None), e
+            )
+            return
+        self._rfid_read_pending[printer_id] = time.monotonic() + _RFID_READ_PENDING_GRACE
+
+    def rfid_read_in_flight(self, printer_id: int) -> bool:
+        """Is an RFID read round moving filament on *printer_id*, or about to?
+
+        Asked by the smart-plug auto-off paths before they cut mains power: a
+        round has the AMS feeding a spool to the reader, and on the unload path
+        it has the printer retracting a strand for tens of seconds. A plug that
+        fires in that window leaves the filament stranded part way and the
+        machine needing recovery by hand.
+
+        Two things make it true. The reservation, read off ``_dispatch_holds``
+        rather than off a flag of its own so it cannot outlive the round:
+        ``_release_rfid_reread_hold`` drops it in the round's ``finally``, and
+        ``_printer_in_dispatch_hold`` expires it on ``_RFID_REREAD_MAX_HOLD``
+        even for a task that died before reaching that ``finally``. And the
+        announcement :meth:`expect_after_print_read` makes, which covers the
+        gap between an off being scheduled and the round it must wait for
+        existing at all.
+        """
+        expires = self._rfid_read_pending.get(printer_id)
+        if expires is not None:
+            if time.monotonic() < expires:
+                return True
+            self._rfid_read_pending.pop(printer_id, None)
+        entry = self._dispatch_holds.get(printer_id)
+        if entry is None or entry[1] != _RFID_REREAD_HOLD_MARKER:
+            return False
+        return self._printer_in_dispatch_hold(printer_id)
+
     def _release_rfid_reread_hold(self, printer_id: int) -> None:
-        """Hand *printer_id* back to the queue after its pre-dispatch RFID read.
+        """Hand *printer_id* back to the queue after an RFID read of either kind.
 
         Only a hold the read placed is dropped: a post-dispatch hold that
         somehow replaced it belongs to the watchdog.
@@ -4468,7 +5198,7 @@ class PrintScheduler:
             self._dispatch_holds.pop(printer_id, None)
         self._rfid_rereads.pop(printer_id, None)
 
-    async def _reread_unknown_slots(self, printer_id: int, item_id: int, slots: list[tuple[int, int]]) -> None:
+    async def _reread_unknown_slots(self, printer_id: int, item_id: int | None, slots: list[tuple[int, int]]) -> None:
         """Read *slots* one at a time, then release the printer to the queue.
 
         Sequential because the AMS reads one tag at a time. A refused slot
@@ -4477,8 +5207,11 @@ class PrintScheduler:
         re-apply the manual Re-read RFID button triggers. A slot the AMS
         still puts no identity on when its turn is over is remembered, so the
         next job does not ask about it again. The reservation is dropped on
-        every exit -- success, ceiling, printer gone, exception -- so the next
-        pass always dispatches the item.
+        every exit -- success, ceiling, printer gone, print started, exception
+        -- so the next pass always dispatches the item.
+
+        ``item_id`` is None for the round a finished print schedules; the only
+        difference is what the lines call it, because there is no item.
         """
         from backend.app.api.routes.printers import _apply_pa_after_refresh
 
@@ -4501,6 +5234,20 @@ class PrintScheduler:
                 if client is None or state is None:
                     not_attempted = slots[index:]
                     logger.info("%s: printer gone, not reading %s", tag, _rfid_slot_labels(not_attempted))
+                    break
+                # A print that started while this was running owns the machine.
+                # The AMS is about to move filament for it, every further
+                # ams_get_rfid would be refused, and nothing is waiting on the
+                # answer -- so give the printer back rather than hold the queue
+                # behind a round that has been overtaken.
+                if _is_printing(state):
+                    not_attempted = slots[index:]
+                    logger.info(
+                        "%s: printing again (state=%s), not reading %s",
+                        tag,
+                        getattr(state, "state", None),
+                        _rfid_slot_labels(not_attempted),
+                    )
                     break
                 before = slot_identity(state, ams_id, slot_id)
                 done_before = slot_read_done(state, ams_id, slot_id)
@@ -4535,20 +5282,25 @@ class PrintScheduler:
                     # when the printer stops reporting, and a line claiming
                     # 25 s of AMS silence sends the reader after the AMS.
                     logger.info("%s: %s ams_get_rfid accepted (%s), no read after %.0f s", tag, label, message, waited)
-                if not identified:
+                # A slot the print took back never got its fair attempt, so it
+                # is not remembered as unreadable: the round that follows the
+                # next print has to be free to ask about it again.
+                if not identified and not self._printing_again(printer_id):
                     self._rfid_unreadable.setdefault(printer_id, set()).add((ams_id, slot_id))
         except Exception as e:
             logger.warning("%s: aborted: %s", tag, e, exc_info=True)
         finally:
             self._release_rfid_reread_hold(printer_id)
             logger.info(
-                "%s: finished — read %d, refused %d, no read %d, not attempted %d; "
-                "the job dispatches on the next queue pass",
+                "%s: finished — read %d, refused %d, no read %d, not attempted %d; %s",
                 tag,
                 len(reread),
                 len(refused),
                 len(timed_out),
                 len(not_attempted),
+                "the job dispatches on the next queue pass"
+                if item_id is not None
+                else "the printer is back with the queue",
             )
 
     def _slot_identified(self, printer_id: int, ams_id: int, slot_id: int) -> bool:
@@ -4589,6 +5341,11 @@ class PrintScheduler:
             await asyncio.sleep(_RFID_REREAD_POLL_INTERVAL)
             state = printer_manager.get_status(printer_id)
             if state is None:
+                return time.monotonic() - started, False
+            # A print took the printer back mid-read. Stop waiting on an
+            # answer the AMS is no longer free to give; the round ends on the
+            # same check one level up.
+            if _is_printing(state):
                 return time.monotonic() - started, False
             if slot_identity(state, ams_id, slot_id) != before:
                 return time.monotonic() - started, True

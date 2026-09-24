@@ -116,7 +116,7 @@ from backend.app.services.mqtt_smart_plug import mqtt_smart_plug_service
 from backend.app.services.notification_service import notification_service
 from backend.app.services.obico_detection import obico_detection_service
 from backend.app.services.print_cost_estimate import plate_scoped_run_estimate as _plate_scoped_run_estimate
-from backend.app.services.print_scheduler import scheduler as print_scheduler
+from backend.app.services.print_scheduler import RFID_AFTER_PRINT_MAX_WAIT, scheduler as print_scheduler
 from backend.app.services.print_storage import (
     REASON_FTP_TRANSFER_FAILED,
     REASON_FTPS_COOLOFF,
@@ -6987,8 +6987,22 @@ async def on_print_complete(printer_id: int, data: dict):
             # power on a loaded print (#1890). Previously an inline block here
             # hardcoded a 50°C / 600s cooldown wait and powered off on the
             # timeout regardless of print state — cutting a touchscreen reprint.
+            #
+            # This runs long before the [RFID-BG] gate further down exists, and
+            # `off_delay_minutes` may be 0. The AMS read is not gated here but
+            # in `_wait_for_ams_read`, which every scheduled off passes through
+            # right before it switches the plug — this call site only schedules.
+            #
+            # `_wait_for_ams_read` asks whether a round is in flight, though,
+            # and at this point none is: the round is spawned a thousand lines
+            # below, after a stretch of awaited database and archive work. A
+            # zero-delay off would reach that gate an event-loop tick from now,
+            # find nothing to wait for and switch the plug — so the round is
+            # announced first. `expect_after_print_read` is a no-op unless the
+            # feature is on, and the round drops the announcement itself.
             if queue_auto_off:
                 try:
+                    await print_scheduler.expect_after_print_read(printer_id)
                     async with async_session() as db:
                         await smart_plug_manager.schedule_off_after_queue_job(printer_id, db)
                 except Exception as e:
@@ -7835,9 +7849,42 @@ async def on_print_complete(printer_id: int, data: dict):
     # Also run smart plug, notifications, and maintenance as background tasks
     print_status = data.get("status", "completed")
 
+    # [RFID-BG] can have the AMS moving filament for a few seconds on a printer
+    # that has just finished, and [AUTO-OFF-BG] can cut that printer's power in
+    # the same few seconds. The gate is created here, synchronously, before
+    # either task exists: a gate the reader armed itself would be checked by
+    # auto-off before it was there, and a round that loses its printer mid-way
+    # is the one way this feature quietly does nothing.
+    #
+    # It gates this callback's own auto-off only. The off a queue item's
+    # `auto_off_after` schedules was handed to the smart-plug manager a
+    # thousand lines up, so the wait that covers every path is the one in
+    # `SmartPlugManager._wait_for_ams_read`; this one keeps [AUTO-OFF-BG] from
+    # even asking the plugs while the AMS is still busy.
+    rfid_read_done = asyncio.Event()
+
+    async def _background_rfid_read():
+        """Read the AMS slots this printer cannot name, now that it is free."""
+        try:
+            await print_scheduler.read_unidentified_slots_after_print(printer_id)
+        except Exception as e:
+            logger.warning("[RFID-BG] Failed for printer %s: %s", printer_id, e, exc_info=True)
+        finally:
+            # Whatever happened, auto-off must not go on waiting for a round
+            # that is no longer running.
+            rfid_read_done.set()
+
     async def _background_smart_plug():
         """Handle smart plug automation in background."""
         try:
+            try:
+                await asyncio.wait_for(rfid_read_done.wait(), timeout=RFID_AFTER_PRINT_MAX_WAIT)
+            except TimeoutError:
+                logger.warning(
+                    "[AUTO-OFF-BG] AMS RFID read on printer %s still running after %ss, powering down anyway",
+                    printer_id,
+                    RFID_AFTER_PRINT_MAX_WAIT,
+                )
             logger.info("[AUTO-OFF-BG] Starting smart plug automation for printer %s", printer_id)
             async with async_session() as db:
                 await smart_plug_manager.on_print_complete(printer_id, print_status, db)
@@ -8031,6 +8078,7 @@ async def on_print_complete(printer_id: int, data: dict):
         except Exception as e:
             logger.warning("[MAINT-BG] Failed: %s", e)
 
+    spawn_background_task(_background_rfid_read(), name=f"rfid-after-print-{printer_id}")
     spawn_background_task(_background_smart_plug(), name="background-smart-plug")
     spawn_background_task(_background_maintenance_check(), name="background-maintenance-check")
 

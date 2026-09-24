@@ -504,6 +504,26 @@ class AppSettings(BaseModel):
             "filament is loaded because the AMS cannot move it then."
         ),
     )
+    ams_read_unidentified_after_print: bool = Field(
+        default=False,
+        description=(
+            "When a print ends — completed or failed — ask the AMS to read every occupied slot it has "
+            "not identified yet, while the printer is idle and nobody is waiting on the answer. The "
+            "AMS can only read with nothing loaded, so a printer that has not retracted its filament "
+            "is left until after the next print that does; a new print takes the printer back at "
+            "once. Auto-off waits for the read to finish."
+        ),
+    )
+    ams_unload_before_after_print_read: bool = Field(
+        default=False,
+        description=(
+            "Only meaningful with ams_read_unidentified_after_print on. A printer that still holds "
+            "filament when its print ends cannot read any tag, so the read is normally skipped. With "
+            "this on, the filament is retracted into the AMS first and the read then runs — and the "
+            "printer is left unloaded, because the next print loads what it needs. A printer that has "
+            "already retracted, which is the usual case, is never sent an unload."
+        ),
+    )
     queue_max_concurrent_uploads: int = Field(
         default=4,
         ge=1,
@@ -823,6 +843,8 @@ class AppSettingsUpdate(BaseModel):
     require_plate_clear: bool | None = None
     queue_shortest_first: bool | None = None
     queue_rfid_reread_before_start: bool | None = None
+    ams_read_unidentified_after_print: bool | None = None
+    ams_unload_before_after_print_read: bool | None = None
     queue_max_concurrent_uploads: int | None = Field(default=None, ge=1, le=16)
     preheat_enabled: bool | None = None
     preheat_filament_targets: str | None = None

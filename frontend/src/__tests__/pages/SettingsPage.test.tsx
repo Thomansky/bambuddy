@@ -1074,6 +1074,136 @@ describe('SettingsPage', () => {
         expect(within(row).getByRole('checkbox')).toBeChecked();
       });
     });
+
+    describe('after-print RFID read (ams_read_unidentified_after_print), on the Filament tab', () => {
+      const label = 'Read unidentified AMS spools after a print';
+
+      async function openWorkflow() {
+        const user = userEvent.setup();
+        render(<SettingsPage />);
+        await waitFor(() => expect(screen.getAllByText('Filament').length).toBeGreaterThan(0));
+        await user.click(screen.getAllByText('Filament')[0]);
+        return user;
+      }
+
+      it('is off when the backend has never stored the setting', async () => {
+        // A missing row must read as off: this one makes the AMS move filament
+        // on a machine that has just finished, which nobody opted into.
+        await openWorkflow();
+
+        const row = (await screen.findByText(label)).closest('div')!.parentElement!;
+        expect(within(row).getByRole('checkbox')).not.toBeChecked();
+      });
+
+      it('reflects a stored on value', async () => {
+        server.use(
+          http.get('/api/v1/settings/', () =>
+            HttpResponse.json({ ...mockSettings, ams_read_unidentified_after_print: true })
+          )
+        );
+        await openWorkflow();
+
+        const row = (await screen.findByText(label)).closest('div')!.parentElement!;
+        expect(within(row).getByRole('checkbox')).toBeChecked();
+      });
+
+      it('sends the new value on save without disturbing the pre-dispatch one', async () => {
+        // The two toggles live in one card and are saved through the same
+        // explicit list; a new setting left out of it never reaches the server.
+        let saved: Record<string, unknown> | null = null;
+        server.use(
+          http.get('/api/v1/settings/', () =>
+            HttpResponse.json({ ...mockSettings, queue_rfid_reread_before_start: true })
+          ),
+          http.put('/api/v1/settings/', async ({ request }) => {
+            saved = (await request.json()) as Record<string, unknown>;
+            return HttpResponse.json({ ...mockSettings, ...saved });
+          })
+        );
+        const user = await openWorkflow();
+
+        const labelEl = await screen.findByText(label);
+        // Same 100 ms post-load auto-save suppression as the other toggles.
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        const row = labelEl.closest('div')!.parentElement!;
+        await user.click(within(row).getByRole('checkbox'));
+
+        await waitFor(() => {
+          expect(saved).not.toBeNull();
+        }, { timeout: 3000 });
+        expect(saved!.ams_read_unidentified_after_print).toBe(true);
+        expect(saved!.queue_rfid_reread_before_start).toBe(true);
+        expect(within(row).getByRole('checkbox')).toBeChecked();
+      });
+    });
+
+    describe('unload before reading (ams_unload_before_after_print_read), on the Filament tab', () => {
+      const label = 'Unload before reading';
+
+      async function openWorkflow(settings: Record<string, unknown> = {}) {
+        server.use(
+          http.get('/api/v1/settings/', () => HttpResponse.json({ ...mockSettings, ...settings }))
+        );
+        const user = userEvent.setup();
+        render(<SettingsPage />);
+        await waitFor(() => expect(screen.getAllByText('Filament').length).toBeGreaterThan(0));
+        await user.click(screen.getAllByText('Filament')[0]);
+        return user;
+      }
+
+      const rowFor = async () => (await screen.findByText(label)).closest('div')!.parentElement!;
+
+      it('is off when the backend has never stored the setting', async () => {
+        // This one makes a real machine retract filament. A missing row must
+        // never read as "yes, retract".
+        await openWorkflow();
+
+        expect(within(await rowFor()).getByRole('checkbox')).not.toBeChecked();
+      });
+
+      it('cannot be switched while the after-print read itself is off', async () => {
+        // It only qualifies the read above it; on its own it does nothing, and
+        // an enabled switch that changes no behaviour is a bug report waiting
+        // to happen.
+        await openWorkflow({ ams_read_unidentified_after_print: false });
+
+        expect(within(await rowFor()).getByRole('checkbox')).toBeDisabled();
+      });
+
+      it('is enabled once the after-print read is on, and reflects a stored value', async () => {
+        await openWorkflow({
+          ams_read_unidentified_after_print: true,
+          ams_unload_before_after_print_read: true,
+        });
+
+        const checkbox = within(await rowFor()).getByRole('checkbox');
+        expect(checkbox).toBeEnabled();
+        expect(checkbox).toBeChecked();
+      });
+
+      it('sends the new value on save without disturbing the read it qualifies', async () => {
+        let saved: Record<string, unknown> | null = null;
+        server.use(
+          http.put('/api/v1/settings/', async ({ request }) => {
+            saved = (await request.json()) as Record<string, unknown>;
+            return HttpResponse.json({ ...mockSettings, ...saved });
+          })
+        );
+        const user = await openWorkflow({ ams_read_unidentified_after_print: true });
+
+        const row = await rowFor();
+        // Same 100 ms post-load auto-save suppression as the other toggles.
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        await user.click(within(row).getByRole('checkbox'));
+
+        await waitFor(() => {
+          expect(saved).not.toBeNull();
+        }, { timeout: 3000 });
+        expect(saved!.ams_unload_before_after_print_read).toBe(true);
+        expect(saved!.ams_read_unidentified_after_print).toBe(true);
+        expect(within(row).getByRole('checkbox')).toBeChecked();
+      });
+    });
   });
 
   describe('API Keys tab', () => {
