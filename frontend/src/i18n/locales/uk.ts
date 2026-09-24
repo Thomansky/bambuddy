@@ -3140,9 +3140,10 @@ export default {
     // the Workflow tab's Queue & Dispatch sub-tab.
     numberSeries: {
       title: 'Нумерація',
-      description: 'Надає порядковий номер кожному новому проєкту та кожному завданню в черзі. Наявні записи не перенумеровуються.',
+      description: 'Надає порядковий номер кожній новій теці замовлення, проєкту та завданню в черзі. Наявні записи не перенумеровуються.',
       project: 'Проєкти',
       queueJob: 'Завдання черги',
+      libraryFolder: 'Теки замовлень',
       enable: 'Видавати номери',
       prefix: 'Префікс',
       suffix: 'Суфікс',
@@ -4078,6 +4079,10 @@ export default {
     newFolder: "Нова папка",
     folderName: "Назва папки",
     folderNamePlaceholder: "наприклад, функціональні частини",
+    folderNumber: 'Номер теки',
+    assignNumber: 'Надати номер',
+    nextNumber: 'Наступний номер: {{value}}',
+    folderNumberTaken: 'Цей номер уже надано іншій теці.',
     renameFile: "Перейменувати файл",
     renameFolder: "Перейменувати папку",
     invalidFilenameChar: "Символ «{{char}}» не можна використовувати в назвах файлів для друку. SD-картка принтера не приймає такі символи: < > : \" / \\ | ? *",

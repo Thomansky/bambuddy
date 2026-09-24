@@ -3124,9 +3124,10 @@ export default {
     // the Workflow tab's Queue & Dispatch sub-tab.
     numberSeries: {
       title: 'Serie de numeración',
-      description: 'Asigna un número correlativo a cada proyecto nuevo y a cada trabajo en cola. Nada de lo que ya existe se renumera.',
+      description: 'Asigna un número correlativo a cada nueva carpeta de pedido, proyecto y trabajo en cola. No se renumera nada de lo que ya existe.',
       project: 'Proyectos',
       queueJob: 'Trabajos en cola',
+      libraryFolder: 'Carpetas de pedido',
       enable: 'Asignar números',
       prefix: 'Prefijo',
       suffix: 'Sufijo',
@@ -4055,6 +4056,10 @@ export default {
     newFolder: 'Nueva carpeta',
     folderName: 'Nombre de la carpeta',
     folderNamePlaceholder: 'p. ej., Piezas funcionales',
+    folderNumber: 'Número de carpeta',
+    assignNumber: 'Asignar un número',
+    nextNumber: 'Siguiente número: {{value}}',
+    folderNumberTaken: 'Ese número ya está asignado a otra carpeta.',
     renameFile: 'Renombrar archivo',
     renameFolder: 'Renombrar carpeta',
     invalidFilenameChar: 'El carácter "{{char}}" no está permitido en nombres de archivos de impresión. La tarjeta SD de la impresora rechaza: < > : " / \\ | ? *',

@@ -2973,9 +2973,10 @@ export default {
     // the Workflow tab's Queue & Dispatch sub-tab.
     numberSeries: {
       title: '번호 규칙',
-      description: '새 프로젝트와 대기열에 추가된 작업에 일련번호를 부여합니다. 이미 있는 항목의 번호는 다시 매기지 않습니다.',
+      description: '새 주문 폴더, 프로젝트, 대기열 작업마다 일련번호를 부여합니다. 이미 있는 항목은 다시 번호를 매기지 않습니다.',
       project: '프로젝트',
       queueJob: '대기열 작업',
+      libraryFolder: '주문 폴더',
       enable: '번호 부여',
       prefix: '접두사',
       suffix: '접미사',
@@ -3860,6 +3861,10 @@ export default {
     newFolder: '새 폴더',
     folderName: '폴더 이름',
     folderNamePlaceholder: '예: 기능성 부품',
+    folderNumber: '폴더 번호',
+    assignNumber: '번호 부여',
+    nextNumber: '다음 번호: {{value}}',
+    folderNumberTaken: '이 번호는 이미 다른 폴더에서 사용 중입니다.',
     renameFile: '파일 이름 바꾸기',
     renameFolder: '폴더 이름 바꾸기',
     invalidFilenameChar: '"{{char}}" 문자는 인쇄 파일 이름에 허용되지 않습니다. 프린터 SD 카드가 거부하는 문자: < > : " / \\ | ? *',

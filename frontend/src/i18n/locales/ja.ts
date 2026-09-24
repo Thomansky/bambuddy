@@ -3121,9 +3121,10 @@ export default {
     // the Workflow tab's Queue & Dispatch sub-tab.
     numberSeries: {
       title: '採番ルール',
-      description: '新しいプロジェクトとキューに入れたジョブに連番を割り当てます。既存のデータに番号が振り直されることはありません。',
+      description: '新しい注文フォルダ、プロジェクト、印刷キューの各ジョブに連番を割り当てます。既存の項目に遡って番号を付けることはありません。',
       project: 'プロジェクト',
       queueJob: 'キューのジョブ',
+      libraryFolder: '注文フォルダ',
       enable: '番号を割り当てる',
       prefix: '接頭辞',
       suffix: '接尾辞',
@@ -4052,6 +4053,10 @@ export default {
     newFolder: '新しいフォルダ',
     folderName: 'フォルダ名',
     folderNamePlaceholder: '例: 機能パーツ',
+    folderNumber: 'フォルダ番号',
+    assignNumber: '番号を割り当てる',
+    nextNumber: '次の番号: {{value}}',
+    folderNumberTaken: 'その番号は既に別のフォルダで使われています。',
     renameFile: 'ファイル名を変更',
     renameFolder: 'フォルダ名を変更',
     invalidFilenameChar: '印刷ファイル名に "{{char}}" は使用できません。プリンターのSDカードは次の文字を拒否します: < > : " / \\ | ? *',

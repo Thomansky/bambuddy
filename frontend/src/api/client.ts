@@ -1190,6 +1190,10 @@ export interface Project {
   id: number;
   name: string;
   number: string | null;  // Running number from the `project` series
+  // Where a project created from an order folder got its number: 'folder' when
+  // it inherited the folder's, 'series' when that number was already on
+  // another project. Only a create from a folder sets it.
+  number_source?: string | null;
   description: string | null;
   color: string | null;
   status: string;  // active, completed, archived
@@ -1283,6 +1287,9 @@ export interface ProjectCreate {
   budget?: number | null;
   parent_id?: number;
   url?: string | null;  // #1155
+  // The order folder this project comes out of. The project inherits that
+  // folder's number instead of drawing one from the `project` series.
+  library_folder_id?: number | null;
 }
 
 export interface ProjectUpdate {
@@ -4287,7 +4294,7 @@ export interface MaintenanceSummary {
 
 // Running numbers handed to new projects and queued jobs
 export interface NumberSeries {
-  key: string;  // 'project' | 'queue_job'
+  key: string;  // 'project' | 'queue_job' | 'library_folder'
   enabled: boolean;
   prefix: string;
   suffix: string;
@@ -8547,7 +8554,11 @@ export interface StorageUsageResponse {
 // Library (File Manager) types
 export interface LibraryFolderTree {
   id: number;
+  // An order folder may be nothing but a number, so this can be empty.
   name: string;
+  // Running number from the `library_folder` series, drawn before the name
+  // wherever a folder is shown. null for every folder predating the series.
+  number: string | null;
   parent_id: number | null;
   project_id: number | null;
   archive_id: number | null;
@@ -8566,6 +8577,7 @@ export interface LibraryFolderTree {
 export interface LibraryFolder {
   id: number;
   name: string;
+  number: string | null;  // See LibraryFolderTree.number
   parent_id: number | null;
   project_id: number | null;
   archive_id: number | null;
@@ -8582,10 +8594,16 @@ export interface LibraryFolder {
 }
 
 export interface LibraryFolderCreate {
+  // May be empty, but only when the folder is given a number.
   name: string;
   parent_id?: number | null;
   project_id?: number | null;
   archive_id?: number | null;
+  // Omitted or empty = let the series decide
+  number?: string | null;
+  // Take the next number from the `library_folder` series. Ignored while that
+  // series is off, and never overrides a number typed above.
+  use_number_series?: boolean;
 }
 
 export interface ExternalFolderCreate {
@@ -8598,6 +8616,7 @@ export interface ExternalFolderCreate {
 
 export interface LibraryFolderUpdate {
   name?: string;
+  number?: string | null;  // Explicit null (or '') clears the number
   parent_id?: number | null;
   project_id?: number | null;  // 0 to unlink
   archive_id?: number | null;  // 0 to unlink

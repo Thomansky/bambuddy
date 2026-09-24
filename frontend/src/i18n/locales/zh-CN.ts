@@ -3107,9 +3107,10 @@ export default {
     // the Workflow tab's Queue & Dispatch sub-tab.
     numberSeries: {
       title: '编号规则',
-      description: '为每个新建项目和每个入队作业分配一个流水号。已有数据不会被重新编号。',
+      description: '为每个新建的订单文件夹、项目和打印队列任务分配一个连续编号。已有条目不会重新编号。',
       project: '项目',
       queueJob: '队列作业',
+      libraryFolder: '订单文件夹',
       enable: '分配编号',
       prefix: '前缀',
       suffix: '后缀',
@@ -4038,6 +4039,10 @@ export default {
     newFolder: '新建文件夹',
     folderName: '文件夹名称',
     folderNamePlaceholder: '例如：功能零件',
+    folderNumber: '文件夹编号',
+    assignNumber: '分配编号',
+    nextNumber: '下一个编号：{{value}}',
+    folderNumberTaken: '该编号已被其他文件夹使用。',
     renameFile: '重命名文件',
     renameFolder: '重命名文件夹',
     invalidFilenameChar: '打印文件名中不允许使用字符 "{{char}}"。打印机 SD 卡拒绝以下字符: < > : " / \\ | ? *',

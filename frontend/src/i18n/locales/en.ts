@@ -3146,9 +3146,10 @@ export default {
     // the Workflow tab's Queue & Dispatch sub-tab.
     numberSeries: {
       title: 'Number series',
-      description: 'Give every new project and every queued job a running number. Nothing that already exists is renumbered.',
+      description: 'Give every new order folder, project and queued job a running number. Nothing that already exists is renumbered.',
       project: 'Projects',
       queueJob: 'Queue jobs',
+      libraryFolder: 'Order folders',
       enable: 'Hand out numbers',
       prefix: 'Prefix',
       suffix: 'Suffix',
@@ -4084,6 +4085,10 @@ export default {
     newFolder: 'New Folder',
     folderName: 'Folder Name',
     folderNamePlaceholder: 'e.g., Functional Parts',
+    folderNumber: 'Folder number',
+    assignNumber: 'Assign a number',
+    nextNumber: 'Next number: {{value}}',
+    folderNumberTaken: 'That number is already used by another folder.',
     renameFile: 'Rename File',
     renameFolder: 'Rename Folder',
     invalidFilenameChar: 'The character "{{char}}" is not allowed in print filenames. The printer SD card rejects: < > : " / \\ | ? *',
