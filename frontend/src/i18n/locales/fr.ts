@@ -4278,6 +4278,7 @@ export default {
       openInSlicerFailed: "Impossible d'ouvrir dans le slicer",
       pathCopied: 'Chemin copié',
       folderPathCopied: 'Chemin du dossier copié',
+      filePathCopied: 'Chemin du fichier copié',
       folderDeleted: 'Dossier supprimé',
       fileDeleted: 'Fichier supprimé',
       filesDeleted: '{{count}} fichiers supprimés',

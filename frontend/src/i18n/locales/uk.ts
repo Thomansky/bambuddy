@@ -4317,6 +4317,7 @@ export default {
       openInSlicerFailed: "Не вдалося відкрити у слайсері",
       pathCopied: "Шлях скопійовано",
       folderPathCopied: "Шлях до папки скопійовано",
+      filePathCopied: "Шлях до файлу скопійовано",
       folderDeleted: "Папку видалено",
       fileDeleted: "Файл видалено",
       filesDeleted: "Видалені файли {{count}}.",

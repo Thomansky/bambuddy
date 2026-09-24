@@ -105,7 +105,11 @@ let fileRequests: URLSearchParams[];
 const allFilesRequests = () =>
   fileRequests.filter((p) => !p.has('folder_id') && p.get('include_root') === 'false');
 
+/** What /library/stats answers right now — a move changes it mid-test. */
+let statsState = mockStats;
+
 function useHandlers(settings: Record<string, unknown> = {}, stats = mockStats) {
+  statsState = stats;
   server.use(
     http.get('/api/v1/library/folders', () => HttpResponse.json(mockFolders)),
     http.get('/api/v1/library/files', ({ request }) => {
@@ -118,7 +122,7 @@ function useHandlers(settings: Record<string, unknown> = {}, stats = mockStats) 
       if (params.get('include_root') === 'true') return HttpResponse.json([rootFile]);
       return HttpResponse.json([rootFile, jobFile, nasFile]);
     }),
-    http.get('/api/v1/library/stats', () => HttpResponse.json(stats)),
+    http.get('/api/v1/library/stats', () => HttpResponse.json(statsState)),
     http.get('/api/v1/settings/', () =>
       HttpResponse.json({
         check_updates: false,
@@ -140,6 +144,13 @@ async function openFolderMenu(user: ReturnType<typeof userEvent.setup>, name: st
   const row = sidebar().getByText(name).closest('.group') as HTMLElement;
   await user.click(within(row).getByTitle('Actions'));
   return screen.getByText('Copy path');
+}
+
+/** Open a file card's kebab in the grid and return its "Copy path" entry. */
+async function openFileMenu(user: ReturnType<typeof userEvent.setup>, filename: string) {
+  const card = screen.getByText(filename).closest('.group') as HTMLElement;
+  await user.click(within(card).getAllByRole('button').at(-1)!);
+  return screen.findByText('Copy path');
 }
 
 describe('FileManagerPage — Copy path', () => {
@@ -208,7 +219,7 @@ describe('FileManagerPage — Copy path', () => {
     expect(screen.queryByText('Path copied')).not.toBeInTheDocument();
   });
 
-  it('appends the filename for a file, under its library folder and under an external one', async () => {
+  it('appends the filename to the library path for a file in a managed folder', async () => {
     render(<FileManagerPage />);
 
     await waitFor(() => expect(screen.getByTestId('folder-sidebar')).toBeInTheDocument());
@@ -216,10 +227,51 @@ describe('FileManagerPage — Copy path', () => {
     await waitFor(() => expect(screen.getByText('part.3mf')).toBeInTheDocument());
 
     // Grid: the card's kebab menu.
-    const card = screen.getByText('part.3mf').closest('.group') as HTMLElement;
-    await user.click(within(card).getAllByRole('button').at(-1)!);
-    await user.click(await screen.findByText('Copy path'));
+    await user.click(await openFileMenu(user, 'part.3mf'));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('Kunden/RAFI/N1125035/part.3mf'));
+  });
+
+  it('appends the filename to the real path for a file in an external folder', async () => {
+    render(<FileManagerPage />);
+
+    await waitFor(() => expect(screen.getByTestId('folder-sidebar')).toBeInTheDocument());
+    await user.click(sidebar().getByText('NAS Prints'));
+    await waitFor(() => expect(screen.getByText('nas.3mf')).toBeInTheDocument());
+
+    await user.click(await openFileMenu(user, 'nas.3mf'));
+
+    // The real path the farm pastes into Explorer, not the library name chain.
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('/mnt/nas/prints/nas.3mf'));
+    // …and the confirmation names a file, because that is what is on the
+    // clipboard: pasting it where a directory is expected does not work.
+    expect(await screen.findByText('File path copied')).toBeInTheDocument();
+    expect(screen.queryByText('Folder path copied')).not.toBeInTheDocument();
+  });
+
+  it('joins a linked Windows share in its own path flavour', async () => {
+    const share = folder({
+      id: 20,
+      name: 'Werkstatt',
+      file_count: 1,
+      is_external: true,
+      external_path: 'C:\\Jobs\\RAFI',
+    });
+    const shareFile = file({ id: 21, filename: 'jig.3mf', folder_id: 20, is_external: true });
+    server.use(
+      http.get('/api/v1/library/folders', () => HttpResponse.json([share])),
+      http.get('/api/v1/library/files', () => HttpResponse.json([shareFile])),
+    );
+    render(<FileManagerPage />);
+
+    await waitFor(() => expect(screen.getByTestId('folder-sidebar')).toBeInTheDocument());
+    await user.click(sidebar().getByText('Werkstatt'));
+    await waitFor(() => expect(screen.getByText('jig.3mf')).toBeInTheDocument());
+
+    await user.click(await openFileMenu(user, 'jig.3mf'));
+
+    // A forward slash appended to a Windows path is exactly the paste this
+    // feature exists to remove.
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('C:\\Jobs\\RAFI\\jig.3mf'));
   });
 
   it('does not throw and shows no confirmation when no clipboard API is available', async () => {
@@ -284,6 +336,84 @@ describe('FileManagerPage — what the root lists', () => {
     await waitFor(() => expect(screen.getByText('loose.3mf')).toBeInTheDocument());
     // Opened via include_root=true — the unfoldered files, not the whole library.
     expect(fileRequests.some((p) => p.get('include_root') === 'true' && !p.has('folder_id'))).toBe(true);
+    expect(allFilesRequests()).toHaveLength(0);
+  });
+
+  it('leaves the folder tiles out of "No folder", which is defined as what they do not hold', async () => {
+    useHandlers({ library_root_lists_all_files: false });
+    const user = userEvent.setup();
+    render(<FileManagerPage />);
+
+    // Each top-level folder renders twice at the root: sidebar entry + tile.
+    await waitFor(() => expect(screen.getAllByText('Kunden').length).toBeGreaterThanOrEqual(2));
+    const atRoot = screen.getAllByText('Kunden').length;
+
+    await user.click(await screen.findByTestId('no-folder-entry'));
+    await waitFor(() => expect(screen.getByText('loose.3mf')).toBeInTheDocument());
+
+    // The crumb says "No folder" — the pane under it must not still be
+    // offering the very folders the view excludes.
+    expect(pathBar().getByText('No folder')).toBeInTheDocument();
+    expect(screen.getAllByText('Kunden')).toHaveLength(atRoot - 1);
+    expect(screen.queryByTestId('no-folder-entry')).not.toBeInTheDocument();
+  });
+
+  it('keeps the search box at the root of a library that has no folders yet', async () => {
+    // Search is the documented way back to the flat listing with the setting
+    // off. A library with no folder rows used to lose the whole toolbar here,
+    // which made that override unreachable without a reload.
+    useHandlers({ library_root_lists_all_files: false });
+    server.use(http.get('/api/v1/library/folders', () => HttpResponse.json([])));
+    const user = userEvent.setup();
+    render(<FileManagerPage />);
+
+    expect(await screen.findByTestId('no-folder-entry')).toBeInTheDocument();
+    expect(allFilesRequests()).toHaveLength(0);
+
+    await user.type(screen.getByPlaceholderText('Search files...'), 'part');
+
+    await waitFor(() => expect(screen.getByText('part.3mf')).toBeInTheDocument());
+    expect(allFilesRequests().length).toBeGreaterThan(0);
+  });
+
+  it('offers "No folder" for the files a move just took out of every folder', async () => {
+    // The entry is driven entirely by the stats count and the root issues no
+    // file listing of its own, so a move that leaves ['library-stats'] cached
+    // makes the files it just moved unreachable until a reload.
+    useHandlers({ library_root_lists_all_files: false }, { ...mockStats, unfoldered_files: 0 });
+    let moved = false;
+    server.use(
+      http.get('/api/v1/library/files', ({ request }) => {
+        const params = new URL(request.url).searchParams;
+        fileRequests.push(params);
+        if (params.get('folder_id') === '3') return HttpResponse.json(moved ? [] : [jobFile]);
+        if (params.has('folder_id')) return HttpResponse.json([]);
+        if (params.get('include_root') === 'true') return HttpResponse.json(moved ? [jobFile] : []);
+        return HttpResponse.json([rootFile, jobFile, nasFile]);
+      }),
+      http.post('/api/v1/library/files/move', () => {
+        moved = true;
+        statsState = { ...mockStats, unfoldered_files: 1 };
+        return HttpResponse.json({ status: 'success', moved: 1 });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<FileManagerPage />);
+
+    await waitFor(() => expect(screen.getAllByText('Kunden').length).toBeGreaterThanOrEqual(2));
+    expect(screen.queryByTestId('no-folder-entry')).not.toBeInTheDocument();
+
+    await user.click(sidebar().getByText('N1125035'));
+    await waitFor(() => expect(screen.getByText('part.3mf')).toBeInTheDocument());
+    await user.click(within(screen.getByTestId('library-filter-card')).getByText('Select All'));
+    await user.click(within(screen.getByTestId('selection-actions')).getByText('Move'));
+    await user.click(within(screen.getByTestId('move-folder-list')).getByText('Root (No Folder)'));
+    await user.click(within(screen.getByTestId('move-files-modal')).getByText('Move'));
+    await waitFor(() => expect(screen.queryByTestId('move-files-modal')).not.toBeInTheDocument());
+
+    await user.click(pathBar().getByText('All Files'));
+
+    expect(await screen.findByTestId('no-folder-entry')).toBeInTheDocument();
     expect(allFilesRequests()).toHaveLength(0);
   });
 

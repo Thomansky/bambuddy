@@ -86,6 +86,9 @@ export function LibraryTrashPage() {
       queryClient.invalidateQueries({ queryKey: ['library-trash-count'] });
       queryClient.invalidateQueries({ queryKey: ['library-files'] });
       queryClient.invalidateQueries({ queryKey: ['library-folders'] });
+      // A restored file counts again — including in the unfoldered count the
+      // File Manager's folders-first root reads to offer "No folder".
+      queryClient.invalidateQueries({ queryKey: ['library-stats'] });
     },
     onError: (e: Error) => showToast(e.message || t('libraryTrash.toast.restoreFailed'), 'error'),
   });
@@ -123,6 +126,7 @@ export function LibraryTrashPage() {
       queryClient.invalidateQueries({ queryKey: ['library-trash-count'] });
       queryClient.invalidateQueries({ queryKey: ['library-files'] });
       queryClient.invalidateQueries({ queryKey: ['library-folders'] });
+      queryClient.invalidateQueries({ queryKey: ['library-stats'] });
     },
     onError: (e: Error) => showToast(e.message || t('libraryTrash.toast.restoreFailed'), 'error'),
   });

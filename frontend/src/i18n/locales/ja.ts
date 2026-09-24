@@ -4291,6 +4291,7 @@ export default {
       openInSlicerFailed: 'スライサーで開けませんでした',
       pathCopied: 'パスをコピーしました',
       folderPathCopied: 'フォルダのパスをコピーしました',
+      filePathCopied: 'ファイルのパスをコピーしました',
       folderDeleted: 'フォルダを削除しました',
       fileDeleted: 'ファイルを削除しました',
       filesDeleted: '{{count}}件のファイルを削除しました',

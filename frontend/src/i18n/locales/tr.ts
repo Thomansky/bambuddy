@@ -4284,6 +4284,7 @@ export default {
       openInSlicerFailed: 'Dilimleyicide açılamadı',
       pathCopied: 'Yol kopyalandı',
       folderPathCopied: 'Klasör yolu kopyalandı',
+      filePathCopied: 'Dosya yolu kopyalandı',
       folderDeleted: 'Klasör silindi',
       fileDeleted: 'Dosya silindi',
       filesDeleted: '{{count}} dosya silindi',

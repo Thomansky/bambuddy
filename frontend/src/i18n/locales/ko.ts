@@ -4098,6 +4098,7 @@ export default {
       openInSlicerFailed: '슬라이서에서 열 수 없습니다',
       pathCopied: '경로가 복사되었습니다',
       folderPathCopied: '폴더 경로가 복사되었습니다',
+      filePathCopied: '파일 경로가 복사되었습니다',
       folderDeleted: '폴더 삭제됨',
       fileDeleted: '파일 삭제됨',
       filesDeleted: '{{count}}개 파일 삭제됨',

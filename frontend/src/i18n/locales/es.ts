@@ -4294,6 +4294,7 @@ export default {
       openInSlicerFailed: 'No se pudo abrir en el laminador',
       pathCopied: 'Ruta copiada',
       folderPathCopied: 'Ruta de la carpeta copiada',
+      filePathCopied: 'Ruta del archivo copiada',
       folderDeleted: 'Carpeta eliminada',
       fileDeleted: 'Archivo eliminado',
       filesDeleted: 'Se eliminaron {{count}} archivos',

@@ -4277,6 +4277,7 @@ export default {
       openInSlicerFailed: '無法在切片軟體中開啟',
       pathCopied: '已複製路徑',
       folderPathCopied: '已複製資料夾路徑',
+      filePathCopied: '已複製檔案路徑',
       folderDeleted: '資料夾已刪除',
       fileDeleted: '檔案已刪除',
       filesDeleted: '已刪除 {{count}} 個檔案',

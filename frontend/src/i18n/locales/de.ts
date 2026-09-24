@@ -4292,6 +4292,7 @@ export default {
       openInSlicerFailed: 'Konnte nicht im Slicer öffnen',
       pathCopied: 'Pfad kopiert',
       folderPathCopied: 'Ordnerpfad kopiert',
+      filePathCopied: 'Dateipfad kopiert',
       folderDeleted: 'Ordner gelöscht',
       fileDeleted: 'Datei gelöscht',
       filesDeleted: '{{count}} Dateien gelöscht',

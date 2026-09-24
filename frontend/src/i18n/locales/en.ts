@@ -4323,6 +4323,7 @@ export default {
       openInSlicerFailed: 'Could not open in slicer',
       pathCopied: 'Path copied',
       folderPathCopied: 'Folder path copied',
+      filePathCopied: 'File path copied',
       folderDeleted: 'Folder deleted',
       fileDeleted: 'File deleted',
       filesDeleted: 'Deleted {{count}} files',

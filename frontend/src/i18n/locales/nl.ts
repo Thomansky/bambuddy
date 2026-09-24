@@ -4322,6 +4322,7 @@ export default {
       openInSlicerFailed: 'Kon niet openen in slicer',
       pathCopied: 'Pad gekopieerd',
       folderPathCopied: 'Mappad gekopieerd',
+      filePathCopied: 'Bestandspad gekopieerd',
       folderDeleted: 'Map verwijderd',
       fileDeleted: 'Bestand verwijderd',
       filesDeleted: '{{count}} bestanden verwijderd',

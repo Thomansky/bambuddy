@@ -4090,6 +4090,7 @@ export default {
       openInSlicerFailed: "Не удалось открыть в слайсере",
       pathCopied: "Путь скопирован",
       folderPathCopied: "Путь к папке скопирован",
+      filePathCopied: "Путь к файлу скопирован",
       folderDeleted: "Папка удалена",
       fileDeleted: "Файл удалён",
       filesDeleted: "Удалено файлов: {{count}}",

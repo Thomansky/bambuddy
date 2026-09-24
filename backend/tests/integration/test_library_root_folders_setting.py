@@ -5,10 +5,15 @@ no existing install changes on upgrade — and the frontend turns it off to make
 the root list its top-level folders instead. Two things have to hold for that
 to work:
 
-  * the flag survives a round trip as a *bool*. The settings table stores
-    strings, and a key missing from the boolean list in ``_build_settings_response``
-    comes back as the string "false", which is truthy — the setting would look
-    on while the stored row says off.
+  * the flag survives a round trip as a *bool*, including from a row whose
+    stored value is not a boolean the response model can parse. The settings
+    table stores strings, and the PUT/PATCH path writes the literal "None" for
+    an explicit null; a key missing from the boolean list in
+    ``_build_settings_response`` reaches ``AppSettings(**settings_dict)`` as
+    that raw string, and validation then fails and takes the *whole* settings
+    response down with it — the #2905 failure mode, one endpoint the entire
+    app depends on. (Pydantic coerces "true"/"false" itself, so the happy
+    round trip alone does not pin that list entry.)
   * ``/library/stats`` reports how many files sit in no folder at all, per
     bucket. The root offers a "No folder" entry only when there is something
     behind it, and asking the listing endpoint that question would issue the
@@ -33,7 +38,7 @@ async def test_root_lists_all_files_defaults_to_true(async_client: AsyncClient):
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_root_lists_all_files_round_trips_as_a_bool(async_client: AsyncClient):
-    """Off must read back as False, not as the truthy string "false"."""
+    """Off must read back as False, from the PATCH echo and from a fresh GET."""
     patched = await async_client.patch("/api/v1/settings/", json={"library_root_lists_all_files": False})
     assert patched.status_code == 200
     assert patched.json()["library_root_lists_all_files"] is False
@@ -44,6 +49,26 @@ async def test_root_lists_all_files_round_trips_as_a_bool(async_client: AsyncCli
 
     back_on = await async_client.patch("/api/v1/settings/", json={"library_root_lists_all_files": True})
     assert back_on.json()["library_root_lists_all_files"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_a_stored_none_does_not_take_the_settings_response_down(async_client: AsyncClient):
+    """The key belongs in the boolean list in ``_build_settings_response``.
+
+    A null in the payload is stored as the literal string "None" (see the
+    ``value is None`` branch of ``update_settings``). Only the boolean list
+    turns that back into a bool; without it the raw string reaches the
+    response model, fails validation and 500s every settings read — not just
+    this one field.
+    """
+    patched = await async_client.patch("/api/v1/settings/", json={"library_root_lists_all_files": None})
+    assert patched.status_code == 200
+    assert patched.json()["library_root_lists_all_files"] is False
+
+    reread = await async_client.get("/api/v1/settings/")
+    assert reread.status_code == 200
+    assert reread.json()["library_root_lists_all_files"] is False
 
 
 @pytest.mark.asyncio

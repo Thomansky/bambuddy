@@ -1967,6 +1967,16 @@ function joinExternalPath(dir: string, filename: string): string {
   return dir.endsWith(sep) ? `${dir}${filename}` : `${dir}${sep}${filename}`;
 }
 
+// Which of the three "Copy path" confirmations to show. A library path, the
+// real directory of an external folder and the real path of a file inside one
+// are three different strings to paste, so the toast may not name the wrong
+// kind — an Explorer paste of a "folder path" that is really a file fails.
+const PATH_COPIED_TOAST = {
+  library: 'fileManager.toast.pathCopied',
+  folder: 'fileManager.toast.folderPathCopied',
+  file: 'fileManager.toast.filePathCopied',
+} as const;
+
 // Stable stand-in for the flat listing the folders-first root never requests.
 const NO_FILES: LibraryFileListItem[] = [];
 
@@ -2460,6 +2470,11 @@ export function FileManagerPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['library-files'] });
       queryClient.invalidateQueries({ queryKey: ['library-folders'] });
+      // A move is the one operation that changes how many files sit in no
+      // folder at all, and the folders-first root reads that count from the
+      // stats to decide whether to offer "No folder". Without this the files
+      // moved to the root have no entry to appear under until a reload.
+      queryClient.invalidateQueries({ queryKey: ['library-stats'] });
       setSelectedFiles([]);
       setShowMoveModal(false);
       showToast(t('fileManager.toast.filesMoved'), 'success');
@@ -2768,11 +2783,12 @@ export function FileManagerPage() {
   // external folder copies the real directory it was linked from — the string
   // that goes back into Explorer or the slicer — while a managed one has only
   // its library path. They are not interchangeable, so the toast says which of
-  // the two landed on the clipboard.
+  // the three landed on the clipboard; a real path ending in a filename is not
+  // a directory and must not be confirmed as one.
   const copyPath = useCallback(
-    async (value: string, isRealPath: boolean) => {
+    async (value: string, kind: 'library' | 'folder' | 'file') => {
       if (!(await copyTextToClipboard(value))) return;
-      showToast(t(isRealPath ? 'fileManager.toast.folderPathCopied' : 'fileManager.toast.pathCopied'), 'success');
+      showToast(t(PATH_COPIED_TOAST[kind]), 'success');
     },
     [showToast, t],
   );
@@ -2787,8 +2803,8 @@ export function FileManagerPage() {
 
   const handleCopyFolderPath = useCallback(
     (folder: LibraryFolderTree) => {
-      if (folder.is_external && folder.external_path) copyPath(folder.external_path, true);
-      else copyPath(libraryPathOf(folder.id), false);
+      if (folder.is_external && folder.external_path) copyPath(folder.external_path, 'folder');
+      else copyPath(libraryPathOf(folder.id), 'library');
     },
     [copyPath, libraryPathOf],
   );
@@ -2798,11 +2814,11 @@ export function FileManagerPage() {
       const parent =
         file.folder_id !== null && folders ? findFolderChain(folders, file.folder_id)?.at(-1) : undefined;
       if (parent?.is_external && parent.external_path) {
-        copyPath(joinExternalPath(parent.external_path, file.filename), true);
+        copyPath(joinExternalPath(parent.external_path, file.filename), 'file');
         return;
       }
       const dir = libraryPathOf(file.folder_id);
-      copyPath(dir ? `${dir}/${file.filename}` : file.filename, false);
+      copyPath(dir ? `${dir}/${file.filename}` : file.filename, 'library');
     },
     [copyPath, folders, libraryPathOf],
   );
@@ -2869,8 +2885,11 @@ export function FileManagerPage() {
 
   // The tiles disappear while a search or tag filter is active: those views
   // list matches from every descendant folder, so per-folder navigation
-  // would sit beside results it doesn't scope.
-  const showFolderTiles = visibleSubfolders.length > 0 && !searchQuery.trim() && selectedTagIds.length === 0;
+  // would sit beside results it doesn't scope. "No folder" is the same case
+  // from the other side — it is defined as the files those very folders do
+  // not hold, so showing them inside it would contradict its own crumb.
+  const showFolderTiles =
+    visibleSubfolders.length > 0 && !searchQuery.trim() && selectedTagIds.length === 0 && !rootUnfolderedView;
 
   // "No folder" sits beside the root's folder tiles, and only when there is
   // something behind it. The count rides along on the stats the header already
@@ -3042,12 +3061,16 @@ export function FileManagerPage() {
   // selection actions, so it has to outlive the file list. An organisational
   // folder holding nothing but subfolders is precisely where the folder search
   // is needed, and a selection made in another column must keep its actions on
-  // screen even when the selected folder's own pane is empty.
+  // screen even when the selected folder's own pane is empty. The folders-first
+  // root keeps it unconditionally: it never lists files, and a search is the
+  // documented way back to the flat listing — a library with no folders yet
+  // would otherwise lose the search box that restores it.
   const showFilterCard =
     (files?.length ?? 0) > 0 ||
     (sortedFolders?.length ?? 0) > 0 ||
     searchQuery.trim().length > 0 ||
-    selectedFiles.length > 0;
+    selectedFiles.length > 0 ||
+    rootListsFolders;
 
   // A selection belongs to the folder it was made in. Every column can tick a
   // file now, so a selection that survived a folder change would leave Move /

@@ -4277,6 +4277,7 @@ export default {
       openInSlicerFailed: 'Não foi possível abrir no fatiador',
       pathCopied: 'Caminho copiado',
       folderPathCopied: 'Caminho da pasta copiado',
+      filePathCopied: 'Caminho do arquivo copiado',
       folderDeleted: 'Pasta excluída',
       fileDeleted: 'Arquivo excluído',
       filesDeleted: 'Excluídos {{count}} arquivos',
