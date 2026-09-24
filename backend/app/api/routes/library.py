@@ -16,6 +16,7 @@ from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 from stat import S_ISREG
+from typing import NamedTuple
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse as FastAPIFileResponse, StreamingResponse
@@ -306,7 +307,9 @@ def validate_print_file_upload(filename: str, content: bytes) -> None:
         )
 
 
-def _resolve_upload_destination(target_folder: LibraryFolder | None, filename: str) -> tuple[Path, bool]:
+def _resolve_upload_destination(
+    target_folder: LibraryFolder | None, filename: str, *, allow_existing: bool = False
+) -> tuple[Path, bool]:
     """Resolve the on-disk destination for an uploaded file.
 
     Non-external target: returns ``(<library_files_dir>/<uuid><ext>, False)``.
@@ -317,6 +320,11 @@ def _resolve_upload_destination(target_folder: LibraryFolder | None, filename: s
     filename collisions on the external mount (409). See #1112 — previously
     uploads to writable external folders were silently misrouted to the
     internal library dir.
+
+    ``allow_existing`` drops that last refusal, for a caller that has already
+    established the name belongs to no library row — a WebDAV PUT replacing a
+    file left on the share by a delete that only removed the row. An upload
+    from the browser never sets it: there the collision is news to the user.
     """
     if target_folder is not None and target_folder.is_external:
         if target_folder.external_readonly:
@@ -341,7 +349,7 @@ def _resolve_upload_destination(target_folder: LibraryFolder | None, filename: s
             dest.relative_to(ext_dir.resolve())
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid filename")
-        if dest.exists():
+        if dest.exists() and not allow_existing:
             raise HTTPException(
                 status_code=409,
                 detail=f"A file named {filename!r} already exists in the external folder",
@@ -878,6 +886,98 @@ def _generate_server_thumbnail(file_type: str, file_path: Path, thumbnails_dir: 
     if file_type == "pdf":
         return generate_pdf_thumbnail(file_path, thumbnails_dir)
     return None
+
+
+class LibraryFileContent(NamedTuple):
+    """Everything about a library row that is derived from its bytes.
+
+    Four values, in the shape the columns want them: ``thumbnail_path`` is
+    already relative to ``base_dir`` and ``metadata`` is already cleaned and
+    stripped of the embedded 3MF title, so a caller assigns them straight to
+    the row.
+    """
+
+    file_type: str
+    file_hash: str
+    thumbnail_path: str | None
+    metadata: dict | None
+
+
+def ingest_library_file_content(
+    file_path: Path,
+    filename: str,
+    *,
+    generate_stl_thumbnails: bool = True,
+) -> LibraryFileContent:
+    """Classify, hash and preview a file whose bytes are already on disk.
+
+    The content half of an ingest, lifted out of ``upload_file`` so the WebDAV
+    write path (#3152 follow-up) runs the *same* classification, the same 3MF
+    parse and the same thumbnail rules rather than a second implementation that
+    would drift. ``file_path`` is where the bytes are; ``filename`` is the name
+    the library shows, which is what decides the type — the two differ for
+    every managed file, whose blob is a UUID.
+
+    A file whose preview cannot be produced (an unparseable 3MF, an STL trimesh
+    chokes on) still returns — the row belongs in the library either way, so the
+    user can see it and delete it. Only the preview is lost.
+    """
+    ext = os.path.splitext(filename)[1].lower()
+    thumbnails_dir = get_library_thumbnails_dir()
+    thumbnail_path: str | None = None
+    metadata: dict | None = None
+
+    if ext == ".3mf":
+        try:
+            raw_metadata = ThreeMFParser(str(file_path)).parse()
+            thumbnail_data = raw_metadata.get("_thumbnail_data")
+            thumbnail_ext = raw_metadata.get("_thumbnail_ext", ".png")
+            if thumbnail_data:
+                thumb_filename = f"{uuid.uuid4().hex}{thumbnail_ext}"
+                thumb_path = (
+                    thumbnails_dir / thumb_filename
+                )  # SEC-PATH-OK: thumb_filename = uuid.uuid4().hex + thumbnail_ext
+                with open(thumb_path, "wb") as fh:
+                    fh.write(thumbnail_data)
+                thumbnail_path = str(thumb_path)
+            metadata = _clean_3mf_metadata(raw_metadata)
+        except Exception as exc:
+            logger.warning("Failed to parse 3MF: %s", exc)
+    elif ext == ".gcode":
+        try:
+            thumbnail_data = extract_gcode_thumbnail(file_path)
+            if thumbnail_data:
+                thumb_filename = f"{uuid.uuid4().hex}.png"
+                thumb_path = thumbnails_dir / thumb_filename  # SEC-PATH-OK: thumb_filename = uuid.uuid4().hex + ".png"
+                with open(thumb_path, "wb") as fh:
+                    fh.write(thumbnail_data)
+                thumbnail_path = str(thumb_path)
+        except Exception as exc:
+            logger.warning("Failed to extract gcode thumbnail: %s", exc)
+    elif ext in IMAGE_EXTENSIONS:
+        thumbnail_path = create_image_thumbnail(file_path, thumbnails_dir)
+    elif ext == ".stl":
+        # Same MIN_USABLE_STL_BYTES pre-skip as extract_zip_file -- a stub below
+        # this size cannot hold a triangle, so trimesh would return an empty mesh.
+        if generate_stl_thumbnails:
+            try:
+                if file_path.stat().st_size >= MIN_USABLE_STL_BYTES:
+                    thumbnail_path = generate_stl_thumbnail(file_path, thumbnails_dir)
+            except OSError:
+                pass
+    elif ext == ".pdf":
+        # First page as the grid thumbnail (#2976). Not behind the STL toggle: a
+        # pdfium render is milliseconds, not the seconds a mesh render costs.
+        thumbnail_path = generate_pdf_thumbnail(file_path, thumbnails_dir)
+
+    return LibraryFileContent(
+        # Now that the bytes are on disk the zip can settle what the name only
+        # guessed at: a sliced 3MF uploaded as `Foo.3mf` is a sliced 3MF (#2993).
+        file_type=classify_file_type(filename, file_path),
+        file_hash=calculate_file_hash(file_path),
+        thumbnail_path=to_relative_path(thumbnail_path) if thumbnail_path else None,
+        metadata=_without_print_name(metadata) or None,
+    )
 
 
 async def _backfill_external_stl_thumbnails(folder_ids: list[int]) -> None:
@@ -2455,12 +2555,6 @@ async def upload_file(
             validate_print_filename(filename)
         except InvalidFilenameError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
-        # `ext` stays the trailing extension because the on-disk filename uses
-        # it directly and the 3MF-parse branch below still gates on
-        # `ext == ".3mf"`, which is correct for both `.3mf` and `.gcode.3mf`.
-        # `file_type` is compound-aware and is decided further down, once the
-        # bytes are on disk to be read.
-        ext = os.path.splitext(filename)[1].lower()
 
         # Verify folder exists if specified
         target_folder = None
@@ -2488,97 +2582,17 @@ async def upload_file(
         with open(file_path, "wb") as f:
             f.write(content)
 
-        # Now that the bytes are on disk the zip can settle what the name only
-        # guessed at: a sliced 3MF uploaded as `Foo.3mf` is a sliced 3MF (#2993).
-        file_type = classify_file_type(filename, file_path)
-
-        # Calculate hash
-        file_hash = calculate_file_hash(file_path)
+        # Classification, hash, 3MF parse and thumbnail all at once, shared with
+        # the WebDAV write path so two ingests cannot disagree about one file.
+        derived = ingest_library_file_content(file_path, filename, generate_stl_thumbnails=generate_stl_thumbnails)
 
         # Check for duplicates
         dup_result = await db.execute(
-            select(LibraryFile.id).where(LibraryFile.file_hash == file_hash, LibraryFile.deleted_at.is_(None)).limit(1)
+            select(LibraryFile.id)
+            .where(LibraryFile.file_hash == derived.file_hash, LibraryFile.deleted_at.is_(None))
+            .limit(1)
         )
         duplicate_of = dup_result.scalar()
-
-        # Extract metadata and thumbnail
-        metadata = {}
-        thumbnail_path = None
-        thumbnails_dir = get_library_thumbnails_dir()
-
-        if ext == ".3mf":
-            try:
-                parser = ThreeMFParser(str(file_path))
-                raw_metadata = parser.parse()
-
-                # Extract thumbnail before cleaning metadata
-                thumbnail_data = raw_metadata.get("_thumbnail_data")
-                thumbnail_ext = raw_metadata.get("_thumbnail_ext", ".png")
-
-                # Save thumbnail if extracted
-                if thumbnail_data:
-                    thumb_filename = f"{uuid.uuid4().hex}{thumbnail_ext}"
-                    thumb_path = (
-                        thumbnails_dir / thumb_filename
-                    )  # SEC-PATH-OK: thumb_filename = uuid.uuid4().hex + thumbnail_ext
-                    with open(thumb_path, "wb") as f:
-                        f.write(thumbnail_data)
-                    thumbnail_path = str(thumb_path)
-
-                # Clean metadata - remove non-JSON-serializable data (bytes, etc.)
-                def clean_metadata(obj):
-                    if isinstance(obj, dict):
-                        return {
-                            k: clean_metadata(v)
-                            for k, v in obj.items()
-                            if not isinstance(v, bytes) and k not in ("_thumbnail_data", "_thumbnail_ext")
-                        }
-                    elif isinstance(obj, list):
-                        return [clean_metadata(i) for i in obj if not isinstance(i, bytes)]
-                    elif isinstance(obj, bytes):
-                        return None
-                    return obj
-
-                metadata = clean_metadata(raw_metadata)
-            except Exception as e:
-                logger.warning("Failed to parse 3MF: %s", e)
-
-        elif ext == ".gcode":
-            # Extract embedded thumbnail from gcode
-            try:
-                thumbnail_data = extract_gcode_thumbnail(file_path)
-                if thumbnail_data:
-                    thumb_filename = f"{uuid.uuid4().hex}.png"
-                    thumb_path = (
-                        thumbnails_dir / thumb_filename
-                    )  # SEC-PATH-OK: thumb_filename = uuid.uuid4().hex + ".png"
-                    with open(thumb_path, "wb") as f:
-                        f.write(thumbnail_data)
-                    thumbnail_path = str(thumb_path)
-            except Exception as e:
-                logger.warning("Failed to extract gcode thumbnail: %s", e)
-
-        elif ext.lower() in IMAGE_EXTENSIONS:
-            # For image files, create a thumbnail from the image itself
-            thumbnail_path = create_image_thumbnail(file_path, thumbnails_dir)
-
-        elif ext == ".stl":
-            # Generate STL thumbnail if enabled. Same MIN_USABLE_STL_BYTES
-            # pre-skip as extract_zip_file — stubs / placeholders below this
-            # size can't contain a triangle so trimesh would return an empty
-            # mesh anyway.
-            if generate_stl_thumbnails:
-                try:
-                    if file_path.stat().st_size >= MIN_USABLE_STL_BYTES:
-                        thumbnail_path = generate_stl_thumbnail(file_path, thumbnails_dir)
-                except OSError:
-                    pass
-
-        elif ext == ".pdf":
-            # First page as the grid thumbnail (#2976). Not behind the STL
-            # toggle: a pdfium render is milliseconds, not the seconds a
-            # mesh render costs, and the helper degrades to no thumbnail.
-            thumbnail_path = generate_pdf_thumbnail(file_path, thumbnails_dir)
 
         # Create database entry (managed files store relative paths for portability;
         # external files store the absolute mount path — same shape as scan produces)
@@ -2587,11 +2601,11 @@ async def upload_file(
             is_external=is_external_upload,
             filename=filename,
             file_path=_stored_file_path(file_path, is_external_upload),
-            file_type=file_type,
+            file_type=derived.file_type,
             file_size=len(content),
-            file_hash=file_hash,
-            thumbnail_path=to_relative_path(thumbnail_path) if thumbnail_path else None,
-            file_metadata=_without_print_name(metadata) if metadata else None,
+            file_hash=derived.file_hash,
+            thumbnail_path=derived.thumbnail_path,
+            file_metadata=derived.metadata,
             created_by_id=current_user.id if current_user else None,
         )
         db.add(library_file)

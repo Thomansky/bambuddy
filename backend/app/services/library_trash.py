@@ -55,6 +55,15 @@ DEFAULT_AUTO_PURGE_DAYS = 90
 MIN_AUTO_PURGE_DAYS = 7  # anything shorter is begging for accidents
 MAX_AUTO_PURGE_DAYS = 3650
 
+# How long a file created over WebDAV may stay empty before it is given up on
+# (#3152). Clients create a file, lock it, write the bytes and unlock, so the
+# row exists for a moment with nothing in it; if the workstation reboots or the
+# network drops in that moment, nothing ever comes back to fill it in and the
+# library is left with a 0-byte row that the File Manager and the queue treat
+# as a real file. An hour is far longer than any save takes and short enough
+# that nobody plans around the ghost.
+ABANDONED_UPLOAD_HOURS = 1
+
 
 def _to_absolute_path(relative_path: str | None) -> Path | None:
     """Mirror of the routes helper so this service has no route-module import.
@@ -130,6 +139,7 @@ class LibraryTrashService:
                 await asyncio.sleep(self._check_interval)
                 async with async_session() as db:
                     await self._sweep(db)
+                    await self._sweep_abandoned_uploads(db)
                     await self._maybe_run_auto_purge(db)
             except asyncio.CancelledError:
                 break
@@ -362,6 +372,64 @@ class LibraryTrashService:
         await db.commit()
         logger.info("Library trash sweeper: hard-deleted %d row(s) past %d-day retention", deleted, retention)
         return deleted
+
+    async def _sweep_abandoned_uploads(self, db: AsyncSession) -> int:
+        """Drop rows a WebDAV client created and never filled in (#3152).
+
+        The share defers the ingest when a PUT arrives with an empty body,
+        because that is how Windows starts every save: create the file, lock
+        it, write the bytes. The row is marked ``ingest_pending`` until the
+        bytes arrive. When they never do — the workstation rebooted, the
+        network dropped — nothing else revisits the row, and a 0-byte file with
+        a name ending in ``.3mf`` is one the File Manager lists and the queue
+        will happily send to a printer, which stops with "unable to parse the
+        3mf file". Nobody can tell that from a real file by looking, so it is
+        this sweep's job rather than a badge in the UI.
+
+        Not the trash: there is nothing in the row to restore. It is the empty
+        half of a save that never happened.
+        """
+        cutoff = utcnow_naive() - timedelta(hours=ABANDONED_UPLOAD_HOURS)
+        result = await db.execute(
+            select(LibraryFile).where(
+                LibraryFile.ingest_pending.is_(True),
+                LibraryFile.file_hash.is_(None),
+                LibraryFile.file_size == 0,
+                LibraryFile.deleted_at.is_(None),
+                LibraryFile.created_at < cutoff,
+            )
+        )
+        rows = result.scalars().all()
+        if not rows:
+            return 0
+
+        for row in rows:
+            self._unlink_if_still_empty(row)
+        ids = [row.id for row in rows]
+        await delete_dependent_variants(db, ids)
+        await release_queue_references(db, ids)
+        await db.execute(delete(LibraryFile).where(LibraryFile.id.in_(ids)))
+        await db.commit()
+        logger.info("Library sweeper: removed %d file(s) created over WebDAV and never written", len(ids))
+        return len(ids)
+
+    @staticmethod
+    def _unlink_if_still_empty(row: LibraryFile) -> None:
+        """Remove the placeholder an abandoned upload left, and only that.
+
+        The file may be on somebody's external share, where Bambuddy does not
+        get to delete things — except this one, which the share itself created
+        empty a moment before the client vanished. Anything with a byte in it
+        is content, whatever the row says, and is left exactly where it is.
+        """
+        path = _to_absolute_path(row.file_path)
+        if path is None:
+            return
+        try:
+            if path.is_file() and path.stat().st_size == 0:
+                path.unlink()
+        except OSError as e:
+            logger.warning("Abandoned upload sweep: failed to unlink %s: %s", path, e)
 
     @staticmethod
     def _unlink_on_disk(row: LibraryFile) -> None:

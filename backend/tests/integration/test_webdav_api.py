@@ -17,6 +17,7 @@ from urllib.parse import unquote
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 
 from backend.app.core.config import settings as app_settings
 
@@ -63,19 +64,58 @@ def _is_collection(response: ET.Element) -> bool:
     return resourcetype.find(f"{DAV}collection") is not None
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def library_root(monkeypatch, tmp_path) -> Path:
-    """Point the library's path helpers at a throwaway data dir."""
+    """Point the library's path helpers at a throwaway data dir.
+
+    Both of them, and for every test in the file. ``base_dir`` is what a stored
+    relative path resolves against; ``archive_dir`` is a separate setting, and
+    it is the one ``get_library_files_dir`` builds the managed store from — so
+    patching only the first leaves every write in this file landing in the
+    developer's real ``archive/`` tree while the assertions look at tmp_path,
+    and a row's ``file_path`` stored as an absolute repo path instead of the
+    relative one a real install gets.
+    """
     monkeypatch.setattr(app_settings, "base_dir", tmp_path)
+    monkeypatch.setattr(app_settings, "archive_dir", tmp_path / "archive")
     return tmp_path
 
 
-@pytest.fixture
-async def enable_webdav(db_session):
-    from backend.app.models.settings import Settings
+def _managed_files_dir() -> Path:
+    """Where a managed write really lands, asked the way the route asks."""
+    from backend.app.api.routes.library import get_library_files_dir
 
-    db_session.add(Settings(key="webdav_enabled", value="true"))
-    await db_session.commit()
+    return get_library_files_dir()
+
+
+@pytest.fixture
+async def set_webdav_mode(db_session):
+    """Put the share in one of its three modes."""
+
+    async def _set(mode: str):
+        from sqlalchemy import select
+
+        from backend.app.models.settings import Settings
+
+        row = (await db_session.execute(select(Settings).where(Settings.key == "webdav_mode"))).scalar_one_or_none()
+        if row is None:
+            db_session.add(Settings(key="webdav_mode", value=mode))
+        else:
+            row.value = mode
+        await db_session.commit()
+
+    return _set
+
+
+@pytest.fixture
+async def enable_webdav(set_webdav_mode):
+    """The read-only share, which is what the read half is about."""
+    await set_webdav_mode("read")
+
+
+@pytest.fixture
+async def writable_webdav(set_webdav_mode):
+    await set_webdav_mode("readwrite")
 
 
 @pytest.fixture
@@ -897,22 +937,44 @@ class TestEndToEndWalk:
 
 
 class TestTheSetting:
-    """``webdav_enabled`` is the switch the whole feature hangs off."""
+    """``webdav_mode`` is the switch the whole feature hangs off."""
 
     async def test_it_defaults_to_off(self, async_client: AsyncClient):
         """An install that has never seen the setting exposes nothing."""
         response = await async_client.get("/api/v1/settings/")
 
         assert response.status_code == 200, response.text
-        assert response.json()["webdav_enabled"] is False
+        assert response.json()["webdav_mode"] == "off"
 
-    async def test_it_round_trips_as_a_boolean(self, async_client: AsyncClient):
-        patched = await async_client.patch("/api/v1/settings/", json={"webdav_enabled": True})
+    @pytest.mark.parametrize("mode", ["read", "readwrite", "off"])
+    async def test_each_mode_round_trips(self, async_client: AsyncClient, mode):
+        patched = await async_client.patch("/api/v1/settings/", json={"webdav_mode": mode})
         assert patched.status_code == 200, patched.text
-        assert patched.json()["webdav_enabled"] is True
+        assert patched.json()["webdav_mode"] == mode
 
         reread = await async_client.get("/api/v1/settings/")
-        assert reread.json()["webdav_enabled"] is True
+        assert reread.json()["webdav_mode"] == mode
+
+    async def test_a_value_that_is_not_a_mode_is_refused(self, async_client: AsyncClient):
+        """Not coerced to something that serves files -- refused outright."""
+        response = await async_client.patch("/api/v1/settings/", json={"webdav_mode": "yes"})
+
+        assert response.status_code == 422, response.text
+
+    async def test_an_unreadable_stored_value_reads_as_off(self, async_client: AsyncClient, db_session, admin_auth):
+        """A row the schema cannot parse must fail closed, not fail open.
+
+        The settings response would otherwise 500 on the whole payload (#2905),
+        and the share must not decide to serve anything on the strength of a
+        value nobody recognises.
+        """
+        from backend.app.models.settings import Settings
+
+        db_session.add(Settings(key="webdav_mode", value="None"))
+        await db_session.commit()
+
+        assert (await async_client.get("/api/v1/settings/")).json()["webdav_mode"] == "off"
+        assert (await async_client.request("PROPFIND", f"{WEBDAV}/", headers=admin_auth)).status_code == 404
 
     async def test_turning_it_on_through_the_api_opens_the_share(
         self, async_client: AsyncClient, admin_auth, folder_factory
@@ -920,7 +982,1570 @@ class TestTheSetting:
         await folder_factory("Kunden")
         assert (await async_client.request("PROPFIND", f"{WEBDAV}/", headers=admin_auth)).status_code == 404
 
-        await async_client.patch("/api/v1/settings/", json={"webdav_enabled": True})
+        await async_client.patch("/api/v1/settings/", json={"webdav_mode": "read"})
 
         opened = await async_client.request("PROPFIND", f"{WEBDAV}/", headers=admin_auth)
         assert opened.status_code == 207, opened.text
+
+
+# ---------------------------------------------------------------------------
+# The write half
+# ---------------------------------------------------------------------------
+
+
+def _three_mf(*, seconds: int = 3600, grams: float = 12.5, thumbnail: bytes = b"\x89PNG-plate") -> bytes:
+    """A 3MF small enough to read and real enough for ThreeMFParser.
+
+    Only the two entries the parser actually mines for a library row: the plate
+    summary it reads print time and filament weight from, and the plate render
+    it lifts the thumbnail out of.
+    """
+    import io
+    import zipfile
+
+    slice_info = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        "<config><plate>"
+        '<metadata key="index" value="1"/>'
+        f'<metadata key="prediction" value="{seconds}"/>'
+        f'<metadata key="weight" value="{grams}"/>'
+        "</plate></config>"
+    )
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("3D/3dmodel.model", "<model/>")
+        archive.writestr("Metadata/slice_info.config", slice_info)
+        archive.writestr("Metadata/plate_1.png", thumbnail)
+    return buffer.getvalue()
+
+
+async def _row(db_session, file_id: int):
+    """Re-read a row the app committed in its own session.
+
+    ``populate_existing`` on every read here: the test session runs with
+    ``expire_on_commit=False`` and is still holding its pre-write copy, while
+    expiring the whole identity map would make the next attribute read on some
+    other object fire a lazy load from async code.
+    """
+    from backend.app.models.library import LibraryFile
+
+    return await db_session.get(LibraryFile, file_id, populate_existing=True)
+
+
+async def _rows(db_session, **filters):
+    from backend.app.models.library import LibraryFile
+
+    query = select(LibraryFile)
+    for column, value in filters.items():
+        query = query.where(getattr(LibraryFile, column) == value)
+    result = await db_session.execute(query.order_by(LibraryFile.id).execution_options(populate_existing=True))
+    return list(result.scalars().all())
+
+
+async def _only_row(db_session, **filters):
+    rows = await _rows(db_session, **filters)
+    assert len(rows) == 1, [(row.id, row.filename, row.deleted_at) for row in rows]
+    return rows[0]
+
+
+class TestModeGate:
+    """What each of the three modes answers, and what OPTIONS promises."""
+
+    async def test_read_mode_allows_exactly_the_four_read_methods(
+        self, async_client: AsyncClient, enable_webdav, admin_auth
+    ):
+        response = await async_client.request("OPTIONS", WEBDAV, headers=admin_auth)
+
+        assert response.headers["DAV"] == "1"
+        assert {method.strip() for method in response.headers["Allow"].split(",")} == {
+            "OPTIONS",
+            "PROPFIND",
+            "HEAD",
+            "GET",
+        }
+
+    async def test_readwrite_advertises_dav_2_and_the_write_methods(
+        self, async_client: AsyncClient, writable_webdav, admin_auth
+    ):
+        """Level 2 is locking, and a client that does not see it will not save.
+
+        ``Allow`` alone is not enough: the Windows client decides the share is
+        read-only from the ``DAV`` header before it looks at anything else.
+        """
+        response = await async_client.request("OPTIONS", WEBDAV, headers=admin_auth)
+
+        assert response.headers["DAV"] == "1, 2"
+        assert {method.strip() for method in response.headers["Allow"].split(",")} == {
+            "OPTIONS",
+            "PROPFIND",
+            "HEAD",
+            "GET",
+            "PUT",
+            "DELETE",
+            "MKCOL",
+            "MOVE",
+            "COPY",
+            "LOCK",
+            "UNLOCK",
+            "PROPPATCH",
+        }
+
+    @pytest.mark.parametrize("method", ["PUT", "DELETE", "MKCOL", "MOVE", "COPY", "LOCK", "UNLOCK", "PROPPATCH"])
+    async def test_read_mode_refuses_every_write_and_writes_nothing(
+        self, async_client: AsyncClient, enable_webdav, admin_auth, folder_factory, db_session, method
+    ):
+        folder = await folder_factory("Kunden")
+
+        response = await async_client.request(
+            method,
+            f"{WEBDAV}/Files/Kunden/new.3mf",
+            headers={**admin_auth, "Destination": f"http://testserver{WEBDAV}/Files/Kunden/other.3mf"},
+            content=b"payload",
+        )
+
+        assert response.status_code == 405, response.text
+        assert {value.strip() for value in response.headers["Allow"].split(",")} == {
+            "OPTIONS",
+            "PROPFIND",
+            "HEAD",
+            "GET",
+        }
+        assert await _rows(db_session, folder_id=folder.id) == []
+
+    async def test_readwrite_still_reads(self, async_client: AsyncClient, writable_webdav, admin_auth, file_factory):
+        await file_factory("part.3mf", b"the-model")
+
+        listed = await async_client.request("PROPFIND", f"{WEBDAV}/Files", headers={**admin_auth, "Depth": "1"})
+        assert "/webdav/Files/part.3mf" in _responses(listed.content)
+
+        body = await async_client.get(f"{WEBDAV}/Files/part.3mf", headers=admin_auth)
+        assert body.content == b"the-model"
+
+    async def test_a_writable_share_advertises_supportedlock(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, file_factory
+    ):
+        await file_factory("part.3mf")
+
+        response = await async_client.request("PROPFIND", f"{WEBDAV}/Files", headers={**admin_auth, "Depth": "1"})
+
+        entry = _responses(response.content)["/webdav/Files/part.3mf"]
+        assert _prop(entry, "supportedlock") is not None
+
+
+class TestPut:
+    """Creating and replacing files, and the client habits that shape it."""
+
+    async def test_a_put_creates_a_file_the_file_manager_lists(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, folder_factory, db_session
+    ):
+        """Hash, type, metadata and thumbnail -- the same ingest an upload runs."""
+        import hashlib
+
+        folder = await folder_factory("Kunden")
+        payload = _three_mf()
+
+        response = await async_client.request(
+            "PUT", f"{WEBDAV}/Files/Kunden/Sockel.3mf", headers=admin_auth, content=payload
+        )
+
+        assert response.status_code == 201, response.text
+        row = await _only_row(db_session, folder_id=folder.id)
+        assert row.filename == "Sockel.3mf"
+        assert row.file_type == "3mf"
+        assert row.file_size == len(payload)
+        assert row.file_hash == hashlib.sha256(payload).hexdigest()
+        assert row.ingest_pending is False
+        assert row.file_metadata["print_time_seconds"] == 3600
+        assert row.file_metadata["filament_used_grams"] == 12.5
+        assert row.thumbnail_path
+
+        listed = await async_client.get(f"/api/v1/library/files?folder_id={folder.id}")
+        assert [entry["filename"] for entry in listed.json()] == ["Sockel.3mf"]
+        assert listed.json()[0]["thumbnail_path"]
+
+    async def test_the_bytes_come_back_through_the_share(self, async_client: AsyncClient, writable_webdav, admin_auth):
+        await async_client.request("PUT", f"{WEBDAV}/Files/notes.txt", headers=admin_auth, content=b"hello drive")
+
+        body = await async_client.get(f"{WEBDAV}/Files/notes.txt", headers=admin_auth)
+
+        assert body.status_code == 200, body.text
+        assert body.content == b"hello drive"
+
+    async def test_the_empty_then_content_dance_ends_with_one_complete_row(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, db_session
+    ):
+        """What every application actually does when it saves a file.
+
+        Create it empty, lock it, write the bytes, unlock. A naive ingest turns
+        that into a 0-byte row with a pointless hash -- and since every empty
+        file hashes to the same value, a library full of "duplicates".
+        """
+        created = await async_client.request("PUT", f"{WEBDAV}/Files/draft.3mf", headers=admin_auth, content=b"")
+        assert created.status_code == 201, created.text
+
+        pending = await _only_row(db_session, filename="draft.3mf")
+        assert pending.ingest_pending is True
+        assert pending.file_size == 0
+        assert pending.file_hash is None
+
+        payload = _three_mf()
+        filled = await async_client.request("PUT", f"{WEBDAV}/Files/draft.3mf", headers=admin_auth, content=payload)
+        assert filled.status_code == 204, filled.text
+
+        row = await _only_row(db_session, filename="draft.3mf")
+        assert row.id == pending.id
+        assert row.ingest_pending is False
+        assert row.file_size == len(payload)
+        assert row.file_metadata["print_time_seconds"] == 3600
+
+    async def test_a_pending_row_is_not_counted_as_a_duplicate(
+        self, async_client: AsyncClient, writable_webdav, admin_auth
+    ):
+        """Two files created empty in the same second are not two copies."""
+        await async_client.request("PUT", f"{WEBDAV}/Files/one.3mf", headers=admin_auth, content=b"")
+        await async_client.request("PUT", f"{WEBDAV}/Files/two.3mf", headers=admin_auth, content=b"")
+
+        listed = await async_client.get("/api/v1/library/files")
+
+        assert sorted(entry["filename"] for entry in listed.json()) == ["one.3mf", "two.3mf"]
+        assert {entry["duplicate_count"] for entry in listed.json()} == {0}
+
+    async def test_a_file_created_empty_and_never_written_is_given_up_on(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, db_session, library_root
+    ):
+        """The dance that never finishes leaves a row nothing else revisits.
+
+        A 0-byte file called ``.3mf`` is one the File Manager lists and the
+        queue will send to a printer, which stops with "unable to parse the 3mf
+        file" — and nobody can tell it from a real file by looking. The
+        workstation rebooting between the two requests of one save is all it
+        takes, so the housekeeping sweeper clears it.
+        """
+        from datetime import timedelta
+
+        from backend.app.services.library_trash import ABANDONED_UPLOAD_HOURS, library_trash_service
+        from backend.app.utils.local_time import utcnow_naive
+
+        await async_client.request("PUT", f"{WEBDAV}/Files/Auftrag.3mf", headers=admin_auth, content=b"")
+        ghost = await _only_row(db_session, filename="Auftrag.3mf")
+        assert ghost.ingest_pending is True
+        placeholder = library_root / ghost.file_path
+        assert placeholder.is_file()
+
+        # Nothing is swept while the save could still be in flight.
+        assert await library_trash_service._sweep_abandoned_uploads(db_session) == 0
+        ghost.created_at = utcnow_naive() - timedelta(hours=ABANDONED_UPLOAD_HOURS, minutes=5)
+        await db_session.commit()
+
+        removed = await library_trash_service._sweep_abandoned_uploads(db_session)
+
+        assert removed == 1
+        assert await _rows(db_session) == []
+        assert not placeholder.exists()
+
+    async def test_the_sweeper_leaves_a_file_that_did_arrive_alone(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, db_session
+    ):
+        """Only the empty half of a save that never happened, however old."""
+        from datetime import timedelta
+
+        from backend.app.services.library_trash import ABANDONED_UPLOAD_HOURS, library_trash_service
+        from backend.app.utils.local_time import utcnow_naive
+
+        await async_client.request("PUT", f"{WEBDAV}/Files/job.3mf", headers=admin_auth, content=b"")
+        await async_client.request("PUT", f"{WEBDAV}/Files/job.3mf", headers=admin_auth, content=_three_mf())
+        row = await _only_row(db_session, filename="job.3mf")
+        row.created_at = utcnow_naive() - timedelta(hours=ABANDONED_UPLOAD_HOURS * 24)
+        await db_session.commit()
+
+        assert await library_trash_service._sweep_abandoned_uploads(db_session) == 0
+        assert (await _only_row(db_session, filename="job.3mf")).file_hash
+
+    async def test_an_empty_put_never_empties_a_file_that_has_content(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, db_session
+    ):
+        """A truncate and the first half of the create-then-write dance look
+        identical on the wire, and only one of the two readings can lose data.
+        """
+        payload = _three_mf()
+        await async_client.request("PUT", f"{WEBDAV}/Files/kept.3mf", headers=admin_auth, content=payload)
+
+        response = await async_client.request("PUT", f"{WEBDAV}/Files/kept.3mf", headers=admin_auth, content=b"")
+
+        assert response.status_code == 204, response.text
+        row = await _only_row(db_session, filename="kept.3mf")
+        assert row.file_size == len(payload)
+        assert row.ingest_pending is False
+        body = await async_client.get(f"{WEBDAV}/Files/kept.3mf", headers=admin_auth)
+        assert body.content == payload
+
+    async def test_a_managed_put_stores_a_relative_path_inside_the_data_dir(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, db_session, library_root
+    ):
+        """What the row records is what a real install records.
+
+        ``file_path`` is stored relative to the data dir, and the blob is in
+        the managed store under it — the shape every other library row has.
+        """
+        await async_client.request("PUT", f"{WEBDAV}/Files/part.3mf", headers=admin_auth, content=_three_mf())
+
+        row = await _only_row(db_session, filename="part.3mf")
+        assert not Path(row.file_path).is_absolute(), row.file_path
+        blob = library_root / row.file_path
+        assert blob.is_file()
+        assert blob.parent == _managed_files_dir()
+
+    async def test_a_put_under_a_different_case_replaces_the_row(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, db_session
+    ):
+        """Windows compares names case-insensitively, and so must the share.
+
+        Explorer sees ``part.3mf`` in its own listing, asks "replace the file
+        in the destination?" and then writes using the *source* file's
+        spelling. A second row would leave one folder holding two names
+        Windows cannot even display.
+        """
+        created = await async_client.request("PUT", f"{WEBDAV}/Files/part.3mf", headers=admin_auth, content=b"first")
+        assert created.status_code == 201, created.text
+
+        replaced = await async_client.request("PUT", f"{WEBDAV}/Files/PART.3MF", headers=admin_auth, content=b"second")
+
+        assert replaced.status_code == 204, replaced.text
+        row = await _only_row(db_session)
+        # The stored spelling wins, which is what NTFS does with an overwrite.
+        assert row.filename == "part.3mf"
+        body = await async_client.get(f"{WEBDAV}/Files/part.3mf", headers=admin_auth)
+        assert body.content == b"second"
+
+    async def test_two_rows_that_differ_only_in_case_each_keep_their_own_bytes(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, file_factory
+    ):
+        """A library that already holds both is not disambiguated by guessing.
+
+        Only an install predating the fold above can have them, and an exact
+        name has to keep reaching its own row — the fold is a fallback, not a
+        replacement for the match.
+        """
+        await file_factory("part.3mf", b"lower")
+        await file_factory("PART.3MF", b"upper")
+
+        lower = await async_client.get(f"{WEBDAV}/Files/part.3mf", headers=admin_auth)
+        upper = await async_client.get(f"{WEBDAV}/Files/PART.3MF", headers=admin_auth)
+
+        assert lower.content == b"lower"
+        assert upper.content == b"upper"
+
+    async def test_saving_a_name_a_delete_left_behind_on_the_share_replaces_it(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, db_session, external_folder_factory
+    ):
+        """Delete, then copy a newer version over: an everyday mapped-drive move.
+
+        Deleting an external file drops its row and leaves the bytes on the
+        share, so until the next scan the name is absent from the listing while
+        the directory still holds it. Refusing the re-save told the client a
+        file exists that nothing shows.
+        """
+        folder, directory = await external_folder_factory("NAS")
+        await async_client.request("PUT", f"{WEBDAV}/External/NAS/part.3mf", headers=admin_auth, content=b"first")
+        await async_client.request("DELETE", f"{WEBDAV}/External/NAS/part.3mf", headers=admin_auth)
+        assert (directory / "part.3mf").read_bytes() == b"first"
+        assert await _rows(db_session) == []
+
+        again = await async_client.request(
+            "PUT", f"{WEBDAV}/External/NAS/part.3mf", headers=admin_auth, content=b"second"
+        )
+
+        assert again.status_code == 201, again.text
+        row = await _only_row(db_session)
+        assert row.is_external is True
+        assert (directory / "part.3mf").read_bytes() == b"second"
+
+    async def test_a_name_on_the_share_that_a_hidden_row_claims_is_still_refused(
+        self, async_client: AsyncClient, writable_webdav, user_factory, db_session, external_folder_factory
+    ):
+        """The one thing the rule above must not do: overwrite what it cannot see.
+
+        A ``read_own`` caller is not shown another user's files, so "no row in
+        the listing" is not the same question as "no row". Only a name nothing
+        claims may be written over.
+        """
+        from backend.app.models.library import LibraryFile
+
+        folder, directory = await external_folder_factory("NAS")
+        owner = await user_factory("davowner")
+        (directory / "part.3mf").write_bytes(b"someone else's")
+        db_session.add(
+            LibraryFile(
+                filename="part.3mf",
+                file_path=str(directory / "part.3mf"),
+                file_type="3mf",
+                file_size=14,
+                folder_id=folder.id,
+                is_external=True,
+                created_by_id=owner.id,
+            )
+        )
+        await db_session.commit()
+        await user_factory("davguest", permissions=["library:read_own", "library:upload"])
+
+        response = await async_client.request(
+            "PUT",
+            f"{WEBDAV}/External/NAS/part.3mf",
+            headers=_basic("davguest", "DavPass1!"),
+            content=b"mine now",
+        )
+
+        assert response.status_code == 409, response.text
+        assert (directory / "part.3mf").read_bytes() == b"someone else's"
+
+    async def test_upload_permission_finishes_the_file_it_just_created(
+        self, async_client: AsyncClient, writable_webdav, user_factory, db_session
+    ):
+        """One save is two requests, and only the first one looks like an upload.
+
+        A group of "may add files, may not change the ones already there" is
+        expressible and the REST upload serves it in one shot. Over the share
+        the same save arrives as an empty PUT and then a full one, so refusing
+        the second left a 0-byte row the user could not remove either.
+        """
+        await user_factory("davup", permissions=["library:read_all", "library:upload"])
+        auth = _basic("davup", "DavPass1!")
+        payload = _three_mf()
+
+        empty = await async_client.request("PUT", f"{WEBDAV}/Files/job.3mf", headers=auth, content=b"")
+        assert empty.status_code == 201, empty.text
+
+        filled = await async_client.request("PUT", f"{WEBDAV}/Files/job.3mf", headers=auth, content=payload)
+
+        assert filled.status_code == 204, filled.text
+        row = await _only_row(db_session, filename="job.3mf")
+        assert row.ingest_pending is False
+        assert row.file_size == len(payload)
+        assert row.file_hash
+
+    async def test_upload_permission_still_cannot_overwrite_a_finished_file(
+        self, async_client: AsyncClient, writable_webdav, user_factory, admin_auth
+    ):
+        """The exemption is the unfinished row it created, and nothing wider."""
+        await user_factory("davup2", permissions=["library:read_all", "library:upload"])
+        await async_client.request("PUT", f"{WEBDAV}/Files/done.3mf", headers=admin_auth, content=b"complete")
+
+        response = await async_client.request(
+            "PUT", f"{WEBDAV}/Files/done.3mf", headers=_basic("davup2", "DavPass1!"), content=b"mine now"
+        )
+
+        assert response.status_code == 403, response.text
+        body = await async_client.get(f"{WEBDAV}/Files/done.3mf", headers=admin_auth)
+        assert body.content == b"complete"
+
+    async def test_an_overwrite_keeps_the_row_its_id_and_its_tags(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, db_session, file_factory
+    ):
+        """The owner's decision, and the right one for a drive: replace.
+
+        No version, no variant -- the row a user tagged and wrote notes on is
+        still that row after a save from Explorer.
+        """
+        from backend.app.models.library import LibraryFileTag, LibraryTag
+
+        original = await file_factory("brief.txt", b"old-bytes")
+        tag = LibraryTag(name="kid-safe", name_key="kid-safe")
+        db_session.add(tag)
+        await db_session.flush()
+        db_session.add(LibraryFileTag(file_id=original.id, tag_id=tag.id))
+        original.notes = "print at 0.2"
+        await db_session.commit()
+
+        response = await async_client.request(
+            "PUT", f"{WEBDAV}/Files/brief.txt", headers=admin_auth, content=b"the-new-bytes"
+        )
+
+        assert response.status_code == 204, response.text
+        row = await _only_row(db_session, filename="brief.txt")
+        assert row.id == original.id
+        assert row.notes == "print at 0.2"
+        assert row.file_size == len(b"the-new-bytes")
+        listed = (await async_client.get("/api/v1/library/files")).json()
+        assert [entry["id"] for entry in listed] == [original.id]
+        assert [chip["name"] for chip in listed[0]["tags"]] == ["kid-safe"]
+        body = await async_client.get(f"{WEBDAV}/Files/brief.txt", headers=admin_auth)
+        assert body.content == b"the-new-bytes"
+
+    @pytest.mark.parametrize("junk", ["desktop.ini", "Thumbs.db", ".DS_Store", "._resource"])
+    async def test_junk_files_are_accepted_and_vanish(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, folder_factory, db_session, junk
+    ):
+        """Explorer writes these into folders it merely looked at."""
+        folder = await folder_factory("Kunden")
+
+        response = await async_client.request(
+            "PUT", f"{WEBDAV}/Files/Kunden/{junk}", headers=admin_auth, content=b"[.ShellClassInfo]"
+        )
+
+        assert response.status_code in (201, 204), response.text
+        assert await _rows(db_session, folder_id=folder.id) == []
+        listed = await async_client.request("PROPFIND", f"{WEBDAV}/Files/Kunden", headers={**admin_auth, "Depth": "1"})
+        assert set(_responses(listed.content)) == {"/webdav/Files/Kunden/"}
+
+    async def test_a_junk_row_an_external_scan_found_is_not_listed_either(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, folder_factory, file_factory
+    ):
+        """The rule is about what the share shows, not about who wrote it."""
+        folder = await folder_factory("Kunden")
+        await file_factory("Thumbs.db", folder_id=folder.id)
+        await file_factory("part.3mf", folder_id=folder.id)
+
+        listed = await async_client.request("PROPFIND", f"{WEBDAV}/Files/Kunden", headers={**admin_auth, "Depth": "1"})
+
+        assert set(_responses(listed.content)) == {"/webdav/Files/Kunden/", "/webdav/Files/Kunden/part.3mf"}
+
+    async def test_a_tmp_file_is_the_users_own_and_is_kept(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, db_session
+    ):
+        """The junk list is a list, not a pattern -- a .tmp may be real work."""
+        await async_client.request("PUT", f"{WEBDAV}/Files/scan.tmp", headers=admin_auth, content=b"data")
+
+        assert (await _only_row(db_session, filename="scan.tmp")).file_type == "tmp"
+
+    async def test_a_put_into_a_folder_that_does_not_exist_is_409(
+        self, async_client: AsyncClient, writable_webdav, admin_auth
+    ):
+        response = await async_client.request(
+            "PUT", f"{WEBDAV}/Files/Nowhere/part.3mf", headers=admin_auth, content=b"x"
+        )
+
+        assert response.status_code == 409, response.text
+
+    async def test_a_put_onto_a_folder_is_405(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, folder_factory
+    ):
+        await folder_factory("Kunden")
+
+        response = await async_client.request("PUT", f"{WEBDAV}/Files/Kunden", headers=admin_auth, content=b"x")
+
+        assert response.status_code == 405, response.text
+
+
+class TestDelete:
+    """A drive that empties the recycle bin for you is not what anyone expects."""
+
+    async def test_delete_trashes_rather_than_erases(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, file_factory, db_session, library_root
+    ):
+        row = await file_factory("part.3mf", b"the-model")
+        on_disk = library_root / row.file_path
+
+        response = await async_client.request("DELETE", f"{WEBDAV}/Files/part.3mf", headers=admin_auth)
+
+        assert response.status_code == 204, response.text
+        trashed = await _row(db_session, row.id)
+        assert trashed.deleted_at is not None
+        assert on_disk.exists(), "the bytes belong to the trash sweeper, not to a DELETE"
+        gone = await async_client.get(f"{WEBDAV}/Files/part.3mf", headers=admin_auth)
+        assert gone.status_code == 404
+
+    async def test_deleting_something_that_is_not_there_is_404(
+        self, async_client: AsyncClient, writable_webdav, admin_auth
+    ):
+        response = await async_client.request("DELETE", f"{WEBDAV}/Files/ghost.3mf", headers=admin_auth)
+
+        assert response.status_code == 404, response.text
+
+    async def test_an_empty_folder_can_be_removed(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, folder_factory, db_session
+    ):
+        from backend.app.models.library import LibraryFolder
+
+        folder = await folder_factory("Leer")
+
+        response = await async_client.request("DELETE", f"{WEBDAV}/Files/Leer", headers=admin_auth)
+
+        assert response.status_code == 204, response.text
+        assert await db_session.get(LibraryFolder, folder.id, populate_existing=True) is None
+
+    async def test_a_folder_with_files_in_it_is_refused(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, folder_factory, file_factory, db_session
+    ):
+        """The UI's folder delete is a cascade that hard-deletes the tree.
+
+        Behind a mapped drive that is one stray keystroke from a print farm's
+        whole library, with no trash to undo it from.
+        """
+        from backend.app.models.library import LibraryFolder
+
+        folder = await folder_factory("Kunden")
+        row = await file_factory("part.3mf", folder_id=folder.id)
+
+        response = await async_client.request("DELETE", f"{WEBDAV}/Files/Kunden", headers=admin_auth)
+
+        assert response.status_code == 403, response.text
+        assert await db_session.get(LibraryFolder, folder.id, populate_existing=True) is not None
+        assert (await _row(db_session, row.id)).deleted_at is None
+
+    async def test_a_folder_holding_only_trashed_files_is_refused_too(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, folder_factory, file_factory
+    ):
+        """``folder_id`` cascades: the rows somebody can still restore would go."""
+        folder = await folder_factory("Kunden")
+        await file_factory("part.3mf", folder_id=folder.id, deleted_at=datetime(2026, 1, 1))
+
+        response = await async_client.request("DELETE", f"{WEBDAV}/Files/Kunden", headers=admin_auth)
+
+        assert response.status_code == 403, response.text
+
+    @pytest.mark.parametrize("path", ["", "/Files", "/External"])
+    async def test_the_share_and_its_buckets_cannot_be_deleted(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, folder_factory, path
+    ):
+        await folder_factory("NAS", is_external=True)
+
+        response = await async_client.request("DELETE", f"{WEBDAV}{path}", headers=admin_auth)
+
+        assert response.status_code == 403, response.text
+
+
+class TestMkcol:
+    async def test_mkcol_creates_a_folder_with_no_number(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, db_session
+    ):
+        """Even with the series on: there is no dialog here to ask, and a
+        number consumed for a folder nobody numbered is a gap in the books.
+        """
+        from backend.app.models.library import LibraryFolder
+        from backend.app.models.settings import Settings
+
+        db_session.add(Settings(key="number_series_library_folder_enabled", value="true"))
+        await db_session.commit()
+
+        response = await async_client.request("MKCOL", f"{WEBDAV}/Files/Kunden%20%26%20Co", headers=admin_auth)
+
+        assert response.status_code == 201, response.text
+        folder = (
+            await db_session.execute(
+                select(LibraryFolder)
+                .where(LibraryFolder.name == "Kunden & Co")
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one()
+        assert folder.number is None
+        assert folder.parent_id is None
+
+        listed = await async_client.request("PROPFIND", f"{WEBDAV}/Files", headers={**admin_auth, "Depth": "1"})
+        assert "/webdav/Files/Kunden & Co/" in _responses(listed.content)
+
+    async def test_mkcol_nests_under_an_existing_folder(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, folder_factory, db_session
+    ):
+        from backend.app.models.library import LibraryFolder
+
+        parent = await folder_factory("Kunden")
+
+        response = await async_client.request("MKCOL", f"{WEBDAV}/Files/Kunden/2026", headers=admin_auth)
+
+        assert response.status_code == 201, response.text
+        child = (
+            await db_session.execute(
+                select(LibraryFolder).where(LibraryFolder.name == "2026").execution_options(populate_existing=True)
+            )
+        ).scalar_one()
+        assert child.parent_id == parent.id
+
+    async def test_mkcol_onto_an_existing_name_is_405(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, folder_factory
+    ):
+        await folder_factory("Kunden")
+
+        response = await async_client.request("MKCOL", f"{WEBDAV}/Files/Kunden", headers=admin_auth)
+
+        assert response.status_code == 405, response.text
+
+    async def test_mkcol_at_the_share_root_is_refused(self, async_client: AsyncClient, writable_webdav, admin_auth):
+        """The root holds exactly the two buckets; it is not a directory."""
+        response = await async_client.request("MKCOL", f"{WEBDAV}/Somewhere", headers=admin_auth)
+
+        assert response.status_code == 403, response.text
+
+    async def test_mkcol_with_a_body_is_415(self, async_client: AsyncClient, writable_webdav, admin_auth):
+        response = await async_client.request("MKCOL", f"{WEBDAV}/Files/Kunden", headers=admin_auth, content=b"<x/>")
+
+        assert response.status_code == 415, response.text
+
+
+@pytest.fixture
+def external_folder_factory(db_session, tmp_path):
+    """A registered external folder with a real directory behind it."""
+
+    async def _create(name: str, *, readonly: bool = False, parent_id: int | None = None):
+        from backend.app.models.library import LibraryFolder
+
+        directory = tmp_path / "share" / name
+        directory.mkdir(parents=True, exist_ok=True)
+        folder = LibraryFolder(
+            name=name,
+            parent_id=parent_id,
+            is_external=True,
+            external_path=str(directory),
+            external_readonly=readonly,
+        )
+        db_session.add(folder)
+        await db_session.commit()
+        await db_session.refresh(folder)
+        return folder, directory
+
+    return _create
+
+
+def _destination(path: str) -> str:
+    return f"http://testserver{WEBDAV}{path}"
+
+
+class TestMove:
+    """Rename, reparent, and land a temporary name on its real one."""
+
+    async def test_a_rename_that_changes_the_extension_re_runs_the_ingest(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, db_session
+    ):
+        """The write-temp-then-rename habit, which is the reason this matters.
+
+        A client that writes ``foo.tmp`` and renames it onto ``foo.3mf`` has
+        given the library a 3MF, and the classification, the parse and the
+        thumbnail all have to run on the name it ended up with.
+        """
+        payload = _three_mf()
+        await async_client.request("PUT", f"{WEBDAV}/Files/job.tmp", headers=admin_auth, content=payload)
+        before = await _only_row(db_session, filename="job.tmp")
+        assert before.file_type == "tmp"
+        assert before.file_metadata is None
+
+        response = await async_client.request(
+            "MOVE",
+            f"{WEBDAV}/Files/job.tmp",
+            headers={**admin_auth, "Destination": _destination("/Files/job.3mf")},
+        )
+
+        assert response.status_code == 201, response.text
+        row = await _only_row(db_session, filename="job.3mf")
+        assert row.id == before.id
+        assert row.file_type == "3mf"
+        assert row.file_metadata["print_time_seconds"] == 3600
+        assert row.thumbnail_path
+        # The blob follows the name, because the STL and PDF renderers load by
+        # suffix and a .3mf parked at <uuid>.tmp would silently never preview.
+        assert row.file_path.endswith(".3mf")
+        body = await async_client.get(f"{WEBDAV}/Files/job.3mf", headers=admin_auth)
+        assert body.content == payload
+
+    async def test_a_move_between_folders_keeps_the_row(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, folder_factory, db_session
+    ):
+        source = await folder_factory("Eingang")
+        target = await folder_factory("Kunden")
+        await async_client.request("PUT", f"{WEBDAV}/Files/Eingang/part.3mf", headers=admin_auth, content=_three_mf())
+        before = await _only_row(db_session, folder_id=source.id)
+
+        response = await async_client.request(
+            "MOVE",
+            f"{WEBDAV}/Files/Eingang/part.3mf",
+            headers={**admin_auth, "Destination": _destination("/Files/Kunden/part.3mf")},
+        )
+
+        assert response.status_code == 201, response.text
+        row = await _only_row(db_session, folder_id=target.id)
+        assert row.id == before.id
+        assert await _rows(db_session, folder_id=source.id) == []
+
+    async def test_a_rename_onto_a_taken_name_needs_the_delete_permission(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, user_factory, db_session
+    ):
+        """The overwritten side keeps its identity, so the *source* row dies.
+
+        Destroying a row is the delete permission's business whichever method
+        asks: without this, a role that may edit but not delete could wipe a
+        file's tags, notes, photos and queued jobs by renaming another file
+        onto its name, with nothing in the trash to restore.
+        """
+        await user_factory("daveditor", permissions=["library:read_all", "library:update_all", "library:upload"])
+        editor = _basic("daveditor", "DavPass1!")
+        await async_client.request("PUT", f"{WEBDAV}/Files/Sockel.3mf", headers=admin_auth, content=b"the-old-one")
+        await async_client.request("PUT", f"{WEBDAV}/Files/Sockel-v2.3mf", headers=admin_auth, content=b"the-new-one")
+
+        refused = await async_client.request(
+            "MOVE",
+            f"{WEBDAV}/Files/Sockel-v2.3mf",
+            headers={**editor, "Destination": _destination("/Files/Sockel.3mf")},
+        )
+
+        assert refused.status_code == 403, refused.text
+        assert [row.filename for row in await _rows(db_session)] == ["Sockel.3mf", "Sockel-v2.3mf"]
+        body = await async_client.get(f"{WEBDAV}/Files/Sockel.3mf", headers=admin_auth)
+        assert body.content == b"the-old-one"
+
+    async def test_with_the_delete_permission_the_rename_replaces_and_the_source_goes(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, db_session
+    ):
+        """The other half of the rule: a caller who may delete gets the swap."""
+        await async_client.request("PUT", f"{WEBDAV}/Files/Sockel.3mf", headers=admin_auth, content=b"the-old-one")
+        await async_client.request("PUT", f"{WEBDAV}/Files/Sockel-v2.3mf", headers=admin_auth, content=b"the-new-one")
+        kept = await _only_row(db_session, filename="Sockel.3mf")
+
+        response = await async_client.request(
+            "MOVE",
+            f"{WEBDAV}/Files/Sockel-v2.3mf",
+            headers={**admin_auth, "Destination": _destination("/Files/Sockel.3mf")},
+        )
+
+        assert response.status_code == 204, response.text
+        row = await _only_row(db_session)
+        assert row.id == kept.id
+        assert row.filename == "Sockel.3mf"
+        body = await async_client.get(f"{WEBDAV}/Files/Sockel.3mf", headers=admin_auth)
+        assert body.content == b"the-new-one"
+
+    async def test_a_rename_that_changes_only_the_case_renames_in_place(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, db_session
+    ):
+        """The destination folds onto the source, and that is not a replace.
+
+        Read as one it would hand the row its own bytes and then delete it.
+        """
+        await async_client.request("PUT", f"{WEBDAV}/Files/part.3mf", headers=admin_auth, content=b"the-bytes")
+
+        response = await async_client.request(
+            "MOVE", f"{WEBDAV}/Files/part.3mf", headers={**admin_auth, "Destination": _destination("/Files/Part.3mf")}
+        )
+
+        assert response.status_code in (201, 204), response.text
+        row = await _only_row(db_session)
+        assert row.filename == "Part.3mf"
+        body = await async_client.get(f"{WEBDAV}/Files/Part.3mf", headers=admin_auth)
+        assert body.content == b"the-bytes"
+
+    async def test_pulling_a_scanned_external_file_into_the_library_hashes_it(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, db_session, external_folder_factory, library_root
+    ):
+        """An external scan stores no hash, and the same name is not a rename.
+
+        Without the hash the file it has just become could never match a
+        duplicate — the REST bulk move computes it at this same boundary.
+        """
+        import hashlib
+
+        from backend.app.models.library import LibraryFile
+
+        folder, directory = await external_folder_factory("NAS")
+        payload = _three_mf()
+        (directory / "p.3mf").write_bytes(payload)
+        db_session.add(
+            LibraryFile(
+                filename="p.3mf",
+                file_path=str(directory / "p.3mf"),
+                file_type="3mf",
+                file_size=len(payload),
+                folder_id=folder.id,
+                is_external=True,
+                file_hash=None,
+            )
+        )
+        await db_session.commit()
+
+        response = await async_client.request(
+            "MOVE",
+            f"{WEBDAV}/External/NAS/p.3mf",
+            headers={**admin_auth, "Destination": _destination("/Files/p.3mf")},
+        )
+
+        assert response.status_code == 201, response.text
+        row = await _only_row(db_session)
+        assert row.is_external is False
+        assert row.file_hash == hashlib.sha256(payload).hexdigest()
+        assert not Path(row.file_path).is_absolute(), row.file_path
+        assert (library_root / row.file_path).is_file()
+        assert not (directory / "p.3mf").exists()
+
+    async def test_a_move_onto_a_pending_row_completes_it_without_a_second_row(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, db_session
+    ):
+        """Both client habits at once, which is how they actually arrive.
+
+        The application creates ``report.3mf`` empty, writes its bytes into a
+        temporary name and renames that over the empty file. The row the user
+        will see has to be the one that existed first, complete.
+        """
+        payload = _three_mf()
+        await async_client.request("PUT", f"{WEBDAV}/Files/report.3mf", headers=admin_auth, content=b"")
+        pending = await _only_row(db_session, filename="report.3mf")
+        await async_client.request("PUT", f"{WEBDAV}/Files/report.tmp", headers=admin_auth, content=payload)
+
+        response = await async_client.request(
+            "MOVE",
+            f"{WEBDAV}/Files/report.tmp",
+            headers={**admin_auth, "Destination": _destination("/Files/report.3mf")},
+        )
+
+        assert response.status_code == 204, response.text
+        row = await _only_row(db_session, filename="report.3mf")
+        assert row.id == pending.id, "the row the client created first is the one it keeps"
+        assert row.ingest_pending is False
+        assert row.file_type == "3mf"
+        assert row.file_size == len(payload)
+        assert row.file_metadata["print_time_seconds"] == 3600
+        assert await _rows(db_session, filename="report.tmp") == []
+        body = await async_client.get(f"{WEBDAV}/Files/report.3mf", headers=admin_auth)
+        assert body.content == payload
+
+    async def test_overwrite_f_onto_an_existing_name_is_412(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, db_session
+    ):
+        await async_client.request("PUT", f"{WEBDAV}/Files/a.txt", headers=admin_auth, content=b"first")
+        await async_client.request("PUT", f"{WEBDAV}/Files/b.txt", headers=admin_auth, content=b"second")
+
+        response = await async_client.request(
+            "MOVE",
+            f"{WEBDAV}/Files/a.txt",
+            headers={**admin_auth, "Destination": _destination("/Files/b.txt"), "Overwrite": "F"},
+        )
+
+        assert response.status_code == 412, response.text
+        assert (await _only_row(db_session, filename="b.txt")).file_size == len(b"second")
+        assert await _rows(db_session, filename="a.txt")
+
+    async def test_a_move_into_a_writable_external_folder_writes_the_share(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, external_folder_factory, db_session
+    ):
+        """Crossing the #124 boundary: the row follows the real file."""
+        folder, directory = await external_folder_factory("NAS")
+        await async_client.request("PUT", f"{WEBDAV}/Files/part.3mf", headers=admin_auth, content=_three_mf())
+
+        response = await async_client.request(
+            "MOVE",
+            f"{WEBDAV}/Files/part.3mf",
+            headers={**admin_auth, "Destination": _destination("/External/NAS/part.3mf")},
+        )
+
+        assert response.status_code == 201, response.text
+        row = await _only_row(db_session, folder_id=folder.id)
+        assert row.is_external is True
+        assert Path(row.file_path) == directory / "part.3mf"
+        assert (directory / "part.3mf").exists()
+
+    async def test_a_managed_folder_can_be_renamed(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, folder_factory, db_session
+    ):
+        from backend.app.models.library import LibraryFolder
+
+        folder = await folder_factory("Kunde A")
+
+        response = await async_client.request(
+            "MOVE", f"{WEBDAV}/Files/Kunde%20A", headers={**admin_auth, "Destination": _destination("/Files/Kunde%20B")}
+        )
+
+        assert response.status_code == 201, response.text
+        renamed = await db_session.get(LibraryFolder, folder.id, populate_existing=True)
+        assert renamed.name == "Kunde B"
+
+    async def test_a_folder_can_be_renamed_to_another_case_of_its_own_name(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, folder_factory, db_session
+    ):
+        """Fixing the capitalisation of a folder is a rename, not a collision.
+
+        The destination folds onto the folder itself, which is neither "that
+        name is taken by a folder" nor a replace.
+        """
+        from backend.app.models.library import LibraryFolder
+
+        folder = await folder_factory("kunden")
+
+        response = await async_client.request(
+            "MOVE", f"{WEBDAV}/Files/kunden", headers={**admin_auth, "Destination": _destination("/Files/Kunden")}
+        )
+
+        assert response.status_code in (201, 204), response.text
+        renamed = await db_session.get(LibraryFolder, folder.id, populate_existing=True)
+        assert renamed.name == "Kunden"
+
+    async def test_a_folder_cannot_be_moved_into_its_own_subtree(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, folder_factory
+    ):
+        parent = await folder_factory("Kunden")
+        await folder_factory("2026", parent_id=parent.id)
+
+        response = await async_client.request(
+            "MOVE",
+            f"{WEBDAV}/Files/Kunden",
+            headers={**admin_auth, "Destination": _destination("/Files/Kunden/2026/Kunden")},
+        )
+
+        assert response.status_code == 409, response.text
+
+    async def test_a_move_onto_a_folder_is_refused(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, folder_factory
+    ):
+        await folder_factory("Kunden")
+        await async_client.request("PUT", f"{WEBDAV}/Files/part.3mf", headers=admin_auth, content=b"x")
+
+        response = await async_client.request(
+            "MOVE", f"{WEBDAV}/Files/part.3mf", headers={**admin_auth, "Destination": _destination("/Files/Kunden")}
+        )
+
+        assert response.status_code == 403, response.text
+
+    async def test_a_move_with_no_destination_is_400(self, async_client: AsyncClient, writable_webdav, admin_auth):
+        await async_client.request("PUT", f"{WEBDAV}/Files/part.3mf", headers=admin_auth, content=b"x")
+
+        response = await async_client.request("MOVE", f"{WEBDAV}/Files/part.3mf", headers=admin_auth)
+
+        assert response.status_code == 400, response.text
+
+    async def test_a_move_onto_a_junk_name_is_refused_rather_than_swallowed(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, db_session
+    ):
+        """The name is one the share drops on the floor, so accepting the move
+        would answer success while deleting the file.
+        """
+        await async_client.request("PUT", f"{WEBDAV}/Files/part.3mf", headers=admin_auth, content=b"x")
+
+        response = await async_client.request(
+            "MOVE", f"{WEBDAV}/Files/part.3mf", headers={**admin_auth, "Destination": _destination("/Files/Thumbs.db")}
+        )
+
+        assert response.status_code == 403, response.text
+        assert await _rows(db_session, filename="part.3mf")
+
+
+class TestCopy:
+    async def test_a_copy_produces_a_second_hashed_row(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, folder_factory, db_session
+    ):
+        """Its own blob and its own derived columns.
+
+        A copy that pointed at the original's bytes would vanish the moment the
+        original was trashed and swept.
+        """
+        folder = await folder_factory("Kunden")
+        payload = _three_mf()
+        await async_client.request("PUT", f"{WEBDAV}/Files/part.3mf", headers=admin_auth, content=payload)
+
+        response = await async_client.request(
+            "COPY",
+            f"{WEBDAV}/Files/part.3mf",
+            headers={**admin_auth, "Destination": _destination("/Files/Kunden/part.3mf")},
+        )
+
+        assert response.status_code == 201, response.text
+        original = await _only_row(db_session, folder_id=None)
+        copy = await _only_row(db_session, folder_id=folder.id)
+        assert copy.id != original.id
+        assert copy.file_hash == original.file_hash
+        assert copy.file_path != original.file_path
+        assert copy.file_type == "3mf"
+        assert copy.file_metadata["print_time_seconds"] == 3600
+        assert copy.thumbnail_path and copy.thumbnail_path != original.thumbnail_path
+        body = await async_client.get(f"{WEBDAV}/Files/Kunden/part.3mf", headers=admin_auth)
+        assert body.content == payload
+
+    async def test_a_copy_leaves_the_source_alone(self, async_client: AsyncClient, writable_webdav, admin_auth):
+        await async_client.request("PUT", f"{WEBDAV}/Files/part.txt", headers=admin_auth, content=b"payload")
+
+        await async_client.request(
+            "COPY", f"{WEBDAV}/Files/part.txt", headers={**admin_auth, "Destination": _destination("/Files/dup.txt")}
+        )
+
+        source = await async_client.get(f"{WEBDAV}/Files/part.txt", headers=admin_auth)
+        assert source.content == b"payload"
+
+    async def test_copy_overwrite_f_is_412(self, async_client: AsyncClient, writable_webdav, admin_auth, db_session):
+        await async_client.request("PUT", f"{WEBDAV}/Files/a.txt", headers=admin_auth, content=b"first")
+        await async_client.request("PUT", f"{WEBDAV}/Files/b.txt", headers=admin_auth, content=b"second")
+
+        response = await async_client.request(
+            "COPY",
+            f"{WEBDAV}/Files/a.txt",
+            headers={**admin_auth, "Destination": _destination("/Files/b.txt"), "Overwrite": "F"},
+        )
+
+        assert response.status_code == 412, response.text
+        assert (await _only_row(db_session, filename="b.txt")).file_size == len(b"second")
+
+    async def test_copy_over_an_existing_name_replaces_that_row(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, db_session
+    ):
+        await async_client.request("PUT", f"{WEBDAV}/Files/a.txt", headers=admin_auth, content=b"the-source")
+        await async_client.request("PUT", f"{WEBDAV}/Files/b.txt", headers=admin_auth, content=b"second")
+        target = await _only_row(db_session, filename="b.txt")
+
+        response = await async_client.request(
+            "COPY", f"{WEBDAV}/Files/a.txt", headers={**admin_auth, "Destination": _destination("/Files/b.txt")}
+        )
+
+        assert response.status_code == 204, response.text
+        row = await _only_row(db_session, filename="b.txt")
+        assert row.id == target.id
+        body = await async_client.get(f"{WEBDAV}/Files/b.txt", headers=admin_auth)
+        assert body.content == b"the-source"
+
+    async def test_copying_a_folder_is_refused(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, folder_factory
+    ):
+        await folder_factory("Kunden")
+
+        response = await async_client.request(
+            "COPY", f"{WEBDAV}/Files/Kunden", headers={**admin_auth, "Destination": _destination("/Files/Kopie")}
+        )
+
+        assert response.status_code == 403, response.text
+
+    async def test_a_copy_onto_the_same_name_in_another_case_is_refused(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, db_session
+    ):
+        """On the client that sent them, the two spellings are one path.
+
+        Answering it would put two names in one folder that Explorer cannot
+        tell apart, which is the thing a copy should never do.
+        """
+        await async_client.request("PUT", f"{WEBDAV}/Files/part.3mf", headers=admin_auth, content=b"the-bytes")
+
+        response = await async_client.request(
+            "COPY", f"{WEBDAV}/Files/part.3mf", headers={**admin_auth, "Destination": _destination("/Files/PART.3MF")}
+        )
+
+        assert response.status_code == 403, response.text
+        assert [row.filename for row in await _rows(db_session)] == ["part.3mf"]
+
+
+class TestLocking:
+    """Always granted, and deliberately so -- see ``webdav_lock``."""
+
+    async def test_lock_returns_a_token_and_unlock_takes_it_back(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, file_factory
+    ):
+        await file_factory("part.3mf")
+
+        locked = await async_client.request(
+            "LOCK",
+            f"{WEBDAV}/Files/part.3mf",
+            headers=admin_auth,
+            content=b'<?xml version="1.0"?><D:lockinfo xmlns:D="DAV:"><D:lockscope><D:exclusive/></D:lockscope>'
+            b"<D:locktype><D:write/></D:locktype></D:lockinfo>",
+        )
+
+        assert locked.status_code == 200, locked.text
+        token = locked.headers["Lock-Token"]
+        assert token.startswith("<opaquelocktoken:")
+        body = ET.fromstring(locked.content)
+        assert body.findtext(f"{DAV}lockdiscovery/{DAV}activelock/{DAV}locktoken/{DAV}href") == token.strip("<>")
+        assert body.find(f"{DAV}lockdiscovery/{DAV}activelock/{DAV}locktype/{DAV}write") is not None
+
+        released = await async_client.request(
+            "UNLOCK", f"{WEBDAV}/Files/part.3mf", headers={**admin_auth, "Lock-Token": token}
+        )
+        assert released.status_code == 204, released.text
+
+    async def test_locking_a_file_that_does_not_exist_yet_is_201_and_creates_nothing(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, db_session
+    ):
+        """Windows locks the path before it writes it (RFC 4918 9.10.4)."""
+        response = await async_client.request("LOCK", f"{WEBDAV}/Files/new.3mf", headers=admin_auth)
+
+        assert response.status_code == 201, response.text
+        assert response.headers["Lock-Token"]
+        assert await _rows(db_session, filename="new.3mf") == []
+
+    async def test_a_write_carrying_an_if_header_is_not_second_guessed(
+        self, async_client: AsyncClient, writable_webdav, admin_auth
+    ):
+        """Nothing was recorded, so nothing can be checked -- by design."""
+        locked = await async_client.request("LOCK", f"{WEBDAV}/Files/part.txt", headers=admin_auth)
+        token = locked.headers["Lock-Token"]
+
+        written = await async_client.request(
+            "PUT",
+            f"{WEBDAV}/Files/part.txt",
+            headers={**admin_auth, "If": f"({token})"},
+            content=b"payload",
+        )
+
+        assert written.status_code == 201, written.text
+
+
+class TestProppatch:
+    async def test_the_windows_timestamp_properties_are_answered_200(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, file_factory
+    ):
+        """Explorer sends this straight after the PUT and reads a 405 as failure.
+
+        Bytes safely on disk, dialog saying the save did not work -- which is
+        why these are accepted, and then ignored: the row's timestamps are
+        Bambuddy's.
+        """
+        await file_factory("part.3mf")
+
+        response = await async_client.request(
+            "PROPPATCH",
+            f"{WEBDAV}/Files/part.3mf",
+            headers=admin_auth,
+            content=b'<?xml version="1.0"?>'
+            b'<D:propertyupdate xmlns:D="DAV:" xmlns:Z="urn:schemas-microsoft-com:">'
+            b"<D:set><D:prop>"
+            b"<Z:Win32CreationTime>Tue, 23 Sep 2026 10:00:00 GMT</Z:Win32CreationTime>"
+            b"<Z:Win32LastModifiedTime>Tue, 23 Sep 2026 10:00:00 GMT</Z:Win32LastModifiedTime>"
+            b"<Z:Win32FileAttributes>00000020</Z:Win32FileAttributes>"
+            b"</D:prop></D:set></D:propertyupdate>",
+        )
+
+        assert response.status_code == 207, response.text
+        root = ET.fromstring(response.content)
+        propstats = root.findall(f"{DAV}response/{DAV}propstat")
+        assert [stat.findtext(f"{DAV}status") for stat in propstats] == ["HTTP/1.1 200 OK"]
+        named = {element.tag.rpartition("}")[2] for element in propstats[0].find(f"{DAV}prop")}
+        assert named == {"Win32CreationTime", "Win32LastModifiedTime", "Win32FileAttributes"}
+
+    async def test_a_property_the_projection_has_nowhere_to_keep_is_refused_per_property(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, file_factory
+    ):
+        await file_factory("part.3mf")
+
+        response = await async_client.request(
+            "PROPPATCH",
+            f"{WEBDAV}/Files/part.3mf",
+            headers=admin_auth,
+            content=b'<?xml version="1.0"?>'
+            b'<D:propertyupdate xmlns:D="DAV:" xmlns:Z="urn:schemas-microsoft-com:">'
+            b"<D:set><D:prop>"
+            b"<Z:Win32FileAttributes>00000020</Z:Win32FileAttributes>"
+            b'<X:mood xmlns:X="urn:example:">cheerful</X:mood>'
+            b"</D:prop></D:set></D:propertyupdate>",
+        )
+
+        assert response.status_code == 207, response.text
+        root = ET.fromstring(response.content)
+        statuses = [stat.findtext(f"{DAV}status") for stat in root.findall(f"{DAV}response/{DAV}propstat")]
+        assert statuses == ["HTTP/1.1 200 OK", "HTTP/1.1 403 Forbidden"]
+
+    async def test_proppatch_on_a_path_that_is_not_there_is_404(
+        self, async_client: AsyncClient, writable_webdav, admin_auth
+    ):
+        response = await async_client.request(
+            "PROPPATCH",
+            f"{WEBDAV}/Files/ghost.3mf",
+            headers=admin_auth,
+            content=b'<D:propertyupdate xmlns:D="DAV:"><D:set><D:prop/></D:set></D:propertyupdate>',
+        )
+
+        assert response.status_code == 404, response.text
+
+
+class TestWriteSafety:
+    """The part that decides whether this feature can lose somebody's work."""
+
+    @pytest.fixture
+    async def reader(self, user_factory):
+        await user_factory("davreader", permissions=["library:read_all"])
+        return _basic("davreader", "DavPass1!")
+
+    async def test_a_read_only_user_reads_and_is_refused_every_write(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, reader, file_factory, folder_factory, db_session
+    ):
+        """The drive is usable read-only for them, with no other change."""
+        folder = await folder_factory("Kunden")
+        await file_factory("part.3mf", b"the-model", folder_id=folder.id)
+
+        listed = await async_client.request("PROPFIND", f"{WEBDAV}/Files/Kunden", headers={**reader, "Depth": "1"})
+        assert listed.status_code == 207, listed.text
+        body = await async_client.get(f"{WEBDAV}/Files/Kunden/part.3mf", headers=reader)
+        assert body.content == b"the-model"
+
+        attempts = {
+            "PUT": (f"{WEBDAV}/Files/Kunden/new.3mf", {}),
+            "DELETE": (f"{WEBDAV}/Files/Kunden/part.3mf", {}),
+            "MKCOL": (f"{WEBDAV}/Files/Neu", {}),
+            "MOVE": (f"{WEBDAV}/Files/Kunden/part.3mf", {"Destination": _destination("/Files/moved.3mf")}),
+            "COPY": (f"{WEBDAV}/Files/Kunden/part.3mf", {"Destination": _destination("/Files/copy.3mf")}),
+            "LOCK": (f"{WEBDAV}/Files/Kunden/part.3mf", {}),
+            "UNLOCK": (f"{WEBDAV}/Files/Kunden/part.3mf", {}),
+            "PROPPATCH": (f"{WEBDAV}/Files/Kunden/part.3mf", {}),
+        }
+        for method, (url, extra) in attempts.items():
+            response = await async_client.request(method, url, headers={**reader, **extra})
+            assert response.status_code == 403, f"{method} -> {response.status_code}: {response.text}"
+
+        assert [row.filename for row in await _rows(db_session, folder_id=folder.id)] == ["part.3mf"]
+        assert (await _rows(db_session, folder_id=folder.id))[0].deleted_at is None
+
+    async def test_a_read_only_external_folder_refuses_every_write(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, external_folder_factory, db_session
+    ):
+        """The same 403 the REST routes give it, and the share stays untouched."""
+        folder, directory = await external_folder_factory("Archiv", readonly=True)
+        (directory / "part.3mf").write_bytes(b"not ours")
+        from backend.app.models.library import LibraryFile
+
+        db_session.add(
+            LibraryFile(
+                filename="part.3mf",
+                file_path=str(directory / "part.3mf"),
+                file_type="3mf",
+                file_size=8,
+                folder_id=folder.id,
+                is_external=True,
+            )
+        )
+        await db_session.commit()
+
+        attempts = {
+            "PUT": (f"{WEBDAV}/External/Archiv/new.3mf", {}),
+            "DELETE": (f"{WEBDAV}/External/Archiv/part.3mf", {}),
+            "MKCOL": (f"{WEBDAV}/External/Archiv/Neu", {}),
+            "COPY": (f"{WEBDAV}/External/Archiv/part.3mf", {"Destination": _destination("/External/Archiv/c.3mf")}),
+            "MOVE": (f"{WEBDAV}/External/Archiv/part.3mf", {"Destination": _destination("/External/Archiv/m.3mf")}),
+        }
+        for method, (url, extra) in attempts.items():
+            response = await async_client.request(method, url, headers={**admin_auth, **extra})
+            assert response.status_code == 403, f"{method} -> {response.status_code}: {response.text}"
+
+        assert sorted(entry.name for entry in directory.iterdir()) == ["part.3mf"]
+        assert (directory / "part.3mf").read_bytes() == b"not ours"
+        assert (await _only_row(db_session, folder_id=folder.id)).deleted_at is None
+
+    async def test_saving_over_a_file_on_a_mount_that_went_read_only_is_403(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, external_folder_factory, db_session, monkeypatch
+    ):
+        """The flag in the database is not the filesystem's answer.
+
+        A folder registered as writable sits on a share that can be remounted
+        read-only or lose its credentials afterwards, which is how a share in a
+        farm usually becomes read-only. Creating a file there answers a clean
+        400 through the upload resolver; saving over one used to reach
+        ``open()`` and answer 500.
+        """
+        import os
+
+        from backend.app.models.library import LibraryFile
+
+        folder, directory = await external_folder_factory("NAS")
+        (directory / "part.3mf").write_bytes(b"still ours")
+        db_session.add(
+            LibraryFile(
+                filename="part.3mf",
+                file_path=str(directory / "part.3mf"),
+                file_type="3mf",
+                file_size=10,
+                folder_id=folder.id,
+                is_external=True,
+            )
+        )
+        await db_session.commit()
+        real_access = os.access
+        monkeypatch.setattr(
+            os, "access", lambda path, mode: False if Path(path) == directory else real_access(path, mode)
+        )
+
+        response = await async_client.request(
+            "PUT", f"{WEBDAV}/External/NAS/part.3mf", headers=admin_auth, content=b"new bytes"
+        )
+
+        assert response.status_code == 403, response.text
+        assert (directory / "part.3mf").read_bytes() == b"still ours"
+        assert list(directory.glob("*.part")) == []
+
+    async def test_a_failed_cross_device_copy_leaves_the_live_destination_alone(self, tmp_path, monkeypatch):
+        """The fallback ``os.replace`` cannot serve is every move onto a share.
+
+        The managed blob is under the data dir and the share is not, so this
+        path runs on every managed-to-external move. Copying straight onto the
+        destination truncates it at ``open()``: a mount that drops halfway
+        through would leave somebody's file cut in half, with the row still
+        describing the bytes that used to be in it.
+        """
+        import errno
+        import os
+        import shutil
+
+        from fastapi import HTTPException
+
+        from backend.app.api.routes import webdav as webdav_module
+
+        destination = tmp_path / "live.3mf"
+        destination.write_bytes(b"the file that is already there")
+        temp = tmp_path / "scratch.part"
+        temp.write_bytes(b"the new bytes")
+
+        def _no_rename(source, target):
+            raise OSError(errno.EXDEV, "cross-device link")
+
+        def _dies_halfway(source, target):
+            Path(target).write_bytes(b"half")
+            raise OSError(errno.EIO, "the mount dropped")
+
+        monkeypatch.setattr(os, "replace", _no_rename)
+        monkeypatch.setattr(shutil, "copy2", _dies_halfway)
+
+        with pytest.raises(HTTPException) as refused:
+            webdav_module._move_into_place(temp, destination)
+
+        assert refused.value.status_code == 409
+        assert destination.read_bytes() == b"the file that is already there"
+        # The caller's own scratch file is the caller's to clean up; the one
+        # this helper made must not be left behind.
+        assert [entry.name for entry in tmp_path.glob("*.part")] == ["scratch.part"]
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            # Percent-encoded, because httpx normalises a literal ".." out of
+            # the URL before it is ever sent -- these are the forms a hostile
+            # client would actually put on the wire.
+            "/Files/%2E%2E/%2E%2E/escape.txt",
+            "/Files/..%2F..%2Fescape.txt",
+            "/Files/%2E%2E",
+            "/%2E%2E/escape.txt",
+        ],
+    )
+    async def test_a_put_whose_path_leaves_the_library_is_403(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, path, tmp_path
+    ):
+        response = await async_client.request("PUT", f"{WEBDAV}{path}", headers=admin_auth, content=b"pwned")
+
+        assert response.status_code == 403, f"{path} -> {response.status_code}: {response.text}"
+        assert not (tmp_path / "escape.txt").exists()
+
+    @pytest.mark.parametrize("header", ["http://elsewhere.example/dav/x.3mf", "/other/x.3mf", "/webdavious/x.3mf"])
+    async def test_a_destination_outside_the_share_is_403(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, header
+    ):
+        await async_client.request("PUT", f"{WEBDAV}/Files/part.txt", headers=admin_auth, content=b"x")
+
+        response = await async_client.request(
+            "MOVE", f"{WEBDAV}/Files/part.txt", headers={**admin_auth, "Destination": header}
+        )
+
+        assert response.status_code == 403, response.text
+
+    async def test_a_name_the_library_cannot_store_is_refused(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, db_session
+    ):
+        """The SD-card rules the REST upload applies (#1540), here too."""
+        response = await async_client.request("PUT", f"{WEBDAV}/Files/part%3Aone.3mf", headers=admin_auth, content=b"x")
+
+        assert response.status_code == 400, response.text
+        assert await _rows(db_session) == []
+
+    async def test_a_name_the_projection_would_hand_back_differently_is_refused(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, db_session
+    ):
+        """A leading dot does not survive ``_label``, so the next PROPFIND
+        would show the file under another name -- which reads as a write that
+        went somewhere else.
+        """
+        response = await async_client.request("PUT", f"{WEBDAV}/Files/.gitignore", headers=admin_auth, content=b"x")
+
+        assert response.status_code == 400, response.text
+        assert await _rows(db_session) == []
+
+    async def test_an_oversized_put_is_413_and_leaves_nothing_behind(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, db_session, monkeypatch, library_root
+    ):
+        """A mis-dragged folder must not be able to fill the SSD."""
+        from backend.app.api.routes import webdav as webdav_module
+
+        monkeypatch.setattr(webdav_module, "MAX_PUT_BYTES", 16)
+
+        response = await async_client.request("PUT", f"{WEBDAV}/Files/big.3mf", headers=admin_auth, content=b"x" * 64)
+
+        assert response.status_code == 413, response.text
+        assert await _rows(db_session) == []
+        files_dir = _managed_files_dir()
+        # The managed store, asked for the way the route asks for it, and
+        # pinned to the throwaway dir: an assertion about a directory the
+        # write path never touches proves nothing about the scratch file.
+        assert files_dir.is_relative_to(library_root), files_dir
+        assert list(files_dir.iterdir()) == []
+
+    async def test_a_chunked_body_over_the_cap_is_413_too(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, db_session, monkeypatch, library_root
+    ):
+        """A chunked request declares no length, so the stream has to count."""
+        from backend.app.api.routes import webdav as webdav_module
+
+        monkeypatch.setattr(webdav_module, "MAX_PUT_BYTES", 16)
+
+        async def _chunks():
+            for _ in range(8):
+                yield b"xxxxxxxx"
+
+        response = await async_client.request("PUT", f"{WEBDAV}/Files/big.3mf", headers=admin_auth, content=_chunks())
+
+        assert response.status_code == 413, response.text
+        assert await _rows(db_session) == []
+        files_dir = _managed_files_dir()
+        assert files_dir.is_relative_to(library_root), files_dir
+        assert list(files_dir.iterdir()) == []
+
+    async def test_a_loose_file_cannot_be_written_into_the_external_bucket(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, external_folder_factory
+    ):
+        """``External`` lists registered folders; it is not a directory itself."""
+        await external_folder_factory("NAS")
+
+        response = await async_client.request("PUT", f"{WEBDAV}/External/loose.3mf", headers=admin_auth, content=b"x")
+
+        assert response.status_code == 403, response.text
+
+    async def test_a_write_at_the_share_root_is_refused(self, async_client: AsyncClient, writable_webdav, admin_auth):
+        response = await async_client.request("PUT", f"{WEBDAV}/part.3mf", headers=admin_auth, content=b"x")
+
+        assert response.status_code == 403, response.text
+
+
+class TestWriteEndToEnd:
+    """The sequence a client actually performs, in the order it performs it."""
+
+    async def test_a_client_locks_creates_writes_stamps_and_reads_back(
+        self, async_client: AsyncClient, writable_webdav, admin_auth, folder_factory, db_session
+    ):
+        await folder_factory("Kunden")
+        payload = _three_mf()
+
+        created = await async_client.request("MKCOL", f"{WEBDAV}/Files/Kunden/2026", headers=admin_auth)
+        assert created.status_code == 201, created.text
+
+        locked = await async_client.request("LOCK", f"{WEBDAV}/Files/Kunden/2026/job.3mf", headers=admin_auth)
+        assert locked.status_code == 201, locked.text
+        token = locked.headers["Lock-Token"]
+
+        empty = await async_client.request(
+            "PUT", f"{WEBDAV}/Files/Kunden/2026/job.3mf", headers={**admin_auth, "If": f"({token})"}, content=b""
+        )
+        assert empty.status_code == 201, empty.text
+
+        filled = await async_client.request(
+            "PUT", f"{WEBDAV}/Files/Kunden/2026/job.3mf", headers={**admin_auth, "If": f"({token})"}, content=payload
+        )
+        assert filled.status_code == 204, filled.text
+
+        stamped = await async_client.request(
+            "PROPPATCH",
+            f"{WEBDAV}/Files/Kunden/2026/job.3mf",
+            headers=admin_auth,
+            content=b'<D:propertyupdate xmlns:D="DAV:" xmlns:Z="urn:schemas-microsoft-com:"><D:set><D:prop>'
+            b"<Z:Win32LastModifiedTime>Tue, 23 Sep 2026 10:00:00 GMT</Z:Win32LastModifiedTime>"
+            b"</D:prop></D:set></D:propertyupdate>",
+        )
+        assert stamped.status_code == 207, stamped.text
+
+        released = await async_client.request(
+            "UNLOCK", f"{WEBDAV}/Files/Kunden/2026/job.3mf", headers={**admin_auth, "Lock-Token": token}
+        )
+        assert released.status_code == 204, released.text
+
+        listed = await async_client.request(
+            "PROPFIND", f"{WEBDAV}/Files/Kunden/2026", headers={**admin_auth, "Depth": "1"}
+        )
+        entry = _responses(listed.content)["/webdav/Files/Kunden/2026/job.3mf"]
+        assert _text(entry, "getcontentlength") == str(len(payload))
+
+        body = await async_client.get(f"{WEBDAV}/Files/Kunden/2026/job.3mf", headers=admin_auth)
+        assert body.content == payload
+
+        row = await _only_row(db_session, filename="job.3mf")
+        assert row.ingest_pending is False
+        assert row.file_metadata["print_time_seconds"] == 3600

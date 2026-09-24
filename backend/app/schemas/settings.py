@@ -28,6 +28,26 @@ LibraryRootView = Annotated[
     BeforeValidator(_coerce_library_root_view),
 ]
 
+WEBDAV_MODES = ("off", "read", "readwrite")
+
+
+def _coerce_webdav_mode(value: object) -> object:
+    """Read any stored ``webdav_mode`` as one of the three modes.
+
+    Same reasoning as ``_coerce_library_root_view``: an unrecognised row would
+    take the whole settings response down with it. ``off`` is the fail-closed
+    fallback — an unreadable value must never leave a writable share exposed.
+    """
+    if isinstance(value, str) and value.strip().lower() in WEBDAV_MODES:
+        return value.strip().lower()
+    return "off"
+
+
+WebdavMode = Annotated[
+    Literal["off", "read", "readwrite"],
+    BeforeValidator(_coerce_webdav_mode),
+]
+
 # Outbound service URLs validated on save, so a bad value is rejected at
 # configuration time with a clear message rather than failing opaquely at
 # request time. Every one of these services is commonly self-hosted on the same
@@ -329,14 +349,18 @@ class AppSettings(BaseModel):
             "files most recently added or changed"
         ),
     )
-    webdav_enabled: bool = Field(
-        default=False,
+    webdav_mode: WebdavMode = Field(
+        default="off",
         description=(
-            "Expose the library read-only over WebDAV at /webdav. Off by default: "
-            "it is a second protocol onto the same files, and it always requires "
-            "HTTP Basic credentials, including on installs where the web UI runs "
-            "without authentication. Accounts with two-factor authentication "
-            "cannot use it — Basic has nowhere to carry the second factor"
+            "Expose the library over WebDAV at /webdav: 'off' answers 404 for "
+            "everything, 'read' serves a read-only share, and 'readwrite' also "
+            "accepts writes, renames and deletes from a mapped drive. Off by "
+            "default: it is a second protocol onto the same files, and it always "
+            "requires HTTP Basic credentials, including on installs where the web "
+            "UI runs without authentication. Accounts with two-factor "
+            "authentication cannot use it — Basic has nowhere to carry the second "
+            "factor. In 'readwrite' a client's writes are held to the same library "
+            "permissions the REST routes enforce, and a delete goes to the trash"
         ),
     )
 
@@ -841,7 +865,7 @@ class AppSettingsUpdate(BaseModel):
     library_archive_mode: str | None = None
     library_disk_warning_gb: float | None = None
     library_root_view: Literal["all", "folders", "recent"] | None = None
-    webdav_enabled: bool | None = None
+    webdav_mode: Literal["off", "read", "readwrite"] | None = None
     camera_view_mode: str | None = None
     preferred_slicer: str | None = None
     open_in_slicer: str | None = None

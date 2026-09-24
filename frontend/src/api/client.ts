@@ -1479,6 +1479,10 @@ export type CalibrationMode = 'off' | 'on' | 'auto';
  *  most recently added or changed. */
 export type LibraryRootView = 'all' | 'folders' | 'recent';
 
+/** How much of the library WebDAV serves: nothing, a read-only share, or one a
+ *  mapped drive can write to. */
+export type WebdavMode = 'off' | 'read' | 'readwrite';
+
 // Settings types
 export interface AppSettings {
   auto_archive: boolean;
@@ -1580,9 +1584,10 @@ export interface AppSettings {
   // top-level folders plus a "No folder" entry, or the files most recently
   // added or changed.
   library_root_view: LibraryRootView;
-  // Serve the library read-only over WebDAV at /webdav (#3152). Off by default;
-  // it always requires HTTP Basic credentials, even where the web UI does not.
-  webdav_enabled: boolean;
+  // Serve the library over WebDAV at /webdav (#3152): off, read-only, or
+  // writable. Off by default; it always requires HTTP Basic credentials, even
+  // where the web UI does not.
+  webdav_mode: WebdavMode;
   // Camera view settings
   camera_view_mode: 'window' | 'embedded';
   // Preferred slicer (server-side API / sidecar)

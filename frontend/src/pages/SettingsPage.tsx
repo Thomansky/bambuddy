@@ -20,7 +20,7 @@ import {
 } from '../utils/locationSensorDefaults';
 import { describeHASensorReading, iconForHASensor } from '../utils/haSensorDisplay';
 import { PreheatFilamentTargetsEditor } from '../components/PreheatFilamentTargetsEditor';
-import type { APIKey, AppSettings, AppSettingsUpdate, PrinterHASensor, LocationHASensor, LocationHASensorReading, SmartPlug, SmartPlugStatus, NotificationProvider, NotificationTemplate, UpdateStatus, GitHubBackupStatus, CloudAuthStatus, UserCreate, UserUpdate, UserResponse, StorageUsageResponse, CalibrationMode, LibraryRootView } from '../api/client';
+import type { APIKey, AppSettings, AppSettingsUpdate, PrinterHASensor, LocationHASensor, LocationHASensorReading, SmartPlug, SmartPlugStatus, NotificationProvider, NotificationTemplate, UpdateStatus, GitHubBackupStatus, CloudAuthStatus, UserCreate, UserUpdate, UserResponse, StorageUsageResponse, CalibrationMode, LibraryRootView, WebdavMode } from '../api/client';
 import { Card, CardContent, CardDensityProvider, CardHeader } from '../components/Card';
 import { SlicerPipelinesPanel } from '../components/SlicerPipelinesPanel';
 import { NumberSeriesSettings } from '../components/NumberSeriesSettings';
@@ -163,6 +163,18 @@ const ROOT_VIEW_OPTIONS: { value: LibraryRootView; labelKey: string; description
     value: 'recent',
     labelKey: 'settings.libraryRootViewRecent',
     descriptionKey: 'settings.libraryRootViewRecentDescription',
+  },
+];
+
+// One line per option, because "what does this actually let a client do" is
+// the whole question an operator has before turning it on.
+const WEBDAV_MODE_OPTIONS: { value: WebdavMode; labelKey: string; descriptionKey: string }[] = [
+  { value: 'off', labelKey: 'settings.webdavModeOff', descriptionKey: 'settings.webdavModeOffDescription' },
+  { value: 'read', labelKey: 'settings.webdavModeRead', descriptionKey: 'settings.webdavModeReadDescription' },
+  {
+    value: 'readwrite',
+    labelKey: 'settings.webdavModeReadWrite',
+    descriptionKey: 'settings.webdavModeReadWriteDescription',
   },
 ];
 
@@ -1206,7 +1218,7 @@ export function SettingsPage() {
       (baseline.library_archive_mode ?? 'ask') !== (localSettings.library_archive_mode ?? 'ask') ||
       Number(baseline.library_disk_warning_gb ?? 5) !== Number(localSettings.library_disk_warning_gb ?? 5) ||
       (baseline.library_root_view ?? 'all') !== (localSettings.library_root_view ?? 'all') ||
-      (baseline.webdav_enabled ?? false) !== (localSettings.webdav_enabled ?? false) ||
+      (baseline.webdav_mode ?? 'off') !== (localSettings.webdav_mode ?? 'off') ||
       (baseline.preferred_slicer ?? 'bambu_studio') !== (localSettings.preferred_slicer ?? 'bambu_studio') ||
       resolveEngine(baseline.slice_engine) !== resolveEngine(localSettings.slice_engine) ||
       (baseline.open_in_slicer ?? null) !== (localSettings.open_in_slicer ?? null) ||
@@ -1331,7 +1343,7 @@ export function SettingsPage() {
         library_archive_mode: localSettings.library_archive_mode,
         library_disk_warning_gb: localSettings.library_disk_warning_gb,
         library_root_view: localSettings.library_root_view,
-        webdav_enabled: localSettings.webdav_enabled,
+        webdav_mode: localSettings.webdav_mode,
         preferred_slicer: localSettings.preferred_slicer,
         slice_engine: localSettings.slice_engine,
         open_in_slicer: localSettings.open_in_slicer,
@@ -2773,28 +2785,31 @@ export function SettingsPage() {
                 </p>
               </div>
 
-              {/* Read-only WebDAV view of the library (#3152). The hints below
-                  appear only once it is on: off, they describe a URL that
-                  answers 404, and the Windows registry note is advice nobody
-                  needs yet. */}
+              {/* WebDAV view of the library (#3152). The hints below appear only
+                  once it is on: off, they describe a URL that answers 404, and
+                  the Windows registry note is advice nobody needs yet. */}
               <div className="border-t border-bambu-dark-tertiary pt-3 mt-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-white">{t('settings.webdavEnabled')}</p>
-                    <p className="text-sm text-bambu-gray">{t('settings.webdavDescription')}</p>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer flex-shrink-0">
-                    <input
-                      type="checkbox"
-                      checked={localSettings.webdav_enabled ?? false}
-                      onChange={(e) => updateSetting('webdav_enabled', e.target.checked)}
-                      aria-label={t('settings.webdavEnabled')}
-                      className="sr-only peer"
-                    />
-                    <div className="w-11 h-6 bg-bambu-dark-tertiary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-bambu-green"></div>
-                  </label>
+                <p className="text-white">{t('settings.webdavMode')}</p>
+                <p className="text-sm text-bambu-gray">{t('settings.webdavDescription')}</p>
+                <div role="radiogroup" aria-label={t('settings.webdavMode')} className="space-y-2 mt-2">
+                  {WEBDAV_MODE_OPTIONS.map(({ value, labelKey, descriptionKey }) => (
+                    <label key={value} className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="webdav-mode"
+                        value={value}
+                        checked={(localSettings.webdav_mode ?? 'off') === value}
+                        onChange={() => updateSetting('webdav_mode', value)}
+                        className="accent-bambu-green mt-1 flex-shrink-0"
+                      />
+                      <span className="min-w-0">
+                        <span className="block text-white">{t(labelKey)}</span>
+                        <span className="block text-xs text-bambu-gray">{t(descriptionKey)}</span>
+                      </span>
+                    </label>
+                  ))}
                 </div>
-                {localSettings.webdav_enabled && (
+                {(localSettings.webdav_mode ?? 'off') !== 'off' && (
                   <div className="mt-2 space-y-1">
                     <p className="text-xs text-bambu-gray">
                       {t('settings.webdavAddressHint', { url: `${window.location.origin}/webdav` })}
@@ -2803,6 +2818,9 @@ export function SettingsPage() {
                     <p className="text-xs text-bambu-gray">{t('settings.webdavTwoFactorHint')}</p>
                     <p className="text-xs text-bambu-gray">{t('settings.webdavHttpsHint')}</p>
                     <p className="text-xs text-bambu-gray">{t('settings.webdavWindowsHint')}</p>
+                    {localSettings.webdav_mode === 'readwrite' && (
+                      <p className="text-xs text-bambu-gray">{t('settings.webdavWriteHint')}</p>
+                    )}
                   </div>
                 )}
               </div>

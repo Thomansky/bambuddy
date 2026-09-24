@@ -146,6 +146,17 @@ class LibraryFile(Base):
     # Extracted metadata (from 3MF parser)
     file_metadata: Mapped[dict | None] = mapped_column(JSON)
 
+    # The row exists but its bytes do not yet (#3152 write half). Almost every
+    # application saves a file by creating it empty, locking it, writing the
+    # real bytes and unlocking — so the first WebDAV ``PUT`` carries no body at
+    # all. Hashing, classifying and parsing that would produce a 0-byte row, a
+    # pointless hash and a failed 3MF parse, so the derived columns are left
+    # empty and this flag says so; the next ``PUT`` or ``MOVE`` onto the path
+    # fills them in. ``file_hash`` stays NULL meanwhile, which is what keeps a
+    # pending row out of the duplicate counts (every empty file would otherwise
+    # share one hash and look like a library full of duplicates).
+    ingest_pending: Mapped[bool] = mapped_column(Boolean, default=False)
+
     # Usage tracking
     print_count: Mapped[int] = mapped_column(Integer, default=0)
     last_printed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
