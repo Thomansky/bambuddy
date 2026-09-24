@@ -154,6 +154,123 @@ class TestConfirmTokenEndpoint:
         assert (await async_client.get("/api/v1/archives/confirm/no-such-token/good")).status_code == 404
         assert (await async_client.get("/api/v1/archives/confirm/whatever/maybe")).status_code == 400
 
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_link_unfurler_is_offered_the_choice_instead_of_making_it(
+        self, async_client: AsyncClient, archive_factory, printer_factory, db_session
+    ):
+        """The default template puts both verdict URLs in the message body, and
+        Telegram GETs the first one it sees to build a preview card. That fetch
+        used to record 'good', retire the token, and leave the operator's real
+        tap on the already-answered page — a scrap part counted as good for
+        good, in the statistics this branch adds."""
+        printer = await printer_factory()
+        archive = await archive_factory(printer.id, confirm_requested=True, confirm_token="unfurler-token")
+
+        response = await async_client.get(
+            "/api/v1/archives/confirm/unfurler-token/good",
+            headers={"user-agent": "TelegramBot (like TwitterBot)"},
+        )
+        assert response.status_code == 200
+        assert "Confirm this outcome" in response.text
+        assert "confirmed=1" in response.text
+
+        await db_session.refresh(archive)
+        assert archive.user_verdict is None
+        assert archive.confirm_token_used_at is None, "the capability must still be spendable"
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_the_confirmed_hop_records_the_verdict(
+        self, async_client: AsyncClient, archive_factory, printer_factory, db_session
+    ):
+        """Unfurlers fetch the URL from the message; they do not follow links
+        out of the page that comes back. So the interstitial's own link works
+        even when the request that produced it looked automated."""
+        printer = await printer_factory()
+        archive = await archive_factory(printer.id, confirm_requested=True, confirm_token="unfurler-then-tap")
+
+        unfurled = await async_client.get(
+            "/api/v1/archives/confirm/unfurler-then-tap/reject",
+            headers={"user-agent": "Slackbot-LinkExpanding 1.0"},
+        )
+        assert unfurled.status_code == 200
+        assert "Confirm this outcome" in unfurled.text
+
+        response = await async_client.get(
+            "/api/v1/archives/confirm/unfurler-then-tap/reject?confirmed=1",
+            headers={"user-agent": "Slackbot-LinkExpanding 1.0"},
+        )
+        assert response.status_code == 200
+        assert "Rejected" in response.text
+
+        await db_session.refresh(archive)
+        assert archive.user_verdict == "reject"
+        assert archive.user_verdict_source == "link"
+        assert archive.confirm_token_used_at is not None
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_prefetch_from_a_real_browser_records_nothing(
+        self, async_client: AsyncClient, archive_factory, printer_factory, db_session
+    ):
+        printer = await printer_factory()
+        archive = await archive_factory(printer.id, confirm_requested=True, confirm_token="prefetch-token")
+
+        response = await async_client.get(
+            "/api/v1/archives/confirm/prefetch-token/good",
+            headers={
+                "user-agent": "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36",
+                "purpose": "prefetch",
+            },
+        )
+        assert response.status_code == 200
+        await db_session.refresh(archive)
+        assert archive.user_verdict is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_head_request_records_nothing(
+        self, async_client: AsyncClient, archive_factory, printer_factory, db_session
+    ):
+        """Mail scanners probe with HEAD. FastAPI's APIRoute does not widen a
+        GET route to HEAD the way a plain Starlette Route does, so the probe is
+        refused outright — pinned here because the difference is exactly what
+        decides whether a probe can spend the token."""
+        printer = await printer_factory()
+        archive = await archive_factory(printer.id, confirm_requested=True, confirm_token="head-token")
+
+        assert (await async_client.head("/api/v1/archives/confirm/head-token/good")).status_code == 405
+
+        await db_session.refresh(archive)
+        assert archive.user_verdict is None
+        assert archive.confirm_token_used_at is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_phone_browser_still_records_in_one_tap(
+        self, async_client: AsyncClient, archive_factory, printer_factory, db_session
+    ):
+        """The guard must not cost the feature its point: the tap that opens
+        the link in a real phone browser still answers in one hop."""
+        printer = await printer_factory()
+        archive = await archive_factory(printer.id, confirm_requested=True, confirm_token="phone-token")
+
+        response = await async_client.get(
+            "/api/v1/archives/confirm/phone-token/good",
+            headers={
+                "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) "
+                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+            },
+        )
+        assert response.status_code == 200
+        assert "Confirm this outcome" not in response.text
+
+        await db_session.refresh(archive)
+        assert archive.user_verdict == "good"
+        assert archive.confirm_token_used_at is not None
+
     def test_confirm_links_exempt_from_auth_middleware(self):
         """The one-tap links are tapped on a phone with no session, so the
         global auth middleware must step aside for them — the capability token

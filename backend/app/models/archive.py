@@ -128,7 +128,12 @@ class PrintArchive(Base):
     # dated by that older event.
     user_verdict_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     confirm_requested: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
-    confirm_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Indexed and unique: the one-tap route is reachable with no credential
+    # at all, so an unindexed lookup would let anyone turn a stream of
+    # garbage tokens into a stream of full scans of this table. Uniqueness
+    # costs nothing (the only writer is secrets.token_urlsafe(32)) and keeps
+    # scalar_one_or_none from ever raising MultipleResultsFound.
+    confirm_token: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True, index=True)
     confirm_token_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=None)
 
     # Energy tracking

@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import { render } from '../utils';
 import { Layout } from '../../components/Layout';
 import { getAuthToken, setAuthToken } from '../../api/client';
@@ -729,6 +729,81 @@ describe('Layout', () => {
       expect(sidebarLink('/files')).toBeNull();
       expect(sidebarLink('/archives')).toBeNull();
       expect(sidebarLink('/queue')).toBeNull();
+    });
+  });
+  describe('outcome confirmation deep link (#1898)', () => {
+    // The URL a Pushover / Bark notification opens in a brand new tab. Layout
+    // is the PARENT of the page that renders at /archives, and React flushes a
+    // child's effects before its parent's — so while the page owned this deep
+    // link it dispatched `print-confirm-request` before Layout had added the
+    // listener, and then stripped the parameter, leaving nothing to recover.
+    // These tests pin the read where the dialog state lives.
+    const archive = {
+      id: 42,
+      printer_id: 1,
+      filename: 'bracket.gcode.3mf',
+      print_name: 'Bracket',
+      status: 'completed',
+      photos: null,
+      user_verdict: null,
+      user_verdict_source: null,
+      confirm_requested: true,
+    };
+
+    beforeEach(() => {
+      server.use(
+        http.get('/api/v1/archives/42', () => HttpResponse.json(archive))
+      );
+    });
+
+    afterEach(() => {
+      window.history.replaceState({}, '', '/');
+    });
+
+    it('opens the dialog on a cold load, with no page mounted to relay the event', async () => {
+      window.history.replaceState({}, '', '/archives?confirm=42');
+
+      render(<Layout />);
+
+      expect(await screen.findByTestId('confirm-outcome-dialog')).toBeInTheDocument();
+    });
+
+    it('strips the parameter but keeps the rest of the query', async () => {
+      window.history.replaceState({}, '', '/archives?confirm=42&status=completed');
+
+      render(<Layout />);
+
+      await screen.findByTestId('confirm-outcome-dialog');
+      await waitFor(() => {
+        expect(window.location.search).toBe('?status=completed');
+      });
+      expect(window.location.pathname).toBe('/archives');
+    });
+
+    it('ignores a confirm parameter that is not an archive id', async () => {
+      window.history.replaceState({}, '', '/archives?confirm=not-an-id');
+
+      render(<Layout />);
+
+      await waitFor(() => {
+        expect(document.querySelector('aside')).toBeInTheDocument();
+      });
+      expect(screen.queryByTestId('confirm-outcome-dialog')).toBeNull();
+      // Nothing was consumed, so nothing is rewritten either.
+      expect(window.location.search).toBe('?confirm=not-an-id');
+    });
+
+    it('still opens from the WebSocket event, which carries no URL', async () => {
+      render(<Layout />);
+
+      await waitFor(() => {
+        expect(document.querySelector('aside')).toBeInTheDocument();
+      });
+      window.dispatchEvent(
+        new CustomEvent('print-confirm-request', { detail: { archive_id: 42 } })
+      );
+
+      expect(await screen.findByTestId('confirm-outcome-dialog')).toBeInTheDocument();
     });
   });
 });

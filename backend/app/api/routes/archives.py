@@ -40,7 +40,11 @@ from backend.app.services.archive import ArchiveService
 from backend.app.services.bambu_ftp import ftps_handshake_blocked, list_files_result_async
 from backend.app.services.design_settings import overrides_from_config
 from backend.app.services.filament_requirements import annotate_rack_groups
-from backend.app.services.print_confirmation import retire_confirm_token, stamp_verdict
+from backend.app.services.print_confirmation import (
+    is_unattended_fetch,
+    retire_confirm_token,
+    stamp_verdict,
+)
 from backend.app.services.print_storage import (
     REASON_FTP_TRANSFER_FAILED,
     REASON_FTPS_COOLOFF,
@@ -3489,10 +3493,35 @@ async def _render_already_answered_page(db: AsyncSession, archive: PrintArchive)
     )
 
 
+async def _render_unattended_fetch_page(db: AsyncSession, archive: PrintArchive, token: str, verdict: str) -> str:
+    """What an automated fetch of a one-tap link gets instead of a verdict.
+
+    Link unfurlers and mail scanners fetch the URL they found in the message
+    body; they do not then follow links inside the page that comes back. So the
+    single extra hop below is invisible to them and costs a human one tap --
+    the right trade for a capability that can only ever be spent once.
+    """
+    from backend.app.api.routes.settings import get_external_base_url
+
+    base = await get_external_base_url(db)
+    name = html_escape(archive.print_name or archive.filename or "")
+    label = _VERDICT_LABELS.get(verdict, verdict)
+    href = html_escape(f"{base}/api/v1/archives/confirm/{token}/{verdict}?confirmed=1", quote=True)
+    return _confirm_page(
+        "&#63;",
+        "Confirm this outcome",
+        f"<p style='color:#9ca3af'>{name}</p>"
+        f"<p style='color:#9ca3af'>Record this print as <strong>{label}</strong>?</p>"
+        f"<p><a style='color:#00ae42' href='{href}'>Yes, record it</a></p>",
+    )
+
+
 @router.get("/confirm/{token}/{verdict}")
 async def confirm_outcome_by_token(
+    request: Request,
     token: str,
     verdict: str,
+    confirmed: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
     """Record a print-outcome verdict via the capability token from a push notification.
@@ -3504,7 +3533,11 @@ async def confirm_outcome_by_token(
     dropping the token value, so a link for a print that was already answered
     can be recognised and explained instead of looking broken. GET rather than
     POST so it works as a plain link in every notification channel and as an
-    ntfy action button. Returns a small HTML page for the phone browser.
+    ntfy action button -- which also means machines follow it unasked, because
+    the same URLs go out as plain text in the message body. A request that
+    looks like a link unfurler, a prefetch or a mail scanner is therefore
+    answered with a confirmation page and writes nothing; ``?confirmed=1`` is
+    the tap on that page. Returns a small HTML page for the phone browser.
     """
     from fastapi.responses import HTMLResponse
 
@@ -3522,6 +3555,14 @@ async def confirm_outcome_by_token(
         # Answered already — by hand, by the other link, by the plate-clear
         # default or by a reaction. Report what is on file and change nothing.
         return HTMLResponse(await _render_already_answered_page(db, archive))
+
+    if not confirmed and is_unattended_fetch(request.method, request.headers):
+        # A link unfurler or a mail-security scanner, not the operator. Both
+        # verdict URLs sit in the notification body text for every channel, and
+        # Telegram alone fetches the first one the moment the message is
+        # posted; recording here would settle the outcome before anyone read
+        # the question. Offer the choice instead — ``?confirmed=1`` is the tap.
+        return HTMLResponse(await _render_unattended_fetch_page(db, archive, token, verdict))
 
     archive.user_verdict = verdict
     stamp_verdict(archive, "link")

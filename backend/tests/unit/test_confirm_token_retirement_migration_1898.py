@@ -1,9 +1,12 @@
-"""Migration coverage for the one-tap token retirement columns (#1898).
+"""Migration coverage for the one-tap token columns and index (#1898).
 
 ``confirm_token_used_at`` is what turns a spent link into "already answered"
 instead of a 404, and ``user_verdict_source`` is what the hint next to the
 verdict badge reads — both have to reach an install that upgraded rather than
-one created fresh from the models.
+one created fresh from the models. So does the index on ``confirm_token``: the
+route that reads it runs with no authentication, so without the index anyone
+who can reach the host turns a stream of invented tokens into a stream of full
+scans of print_archives.
 """
 
 import pytest
@@ -65,5 +68,57 @@ async def test_retirement_columns_are_added_and_migration_is_idempotent(tmp_path
             }
             assert types["confirm_token_used_at"] == "DATETIME"
             assert types["user_verdict_source"].startswith("VARCHAR")
+    finally:
+        await engine.dispose()
+
+
+async def _archive_indexes(conn) -> dict[str, bool]:
+    """Index name -> whether it is UNIQUE, for print_archives."""
+    rows = (await conn.execute(text("PRAGMA index_list(print_archives)"))).all()
+    return {row[1]: bool(row[2]) for row in rows}
+
+
+def test_the_model_declares_the_index():
+    """A fresh install gets its schema from the models, not from
+    run_migrations, so the declaration is half the fix."""
+    from backend.app.models.archive import PrintArchive
+
+    column = PrintArchive.__table__.c.confirm_token
+    assert column.index is True
+    assert column.unique is True
+
+
+@pytest.mark.asyncio
+async def test_the_confirm_token_index_reaches_an_upgraded_install(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'confirm-token-index.db'}")
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            # An install that upgraded from before the index: the column is
+            # there, the index is not.
+            await conn.execute(text("DROP INDEX ix_print_archives_confirm_token"))
+            assert "ix_print_archives_confirm_token" not in await _archive_indexes(conn)
+
+            await run_migrations(conn)
+            indexes = await _archive_indexes(conn)
+            assert "ix_print_archives_confirm_token" in indexes
+            assert indexes["ix_print_archives_confirm_token"] is True, "must be UNIQUE"
+
+            # Re-running is a no-op, not an error.
+            await run_migrations(conn)
+            assert "ix_print_archives_confirm_token" in await _archive_indexes(conn)
+
+            # Most archives never get a token, so the unique index has to
+            # tolerate any number of NULLs — otherwise the second archive on a
+            # fresh install would fail to insert.
+            from backend.app.models.archive import PrintArchive
+
+            rows = [
+                {"filename": "a.3mf", "file_path": "a", "file_size": 1, "status": "completed"},
+                {"filename": "b.3mf", "file_path": "b", "file_size": 1, "status": "completed"},
+            ]
+            await conn.execute(PrintArchive.__table__.insert(), rows)
+            stored = (await conn.execute(text("SELECT confirm_token FROM print_archives"))).scalars().all()
+            assert stored == [None, None]
     finally:
         await engine.dispose()

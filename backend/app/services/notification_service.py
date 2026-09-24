@@ -605,6 +605,12 @@ class NotificationService:
                 "chat_id": chat_id,
                 "text": message,
                 "parse_mode": "Markdown",
+                # Telegram's servers GET the first URL in the text to build a
+                # preview card. The outcome prompt (#1898) carries single-use
+                # verdict links in its body, so that fetch would answer the
+                # question before the operator saw it. Bambuddy's messages are
+                # status text; a preview card adds nothing to any of them.
+                "disable_web_page_preview": True,
             }
             if message_thread_id is not None:
                 payload["message_thread_id"] = message_thread_id

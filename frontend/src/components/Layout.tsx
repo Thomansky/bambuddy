@@ -478,6 +478,24 @@ export function Layout() {
     return () => window.removeEventListener('print-confirm-request', handleConfirmRequest);
   }, []);
 
+  // The ?confirm=<id> deep link a push notification carries (#1898). It is read
+  // here and not on ArchivesPage because that page renders inside this Layout's
+  // <Outlet />: React flushes a child's effects before its parent's, so a page
+  // dispatching `print-confirm-request` on mount fired before the listener above
+  // existed — which is exactly the cold load a notification tap produces. The
+  // parameter is stripped afterwards so a reload does not re-open the dialog.
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const confirmId = params.get('confirm');
+    if (!confirmId || !/^\d+$/.test(confirmId)) {
+      return;
+    }
+    setConfirmOutcomeArchiveId(Number(confirmId));
+    params.delete('confirm');
+    const rest = params.toString();
+    navigate({ pathname: location.pathname, search: rest ? `?${rest}` : '' }, { replace: true });
+  }, [location.pathname, location.search, navigate]);
+
   // Global keyboard shortcuts for navigation
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     const target = e.target as HTMLElement;

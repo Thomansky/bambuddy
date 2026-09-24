@@ -4989,6 +4989,14 @@ async def run_migrations(conn):
     await _safe_execute(
         conn, "ALTER TABLE notification_providers ADD COLUMN on_print_confirm_request BOOLEAN DEFAULT TRUE"
     )
+    # The one-tap verdict route looks archives up by this token and runs with no
+    # authentication, so an upgraded install needs the index too — without it
+    # every tap, and every unauthenticated request carrying a bogus token, is a
+    # sequential scan of print_archives.
+    await _safe_execute(
+        conn,
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_print_archives_confirm_token ON print_archives (confirm_token)",
+    )
 
     # Migration: rename the ha_sensor_alert template (#2824). "Home Assistant
     # Sensor Alert" was fine as a name while it was the only such template;

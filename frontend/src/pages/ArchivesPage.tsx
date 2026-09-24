@@ -3445,25 +3445,6 @@ export function ArchivesPage() {
     localStorage.setItem('archiveFilterUnconfirmed', filterUnconfirmed.toString());
   }, [filterUnconfirmed]);
 
-  // Deep link from a push notification (#1898): /archives?confirm=<id> opens
-  // the outcome dialog via the globally mounted listener in Layout, then the
-  // parameter is stripped so a reload doesn't re-open it.
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const confirmId = params.get('confirm');
-    if (confirmId && /^\d+$/.test(confirmId)) {
-      window.dispatchEvent(
-        new CustomEvent('print-confirm-request', { detail: { archive_id: Number(confirmId) } })
-      );
-      params.delete('confirm');
-      window.history.replaceState(
-        {},
-        '',
-        `${window.location.pathname}${params.toString() ? `?${params}` : ''}`
-      );
-    }
-  }, []);
-
   useEffect(() => {
     localStorage.setItem('archiveHideDuplicates', hideDuplicates.toString());
   }, [hideDuplicates]);

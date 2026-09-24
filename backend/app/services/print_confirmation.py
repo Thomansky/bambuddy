@@ -1,6 +1,7 @@
 """Post-print outcome confirmation helpers (#1898)."""
 
 import logging
+from collections.abc import Mapping
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -15,6 +16,61 @@ logger = logging.getLogger(__name__)
 # reaction handler (#3046), which lives on its own branch — listed here so the
 # vocabulary is complete and the UI can label it the day that lands.
 VERDICT_SOURCES = ("dialog", "link", "plate_clear", "printer_card", "api", "reaction")
+
+# Link-preview unfurlers and mail-security scanners fetch every URL they find in
+# a message, unattended, within seconds of it being sent. The one-tap verdict
+# links are single-use capabilities that travel in the notification body text,
+# so such a fetch would answer the outcome prompt with a verdict nobody chose --
+# and the token is spent, so the operator's real tap then lands on "already
+# answered". Matched as case-insensitive substrings of the User-Agent; the
+# generic "bot" token covers TelegramBot, Discordbot, Slackbot-LinkExpanding,
+# Twitterbot and LinkedInBot in one go.
+UNATTENDED_FETCH_AGENTS = (
+    "bot",
+    "crawler",
+    "spider",
+    "facebookexternalhit",
+    "whatsapp",
+    "skypeuripreview",
+    "bingpreview",
+    "safelinks",
+    "urldefense",
+    "proofpoint",
+    "mimecast",
+    "barracuda",
+    "forcepoint",
+)
+
+# Prefetch / preload hints. A finger on a notification button is never one.
+UNATTENDED_FETCH_HEADERS = {
+    "purpose": ("prefetch", "preview"),
+    "x-purpose": ("prefetch", "preview"),
+    "x-moz": ("prefetch",),
+    "sec-purpose": ("prefetch",),
+}
+
+
+def is_unattended_fetch(method: str, headers: Mapping[str, str]) -> bool:
+    """Whether a request for a one-tap verdict link came from a machine.
+
+    Gates the capability route: an unattended request is shown the choice
+    instead of having it recorded, so an unfurler cannot spend a token the
+    operator has not tapped yet. False positives are deliberately cheap -- a
+    browser mistaken for a bot gets a page with a single link that records the
+    verdict -- so the lists above err towards catching more.
+    """
+    if method.upper() != "GET":
+        # Defence in depth. FastAPI's APIRoute does not widen GET to HEAD the
+        # way a plain Starlette Route does, so a scanner's HEAD is 405 today --
+        # but the day anyone lists HEAD on the route, a probe must not be able
+        # to spend the token by arriving.
+        return True
+    for header, markers in UNATTENDED_FETCH_HEADERS.items():
+        value = (headers.get(header) or "").lower()
+        if value and any(marker in value for marker in markers):
+            return True
+    agent = (headers.get("user-agent") or "").lower()
+    return any(marker in agent for marker in UNATTENDED_FETCH_AGENTS)
 
 
 def stamp_verdict(archive: PrintArchive, source: str) -> None:
