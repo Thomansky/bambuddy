@@ -2,7 +2,22 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+# The CSV `suppliers` column joins names with "; " (#2988). A name carrying
+# the separator would split into unknown names on import and silently drop the
+# assignments, so it is refused at the edge rather than escaped — the column
+# stays readable and hand-editable.
+SUPPLIER_NAME_SEPARATOR = ";"
+
+
+def validate_supplier_name(value: str) -> str:
+    trimmed = value.strip()
+    if not trimmed:
+        raise ValueError("name must not be empty")
+    if SUPPLIER_NAME_SEPARATOR in trimmed:
+        raise ValueError("name must not contain ';' — it separates suppliers in the CSV export")
+    return trimmed
 
 
 class SupplierBase(BaseModel):
@@ -12,16 +27,30 @@ class SupplierBase(BaseModel):
     customer_number: str | None = Field(default=None, max_length=100)
     note: str | None = Field(default=None, max_length=500)
 
+    @field_validator("name")
+    @classmethod
+    def _normalize_name(cls, value: str) -> str:
+        return validate_supplier_name(value)
+
 
 class SupplierCreate(SupplierBase):
     pass
 
 
 class SupplierUpdate(BaseModel):
+    # Optional so a PATCH can leave the name alone. An explicit null is a 422
+    # here instead of a NOT NULL violation surfacing as a 500.
     name: str | None = Field(default=None, min_length=1, max_length=200)
     website: str | None = Field(default=None, max_length=500)
     customer_number: str | None = Field(default=None, max_length=100)
     note: str | None = Field(default=None, max_length=500)
+
+    @field_validator("name")
+    @classmethod
+    def _normalize_name(cls, value: str | None) -> str:
+        if value is None:
+            raise ValueError("name must not be null")
+        return validate_supplier_name(value)
 
 
 class SupplierResponse(SupplierBase):

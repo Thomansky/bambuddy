@@ -13,6 +13,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.app.api.routes.inventory import DUPLICATE_SUPPLIER_NAME
 from backend.app.models.spool import Spool
 from backend.app.models.spool_usage_history import SpoolUsageHistory
 from backend.app.models.supplier import SpoolmanSpoolSupplier, SpoolSupplier, Supplier
@@ -99,6 +100,7 @@ def mock_spoolman_client():
     client.get_spool = AsyncMock(return_value=SAMPLE_SPOOLMAN_SPOOL)
     client.get_all_spools = AsyncMock(return_value=[SAMPLE_SPOOLMAN_SPOOL])
     client.get_distinct_locations = AsyncMock(return_value=[])
+    client.delete_spool = AsyncMock(return_value=None)
 
     with patch(
         "backend.app.api.routes.spoolman_inventory._get_client",
@@ -187,6 +189,65 @@ class TestSupplierCrud:
         resp = await async_client.delete(f"/api/v1/inventory/suppliers/{supplier.id}")
         assert resp.status_code == 409
         assert (await async_client.get("/api/v1/inventory/suppliers")).json()[0]["spool_count"] == 1
+
+
+class TestSupplierNameUniqueness:
+    """Supplier names are the feature's key (#2988): CSV import resolves
+    against them and a rename re-points every assignment, so two rows with
+    the same name silently send an import to the wrong supplier."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_duplicate_name_is_refused(self, async_client: AsyncClient):
+        assert (await async_client.post("/api/v1/inventory/suppliers", json={"name": "Extrudr"})).status_code == 201
+        resp = await async_client.post("/api/v1/inventory/suppliers", json={"name": "Extrudr"})
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == DUPLICATE_SUPPLIER_NAME
+        assert len((await async_client.get("/api/v1/inventory/suppliers")).json()) == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_duplicate_is_case_and_whitespace_insensitive(self, async_client: AsyncClient):
+        """The CSV map is keyed on the trimmed lower-cased name, so a case
+        variant would be just as ambiguous as an exact duplicate."""
+        await async_client.post("/api/v1/inventory/suppliers", json={"name": "Extrudr"})
+        resp = await async_client.post("/api/v1/inventory/suppliers", json={"name": "  eXtRuDr "})
+        assert resp.status_code == 409
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_rename_onto_an_existing_name_is_refused(self, async_client: AsyncClient, supplier_factory):
+        a = await supplier_factory(name="Extrudr")
+        b = await supplier_factory(name="Filament24")
+        resp = await async_client.patch(f"/api/v1/inventory/suppliers/{b.id}", json={"name": "extrudr"})
+        assert resp.status_code == 409
+        # Renaming a supplier to the name it already has is not a conflict.
+        assert (
+            await async_client.patch(f"/api/v1/inventory/suppliers/{a.id}", json={"name": "Extrudr"})
+        ).status_code == 200
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_name_is_trimmed_on_write(self, async_client: AsyncClient):
+        resp = await async_client.post("/api/v1/inventory/suppliers", json={"name": "  Extrudr  "})
+        assert resp.status_code == 201
+        assert resp.json()["name"] == "Extrudr"
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_explicit_null_name_is_a_validation_error(self, async_client: AsyncClient, supplier_factory):
+        """422, not the 500 a NOT NULL violation used to produce."""
+        supplier = await supplier_factory()
+        resp = await async_client.patch(f"/api/v1/inventory/suppliers/{supplier.id}", json={"name": None})
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_csv_separator_in_name_is_refused(self, async_client: AsyncClient):
+        """A ';' in the name would split into unknown names on CSV import and
+        silently drop every assignment that used it."""
+        resp = await async_client.post("/api/v1/inventory/suppliers", json={"name": "Extrudr; GmbH"})
+        assert resp.status_code == 422
 
 
 class TestSpoolSupplierAssignments:
@@ -369,6 +430,96 @@ class TestSupplierInheritance:
         )
         assert resp.status_code == 200
         assert resp.json()["suppliers"] == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_bulk_create_gives_every_copy_its_own_links(
+        self, async_client: AsyncClient, supplier_factory, spool_factory, db_session: AsyncSession
+    ):
+        """One donor lookup for the batch, one set of rows per copy."""
+        supplier = await supplier_factory(name="Supplier A")
+        donor = await spool_factory()
+        db_session.add(SpoolSupplier(spool_id=donor.id, supplier_id=supplier.id, supplier_article_number="A-100"))
+        await db_session.commit()
+
+        resp = await async_client.post(
+            "/api/v1/inventory/spools/bulk",
+            json={
+                "spool": {"material": "PLA", "subtype": "Matte", "brand": "Bambu Lab", "color_name": "Charcoal"},
+                "quantity": 3,
+            },
+        )
+        assert resp.status_code == 200
+        created = resp.json()
+        assert len(created) == 3
+        for row in created:
+            assert [link["supplier_name"] for link in row["suppliers"]] == ["Supplier A"]
+            assert row["suppliers"][0]["supplier_article_number"] == "A-100"
+            assert row["suppliers"][0]["is_purchase_source"] is False
+
+        # Own rows, not shared ones.
+        assert len({row["suppliers"][0]["id"] for row in created}) == 3
+
+
+class TestSupplierLifecycle:
+    """What happens to assignments when the spool they hang on goes away."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_deleting_a_spool_frees_its_supplier(
+        self, async_client: AsyncClient, supplier_factory, spool_factory, db_session: AsyncSession
+    ):
+        supplier = await supplier_factory()
+        spool = await spool_factory()
+        db_session.add(SpoolSupplier(spool_id=spool.id, supplier_id=supplier.id))
+        await db_session.commit()
+
+        assert (await async_client.delete(f"/api/v1/inventory/suppliers/{supplier.id}")).status_code == 409
+        assert (await async_client.delete(f"/api/v1/inventory/spools/{spool.id}")).status_code == 200
+
+        # delete-orphan on Spool.supplier_links takes the assignment with it,
+        # so the supplier stops being referenced and becomes deletable.
+        assert (await async_client.get("/api/v1/inventory/suppliers")).json()[0]["spool_count"] == 0
+        assert (await async_client.delete(f"/api/v1/inventory/suppliers/{supplier.id}")).status_code == 200
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_deleting_a_spoolman_spool_drops_the_twin_rows(
+        self, async_client: AsyncClient, supplier_factory, spoolman_settings, mock_spoolman_client, db_session
+    ):
+        """Spoolman owns the spool, Bambuddy owns the assignment, and nothing
+        in the database can cascade it. A leaked row keeps the supplier's
+        reference count non-zero, so the delete guard would answer 409 for a
+        spool the user can no longer see (#2988)."""
+        supplier = await supplier_factory()
+        assert (
+            await async_client.put(
+                "/api/v1/spoolman/inventory/spools/7/suppliers",
+                json=[{"supplier_id": supplier.id, "is_purchase_source": True}],
+            )
+        ).status_code == 200
+        assert (await async_client.delete(f"/api/v1/inventory/suppliers/{supplier.id}")).status_code == 409
+
+        assert (await async_client.delete("/api/v1/spoolman/inventory/spools/7")).status_code == 200
+
+        rows = await db_session.execute(select(SpoolmanSpoolSupplier))
+        assert rows.scalars().all() == []
+        assert (await async_client.get("/api/v1/inventory/suppliers")).json()[0]["spool_count"] == 0
+        assert (await async_client.delete(f"/api/v1/inventory/suppliers/{supplier.id}")).status_code == 200
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_bulk_delete_drops_the_twin_rows_too(
+        self, async_client: AsyncClient, supplier_factory, spoolman_settings, mock_spoolman_client, db_session
+    ):
+        supplier = await supplier_factory()
+        await async_client.put("/api/v1/spoolman/inventory/spools/7/suppliers", json=[{"supplier_id": supplier.id}])
+
+        resp = await async_client.post("/api/v1/spoolman/inventory/spools/bulk-delete", json={"ids": [7]})
+        assert resp.status_code == 200
+        assert resp.json()["deleted"] == 1
+        rows = await db_session.execute(select(SpoolmanSpoolSupplier))
+        assert rows.scalars().all() == []
 
 
 class TestSupplierStats:

@@ -214,7 +214,8 @@ async def _load_supplier_map(db: AsyncSession) -> dict[str, int]:
 
     Import resolves the `suppliers` / `purchase_supplier` columns against
     this map and never creates suppliers — the master list is curated in the
-    UI, and a typo in a CSV must not silently mint a new supplier.
+    UI, and a typo in a CSV must not silently mint a new supplier. The key is
+    unambiguous because supplier names are case-insensitively unique.
     """
     result = await db.execute(select(Supplier.id, Supplier.name))
     return {name.strip().lower(): supplier_id for supplier_id, name in result.all()}
@@ -334,6 +335,7 @@ async def parse_and_validate(raw_bytes: bytes, db: AsyncSession) -> ImportPrevie
     catalog = await _load_color_catalog(db)
     existing_keys = await _load_existing_spool_keys(db)
     supplier_map = await _load_supplier_map(db)
+    unknown_suppliers: set[str] = set()
 
     def cell(row: list[str], field: str) -> str:
         idx = col_index.get(field)
@@ -501,7 +503,11 @@ async def parse_and_validate(raw_bytes: bytes, db: AsyncSession) -> ImportPrevie
         for name in names:
             supplier_id = supplier_map.get(name.lower())
             if supplier_id is None:
-                warnings.append(f"Row {row_number}: unknown supplier '{name}' — assignment dropped")
+                # Once per name, not once per row: a 500-row export against an
+                # empty supplier list is one missing supplier, not 500 problems.
+                if name.lower() not in unknown_suppliers:
+                    unknown_suppliers.add(name.lower())
+                    warnings.append(f"Unknown supplier '{name}' — assignments dropped")
             elif supplier_id not in supplier_ids:
                 supplier_ids.append(supplier_id)
         if purchase_name:

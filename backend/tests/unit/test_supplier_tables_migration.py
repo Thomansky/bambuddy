@@ -110,3 +110,19 @@ async def test_migration_is_idempotent(engine_without_supplier_tables):
         names = (await conn.execute(text("SELECT name FROM suppliers"))).scalars().all()
     # Existing rows survive the re-run — the CREATE is swallowed, not applied.
     assert names == ["Kept"]
+
+
+async def test_migration_enforces_case_insensitive_unique_names(engine_without_supplier_tables):
+    """The name is what the CSV import resolves against (#2988), so an
+    upgraded database gets the same unique index create_all gives a fresh one."""
+    from sqlalchemy.exc import IntegrityError
+
+    async with engine_without_supplier_tables.begin() as conn:
+        await run_migrations(conn)
+
+    async with engine_without_supplier_tables.begin() as conn:
+        await conn.execute(text("INSERT INTO suppliers (name) VALUES ('Extrudr')"))
+
+    with pytest.raises(IntegrityError):
+        async with engine_without_supplier_tables.begin() as conn:
+            await conn.execute(text("INSERT INTO suppliers (name) VALUES ('extrudr')"))

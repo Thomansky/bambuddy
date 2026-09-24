@@ -5083,6 +5083,10 @@ async def _migrate_create_supplier_tables(conn) -> None:
     # The model declares index=True on these; fresh installs get them from
     # create_all(), migrated databases need them spelled out.
     await _safe_execute(conn, "CREATE INDEX IF NOT EXISTS ix_suppliers_name ON suppliers (name)")
+    # Case-insensitively unique supplier names (#2988): the CSV import resolves
+    # names against this table, so two rows differing only in case would make
+    # an import land on whichever one the map built last.
+    await _safe_execute(conn, "CREATE UNIQUE INDEX IF NOT EXISTS uq_suppliers_name_lower ON suppliers (lower(name))")
     await _safe_execute(conn, "CREATE INDEX IF NOT EXISTS ix_spool_suppliers_spool_id ON spool_suppliers (spool_id)")
     await _safe_execute(
         conn, "CREATE INDEX IF NOT EXISTS ix_spool_suppliers_supplier_id ON spool_suppliers (supplier_id)"

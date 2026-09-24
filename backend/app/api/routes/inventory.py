@@ -76,7 +76,7 @@ from backend.app.services.spool_csv import (
 )
 from backend.app.services.spool_filament_preset import resolve_spool_preset
 from backend.app.services.spoolman import SpoolmanClient, get_spoolman_client, init_spoolman_client
-from backend.app.services.supplier_links import apply_supplier_inheritance
+from backend.app.services.supplier_links import apply_supplier_inheritance, apply_supplier_inheritance_to_batch
 from backend.app.services.tag_conflict import tag_already_linked
 from backend.app.utils.filament_ids import (
     GENERIC_FILAMENT_IDS,
@@ -791,6 +791,17 @@ async def delete_location(
 # distinct from ``Spool.brand`` (who made it).
 
 
+DUPLICATE_SUPPLIER_NAME = "A supplier with this name already exists"
+
+
+async def _supplier_by_name(db: AsyncSession, name: str, *, exclude_id: int | None = None) -> Supplier | None:
+    """Case-insensitive name lookup behind the duplicate guard (#2988)."""
+    query = select(Supplier).where(func.lower(Supplier.name) == name.strip().lower())
+    if exclude_id is not None:
+        query = query.where(Supplier.id != exclude_id)
+    return (await db.execute(query)).scalars().first()
+
+
 async def _supplier_reference_counts(db: AsyncSession) -> dict[int, int]:
     """Spools referencing each supplier, across BOTH inventories.
 
@@ -829,10 +840,17 @@ async def create_supplier(
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_UPDATE),
 ):
-    """Create a supplier."""
+    """Create a supplier (mirrors create_location, duplicate name included)."""
+    if await _supplier_by_name(db, data.name):
+        raise HTTPException(status_code=409, detail=DUPLICATE_SUPPLIER_NAME)
     supplier = Supplier(**data.model_dump())
     db.add(supplier)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        # The unique index behind the check above, for the concurrent case.
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=DUPLICATE_SUPPLIER_NAME) from exc
     await db.refresh(supplier)
     await ws_manager.broadcast({"type": "inventory_changed"})
     return SupplierResponse.model_validate(supplier)
@@ -851,9 +869,16 @@ async def update_supplier(
     if not supplier:
         raise HTTPException(status_code=404, detail="Supplier not found")
 
-    for field, value in data.model_dump(exclude_unset=True).items():
+    fields = data.model_dump(exclude_unset=True)
+    if "name" in fields and await _supplier_by_name(db, fields["name"], exclude_id=supplier_id):
+        raise HTTPException(status_code=409, detail=DUPLICATE_SUPPLIER_NAME)
+    for field, value in fields.items():
         setattr(supplier, field, value)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=DUPLICATE_SUPPLIER_NAME) from exc
     await db.refresh(supplier)
     await ws_manager.broadcast({"type": "inventory_changed"})
 
@@ -1516,10 +1541,8 @@ async def bulk_create_spools(
         db.add(spool)
         spools.append(spool)
     await db.flush()
-    # Inherit supplier assignments per copy (#2988); the donor lookup is
-    # identical for all copies but each spool gets its own link rows.
-    for spool in spools:
-        await apply_supplier_inheritance(db, spool)
+    # Every copy gets its own link rows, from one donor lookup (#2988).
+    await apply_supplier_inheritance_to_batch(db, spools)
     await db.commit()
     ids = [s.id for s in spools]
     result = await db.execute(select(Spool).options(*spool_response_loads()).where(Spool.id.in_(ids)))

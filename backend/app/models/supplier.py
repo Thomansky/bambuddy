@@ -3,7 +3,18 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.core.database import Base
@@ -22,6 +33,12 @@ class Supplier(Base):
     """
 
     __tablename__ = "suppliers"
+    # Case-insensitively unique: the whole feature keys on the name. The CSV
+    # import resolves a column of names against this table and the master list
+    # is what a rename re-points, so "Extrudr" and "extrudr" must not be two
+    # rows. Functional index rather than a name_key column because there is no
+    # second lookup path that needs one.
+    __table_args__ = (Index("uq_suppliers_name_lower", text("lower(name)"), unique=True),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(200), index=True)
