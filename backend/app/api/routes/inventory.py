@@ -1,5 +1,6 @@
 import json
 import logging
+from datetime import date, datetime, time, timezone
 
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -2457,6 +2458,8 @@ async def get_spool_usage_history(
 
 @router.get("/stats/suppliers", response_model=list[SupplierStats])
 async def get_supplier_stats(
+    date_from: date | None = Query(None, description="Start date (inclusive), YYYY-MM-DD"),
+    date_to: date | None = Query(None, description="End date (inclusive), YYYY-MM-DD"),
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_READ),
 ):
@@ -2467,10 +2470,19 @@ async def get_supplier_stats(
     supplier X" reads directly. Stock comes from active spools; consumption
     and cost from the recorded usage history, archived spools included —
     their consumption happened. Sorted by consumption, heaviest first.
+
+    ``date_from`` / ``date_to`` scope the usage half only, so the widget can
+    honour the dashboard timeframe like every other one on that page. Stock is
+    point-in-time by nature and is never windowed.
     """
     from backend.app.models.spool_usage_history import SpoolUsageHistory
 
     purchase_link = (SpoolSupplier.spool_id == Spool.id) & SpoolSupplier.is_purchase_source.is_(True)
+    usage_window = []
+    if date_from:
+        usage_window.append(SpoolUsageHistory.created_at >= datetime.combine(date_from, time.min, tzinfo=timezone.utc))
+    if date_to:
+        usage_window.append(SpoolUsageHistory.created_at <= datetime.combine(date_to, time.max, tzinfo=timezone.utc))
 
     inventory_rows = await db.execute(
         select(
@@ -2493,6 +2505,7 @@ async def get_supplier_stats(
         .select_from(SpoolUsageHistory)
         .join(Spool, SpoolUsageHistory.spool_id == Spool.id)
         .join(SpoolSupplier, purchase_link)
+        .where(*usage_window)
         .group_by(SpoolSupplier.supplier_id)
     )
 

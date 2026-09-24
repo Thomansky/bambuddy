@@ -1181,7 +1181,7 @@ export function StatsPage() {
     {
       id: 'suppliers',
       title: t('stats.suppliers.title'),
-      component: <SupplierStats currency={currency} />,
+      component: <SupplierStats currency={currency} dateFrom={effectiveDateRange.dateFrom} dateTo={effectiveDateRange.dateTo} />,
       defaultSize: 2,
     },
   ];

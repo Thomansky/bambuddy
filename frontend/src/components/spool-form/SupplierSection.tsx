@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, Loader2, Plus, Store, X } from 'lucide-react';
-import { api } from '../../api/client';
+import { AlertTriangle, ChevronDown, Loader2, Plus, Store, X } from 'lucide-react';
+import { api, ApiError } from '../../api/client';
 import type { Supplier } from '../../api/client';
 import { useToast } from '../../contexts/ToastContext';
+import { inventorySuppliersQueryKey, invalidateInventorySuppliers } from '../../utils/inventoryQueries';
 
 // One editable supplier assignment as the form holds it (#2988). Mirrors
 // SpoolSupplierLinkInput but keeps the name so chips render without lookups.
@@ -29,28 +31,17 @@ interface SupplierSectionProps {
 export function SupplierSection({ links, onChange, currencySymbol }: SupplierSectionProps) {
   const { t } = useTranslation();
   const { showToast } = useToast();
+  const queryClient = useQueryClient();
   const containerRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [creating, setCreating] = useState(false);
-  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
-  const [loaded, setLoaded] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .getSuppliers()
-      .then((list) => {
-        if (!cancelled) setSuppliers(list);
-      })
-      .catch((err) => console.error('SupplierSection.getSuppliers failed:', err))
-      .finally(() => {
-        if (!cancelled) setLoaded(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // Shared key with SuppliersModal, invalidated by the inventory_changed
+  // broadcast — a supplier created in either place shows up in both (#2988).
+  const { data: suppliers = [], isLoading, isError } = useQuery({
+    queryKey: inventorySuppliersQueryKey,
+    queryFn: api.getSuppliers,
+  });
 
   useEffect(() => {
     if (!open) return;
@@ -95,11 +86,14 @@ export function SupplierSection({ links, onChange, currencySymbol }: SupplierSec
     setCreating(true);
     try {
       const supplier = await api.createSupplier({ name });
-      setSuppliers((prev) => [...prev, supplier].sort((a, b) => a.name.localeCompare(b.name)));
+      await invalidateInventorySuppliers(queryClient);
       addLink(supplier);
     } catch (err) {
       console.error('SupplierSection.createAndAdd failed:', err);
-      showToast(t('inventory.suppliers.createFailed'), 'error');
+      showToast(
+        t(err instanceof ApiError && err.status === 409 ? 'inventory.suppliers.duplicateName' : 'inventory.suppliers.createFailed'),
+        'error',
+      );
     } finally {
       setCreating(false);
     }
@@ -211,10 +205,17 @@ export function SupplierSection({ links, onChange, currencySymbol }: SupplierSec
               />
             </div>
             <div className="max-h-48 overflow-y-auto py-1">
-              {!loaded ? (
+              {isLoading ? (
                 <div className="px-3 py-2 text-sm text-bambu-gray flex items-center gap-2">
                   <Loader2 className="w-4 h-4 animate-spin" />
                   {t('common.loading')}
+                </div>
+              ) : isError ? (
+                // An empty list here would invite the user to create a
+                // supplier that already exists, so say the load failed.
+                <div className="px-3 py-2 text-sm text-red-400 flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4" />
+                  {t('inventory.suppliers.loadFailed')}
                 </div>
               ) : (
                 <>

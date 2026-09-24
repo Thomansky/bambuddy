@@ -556,6 +556,53 @@ class TestSupplierStats:
         # never from quoted_price_per_kg.
         assert rows[0]["cost"] == pytest.approx(3.0)
 
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_usage_half_honours_the_date_window(
+        self, async_client: AsyncClient, supplier_factory, spool_factory, db_session: AsyncSession
+    ):
+        """The dashboard timeframe scopes consumption and cost; stock is
+        point-in-time and stays out of the window (#2988)."""
+        from datetime import datetime, timedelta, timezone
+
+        supplier = await supplier_factory(name="Supplier A")
+        spool = await spool_factory(label_weight=1000, weight_used=300)
+        now = datetime.now(timezone.utc)
+        db_session.add_all(
+            [
+                SpoolSupplier(spool_id=spool.id, supplier_id=supplier.id, is_purchase_source=True),
+                SpoolUsageHistory(
+                    spool_id=spool.id,
+                    weight_used=100,
+                    percent_used=10,
+                    status="completed",
+                    cost=2.0,
+                    created_at=now - timedelta(days=90),
+                ),
+                SpoolUsageHistory(
+                    spool_id=spool.id,
+                    weight_used=200,
+                    percent_used=20,
+                    status="completed",
+                    cost=4.0,
+                    created_at=now - timedelta(days=2),
+                ),
+            ]
+        )
+        await db_session.commit()
+
+        lifetime = (await async_client.get("/api/v1/inventory/stats/suppliers")).json()
+        assert lifetime[0]["consumed_g"] == pytest.approx(300)
+        assert lifetime[0]["cost"] == pytest.approx(6.0)
+
+        date_from = (now - timedelta(days=30)).date().isoformat()
+        windowed = (await async_client.get(f"/api/v1/inventory/stats/suppliers?date_from={date_from}")).json()
+        assert windowed[0]["consumed_g"] == pytest.approx(200)
+        assert windowed[0]["cost"] == pytest.approx(4.0)
+        # Stock is not windowed.
+        assert windowed[0]["spool_count"] == 1
+        assert windowed[0]["remaining_g"] == pytest.approx(700)
+
 
 class TestSupplierCsv:
     @pytest.mark.asyncio

@@ -1581,7 +1581,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
               modal opens from the same toolbar — in both inventory modes. */}
           <Button variant="secondary" onClick={() => setSuppliersModalOpen(true)}>
             <Store className="w-4 h-4" />
-            {t('settings.suppliers.title')}
+            {t('inventory.suppliers.title')}
           </Button>
           <Button
             variant="secondary"

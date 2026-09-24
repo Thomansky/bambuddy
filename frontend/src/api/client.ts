@@ -6638,8 +6638,15 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(links),
     }),
-  getSupplierStats: () =>
-    request<SupplierStats[]>('/inventory/stats/suppliers'),
+  // date_from/date_to scope the usage half only, so the widget can follow the
+  // dashboard timeframe; stock stays point-in-time.
+  getSupplierStats: (dateFrom?: string, dateTo?: string) => {
+    const params = new URLSearchParams();
+    if (dateFrom) params.set('date_from', dateFrom);
+    if (dateTo) params.set('date_to', dateTo);
+    const qs = params.toString();
+    return request<SupplierStats[]>(`/inventory/stats/suppliers${qs ? `?${qs}` : ''}`);
+  },
   getLocations: () =>
     request<StorageLocation[]>('/inventory/locations'),
   createLocation: (data: { name: string; identifier?: string | null }) =>
