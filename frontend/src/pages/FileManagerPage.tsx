@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useMemo, useEffect, lazy, Suspense, Fragment } from 'react';
+import { useState, useRef, useCallback, useMemo, useEffect, useLayoutEffect, lazy, Suspense, Fragment } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -98,6 +98,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { formatDuration, parseUTCDate, formatDate } from '../utils/date';
 import { formatFileSize } from '../utils/file';
 import { folderLabel, folderText } from '../utils/folder';
+import { fitPathCrumbs } from '../utils/pathBarFit';
 import { assignableProjects } from '../utils/projectTree';
 import { openInSlicer, resolveDesktopSlicer, type SlicerType } from '../utils/slicer';
 import { isSlicedLibraryFile, isSliceableLibraryFile } from '../utils/libraryFiles';
@@ -1998,6 +1999,7 @@ interface PathBarProps {
 function PathBar({ rootLabel, rootIsExternal, path, leafLabel, onSelectRoot, onSelectFolder, t }: PathBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const { i18n } = useTranslation();
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -2008,13 +2010,60 @@ function PathBar({ rootLabel, rootIsExternal, path, leafLabel, onSelectRoot, onS
     return () => document.removeEventListener('mousedown', handlePointerDown);
   }, [menuOpen]);
 
-  // Keep the first element and the last two; everything between them moves
-  // into the ellipsis menu. Root plus three folders still fits on any pane we
-  // target, so folding only starts beyond that — collapsing a chain that fits
-  // hides an ancestor for nothing.
-  const collapsed = path.length > 3;
-  const hidden = collapsed ? path.slice(0, path.length - 2) : [];
-  const visible = collapsed ? path.slice(path.length - 2) : path;
+  // How many crumbs fit is measured, not counted: see utils/pathBarFit.ts.
+  // `null` means the measurement produced nothing usable.
+  const barRef = useRef<HTMLDivElement>(null);
+  const rootMeasureRef = useRef<HTMLSpanElement>(null);
+  const ellipsisMeasureRef = useRef<HTMLSpanElement>(null);
+  const leafMeasureRef = useRef<HTMLSpanElement>(null);
+  const crumbMeasureRefs = useRef<(HTMLSpanElement | null)[]>([]);
+  const trailingRef = useRef<HTMLSpanElement>(null);
+  const [fittedCount, setFittedCount] = useState<number | null>(null);
+
+  const measure = useCallback(() => {
+    const bar = barRef.current;
+    if (!bar) return;
+    // One pass: read every width, then set state only if the answer changed.
+    // Returning the previous value makes React bail out of the re-render, so
+    // a resize that does not move the boundary costs no layout.
+    const first = rootMeasureRef.current;
+    const second = ellipsisMeasureRef.current;
+    const gap =
+      first && second ? Math.max(0, second.offsetLeft - first.offsetLeft - first.offsetWidth) : 0;
+    const next = fitPathCrumbs({
+      available: bar.clientWidth,
+      gap,
+      rootWidth: first?.offsetWidth ?? 0,
+      ellipsisWidth: second?.offsetWidth ?? 0,
+      crumbWidths: path.map((_, index) => crumbMeasureRefs.current[index]?.offsetWidth ?? 0),
+      leafWidth: leafMeasureRef.current?.offsetWidth ?? 0,
+      reservedWidth: trailingRef.current?.offsetWidth ?? 0,
+    });
+    setFittedCount((prev) => (prev === next ? prev : next));
+  }, [path]);
+
+  // Re-measure when the pane resizes, when the path changes and when the
+  // language changes — translated labels are not the same width.
+  useLayoutEffect(() => {
+    measure();
+  }, [measure, rootLabel, leafLabel, i18n.language]);
+
+  useEffect(() => {
+    const bar = barRef.current;
+    if (!bar || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => measure());
+    observer.observe(bar);
+    return () => observer.disconnect();
+  }, [measure]);
+
+  // Keep the root and the last crumbs that fit; everything between them moves
+  // into the ellipsis menu. When the widths cannot be measured at all — jsdom,
+  // or a pane that is display:none — the old depth rule stands in, which is
+  // still a sane answer rather than folding everything or nothing.
+  const shown = fittedCount ?? (path.length > 3 ? 2 : path.length);
+  const collapsed = shown < path.length;
+  const hidden = collapsed ? path.slice(0, path.length - shown) : [];
+  const visible = collapsed ? path.slice(path.length - shown) : path;
   const separator = <ChevronRightIcon className="w-3.5 h-3.5 flex-shrink-0 text-bambu-gray/60" aria-hidden="true" />;
   const crumbClass = 'flex items-center gap-1.5 min-w-0 px-1.5 py-1 rounded transition-colors';
   const rootIcon = rootIsExternal ? (
@@ -2024,11 +2073,56 @@ function PathBar({ rootLabel, rootIsExternal, path, leafLabel, onSelectRoot, onS
   );
 
   return (
-    <nav
-      aria-label={t('fileManager.pathBar.label')}
-      data-testid="library-path-bar"
-      className="flex items-center gap-0.5 mb-3 min-w-0 overflow-hidden whitespace-nowrap text-sm"
-    >
+    <div ref={barRef} className="relative mb-3 min-w-0 overflow-hidden whitespace-nowrap text-sm">
+      {/* The bar only contains the crumbs it shows, so the widths of the
+          folded ones have to come from somewhere: this twin renders the whole
+          chain at its natural width. Out of the accessibility tree, out of
+          flow and outside the <nav>, so it costs neither a tab stop, nor a
+          line, nor a second hit for anything looking inside the bar. It is
+          wider than the pane by definition — hence overflow-hidden above, or
+          a deep chain would give the page a horizontal scrollbar. Clipping
+          does not change a box's layout width, so the measurement stands. */}
+      <div
+        aria-hidden="true"
+        className="absolute left-0 top-0 flex items-center gap-0.5 invisible pointer-events-none"
+      >
+        <span ref={rootMeasureRef} className={`${crumbClass} flex-shrink-0`}>
+          {rootIcon}
+          <span>{rootLabel}</span>
+        </span>
+        <span ref={ellipsisMeasureRef} className="flex items-center gap-0.5 flex-shrink-0">
+          {separator}
+          <span className="flex items-center px-1.5 py-1">
+            <MoreHorizontal className="w-4 h-4" />
+          </span>
+        </span>
+        {path.map((folder, index) => (
+          <span
+            key={folder.id}
+            ref={(el) => {
+              crumbMeasureRefs.current[index] = el;
+            }}
+            className="flex items-center gap-0.5 flex-shrink-0"
+          >
+            {separator}
+            <span className={`${crumbClass} font-medium`}>
+              <FolderNumber number={folder.number} t={t} />
+              <span>{folder.name}</span>
+            </span>
+          </span>
+        ))}
+        {leafLabel && (
+          <span ref={leafMeasureRef} className="flex items-center gap-0.5 flex-shrink-0">
+            {separator}
+            <span className={`${crumbClass} font-medium`}>{leafLabel}</span>
+          </span>
+        )}
+      </div>
+      <nav
+        aria-label={t('fileManager.pathBar.label')}
+        data-testid="library-path-bar"
+        className="flex items-center gap-0.5 min-w-0 overflow-hidden"
+      >
       {path.length === 0 && !leafLabel ? (
         <span aria-current="page" className={`${crumbClass} text-white font-medium`}>
           {rootIcon}
@@ -2123,16 +2217,21 @@ function PathBar({ rootLabel, rootIsExternal, path, leafLabel, onSelectRoot, onS
         </span>
       )}
       {/* The chain as text, for Explorer / the slicer / a mail. The root has
-          no path, so at the root there is nothing to copy. */}
+          no path, so at the root there is nothing to copy. The wrapper is the
+          measuring handle: whatever the bar always shows beside the crumbs is
+          width the crumbs do not get. */}
       {path.length > 0 && (
-        <CopyButton
-          value={path.map((folder) => folder.name).join('/')}
-          titleKey="fileManager.copyPath"
-          copiedTitleKey="fileManager.toast.pathCopied"
-          className="ml-1 flex-shrink-0 p-1 rounded text-bambu-gray hover:text-white hover:bg-bambu-dark transition-colors"
-        />
+        <span ref={trailingRef} className="flex items-center flex-shrink-0">
+          <CopyButton
+            value={path.map((folder) => folder.name).join('/')}
+            titleKey="fileManager.copyPath"
+            copiedTitleKey="fileManager.toast.pathCopied"
+            className="ml-1 flex-shrink-0 p-1 rounded text-bambu-gray hover:text-white hover:bg-bambu-dark transition-colors"
+          />
+        </span>
       )}
-    </nav>
+      </nav>
+    </div>
   );
 }
 
