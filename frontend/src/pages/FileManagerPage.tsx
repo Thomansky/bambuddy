@@ -60,7 +60,7 @@ import {
   PanelLeftOpen,
   type LucideIcon,
 } from 'lucide-react';
-import { api } from '../api/client';
+import { ApiError, api } from '../api/client';
 import type {
   LibraryFolderTree,
   LibraryFileListItem,
@@ -307,6 +307,33 @@ function filterAndSortFiles(
   return result;
 }
 
+/** The key of the running-number series order folders draw from. */
+const FOLDER_SERIES_KEY = 'library_folder';
+
+/** What to call a folder in a tooltip or an aria-label. An order folder is
+ *  often nothing but a number, so the number stands in for the missing name
+ *  rather than leaving the control unlabelled. */
+function folderLabel(folder: { name: string; number?: string | null }): string {
+  return folder.name || folder.number || '';
+}
+
+/** The folder's running number, drawn before the name the way the project
+ *  number sits next to the project name. Its own element, never part of the
+ *  name: a number baked into a name would not survive a rename, and this one
+ *  is what the quote and the invoice are filed under. */
+function FolderNumber({ number, t }: { number?: string | null; t: TFunction }) {
+  if (!number) return null;
+  return (
+    <span
+      data-testid="folder-number"
+      title={t('fileManager.folderNumber')}
+      className="text-xs font-mono px-1.5 py-0.5 rounded bg-bambu-dark text-bambu-gray whitespace-nowrap flex-shrink-0"
+    >
+      {number}
+    </span>
+  );
+}
+
 // New Folder Modal
 interface NewFolderModalProps {
   parentId: number | null;
@@ -318,10 +345,27 @@ interface NewFolderModalProps {
 
 function NewFolderModal({ parentId, onClose, onSave, isLoading, t }: NewFolderModalProps) {
   const [name, setName] = useState('');
+  // On by default: in the workflow this exists for, every new folder is an
+  // order and every order gets a number. Unticking it is the exception.
+  const [assignNumber, setAssignNumber] = useState(true);
+
+  const { data: allSeries } = useQuery({
+    queryKey: ['number-series'],
+    queryFn: () => api.getNumberSeries(),
+  });
+  // Only an enabled series has anything to offer; with it off the dialog looks
+  // exactly as it did before the feature.
+  const folderSeries = allSeries?.find((s) => s.key === FOLDER_SERIES_KEY && s.enabled);
+  const willBeNumbered = Boolean(folderSeries) && assignNumber;
+
+  // An order folder that is only a number is the normal case here, so a name
+  // is required only when no number is coming with it.
+  const canSubmit = Boolean(name.trim()) || willBeNumbered;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSave({ name: name.trim(), parent_id: parentId });
+    if (!canSubmit) return;
+    onSave({ name: name.trim(), parent_id: parentId, use_number_series: willBeNumbered });
   };
 
   return (
@@ -342,14 +386,29 @@ function NewFolderModal({ parentId, onClose, onSave, isLoading, t }: NewFolderMo
               className="w-full bg-bambu-dark border border-bambu-dark-tertiary rounded px-3 py-2 text-white placeholder-bambu-gray focus:outline-none focus:border-bambu-green"
               placeholder={t('fileManager.folderNamePlaceholder')}
               autoFocus
-              required
             />
           </div>
+          {folderSeries && (
+            <div>
+              <label className="flex items-center gap-2 text-sm text-white cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={assignNumber}
+                  onChange={(e) => setAssignNumber(e.target.checked)}
+                  className="w-4 h-4 accent-bambu-green"
+                />
+                {t('fileManager.assignNumber')}
+              </label>
+              <p className="mt-1 text-xs text-bambu-gray font-mono">
+                {t('fileManager.nextNumber', { value: folderSeries.preview })}
+              </p>
+            </div>
+          )}
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="secondary" onClick={onClose}>
               {t('common.cancel')}
             </Button>
-            <Button type="submit" disabled={!name.trim() || isLoading}>
+            <Button type="submit" disabled={!canSubmit || isLoading}>
               {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : t('common.create')}
             </Button>
           </div>
@@ -473,31 +532,44 @@ function findInvalidFilenameChar(name: string): string | null {
 interface RenameModalProps {
   type: 'file' | 'folder';
   currentName: string;
+  /** Folders only: the running number, edited in its own field so a rename
+   *  can never drop it. */
+  currentNumber?: string | null;
   onClose: () => void;
-  onSave: (newName: string) => void;
+  onSave: (newName: string, newNumber?: string | null, nameChanged?: boolean) => void;
   isLoading: boolean;
   t: TFunction;
 }
 
-function RenameModal({ type, currentName, onClose, onSave, isLoading, t }: RenameModalProps) {
+function RenameModal({ type, currentName, currentNumber, onClose, onSave, isLoading, t }: RenameModalProps) {
   // For files, separate the extension so users can only edit the base name
   // Handle compound extensions like .gcode.3mf
   const fileExtension = type === 'file' ? (currentName.match(/(\.gcode\.3mf|\.3mf|\.gcode)$/i)?.[1] ?? '') : '';
   const baseName = type === 'file' && fileExtension ? currentName.slice(0, -fileExtension.length) : currentName;
   const [name, setName] = useState(baseName);
+  const [number, setNumber] = useState(currentNumber ?? '');
 
   const invalidChar = type === 'file' ? findInvalidFilenameChar(name) : null;
   const filenameError = invalidChar
     ? t('fileManager.invalidFilenameChar', { char: invalidChar })
     : null;
 
+  const trimmedNumber = number.trim();
+  const numberChanged = type === 'folder' && trimmedNumber !== (currentNumber ?? '');
+  const nameChanged = name.trim() !== baseName;
+  // A folder that carries a number may be left nameless — that is what an
+  // order folder looks like before anyone types a customer onto it.
+  const nameRequired = type === 'file' || !trimmedNumber;
+  const canSubmit =
+    (!nameRequired || Boolean(name.trim())) && (nameChanged || numberChanged) && !filenameError;
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (filenameError) return;
+    if (!canSubmit) return;
     const fullName = type === 'file' ? name.trim() + fileExtension : name.trim();
-    if (name.trim() && fullName !== currentName) {
-      onSave(fullName);
-    }
+    // `undefined` on either side leaves that field alone: an order folder can
+    // be nothing but a number, and re-sending its empty name would be refused.
+    onSave(fullName, numberChanged ? trimmedNumber || null : undefined, nameChanged);
   };
 
   return (
@@ -508,17 +580,18 @@ function RenameModal({ type, currentName, onClose, onSave, isLoading, t }: Renam
         </div>
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
           <div>
-            <label className="block text-sm font-medium text-white mb-1">
+            <label className="block text-sm font-medium text-white mb-1" htmlFor="rename-name">
               {t('common.name')}
             </label>
             <div className={`flex items-center bg-bambu-dark border rounded focus-within:border-bambu-green ${filenameError ? 'border-red-500' : 'border-bambu-dark-tertiary'}`}>
               <input
+                id="rename-name"
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 className="flex-1 bg-transparent px-3 py-2 text-white placeholder-bambu-gray focus:outline-none min-w-0"
                 autoFocus
-                required
+                required={nameRequired}
               />
               {fileExtension && (
                 <span className="pr-3 text-bambu-gray text-sm select-none whitespace-nowrap">{fileExtension}</span>
@@ -528,11 +601,26 @@ function RenameModal({ type, currentName, onClose, onSave, isLoading, t }: Renam
               <p className="mt-1 text-xs text-red-700 dark:text-red-400">{filenameError}</p>
             )}
           </div>
+          {type === 'folder' && (
+            <div>
+              <label className="block text-sm font-medium text-white mb-1" htmlFor="folder-number">
+                {t('fileManager.folderNumber')}
+              </label>
+              <input
+                id="folder-number"
+                type="text"
+                maxLength={32}
+                value={number}
+                onChange={(e) => setNumber(e.target.value)}
+                className="w-full bg-bambu-dark border border-bambu-dark-tertiary rounded px-3 py-2 text-white placeholder-bambu-gray focus:outline-none focus:border-bambu-green font-mono"
+              />
+            </div>
+          )}
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="secondary" onClick={onClose}>
               {t('common.cancel')}
             </Button>
-            <Button type="submit" disabled={!name.trim() || name.trim() === baseName || !!filenameError || isLoading}>
+            <Button type="submit" disabled={!canSubmit || isLoading}>
               {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : t('common.rename')}
             </Button>
           </div>
@@ -1011,7 +1099,10 @@ function FolderTreeItem({ folder, selectedFolderId, onSelect, onDownloadFolder, 
           <FolderOpen className="w-4 h-4 text-bambu-green flex-shrink-0" />
         )}
         <div className="flex-1 min-w-0">
-          <span className={`block text-sm ${wrapNames ? 'break-all' : 'truncate'}`} title={folder.name}>{folder.name}</span>
+          <span className="flex items-center gap-1.5 min-w-0 text-sm" title={folderLabel(folder)}>
+            <FolderNumber number={folder.number} t={t} />
+            <span className={wrapNames ? 'break-all' : 'truncate'}>{folder.name}</span>
+          </span>
           {/* #2680 follow-up: the same toolbar toggle that shows dates on file
               cards also shows them here. This is `latest_activity_at` — the
               newest timestamp among the folder itself, its files and its
@@ -1748,11 +1839,12 @@ function PathBar({ rootLabel, rootIsExternal, path, onSelectRoot, onSelectFolder
                       setMenuOpen(false);
                       onSelectFolder(folder.id);
                     }}
-                    aria-label={folder.name}
-                    title={folder.name}
+                    aria-label={folderLabel(folder)}
+                    title={folderLabel(folder)}
                     className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm text-white hover:bg-bambu-dark transition-colors"
                   >
                     <FolderOpen className="w-3.5 h-3.5 flex-shrink-0 text-bambu-green" />
+                    <FolderNumber number={folder.number} t={t} />
                     <span className="truncate">{folder.name}</span>
                   </button>
                 ))}
@@ -1767,17 +1859,19 @@ function PathBar({ rootLabel, rootIsExternal, path, onSelectRoot, onSelectFolder
           <span key={folder.id} className="flex items-center gap-0.5 min-w-0">
             {separator}
             {isCurrent ? (
-              <span aria-current="page" title={folder.name} className={`${crumbClass} text-white font-medium`}>
+              <span aria-current="page" title={folderLabel(folder)} className={`${crumbClass} text-white font-medium`}>
+                <FolderNumber number={folder.number} t={t} />
                 <span className="truncate">{folder.name}</span>
               </span>
             ) : (
               <button
                 type="button"
                 onClick={() => onSelectFolder(folder.id)}
-                aria-label={folder.name}
-                title={folder.name}
+                aria-label={folderLabel(folder)}
+                title={folderLabel(folder)}
                 className={`${crumbClass} text-bambu-gray hover:text-white hover:bg-bambu-dark`}
               >
+                <FolderNumber number={folder.number} t={t} />
                 <span className="truncate">{folder.name}</span>
               </button>
             )}
@@ -1884,10 +1978,11 @@ function ContentFolderNav({
                 <button
                   type="button"
                   onClick={() => onSelectFolder(folder.id)}
-                  title={folder.name}
+                  title={folderLabel(folder)}
                   className="min-w-0 flex-1 flex items-center gap-2 px-3 py-2.5 text-left"
                 >
                   {folderIcon(folder)}
+                  <FolderNumber number={folder.number} t={t} />
                   <span className="min-w-0 flex-1 truncate text-sm text-white">{folder.name}</span>
                   {folder.file_count > 0 && (
                     <span className="text-xs text-bambu-gray flex-shrink-0">{folder.file_count}</span>
@@ -1917,10 +2012,11 @@ function ContentFolderNav({
                 <button
                   type="button"
                   onClick={() => onSelectFolder(folder.id)}
-                  title={folder.name}
+                  title={folderLabel(folder)}
                   className="min-w-0 flex-1 flex items-center gap-3 px-3 py-2 text-left"
                 >
                   {folderIcon(folder)}
+                  <FolderNumber number={folder.number} t={t} />
                   <span className="min-w-0 flex-1 truncate text-sm text-white">{folder.name}</span>
                   {folder.file_count > 0 && (
                     <span className="text-xs text-bambu-gray flex-shrink-0">{folder.file_count}</span>
@@ -1982,7 +2078,12 @@ export function FileManagerPage() {
   const [sliceFile, setSliceFile] = useState<LibraryFileListItem | null>(null);
   // Slicer Pipelines (#1425 PR B) — file gets "Run with pipeline" action.
   const [runPipelineFile, setRunPipelineFile] = useState<LibraryFileListItem | null>(null);
-  const [renameItem, setRenameItem] = useState<{ type: 'file' | 'folder'; id: number; name: string } | null>(null);
+  const [renameItem, setRenameItem] = useState<{
+    type: 'file' | 'folder';
+    id: number;
+    name: string;
+    number?: string | null;
+  } | null>(null);
   const [thumbnailVersions, setThumbnailVersions] = useState<Record<number, number>>({});
   const [viewerFile, setViewerFile] = useState<LibraryFileListItem | null>(null);
   const [pdfPreviewFile, setPdfPreviewFile] = useState<LibraryFileListItem | null>(null);
@@ -2443,8 +2544,14 @@ export function FileManagerPage() {
   });
 
   const renameFolderMutation = useMutation({
-    mutationFn: ({ id, name }: { id: number; name: string }) =>
-      api.updateLibraryFolder(id, { name }),
+    mutationFn: ({ id, name, number }: { id: number; name?: string; number?: string | null }) =>
+      // Each field is sent only when the dialog changed it — the backend reads
+      // "sent but null" as "clear it" and a missing key as "leave it alone",
+      // so spelling the number out on every rename would drop it.
+      api.updateLibraryFolder(id, {
+        ...(name === undefined ? {} : { name }),
+        ...(number === undefined ? {} : { number }),
+      }),
     onSuccess: () => {
       // Invalidate both folders and files - files may display folder info
       queryClient.invalidateQueries({ queryKey: ['library-folders'] });
@@ -2453,8 +2560,12 @@ export function FileManagerPage() {
       showToast(t('fileManager.toast.folderRenamed'), 'success');
     },
     onError: (error: Error) => {
-      setRenameItem(null);
-      showToast(error.message, 'error');
+      // The only 409 this route answers is a folder number that is already
+      // taken, and the backend's detail is English. Leave the dialog open so
+      // the number can be corrected instead of retyping the rename.
+      const taken = error instanceof ApiError && error.status === 409;
+      if (!taken) setRenameItem(null);
+      showToast(taken ? t('fileManager.folderNumberTaken') : error.message, 'error');
     },
   });
 
@@ -2924,17 +3035,22 @@ export function FileManagerPage() {
     return undefined;
   })();
 
-  // Folder name matches for the active search. The tree is already in memory,
-  // so this needs no endpoint; a tree that has not loaded simply matches
-  // nothing. `path` is the ancestor chain, shown under the name.
+  // Folder name and number matches for the active search. The tree is already
+  // in memory, so this needs no endpoint; a tree that has not loaded simply
+  // matches nothing. `path` is the ancestor chain, shown under the name.
+  // Looking a job up by the number on its quote is the whole reason the number
+  // exists, so it is searched exactly like the name.
   const folderSearchMatches = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     if (!query || !sortedFolders) return [];
     const matches: { folder: LibraryFolderTree; path: string[] }[] = [];
     const walk = (items: LibraryFolderTree[], ancestors: string[]) => {
       for (const item of items) {
-        if (item.name.toLowerCase().includes(query)) matches.push({ folder: item, path: ancestors });
-        walk(item.children, [...ancestors, item.name]);
+        const hit =
+          item.name.toLowerCase().includes(query) ||
+          (item.number ?? '').toLowerCase().includes(query);
+        if (hit) matches.push({ folder: item, path: ancestors });
+        walk(item.children, [...ancestors, folderLabel(item)]);
       }
     };
     walk(sortedFolders, []);
@@ -3597,7 +3713,7 @@ export function FileManagerPage() {
                 onDownloadFolder={handleDownloadFolder}
                 onDelete={(id) => setDeleteConfirm({ type: 'folder', id })}
                 onLink={setLinkFolder}
-                onRename={(f) => setRenameItem({ type: 'folder', id: f.id, name: f.name })}
+                onRename={(f) => setRenameItem({ type: 'folder', id: f.id, name: f.name, number: f.number })}
                 wrapNames={wrapFolderNames}
                 defaultExpanded={!collapseFoldersByDefault}
                 showModified={showModified}
@@ -3989,7 +4105,7 @@ export function FileManagerPage() {
               onDownloadFolder={handleDownloadFolder}
               onDeleteFolder={(id) => setDeleteConfirm({ type: 'folder', id })}
               onLinkFolder={setLinkFolder}
-              onRenameFolder={(f) => setRenameItem({ type: 'folder', id: f.id, name: f.name })}
+              onRenameFolder={(f) => setRenameItem({ type: 'folder', id: f.id, name: f.name, number: f.number })}
               hasPermission={hasPermission}
               t={t}
             />
@@ -4016,7 +4132,10 @@ export function FileManagerPage() {
                     ) : (
                       <FolderOpen className="w-5 h-5 flex-shrink-0 text-bambu-green" />                    )}
                     <span className="min-w-0 flex-1">
-                      <span className="block text-sm text-white truncate">{folder.name}</span>
+                      <span className="flex items-center gap-1.5 min-w-0 text-sm text-white">
+                        <FolderNumber number={folder.number} t={t} />
+                        <span className="truncate">{folder.name}</span>
+                      </span>
                       <span className="block text-xs text-bambu-gray truncate">
                         {path.length > 0
                           ? path.join(' › ')
@@ -4113,13 +4232,14 @@ export function FileManagerPage() {
                               setSelectedFolderId(folder.id);
                             }}
                             className="flex-1 min-w-0 flex items-center gap-2 pl-3 pr-1 py-2.5 text-left text-sm"
-                            title={folder.name}
+                            title={folderLabel(folder)}
                           >
                             {folder.is_external ? (
                               <FolderSymlink className="w-5 h-5 flex-shrink-0 text-purple-600 dark:text-purple-400" />
                             ) : (
                               <FolderOpen className="w-5 h-5 flex-shrink-0 text-bambu-green" />
                             )}
+                            <FolderNumber number={folder.number} t={t} />
                             <span className="flex-1 truncate">{folder.name}</span>
                             {(folder.project_id || folder.archive_id) && (
                               <Link2 className="w-3.5 h-3.5 flex-shrink-0 text-blue-700 dark:text-blue-400" />
@@ -4141,7 +4261,7 @@ export function FileManagerPage() {
                             onDownloadFolder={handleDownloadFolder}
                             onDelete={(id) => setDeleteConfirm({ type: 'folder', id })}
                             onLink={setLinkFolder}
-                            onRename={(f) => setRenameItem({ type: 'folder', id: f.id, name: f.name })}
+                            onRename={(f) => setRenameItem({ type: 'folder', id: f.id, name: f.name, number: f.number })}
                             hasPermission={hasPermission}
                             revealOnHover={!isSelectedFolder}
                             tabIndex={isSelectedFolder ? 0 : -1}
@@ -4279,7 +4399,13 @@ export function FileManagerPage() {
                       )}
                     </div>
                     <div className="p-3">
-                      <h3 className="text-sm font-medium text-white truncate" title={folder.name}>{folder.name}</h3>
+                      <h3
+                        className="flex items-center gap-1.5 min-w-0 text-sm font-medium text-white"
+                        title={folderLabel(folder)}
+                      >
+                        <FolderNumber number={folder.number} t={t} />
+                        <span className="truncate">{folder.name}</span>
+                      </h3>
                       <div className="mt-1 text-xs text-bambu-gray">
                         {folder.file_count > 0 ? folder.file_count : ' '}
                       </div>
@@ -4354,7 +4480,8 @@ export function FileManagerPage() {
                       ) : (
                         <FolderOpen className="w-4 h-4 text-bambu-green flex-shrink-0" />
                       )}
-                      <span className="text-sm text-white truncate" title={folder.name}>{folder.name}</span>
+                      <FolderNumber number={folder.number} t={t} />
+                      <span className="text-sm text-white truncate" title={folderLabel(folder)}>{folder.name}</span>
                     </div>
                     {authEnabled && <div />}
                     <div />
@@ -4750,12 +4877,17 @@ export function FileManagerPage() {
         <RenameModal
           type={renameItem.type}
           currentName={renameItem.name}
+          currentNumber={renameItem.number}
           onClose={() => setRenameItem(null)}
-          onSave={(newName) => {
+          onSave={(newName, newNumber, nameChanged) => {
             if (renameItem.type === 'file') {
               renameFileMutation.mutate({ id: renameItem.id, filename: newName });
             } else {
-              renameFolderMutation.mutate({ id: renameItem.id, name: newName });
+              renameFolderMutation.mutate({
+                id: renameItem.id,
+                name: nameChanged ? newName : undefined,
+                number: newNumber,
+              });
             }
           }}
           isLoading={renameFileMutation.isPending || renameFolderMutation.isPending}
