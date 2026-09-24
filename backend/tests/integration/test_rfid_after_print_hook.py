@@ -163,9 +163,14 @@ class TestAutoOffWaitsForTheRound:
 
     def test_the_ceiling_outlasts_a_round_that_runs_its_full_budget(self):
         """The ceiling only has a job if it is longer than the round it waits
-        for; set below ``_RFID_REREAD_TASK_TIMEOUT`` it would cut every slow
-        round short instead of catching the ones that died."""
+        for; set below the round's own budget it would cut every slow round
+        short instead of catching the ones that died. Retracting a hotend is
+        tens of seconds of that budget, so the unload phase counts too."""
         from backend.app.main import RFID_AFTER_PRINT_MAX_WAIT
-        from backend.app.services.print_scheduler import _RFID_REREAD_TASK_TIMEOUT
+        from backend.app.services.print_scheduler import (
+            _RFID_REREAD_TASK_TIMEOUT,
+            _RFID_UNLOAD_MAX_HOTENDS,
+            _RFID_UNLOAD_TIMEOUT,
+        )
 
-        assert RFID_AFTER_PRINT_MAX_WAIT > _RFID_REREAD_TASK_TIMEOUT
+        assert RFID_AFTER_PRINT_MAX_WAIT > (_RFID_UNLOAD_TIMEOUT * _RFID_UNLOAD_MAX_HOTENDS + _RFID_REREAD_TASK_TIMEOUT)

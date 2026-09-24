@@ -20,9 +20,15 @@ The contract these tests pin:
   transport enforces: ``ams_refresh_tray`` refuses every slot on the printer
   while ``tray_now`` says anything is loaded. A printer that has finished
   normally has retracted and reports 255; one that has not is read after the
-  next print that does;
+  next print that does -- unless ``ams_unload_before_after_print_read`` says to
+  retract it first, which is what ``TestUnloadBeforeReading`` covers;
+- nothing loaded means no unload command is sent at all, ever. That is the
+  owner's own requirement and the common case on his machines: an unload sent
+  to a hotend that has already retracted is the defect, not a detail;
 - the second hotend of a dual-nozzle machine, which ``tray_now`` cannot
-  describe, is dropped from the round by ``extruder_slots``;
+  describe, is found through ``extruder_slots`` -- it stands the round down
+  like any other loaded hotend, and gets its own addressed unload when the
+  round is allowed to retract;
 - the plate-clear gate is NOT consulted: a finished plate nobody has released
   is exactly the window this exists for;
 - a print that takes the printer back ends the round at once, and a slot it
@@ -55,6 +61,7 @@ from backend.app.services.print_scheduler import _RFID_REREAD_HOLD_MARKER, Print
 from backend.tests.unit.test_scheduler_rfid_preread import _add_item, _Harness, _item, _printer_state, _tray
 
 SETTING = "ams_read_unidentified_after_print"
+UNLOAD_SETTING = "ams_unload_before_after_print_read"
 
 
 @pytest.fixture
@@ -87,9 +94,11 @@ async def qctx(ctx):
     return ctx
 
 
-async def _enable(ctx, value="true"):
+async def _enable(ctx, value="true", *, unload=None):
     async with ctx.session_maker() as db:
         db.add(Settings(key=SETTING, value=value))
+        if unload is not None:
+            db.add(Settings(key=UNLOAD_SETTING, value=unload))
         await db.commit()
 
 
@@ -100,6 +109,38 @@ def _finished(*, state="FINISH", tray_now=255, unread=(3,), exist="f", extruder_
     report.connected = True
     report.extruder_slots = extruder_slots or {}
     return report
+
+
+def _hotend(ams_id, slot_id, *, loaded=True):
+    """One ``extruder_slots`` entry, in the shape ``_parse_extruder_slots`` builds."""
+    return SimpleNamespace(ams_id=ams_id, slot_id=slot_id, has_filament=loaded)
+
+
+def _global_tray(slot):
+    """The id ``ams_unload_filament`` addresses a slot by, as the AMS UI computes it."""
+    if slot.ams_id is None or slot.slot_id is None:
+        return None
+    return slot.ams_id * 4 + slot.slot_id
+
+
+def _retract(state, tray_id=None):
+    """Make *state* report what a printer looks like once an unload has landed.
+
+    An addressed unload frees the hotend fed from that slot; the unaddressed
+    one frees everything, which on a printer without a per-extruder block is
+    the single hotend ``tray_now`` names. ``tray_now`` then reports whatever is
+    left, or 255 once nothing is.
+    """
+    slots = state.extruder_slots or {}
+    for slot in slots.values():
+        if tray_id is None or _global_tray(slot) == tray_id:
+            slot.has_filament = False
+    still_loaded = [slot for slot in slots.values() if slot.has_filament]
+    if not still_loaded:
+        state.tray_now = 255
+        return
+    remaining = _global_tray(still_loaded[0])
+    state.tray_now = 254 if remaining is None else remaining
 
 
 def _transport(state) -> BambuMQTTClient:
@@ -118,7 +159,7 @@ def _transport(state) -> BambuMQTTClient:
 class _Round:
     """One after-print read round against a fake printer."""
 
-    def __init__(self, scheduler, state, *, refresh=None, connected=True, client=True):
+    def __init__(self, scheduler, state, *, refresh=None, unload=None, connected=True, client=True):
         self.scheduler = scheduler
         self.state = state
         self.connected = connected
@@ -126,8 +167,15 @@ class _Round:
         self.client = MagicMock() if client else None
         if self.client is not None:
             self.client.ams_refresh_tray = MagicMock(side_effect=self._refresh(refresh))
+            # Default: the printer accepts the unload and retracts at once.
+            self.client.ams_unload_filament = MagicMock(side_effect=unload or self._retract)
         self.tasks: list[asyncio.Task] = []
         self.pa_applied = AsyncMock()
+
+    def _retract(self, tray_id=None):
+        """What a printer that obeys an unload reports afterwards."""
+        _retract(self.state, tray_id)
+        return True
 
     def _refresh(self, hook):
         """The real gate first; *hook* is what the printer does once it is past.
@@ -157,22 +205,35 @@ class _Round:
             return []
         return [c.args for c in self.client.ams_refresh_tray.call_args_list]
 
-    def patched(self, ctx, *, slot_timeout=0.05):
+    @property
+    def unloaded(self):
+        """The tray ids an ``ams_change_filament`` unload went out for, in order.
+
+        None is the unaddressed command, which unloads whatever ``tray_now``
+        names -- the only form a printer that reports no per-extruder block
+        understands.
+        """
+        if self.client is None:
+            return []
+        return [c.kwargs.get("tray_id") for c in self.client.ams_unload_filament.call_args_list]
+
+    def patched(self, ctx, *, slot_timeout=0.05, unload_timeout=0.05):
         stack = ExitStack()
-        for p in _patches(ctx, self, slot_timeout):
+        for p in _patches(ctx, self, slot_timeout, unload_timeout):
             stack.enter_context(p)
         return stack
 
-    async def run(self, ctx, printer_id=1, *, slot_timeout=0.05):
-        with self.patched(ctx, slot_timeout=slot_timeout):
+    async def run(self, ctx, printer_id=1, *, slot_timeout=0.05, unload_timeout=0.05):
+        with self.patched(ctx, slot_timeout=slot_timeout, unload_timeout=unload_timeout):
             await self.scheduler.read_unidentified_slots_after_print(printer_id)
             for task in self.tasks:
                 await task
         return self
 
 
-def _patches(ctx, round_: _Round, slot_timeout: float):
+def _patches(ctx, round_: _Round, slot_timeout: float, unload_timeout: float = 0.05):
     return [
+        patch("backend.app.services.print_scheduler._RFID_UNLOAD_TIMEOUT", unload_timeout),
         patch("backend.app.services.print_scheduler.async_session", ctx.session_maker),
         patch(
             "backend.app.services.print_scheduler.printer_manager.is_connected",
@@ -286,17 +347,22 @@ class TestTheLoadedTray:
         r = await _Round(scheduler, _finished(tray_now=tray_now, unread=(1, 3))).run(ctx)
 
         assert r.refreshed == []
+        assert r.unloaded == []
         assert scheduler._dispatch_holds == {}
         assert scheduler._rfid_rereads == {}
 
     @pytest.mark.asyncio
-    async def test_the_stand_down_says_how_much_it_did_not_read(self, ctx, caplog):
+    async def test_the_stand_down_names_what_is_in_the_way(self, ctx, caplog):
+        """A line that says "loaded" and nothing else reads as the feature
+        being dead. It names the hotend and the setting that would fix it."""
         await _enable(ctx)
 
         with caplog.at_level(logging.INFO, logger="backend.app.services.print_scheduler"):
             await _Round(PrintScheduler(), _finished(tray_now=1, unread=(1, 3))).run(ctx)
 
-        assert any("2 unread slot(s), skipped: filament loaded" in line for line in _lines(caplog))
+        assert any(
+            "filament loaded (tray 1), unload before reading is off, nothing read" in line for line in _lines(caplog)
+        )
 
     @pytest.mark.parametrize("tray_now", [0, 1, 5, 128, 254])
     def test_the_stand_down_is_the_rule_the_transport_itself_enforces(self, tray_now):
@@ -325,50 +391,340 @@ class TestTheSecondHotend:
     """What ``tray_now`` cannot say, and ``extruder_slots`` can.
 
     One global tray id names one slot for the whole printer, so on a dual-nozzle
-    machine holding two spools it can only ever cover one of them. The other is
-    dropped here, because the transport's gate will not catch it.
+    machine holding two spools it can only ever cover one of them -- and a
+    ``tray_now`` of 255 there does not mean the machine is empty. The round
+    therefore asks both signals, and a hotend only ``extruder_slots`` knows
+    about stands it down exactly as a loaded ``tray_now`` does.
     """
 
     @pytest.mark.asyncio
-    async def test_the_slot_tray_now_cannot_name_is_left_out(self, ctx):
+    async def test_a_hotend_only_the_extruder_block_knows_about_stands_the_round_down(self, ctx, caplog):
         await _enable(ctx)
-        state = _finished(
-            unread=(1, 2, 3),
-            extruder_slots={
-                0: SimpleNamespace(ams_id=0, slot_id=1, has_filament=True),
-                1: SimpleNamespace(ams_id=0, slot_id=2, has_filament=True),
-            },
-        )
-
-        r = await _Round(PrintScheduler(), state).run(ctx)
-
-        assert r.refreshed == [(0, 3)]
-
-    @pytest.mark.asyncio
-    async def test_an_extruder_holding_nothing_does_not_hide_its_slot(self, ctx):
-        await _enable(ctx)
-        state = _finished(
-            unread=(3,),
-            extruder_slots={0: SimpleNamespace(ams_id=0, slot_id=3, has_filament=False)},
-        )
-
-        r = await _Round(PrintScheduler(), state).run(ctx)
-
-        assert r.refreshed == [(0, 3)]
-
-    @pytest.mark.asyncio
-    async def test_a_round_with_nothing_left_to_read_says_which_slots_were_loaded(self, ctx, caplog):
-        await _enable(ctx)
-        state = _finished(
-            unread=(3,),
-            extruder_slots={0: SimpleNamespace(ams_id=0, slot_id=3, has_filament=True)},
-        )
+        state = _finished(unread=(1, 2, 3), extruder_slots={0: _hotend(0, 1), 1: _hotend(0, 2)})
 
         with caplog.at_level(logging.INFO, logger="backend.app.services.print_scheduler"):
             r = await _Round(PrintScheduler(), state).run(ctx)
 
         assert r.refreshed == []
-        assert any("0 unread slot(s) (1 skipped: loaded (AMS0-T3))" in line for line in _lines(caplog))
+        assert r.unloaded == []
+        assert any("filament loaded (AMS0-T1, AMS0-T2)" in line for line in _lines(caplog))
+
+    @pytest.mark.asyncio
+    async def test_an_extruder_holding_nothing_does_not_hide_its_slot(self, ctx):
+        await _enable(ctx)
+        state = _finished(unread=(3,), extruder_slots={0: _hotend(0, 3, loaded=False)})
+
+        r = await _Round(PrintScheduler(), state).run(ctx)
+
+        assert r.refreshed == [(0, 3)]
+
+    def test_the_pre_dispatch_read_still_only_drops_the_slot(self, ctx):
+        """The two rounds part company here on purpose. The pre-dispatch read
+        has a job waiting on it and cannot unload anything, so it keeps its
+        per-slot drop; the after-print round stands down instead, because it
+        can be told to retract and then read everything."""
+        state = _finished(unread=(1, 3), extruder_slots={0: _hotend(0, 1)})
+
+        with ExitStack() as stack:
+            for p in _patches(ctx, _Round(PrintScheduler(), state), 0.05):
+                stack.enter_context(p)
+            slots = PrintScheduler()._slots_to_reread(1, item_id=7)
+
+        assert slots == [(0, 3)]
+
+
+class TestUnloadBeforeReading:
+    """``ams_unload_before_after_print_read``: the round may retract first.
+
+    The AMS has to move filament to reach a tag, so a printer that still holds
+    any is refused every slot -- the second reason the read never fired on a
+    busy farm, after the idle gate. With this on the round retracts into the
+    AMS first and reads afterwards; with it off it stands down and says so.
+
+    The rule that outranks everything else here is the owner's: do not trigger
+    an unload twice when the material is already unloaded. His H2S retracts by
+    itself when a print ends, so the ordinary case is that there is nothing to
+    unload at all -- and a command sent to an empty hotend, or a second one
+    sent to a slot already freed, is the defect this shape exists to prevent,
+    not a detail. Every path therefore re-reads the printer's own report
+    immediately before it sends anything.
+    """
+
+    @pytest.mark.asyncio
+    async def test_nothing_loaded_sends_no_unload_at_all(self, ctx):
+        """The owner's rule and his common case. 255 with no hotend holding a
+        slot is a printer that has already retracted; it is read exactly as it
+        was before this setting existed and never sent a command."""
+        await _enable(ctx, unload="true")
+
+        r = await _Round(PrintScheduler(), _finished()).run(ctx)
+
+        r.client.ams_unload_filament.assert_not_called()
+        assert r.refreshed == [(0, 3)]
+
+    @pytest.mark.asyncio
+    async def test_a_hotend_block_reporting_nothing_loaded_is_not_something_loaded(self, ctx):
+        """``has_filament`` false on every extruder is the same "nothing
+        loaded" as no block at all: still no unload, still a straight read."""
+        await _enable(ctx, unload="true")
+        state = _finished(extruder_slots={0: _hotend(0, 1, loaded=False), 1: _hotend(None, None, loaded=False)})
+
+        r = await _Round(PrintScheduler(), state).run(ctx)
+
+        r.client.ams_unload_filament.assert_not_called()
+        assert r.refreshed == [(0, 3)]
+
+    @pytest.mark.asyncio
+    async def test_loaded_with_the_setting_off_neither_unloads_nor_reads(self, ctx, caplog):
+        await _enable(ctx)
+        scheduler = PrintScheduler()
+
+        with caplog.at_level(logging.INFO, logger="backend.app.services.print_scheduler"):
+            r = await _Round(scheduler, _finished(tray_now=1, unread=(1, 3))).run(ctx)
+
+        assert r.unloaded == []
+        assert r.refreshed == []
+        assert scheduler._dispatch_holds == {}
+        assert any(
+            "filament loaded (tray 1), unload before reading is off, nothing read" in line for line in _lines(caplog)
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_stored_false_is_still_off(self, ctx):
+        await _enable(ctx, unload="false")
+
+        r = await _Round(PrintScheduler(), _finished(tray_now=1)).run(ctx)
+
+        assert r.unloaded == []
+        assert r.refreshed == []
+
+    @pytest.mark.asyncio
+    async def test_it_does_nothing_while_the_after_print_read_itself_is_off(self, ctx):
+        """It only qualifies the other setting. On its own it is not a licence
+        to move filament on a machine nobody asked us to read."""
+        await _enable(ctx, "false", unload="true")
+
+        r = await _Round(PrintScheduler(), _finished(tray_now=1)).run(ctx)
+
+        assert r.unloaded == []
+        assert r.refreshed == []
+
+    @pytest.mark.asyncio
+    async def test_loaded_with_the_setting_on_unloads_then_reads(self, ctx):
+        await _enable(ctx, unload="true")
+        state = _finished(tray_now=1, unread=(1, 3))
+        order: list[str] = []
+
+        def unload(tray_id=None):
+            order.append(f"unload {tray_id}")
+            _retract(state, tray_id)
+            return True
+
+        def refresh(ams_id, slot_id):
+            order.append(f"read AMS{ams_id}-T{slot_id}")
+            return True, "Refreshing"
+
+        await _Round(
+            PrintScheduler(),
+            state,
+            refresh=MagicMock(side_effect=refresh),
+            unload=MagicMock(side_effect=unload),
+        ).run(ctx)
+
+        assert order == ["unload None", "read AMS0-T1", "read AMS0-T3"]
+
+    @pytest.mark.asyncio
+    async def test_a_printer_with_no_extruder_block_takes_the_unaddressed_unload(self, ctx):
+        """The single-nozzle shape. ``tray_now`` already names the one loaded
+        slot exactly, and the unaddressed command -- which reads it itself --
+        is the only form those machines are known to accept."""
+        await _enable(ctx, unload="true")
+
+        r = await _Round(PrintScheduler(), _finished(tray_now=5)).run(ctx)
+
+        assert r.unloaded == [None]
+
+    @pytest.mark.asyncio
+    async def test_a_hotend_fed_from_a_unit_the_command_cannot_address_falls_back(self, ctx):
+        """An AMS-HT dry box shares its unit id (128-135) and does not divide
+        by four, so there is no ``ams_id * 4 + slot`` for it: ``ams_unload_filament``
+        would decode 128 as unit 32 and send the command at nothing. It takes
+        the unaddressed form, which the printer resolves itself."""
+        await _enable(ctx, unload="true")
+        state = _finished(tray_now=128, extruder_slots={0: _hotend(128, 0)})
+
+        r = await _Round(PrintScheduler(), state).run(ctx)
+
+        assert r.unloaded == [None]
+
+    @pytest.mark.asyncio
+    async def test_both_hotends_get_one_addressed_unload_each(self, ctx):
+        """``tray_now`` is one value for the whole printer, so it names one of
+        these two. An unaddressed unload would retract that one and leave the
+        other loaded -- and the read would still be refused."""
+        await _enable(ctx, unload="true")
+        state = _finished(tray_now=1, unread=(0, 3), extruder_slots={0: _hotend(0, 1), 1: _hotend(0, 2)})
+
+        r = await _Round(PrintScheduler(), state).run(ctx)
+
+        assert r.unloaded == [1, 2]
+        assert r.refreshed == [(0, 0), (0, 3)]
+
+    @pytest.mark.asyncio
+    async def test_a_hotend_that_came_free_on_its_own_gets_no_command(self, ctx, caplog):
+        """The owner's rule at its sharpest: this printer retracts both hotends
+        on the first command, so the second one's unload is never sent."""
+        await _enable(ctx, unload="true")
+        state = _finished(tray_now=1, unread=(3,), extruder_slots={0: _hotend(0, 1), 1: _hotend(0, 2)})
+
+        def unload(tray_id=None):
+            _retract(state, None)
+            return True
+
+        with caplog.at_level(logging.INFO, logger="backend.app.services.print_scheduler"):
+            r = await _Round(PrintScheduler(), state, unload=MagicMock(side_effect=unload)).run(ctx)
+
+        assert r.unloaded == [1]
+        assert any("AMS0-T2 came free on its own, no unload sent" in line for line in _lines(caplog))
+        assert r.refreshed == [(0, 3)]
+
+    @pytest.mark.asyncio
+    async def test_a_hotend_that_never_reports_free_is_not_re_sent(self, ctx, caplog):
+        """One unload the printer swallowed is a machine for somebody to look
+        at, not one to send a second at. The round gives up and lets go."""
+        await _enable(ctx, unload="true")
+        scheduler = PrintScheduler()
+
+        with caplog.at_level(logging.INFO, logger="backend.app.services.print_scheduler"):
+            r = await _Round(scheduler, _finished(tray_now=1), unload=MagicMock(return_value=True)).run(ctx)
+
+        assert r.unloaded == [None]
+        assert r.refreshed == []
+        assert scheduler._dispatch_holds == {}
+        assert scheduler._rfid_rereads == {}
+        assert any("not re-sent, giving up" in line for line in _lines(caplog))
+
+    @pytest.mark.asyncio
+    async def test_an_unload_the_printer_refuses_ends_the_round(self, ctx, caplog):
+        await _enable(ctx, unload="true")
+        scheduler = PrintScheduler()
+
+        with caplog.at_level(logging.INFO, logger="backend.app.services.print_scheduler"):
+            r = await _Round(scheduler, _finished(tray_now=1), unload=MagicMock(return_value=False)).run(ctx)
+
+        assert r.unloaded == [None]
+        assert r.refreshed == []
+        assert scheduler._dispatch_holds == {}
+        assert any("unload refused by the printer, giving up" in line for line in _lines(caplog))
+
+    @pytest.mark.asyncio
+    async def test_a_print_starting_during_the_unload_wait_ends_the_round(self, ctx, caplog):
+        await _enable(ctx, unload="true")
+        scheduler = PrintScheduler()
+        state = _finished(tray_now=1)
+
+        def unload(tray_id=None):
+            state.state = "RUNNING"
+            return True
+
+        with caplog.at_level(logging.INFO, logger="backend.app.services.print_scheduler"):
+            r = await _Round(scheduler, state, unload=MagicMock(side_effect=unload)).run(ctx, unload_timeout=30.0)
+
+        assert r.unloaded == [None]
+        assert r.refreshed == []
+        assert scheduler._dispatch_holds == {}
+        assert any("printing again, tray 1 left loaded, nothing read" in line for line in _lines(caplog))
+
+    @pytest.mark.asyncio
+    async def test_a_print_that_starts_between_two_unloads_stops_the_second(self, ctx, caplog):
+        await _enable(ctx, unload="true")
+        scheduler = PrintScheduler()
+        state = _finished(tray_now=1, extruder_slots={0: _hotend(0, 1), 1: _hotend(0, 2)})
+
+        def unload(tray_id=None):
+            _retract(state, tray_id)
+            state.state = "RUNNING"
+            return True
+
+        with caplog.at_level(logging.INFO, logger="backend.app.services.print_scheduler"):
+            r = await _Round(scheduler, state, unload=MagicMock(side_effect=unload)).run(ctx, unload_timeout=30.0)
+
+        assert r.unloaded == [1]
+        assert r.refreshed == []
+        assert scheduler._dispatch_holds == {}
+        assert any("printing again (state=RUNNING), AMS0-T2 not unloaded" in line for line in _lines(caplog))
+
+    @pytest.mark.asyncio
+    async def test_the_hold_covers_the_unload_and_is_released_after_it(self, ctx):
+        """Auto-off asks ``rfid_read_in_flight`` before it switches a plug, and
+        an unload takes longer than a tag read -- power cut mid-retraction
+        strands the filament in the tube."""
+        await _enable(ctx, unload="true")
+        scheduler = PrintScheduler()
+        state = _finished(tray_now=1)
+        seen: dict[str, object] = {}
+
+        def unload(tray_id=None):
+            seen.setdefault("in_flight", scheduler.rfid_read_in_flight(1))
+            _retract(state, tray_id)
+            return True
+
+        await _Round(scheduler, state, unload=MagicMock(side_effect=unload)).run(ctx)
+
+        assert seen == {"in_flight": True}
+        assert scheduler.rfid_read_in_flight(1) is False
+        assert scheduler._dispatch_holds == {}
+        assert scheduler._rfid_rereads == {}
+
+    @pytest.mark.asyncio
+    async def test_an_exception_on_the_unload_path_still_hands_the_printer_back(self, ctx):
+        await _enable(ctx, unload="true")
+        scheduler = PrintScheduler()
+
+        r = await _Round(
+            scheduler, _finished(tray_now=1), unload=MagicMock(side_effect=RuntimeError("MQTT session gone"))
+        ).run(ctx)
+
+        assert r.refreshed == []
+        assert scheduler._dispatch_holds == {}
+        assert scheduler._rfid_rereads == {}
+
+    @pytest.mark.asyncio
+    async def test_nothing_is_loaded_back_afterwards(self, ctx):
+        """Left unloaded on purpose: the next print loads what it needs, and a
+        reload here would spend a second purge for nothing."""
+        await _enable(ctx, unload="true")
+        state = _finished(tray_now=1)
+
+        r = await _Round(PrintScheduler(), state).run(ctx)
+
+        r.client.ams_load_filament.assert_not_called()
+        assert state.tray_now == 255
+
+    @pytest.mark.asyncio
+    async def test_the_round_says_what_it_unloaded_before_it_read(self, ctx, caplog):
+        await _enable(ctx, unload="true")
+        state = _finished(tray_now=1, unread=(3,), extruder_slots={0: _hotend(0, 1), 1: _hotend(0, 2)})
+
+        with caplog.at_level(logging.INFO, logger="backend.app.services.print_scheduler"):
+            await _Round(PrintScheduler(), state).run(ctx)
+
+        lines = _lines(caplog)
+        assert any(
+            "filament loaded (AMS0-T1, AMS0-T2) -> unloading 2 hotend(s) before reading" in line for line in lines
+        )
+        assert any("unloaded 2 hotend(s), reading now" in line for line in lines)
+
+    @pytest.mark.asyncio
+    async def test_a_round_that_unloads_and_finds_nothing_to_read_says_so(self, ctx, caplog):
+        await _enable(ctx, unload="true")
+
+        with caplog.at_level(logging.INFO, logger="backend.app.services.print_scheduler"):
+            r = await _Round(PrintScheduler(), _finished(tray_now=1, unread=())).run(ctx)
+
+        assert r.unloaded == [None]
+        assert r.refreshed == []
+        assert any("unloaded 1 hotend(s), nothing left to read" in line for line in _lines(caplog))
 
 
 class TestThePlateClearGate:
