@@ -5008,6 +5008,7 @@ async def _migrate_create_supplier_tables(conn) -> None:
             CREATE TABLE IF NOT EXISTS suppliers (
                 id INTEGER PRIMARY KEY,
                 name VARCHAR(200) NOT NULL,
+                name_key VARCHAR(200),
                 website VARCHAR(500),
                 customer_number VARCHAR(100),
                 note VARCHAR(500),
@@ -5046,6 +5047,7 @@ async def _migrate_create_supplier_tables(conn) -> None:
             CREATE TABLE IF NOT EXISTS suppliers (
                 id SERIAL PRIMARY KEY,
                 name VARCHAR(200) NOT NULL,
+                name_key VARCHAR(200),
                 website VARCHAR(500),
                 customer_number VARCHAR(100),
                 note VARCHAR(500),
@@ -5083,10 +5085,7 @@ async def _migrate_create_supplier_tables(conn) -> None:
     # The model declares index=True on these; fresh installs get them from
     # create_all(), migrated databases need them spelled out.
     await _safe_execute(conn, "CREATE INDEX IF NOT EXISTS ix_suppliers_name ON suppliers (name)")
-    # Case-insensitively unique supplier names (#2988): the CSV import resolves
-    # names against this table, so two rows differing only in case would make
-    # an import land on whichever one the map built last.
-    await _safe_execute(conn, "CREATE UNIQUE INDEX IF NOT EXISTS uq_suppliers_name_lower ON suppliers (lower(name))")
+    await _migrate_supplier_name_key(conn)
     await _safe_execute(conn, "CREATE INDEX IF NOT EXISTS ix_spool_suppliers_spool_id ON spool_suppliers (spool_id)")
     await _safe_execute(
         conn, "CREATE INDEX IF NOT EXISTS ix_spool_suppliers_supplier_id ON spool_suppliers (supplier_id)"
@@ -5100,6 +5099,89 @@ async def _migrate_create_supplier_tables(conn) -> None:
         conn,
         "CREATE INDEX IF NOT EXISTS ix_spoolman_spool_suppliers_supplier_id ON spoolman_spool_suppliers (supplier_id)",
     )
+
+
+async def _migrate_supplier_name_key(conn) -> None:
+    """Backfill ``suppliers.name_key`` and collapse case-insensitive duplicates (#2988).
+
+    The unique index cannot simply be created: a database written by an
+    earlier build of this branch is allowed to hold two suppliers whose names
+    differ only in case, and ``CREATE UNIQUE INDEX`` refuses to build over
+    them. ``_safe_execute`` re-raises that IntegrityError, which would abort
+    startup with no route to recovery from the UI — the same trap
+    ``_migrate_location_ha_sensor_unique_binding`` clears first.
+
+    Colliding rows are merged rather than deleted, because a supplier is
+    referenced: the oldest row wins (it is the one assignments and the CSV
+    import already resolved to), its empty fields are filled from the
+    duplicate, every assignment is re-pointed to it, and only then is the
+    duplicate dropped. An assignment the surviving row already holds for the
+    same spool is dropped instead of re-pointed — the (spool, supplier) pair
+    is unique.
+    """
+    from sqlalchemy import text
+
+    from backend.app.models.supplier import supplier_name_key
+
+    await _safe_execute(conn, "ALTER TABLE suppliers ADD COLUMN name_key VARCHAR(200)")
+
+    async with conn.begin_nested():
+        rows = (
+            await conn.execute(
+                text("SELECT id, name, name_key, website, customer_number, note FROM suppliers ORDER BY id")
+            )
+        ).fetchall()
+        kept: dict[str, int] = {}
+        for row in rows:
+            key = supplier_name_key(row.name or "")
+            winner_id = kept.get(key)
+            if winner_id is None:
+                kept[key] = row.id
+                if row.name_key != key:
+                    await conn.execute(
+                        text("UPDATE suppliers SET name_key = :key WHERE id = :id"),
+                        {"key": key, "id": row.id},
+                    )
+                continue
+            params = {"keep": winner_id, "drop": row.id}
+            await conn.execute(
+                text(
+                    "DELETE FROM spool_suppliers WHERE supplier_id = :drop AND spool_id IN "
+                    "(SELECT spool_id FROM spool_suppliers WHERE supplier_id = :keep)"
+                ),
+                params,
+            )
+            await conn.execute(text("UPDATE spool_suppliers SET supplier_id = :keep WHERE supplier_id = :drop"), params)
+            await conn.execute(
+                text(
+                    "DELETE FROM spoolman_spool_suppliers WHERE supplier_id = :drop AND spoolman_spool_id IN "
+                    "(SELECT spoolman_spool_id FROM spoolman_spool_suppliers WHERE supplier_id = :keep)"
+                ),
+                params,
+            )
+            await conn.execute(
+                text("UPDATE spoolman_spool_suppliers SET supplier_id = :keep WHERE supplier_id = :drop"), params
+            )
+            await conn.execute(
+                text(
+                    "UPDATE suppliers SET website = COALESCE(website, :website), "
+                    "customer_number = COALESCE(customer_number, :customer_number), "
+                    "note = COALESCE(note, :note) WHERE id = :keep"
+                ),
+                {
+                    "website": row.website,
+                    "customer_number": row.customer_number,
+                    "note": row.note,
+                    "keep": winner_id,
+                },
+            )
+            await conn.execute(text("DELETE FROM suppliers WHERE id = :drop"), {"drop": row.id})
+            logger.info("Merged duplicate supplier %r (id=%s) into id=%s", row.name, row.id, winner_id)
+
+    # Superseded by ix_suppliers_name_key: lower(name) folds ASCII only, so it
+    # never enforced the rule for non-ASCII names in the first place.
+    await _safe_execute(conn, "DROP INDEX IF EXISTS uq_suppliers_name_lower")
+    await _safe_execute(conn, "CREATE UNIQUE INDEX IF NOT EXISTS ix_suppliers_name_key ON suppliers (name_key)")
 
 
 async def _migrate_rename_ha_sensor_alert_template(conn) -> None:

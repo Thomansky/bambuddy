@@ -8,19 +8,29 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
-    Index,
     Integer,
     String,
     UniqueConstraint,
     func,
-    text,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from backend.app.core.database import Base
 
 if TYPE_CHECKING:
     from backend.app.models.spool import Spool
+
+
+def supplier_name_key(name: str) -> str:
+    """Case-insensitive lookup key stored on ``Supplier.name_key``.
+
+    Folded in Python, not in SQL: SQLite's ``lower()`` folds ASCII only, so a
+    unique index on ``lower(name)`` lets “Ökofilament” and “ökofilament” both
+    through — and the CSV import, which folds in Python, then collapses them
+    onto one map entry and resolves to whichever row it built last. Every
+    caller goes through this one function so the two folds cannot drift.
+    """
+    return name.strip().lower()
 
 
 class Supplier(Base):
@@ -33,15 +43,16 @@ class Supplier(Base):
     """
 
     __tablename__ = "suppliers"
-    # Case-insensitively unique: the whole feature keys on the name. The CSV
-    # import resolves a column of names against this table and the master list
-    # is what a rename re-points, so "Extrudr" and "extrudr" must not be two
-    # rows. Functional index rather than a name_key column because there is no
-    # second lookup path that needs one.
-    __table_args__ = (Index("uq_suppliers_name_lower", text("lower(name)"), unique=True),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(200), index=True)
+    # Case-insensitive uniqueness -- the whole feature keys on the name. The
+    # CSV import resolves a column of names against this table and the master
+    # list is what a rename re-points, so "Extrudr" and "extrudr" must not be
+    # two rows. Stored key rather than a unique index on lower(name), for the
+    # reason in supplier_name_key: only the Python fold is Unicode-correct on
+    # every backend, and it is the same fold the import map uses.
+    name_key: Mapped[str] = mapped_column(String(200), nullable=False, unique=True, index=True)
     # Shop / website URL, purely informational.
     website: Mapped[str | None] = mapped_column(String(500))
     # The business's own customer number AT this supplier.
@@ -51,6 +62,12 @@ class Supplier(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
     spool_links: Mapped[list[SpoolSupplier]] = relationship(back_populates="supplier")
+
+    @validates("name")
+    def _sync_name_key(self, _key: str, value: str) -> str:
+        """Derive name_key from every name write, so no insert path can skip it."""
+        self.name_key = supplier_name_key(value)
+        return value
 
 
 class SpoolSupplier(Base):

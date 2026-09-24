@@ -29,7 +29,7 @@ from backend.app.models.spool_assignment import SpoolAssignment
 from backend.app.models.spool_catalog import SpoolCatalogEntry
 from backend.app.models.spool_filament_preset import SpoolFilamentPreset
 from backend.app.models.spool_k_profile import SpoolKProfile
-from backend.app.models.supplier import SpoolmanSpoolSupplier, SpoolSupplier, Supplier
+from backend.app.models.supplier import SpoolmanSpoolSupplier, SpoolSupplier, Supplier, supplier_name_key
 from backend.app.models.user import User
 from backend.app.schemas.location import LocationCreate, LocationResponse, LocationUpdate
 from backend.app.schemas.spool import (
@@ -796,8 +796,13 @@ DUPLICATE_SUPPLIER_NAME = "A supplier with this name already exists"
 
 
 async def _supplier_by_name(db: AsyncSession, name: str, *, exclude_id: int | None = None) -> Supplier | None:
-    """Case-insensitive name lookup behind the duplicate guard (#2988)."""
-    query = select(Supplier).where(func.lower(Supplier.name) == name.strip().lower())
+    """Case-insensitive name lookup behind the duplicate guard (#2988).
+
+    Matches on the stored ``name_key``, so the comparison is the Python fold
+    the CSV import also uses — ``func.lower()`` would have folded ASCII only
+    on SQLite and let an umlaut'd case variant past the check.
+    """
+    query = select(Supplier).where(Supplier.name_key == supplier_name_key(name))
     if exclude_id is not None:
         query = query.where(Supplier.id != exclude_id)
     return (await db.execute(query)).scalars().first()
@@ -816,6 +821,46 @@ async def _supplier_reference_counts(db: AsyncSession) -> dict[int, int]:
         for supplier_id, count in result.all():
             counts[supplier_id] = counts.get(supplier_id, 0) + count
     return counts
+
+
+async def _prune_orphaned_spoolman_supplier_rows(db: AsyncSession) -> int:
+    """Drop twin rows whose Spoolman spool no longer exists (#2988).
+
+    ``_purge_local_rows_for_spool`` covers the deletes Bambuddy performs, but
+    Spoolman is a separate application with its own UI: a spool deleted there
+    — or a Spoolman instance that was rebuilt or replaced — leaves
+    ``spoolman_spool_suppliers`` rows behind that keep the supplier's
+    reference count non-zero, and nothing in Bambuddy can show or remove the
+    phantom reference. Without this, that 409 is permanent.
+
+    Reconciled on the delete attempt rather than on every listing: it costs
+    one Spoolman call, and only the route that is about to refuse needs the
+    answer. Archived spools count as live — archiving is a soft delete and the
+    assignment has to survive it. Returns the number of rows removed; 0 when
+    Spoolman is off or unreachable, which leaves the 409 standing rather than
+    dropping rows on the strength of a failed lookup.
+    """
+    settings = await _load_settings_map(db)
+    if not _spoolman_is_enabled(settings):
+        return 0
+    local_ids = set((await db.execute(select(SpoolmanSpoolSupplier.spoolman_spool_id).distinct())).scalars().all())
+    if not local_ids:
+        return 0
+    client = await _ensure_spoolman_client(settings)
+    if not client:
+        return 0
+    try:
+        spools = await client.get_all_spools(allow_archived=True)
+    except Exception:
+        logger.warning("Failed to fetch Spoolman spools to reconcile supplier assignments", exc_info=True)
+        return 0
+    stale = local_ids - {s.get("id") for s in spools if isinstance(s, dict)}
+    if not stale:
+        return 0
+    await db.execute(delete(SpoolmanSpoolSupplier).where(SpoolmanSpoolSupplier.spoolman_spool_id.in_(stale)))
+    await db.commit()
+    logger.info("Dropped supplier assignments for %d Spoolman spool(s) that no longer exist", len(stale))
+    return len(stale)
 
 
 @router.get("/suppliers", response_model=list[SupplierResponse])
@@ -901,7 +946,11 @@ async def delete_supplier(
         raise HTTPException(status_code=404, detail="Supplier not found")
 
     if (await _supplier_reference_counts(db)).get(supplier_id, 0) > 0:
-        raise HTTPException(status_code=409, detail="Supplier has spools assigned and cannot be deleted")
+        # Last chance before refusing: the reference may be a Spoolman spool
+        # that was deleted in Spoolman itself, which Bambuddy never hears about.
+        await _prune_orphaned_spoolman_supplier_rows(db)
+        if (await _supplier_reference_counts(db)).get(supplier_id, 0) > 0:
+            raise HTTPException(status_code=409, detail="Supplier has spools assigned and cannot be deleted")
 
     await db.delete(supplier)
     await db.commit()

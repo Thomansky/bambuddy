@@ -102,9 +102,14 @@ def mock_spoolman_client():
     client.get_distinct_locations = AsyncMock(return_value=[])
     client.delete_spool = AsyncMock(return_value=None)
 
-    with patch(
-        "backend.app.api.routes.spoolman_inventory._get_client",
-        AsyncMock(return_value=client),
+    with (
+        patch(
+            "backend.app.api.routes.spoolman_inventory._get_client",
+            AsyncMock(return_value=client),
+        ),
+        # The supplier delete reconciles twin rows against Spoolman before it
+        # refuses (#2988); inventory.py resolves its own client.
+        patch("backend.app.api.routes.inventory.get_spoolman_client", AsyncMock(return_value=client)),
     ):
         yield client
 
@@ -213,6 +218,23 @@ class TestSupplierNameUniqueness:
         await async_client.post("/api/v1/inventory/suppliers", json={"name": "Extrudr"})
         resp = await async_client.post("/api/v1/inventory/suppliers", json={"name": "  eXtRuDr "})
         assert resp.status_code == 409
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_duplicate_is_refused_for_non_ascii_names(self, async_client: AsyncClient):
+        """The fold has to be the Python one to be worth anything here.
+
+        SQLite's lower() folds ASCII only, so a unique index on lower(name)
+        saw these as two different names and let both in — while the import
+        map, which folds in Python, collapsed them onto a single entry and
+        resolved to whichever row it built last. That is exactly the silent
+        wrong-supplier assignment the rule exists to prevent.
+        """
+        assert (await async_client.post("/api/v1/inventory/suppliers", json={"name": "Ökofilament"})).status_code == 201
+        resp = await async_client.post("/api/v1/inventory/suppliers", json={"name": "ökofilament"})
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == DUPLICATE_SUPPLIER_NAME
+        assert len((await async_client.get("/api/v1/inventory/suppliers")).json()) == 1
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -513,13 +535,80 @@ class TestSupplierLifecycle:
         self, async_client: AsyncClient, supplier_factory, spoolman_settings, mock_spoolman_client, db_session
     ):
         supplier = await supplier_factory()
-        await async_client.put("/api/v1/spoolman/inventory/spools/7/suppliers", json=[{"supplier_id": supplier.id}])
+        assert (
+            await async_client.put("/api/v1/spoolman/inventory/spools/7/suppliers", json=[{"supplier_id": supplier.id}])
+        ).status_code == 200
+        # The row has to be proven present before the delete, or the empty
+        # assertion below holds whether or not the purge did anything.
+        assert (await async_client.delete(f"/api/v1/inventory/suppliers/{supplier.id}")).status_code == 409
 
         resp = await async_client.post("/api/v1/spoolman/inventory/spools/bulk-delete", json={"ids": [7]})
         assert resp.status_code == 200
         assert resp.json()["deleted"] == 1
         rows = await db_session.execute(select(SpoolmanSpoolSupplier))
         assert rows.scalars().all() == []
+        assert (await async_client.get("/api/v1/inventory/suppliers")).json()[0]["spool_count"] == 0
+        assert (await async_client.delete(f"/api/v1/inventory/suppliers/{supplier.id}")).status_code == 200
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_delete_reconciles_a_spool_deleted_in_spoolman_itself(
+        self, async_client: AsyncClient, supplier_factory, spoolman_settings, mock_spoolman_client, db_session
+    ):
+        """Spoolman is a separate application with its own UI, and Bambuddy
+        only hears about the deletes it performs itself. A spool removed over
+        there leaves its assignment behind, and that phantom reference used to
+        make the supplier permanently undeletable with nothing on any screen
+        that could show or clear it (#2988)."""
+        supplier = await supplier_factory()
+        assert (
+            await async_client.put("/api/v1/spoolman/inventory/spools/7/suppliers", json=[{"supplier_id": supplier.id}])
+        ).status_code == 200
+        assert (await async_client.delete(f"/api/v1/inventory/suppliers/{supplier.id}")).status_code == 409
+
+        # Spool 7 disappears from Spoolman without Bambuddy doing anything.
+        mock_spoolman_client.get_all_spools = AsyncMock(return_value=[])
+
+        assert (await async_client.delete(f"/api/v1/inventory/suppliers/{supplier.id}")).status_code == 200
+        rows = await db_session.execute(select(SpoolmanSpoolSupplier))
+        assert rows.scalars().all() == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_reconcile_keeps_assignments_of_an_archived_spool(
+        self, async_client: AsyncClient, supplier_factory, spoolman_settings, mock_spoolman_client
+    ):
+        """Archiving is a soft delete: the spool is still there and its
+        assignment has to survive, so the reconcile asks for the archived ones
+        too and the delete still answers 409."""
+        supplier = await supplier_factory()
+        assert (
+            await async_client.put("/api/v1/spoolman/inventory/spools/7/suppliers", json=[{"supplier_id": supplier.id}])
+        ).status_code == 200
+
+        async def _all_spools(allow_archived: bool = False):
+            return [dict(SAMPLE_SPOOLMAN_SPOOL, archived=True)] if allow_archived else []
+
+        mock_spoolman_client.get_all_spools = AsyncMock(side_effect=_all_spools)
+
+        assert (await async_client.delete(f"/api/v1/inventory/suppliers/{supplier.id}")).status_code == 409
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_reconcile_keeps_the_rows_when_spoolman_is_unreachable(
+        self, async_client: AsyncClient, supplier_factory, spoolman_settings, mock_spoolman_client, db_session
+    ):
+        """A failed lookup is not evidence that the spool is gone."""
+        supplier = await supplier_factory()
+        assert (
+            await async_client.put("/api/v1/spoolman/inventory/spools/7/suppliers", json=[{"supplier_id": supplier.id}])
+        ).status_code == 200
+
+        mock_spoolman_client.get_all_spools = AsyncMock(side_effect=RuntimeError("Cannot reach Spoolman"))
+
+        assert (await async_client.delete(f"/api/v1/inventory/suppliers/{supplier.id}")).status_code == 409
+        rows = await db_session.execute(select(SpoolmanSpoolSupplier))
+        assert len(rows.scalars().all()) == 1
 
 
 class TestSupplierStats:

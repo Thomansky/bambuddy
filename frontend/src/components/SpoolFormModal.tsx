@@ -78,9 +78,10 @@ export function SpoolFormModal({
   const [weightTouched, setWeightTouched] = useState(false);
   const [locationIdTouched, setLocationIdTouched] = useState(false);
   // Supplier assignments (#2988). Held outside SpoolFormData — they are
-  // relational and saved through their own replace-all endpoint. Only sent
-  // when touched, so an untouched create keeps the backend's inherited
-  // assignments instead of wiping them with an empty list.
+  // relational and saved through their own replace-all endpoint. An untouched
+  // create does not send them, so it keeps the backend's inherited
+  // assignments instead of wiping them with an empty list; a copy always
+  // sends them, see saveSupplierLinks.
   const [supplierLinks, setSupplierLinks] = useState<SupplierLinkDraft[]>([]);
   const [supplierLinksTouched, setSupplierLinksTouched] = useState(false);
   const [quickAdd, setQuickAdd] = useState(false);
@@ -640,7 +641,7 @@ export function SpoolFormModal({
         }
       }
       // Every copy of a bulk add shares the same supplier assignments (#2988).
-      if (supplierLinksTouched) {
+      if (shouldSaveSupplierLinks) {
         for (const s of createdSpools) {
           await saveSupplierLinks(s.id);
         }
@@ -796,11 +797,20 @@ export function SpoolFormModal({
     },
   });
 
-  // Supplier assignments (#2988): replace-all save, only when the user
-  // actually touched the control — an untouched create keeps the backend's
-  // inherited assignments instead of wiping them with an empty list.
+  // Supplier assignments (#2988): replace-all save.
+  //
+  // Skipped on an untouched create so the backend's inheritance can fill the
+  // new spool in — an empty list would wipe what it just attached. A COPY is
+  // the opposite case and always saves: the dialog seeded the chips from the
+  // spool being copied and showed them, so they have to be what the copy
+  // gets. Inheritance cannot stand in for that — it keys on the (material,
+  // subtype, brand, color_name) tuple and so resolves to the NEWEST spool of
+  // the product rather than the one on screen, and in Spoolman mode there is
+  // no inheritance at all.
+  const shouldSaveSupplierLinks = supplierLinksTouched || isCopying;
+
   const saveSupplierLinks = async (spoolId: number): Promise<boolean> => {
-    if (!supplierLinksTouched) return true;
+    if (!shouldSaveSupplierLinks) return true;
     // Spoolman parity (#2988): the assignment rows live Bambuddy-side either
     // way; only the endpoint differs (twin table keyed by the remote id).
     const save = spoolmanMode ? api.setSpoolmanSpoolSuppliers : api.setSpoolSuppliers;
