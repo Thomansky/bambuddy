@@ -2919,6 +2919,12 @@ export default {
     libraryRootViewRecent: '最近追加または変更されたもの',
     libraryRootViewRecentDescription: 'ライブラリ全体で最も新しいファイルを最大100件。一覧ではなくスタートページです。',
     libraryRootViewDescription: '検索とタグフィルターは、どれを選んでも常にライブラリ全体を対象にします。',
+    webdavEnabled: 'WebDAV アクセス（読み取り専用）',
+    webdavDescription: 'ファイルマネージャーのツリーを WebDAV で公開し、ワークステーションからドライブとして割り当てられるようにします。',
+    webdavAddressHint: '{{url}} を割り当ててください。共有には管理ライブラリ用の「Files」と、外部フォルダーが登録されている場合は「External」があります。',
+    webdavCredentialsHint: 'Web UI がログインなしで動作している環境でも、常に Bambuddy のユーザー名とパスワードを要求します。各ユーザーには読み取りを許可されたファイルだけが見えます。',
+    webdavHttpsHint: '読み取り専用です。ファイルを開いてコピーできますが、書き込み・名前の変更・削除はできません。Basic 認証の資格情報はリクエストごとに送信されるため、HTTPS で公開してください。',
+    webdavWindowsHint: 'Windows は HKLM\\SYSTEM\\CurrentControlSet\\Services\\WebClient\\Parameters\\BasicAuthLevel を 2 にするまで、平文 HTTP での Basic 認証を拒否します。HTTPS ならそのまま動作します。',
     // Updates
     printerFirmware: 'プリンターファームウェア',
     checkFirmwareDescription: 'Bambu Labのプリンターファームウェア更新を確認',

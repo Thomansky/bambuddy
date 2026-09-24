@@ -78,7 +78,7 @@ registerSettingsSearch({ labelKey: 'settings.appearance', tab: 'general', keywor
 registerSettingsSearch({ labelKey: 'settings.archiveSettings', tab: 'general', keywords: 'archive auto save thumbnails captures', anchor: 'card-archive' });
 registerSettingsSearch({ labelKey: 'settings.camera', tab: 'general', keywords: 'camera external video stream', anchor: 'card-camera' });
 registerSettingsSearch({ labelKey: 'settings.costTracking', tab: 'general', keywords: 'currency filament cost energy kwh price', anchor: 'card-cost' });
-registerSettingsSearch({ labelKey: 'settings.fileManager', tab: 'general', keywords: 'file manager archive mode disk warning storage', anchor: 'card-filemanager' });
+registerSettingsSearch({ labelKey: 'settings.fileManager', tab: 'general', keywords: 'file manager archive mode disk warning storage webdav network drive share', anchor: 'card-filemanager' });
 registerSettingsSearch({ labelKey: 'settings.updates', tab: 'general', keywords: 'updates version firmware beta check', anchor: 'card-updates' });
 registerSettingsSearch({ labelKey: 'settings.dataManagement', tab: 'general', keywords: 'data reset clear logs notifications preferences', anchor: 'card-data' });
 registerSettingsSearch({ labelKey: 'settings.smartPlugs', tab: 'plugs', keywords: 'smart plug energy power automation tapo kasa tplink shelly', anchor: 'card-plugs' });
@@ -1206,6 +1206,7 @@ export function SettingsPage() {
       (baseline.library_archive_mode ?? 'ask') !== (localSettings.library_archive_mode ?? 'ask') ||
       Number(baseline.library_disk_warning_gb ?? 5) !== Number(localSettings.library_disk_warning_gb ?? 5) ||
       (baseline.library_root_view ?? 'all') !== (localSettings.library_root_view ?? 'all') ||
+      (baseline.webdav_enabled ?? false) !== (localSettings.webdav_enabled ?? false) ||
       (baseline.preferred_slicer ?? 'bambu_studio') !== (localSettings.preferred_slicer ?? 'bambu_studio') ||
       resolveEngine(baseline.slice_engine) !== resolveEngine(localSettings.slice_engine) ||
       (baseline.open_in_slicer ?? null) !== (localSettings.open_in_slicer ?? null) ||
@@ -1330,6 +1331,7 @@ export function SettingsPage() {
         library_archive_mode: localSettings.library_archive_mode,
         library_disk_warning_gb: localSettings.library_disk_warning_gb,
         library_root_view: localSettings.library_root_view,
+        webdav_enabled: localSettings.webdav_enabled,
         preferred_slicer: localSettings.preferred_slicer,
         slice_engine: localSettings.slice_engine,
         open_in_slicer: localSettings.open_in_slicer,
@@ -2769,6 +2771,39 @@ export function SettingsPage() {
                 <p className="text-xs text-bambu-gray mt-1">
                   {t('settings.libraryRootViewDescription')}
                 </p>
+              </div>
+
+              {/* Read-only WebDAV view of the library (#3152). The hints below
+                  appear only once it is on: off, they describe a URL that
+                  answers 404, and the Windows registry note is advice nobody
+                  needs yet. */}
+              <div className="border-t border-bambu-dark-tertiary pt-3 mt-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-white">{t('settings.webdavEnabled')}</p>
+                    <p className="text-sm text-bambu-gray">{t('settings.webdavDescription')}</p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer flex-shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={localSettings.webdav_enabled ?? false}
+                      onChange={(e) => updateSetting('webdav_enabled', e.target.checked)}
+                      aria-label={t('settings.webdavEnabled')}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-bambu-dark-tertiary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-bambu-green"></div>
+                  </label>
+                </div>
+                {localSettings.webdav_enabled && (
+                  <div className="mt-2 space-y-1">
+                    <p className="text-xs text-bambu-gray">
+                      {t('settings.webdavAddressHint', { url: `${window.location.origin}/webdav` })}
+                    </p>
+                    <p className="text-xs text-bambu-gray">{t('settings.webdavCredentialsHint')}</p>
+                    <p className="text-xs text-bambu-gray">{t('settings.webdavHttpsHint')}</p>
+                    <p className="text-xs text-bambu-gray">{t('settings.webdavWindowsHint')}</p>
+                  </div>
+                )}
               </div>
 
               {/* Auto-purge (#1008). Admin-only — users without library:purge

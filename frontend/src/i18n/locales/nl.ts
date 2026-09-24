@@ -2941,6 +2941,12 @@ export default {
     libraryRootViewRecent: 'Onlangs toegevoegd of gewijzigd',
     libraryRootViewRecentDescription: 'De nieuwste bestanden uit de hele bibliotheek, maximaal 100 - een startpagina in plaats van een lijst.',
     libraryRootViewDescription: 'Zoeken en tagfilters doorzoeken altijd de hele bibliotheek, welke van de drie ook is gekozen.',
+    webdavEnabled: 'WebDAV-toegang (alleen-lezen)',
+    webdavDescription: 'De boom van de bestandsbeheerder via WebDAV aanbieden, zodat een werkstation hem als schijf kan koppelen.',
+    webdavAddressHint: 'Koppel {{url}}. De share bevat “Files” voor de beheerde bibliotheek en, als er externe mappen zijn geregistreerd, “External”.',
+    webdavCredentialsHint: 'Vraagt altijd om een Bambuddy-gebruikersnaam en -wachtwoord — ook op installaties waarvan de webinterface zonder login draait — en elke gebruiker ziet alleen de bestanden die hij mag lezen.',
+    webdavHttpsHint: 'Alleen-lezen: bestanden kunnen worden geopend en gekopieerd, nooit geschreven, hernoemd of verwijderd. Bied het aan via HTTPS, want de Basic-gegevens gaan bij elk verzoek mee.',
+    webdavWindowsHint: 'Windows weigert Basic-authenticatie over gewoon HTTP zolang HKLM\\SYSTEM\\CurrentControlSet\\Services\\WebClient\\Parameters\\BasicAuthLevel niet op 2 staat. Over HTTPS werkt het zonder meer.',
     // Updates
     printerFirmware: 'Printerfirmware',
     checkFirmwareDescription: 'Controleren op printerfirmware-updates van Bambu Lab',
