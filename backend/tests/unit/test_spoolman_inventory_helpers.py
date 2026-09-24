@@ -107,6 +107,16 @@ class TestMapSpoolmanSpool:
         assert result["weight_used_baseline"] == pytest.approx(0.0)
         assert result["data_origin"] == "spoolman"
 
+    def test_article_number_maps_to_material_number(self):
+        """Spoolman's filament.article_number is the material number (#2870)."""
+        spool = {**MINIMAL_SPOOL, "filament": {**MINIMAL_SPOOL["filament"], "article_number": "15"}}
+        assert _map_spoolman_spool(spool)["material_number"] == "15"
+
+    def test_missing_or_blank_article_number_maps_to_none(self):
+        assert _map_spoolman_spool(MINIMAL_SPOOL)["material_number"] is None
+        blank = {**MINIMAL_SPOOL, "filament": {**MINIMAL_SPOOL["filament"], "article_number": ""}}
+        assert _map_spoolman_spool(blank)["material_number"] is None
+
     def test_remaining_weight_drives_synthetic_used_for_parity(self):
         """When remaining_weight is set, weight_used = label - remaining and
         the baseline absorbs the used_weight delta. This mirrors the internal
