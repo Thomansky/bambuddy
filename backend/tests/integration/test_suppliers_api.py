@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.spool import Spool
@@ -104,6 +105,22 @@ def mock_spoolman_client():
         AsyncMock(return_value=client),
     ):
         yield client
+
+
+@pytest.mark.unit
+def test_supplier_relationships_use_the_default_loader():
+    """No relationship-level eager loader (#2988).
+
+    ``Spool.supplier_links`` used to be ``lazy="selectin"``, which made every
+    ``select(Spool)`` in the app — usage tracker, AMS sync, labels, backup —
+    pay two extra round trips for assignments it never reads. The routes that
+    embed them ask for ``selectinload()`` at the query site instead.
+    """
+    from sqlalchemy import inspect as sa_inspect
+
+    assert sa_inspect(Spool).relationships["supplier_links"].lazy == "select"
+    assert sa_inspect(SpoolSupplier).relationships["supplier"].lazy == "select"
+    assert sa_inspect(SpoolmanSpoolSupplier).relationships["supplier"].lazy == "select"
 
 
 class TestSupplierCrud:
@@ -480,3 +497,64 @@ class TestSupplierCsv:
         for row in listing:
             assert [link["supplier_name"] for link in row["suppliers"]] == ["Supplier A"]
             assert row["suppliers"][0]["is_purchase_source"] is True
+
+
+class TestFromSlotInheritance:
+    """The RFID "+ Add to inventory" path (#2988).
+
+    POST /spools/from-slot builds the spool through create_spool_from_tray,
+    which pre-initialises spool.supplier_links to []. The inheritance rows are
+    added afterwards, so the closing query has to repopulate the collection —
+    otherwise the identity-mapped instance answers with the stale empty list
+    and the caller sees no suppliers until the next fetch.
+    """
+
+    @staticmethod
+    def _status_for_tray(ams_id: int, tray_id: int, tray: dict):
+        status = MagicMock()
+        status.raw_data = {"ams": {"ams": [{"id": ams_id, "tray": [{"id": tray_id, **tray}]}]}}
+        return status
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_from_slot_response_carries_inherited_suppliers(
+        self,
+        async_client: AsyncClient,
+        printer_factory,
+        supplier_factory,
+        spool_factory,
+        db_session: AsyncSession,
+    ):
+        printer = await printer_factory(name="X1C-supplier-inherit")
+        supplier = await supplier_factory(name="Supplier A")
+        donor = await spool_factory(material="PLA", subtype=None, brand="Bambu Lab", color_name="Clear")
+        db_session.add(SpoolSupplier(spool_id=donor.id, supplier_id=supplier.id, supplier_article_number="A-100"))
+        await db_session.commit()
+
+        # alpha=00 → create_spool_from_tray names the colour "Clear", matching
+        # the donor product without needing a colour-catalogue row.
+        tray = {
+            "tray_type": "PLA",
+            "tray_color": "11223300",
+            "tag_uid": "1122334455667788",
+            "tray_uuid": "0123456789ABCDEF0123456789ABCDEF",
+        }
+        with patch(
+            "backend.app.services.printer_manager.printer_manager.get_status",
+            return_value=self._status_for_tray(0, 1, tray),
+        ):
+            resp = await async_client.post(
+                "/api/v1/inventory/spools/from-slot",
+                json={"printer_id": printer.id, "ams_id": 0, "tray_id": 1},
+            )
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert [row["supplier_name"] for row in body["suppliers"]] == ["Supplier A"]
+        assert body["suppliers"][0]["supplier_article_number"] == "A-100"
+        assert body["suppliers"][0]["is_purchase_source"] is False
+
+        # The row was always written — the defect was the response reading a
+        # stale collection off the identity-mapped instance.
+        rows = await db_session.execute(select(SpoolSupplier).where(SpoolSupplier.spool_id == body["id"]))
+        assert [row.supplier_id for row in rows.scalars().all()] == [supplier.id]

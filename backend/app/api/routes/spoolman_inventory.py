@@ -476,7 +476,9 @@ async def list_spools(
         # Supplier assignments (#2988) live Bambuddy-side even for Spoolman
         # spools, so the list carries them in both modes identically.
         link_result = await db.execute(
-            select(SpoolmanSpoolSupplier).where(SpoolmanSpoolSupplier.spoolman_spool_id.in_(spool_ids))
+            select(SpoolmanSpoolSupplier)
+            .options(selectinload(SpoolmanSpoolSupplier.supplier))
+            .where(SpoolmanSpoolSupplier.spoolman_spool_id.in_(spool_ids))
         )
         links_by_spool: dict[int, list[dict]] = {}
         for link in link_result.scalars().all():
@@ -507,7 +509,9 @@ async def get_spool(
     kp_result = await db.execute(select(SpoolmanKProfile).where(SpoolmanKProfile.spoolman_spool_id == spool_id))
     mapped["k_profiles"] = [_k_profile_to_dict(kp) for kp in kp_result.scalars().all()]
     link_result = await db.execute(
-        select(SpoolmanSpoolSupplier).where(SpoolmanSpoolSupplier.spoolman_spool_id == spool_id)
+        select(SpoolmanSpoolSupplier)
+        .options(selectinload(SpoolmanSpoolSupplier.supplier))
+        .where(SpoolmanSpoolSupplier.spoolman_spool_id == spool_id)
     )
     mapped["suppliers"] = [_supplier_link_to_dict(link) for link in link_result.scalars().all()]
     await enrich_spool_dicts_with_location_id(db, [mapped])
@@ -2174,7 +2178,11 @@ async def get_spoolman_spool_suppliers(
 ) -> list[dict]:
     """Supplier assignments for a Spoolman spool (#2988, Bambuddy-side rows)."""
     await _get_client(db)
-    result = await db.execute(select(SpoolmanSpoolSupplier).where(SpoolmanSpoolSupplier.spoolman_spool_id == spool_id))
+    result = await db.execute(
+        select(SpoolmanSpoolSupplier)
+        .options(selectinload(SpoolmanSpoolSupplier.supplier))
+        .where(SpoolmanSpoolSupplier.spoolman_spool_id == spool_id)
+    )
     return [_supplier_link_to_dict(link) for link in result.scalars().all()]
 
 
@@ -2213,7 +2221,11 @@ async def save_spoolman_spool_suppliers(
         db.add(row)
         saved.append(row)
     await db.commit()
-    for row in saved:
-        await db.refresh(row)
+    refreshed = await db.execute(
+        select(SpoolmanSpoolSupplier)
+        .options(selectinload(SpoolmanSpoolSupplier.supplier))
+        .where(SpoolmanSpoolSupplier.id.in_([row.id for row in saved]))
+        .order_by(SpoolmanSpoolSupplier.id)
+    )
     await ws_manager.broadcast({"type": "inventory_changed"})
-    return [_supplier_link_to_dict(link) for link in saved]
+    return [_supplier_link_to_dict(link) for link in refreshed.scalars().all()]

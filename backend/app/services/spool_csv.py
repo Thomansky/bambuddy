@@ -589,7 +589,7 @@ def _cell_value(spool: Spool, col: str) -> str:
     if col == "suppliers":
         # Derived (#2988): "; "-joined supplier names, no decoration — the
         # purchase source has its own column so import can match plain names.
-        # supplier_links is selectin-loaded with the export query.
+        # The export query loads supplier_links explicitly.
         return "; ".join(link.supplier_name for link in spool.supplier_links)
     if col == "purchase_supplier":
         return next((link.supplier_name for link in spool.supplier_links if link.is_purchase_source), "")

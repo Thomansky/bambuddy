@@ -85,10 +85,9 @@ class Spool(Base):
     location: Mapped["Location | None"] = relationship(back_populates="spools")
     # Supplier assignments (#2988): where this product can be bought, with
     # per-assignment article number / price and a purchase-source marker.
-    # selectin so the inventory list can embed them without N+1 queries.
-    supplier_links: Mapped[list["SpoolSupplier"]] = relationship(
-        back_populates="spool", cascade="all, delete-orphan", lazy="selectin"
-    )
+    # Default loader like every other relationship here — the handful of
+    # routes that embed them ask for selectinload() at the query site.
+    supplier_links: Mapped[list["SpoolSupplier"]] = relationship(back_populates="spool", cascade="all, delete-orphan")
 
 
 from backend.app.models.location import Location  # noqa: E402

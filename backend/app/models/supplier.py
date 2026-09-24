@@ -62,13 +62,13 @@ class SpoolSupplier(Base):
     is_purchase_source: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
-    supplier: Mapped[Supplier] = relationship(back_populates="spool_links", lazy="selectin")
+    supplier: Mapped[Supplier] = relationship(back_populates="spool_links")
     spool: Mapped[Spool] = relationship(back_populates="supplier_links")
 
     @property
     def supplier_name(self) -> str:
-        """Flattened for SpoolSupplierResponse — the supplier relationship is
-        selectin-loaded wherever links are embedded, so this never lazy-loads."""
+        """Flattened for SpoolSupplierResponse. Every route that embeds links
+        chains selectinload() onto ``supplier``, so this never lazy-loads."""
         return self.supplier.name if self.supplier else ""
 
 
@@ -92,7 +92,7 @@ class SpoolmanSpoolSupplier(Base):
     is_purchase_source: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
-    supplier: Mapped[Supplier] = relationship(lazy="selectin")
+    supplier: Mapped[Supplier] = relationship()
 
     @property
     def supplier_name(self) -> str:
