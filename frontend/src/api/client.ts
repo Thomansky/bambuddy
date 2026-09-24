@@ -1475,6 +1475,10 @@ export interface APIKeyUpdate {
  */
 export type CalibrationMode = 'off' | 'on' | 'auto';
 
+/** What the File Manager root lists: every file, only folders, or the files
+ *  most recently added or changed. */
+export type LibraryRootView = 'all' | 'folders' | 'recent';
+
 // Settings types
 export interface AppSettings {
   auto_archive: boolean;
@@ -1572,9 +1576,10 @@ export interface AppSettings {
   // File Manager / Library settings
   library_archive_mode: 'always' | 'never' | 'ask';
   library_disk_warning_gb: number;
-  // Root ("All Files") lists every file in the library. Off makes the root show
-  // its top-level folders plus a "No folder" entry instead.
-  library_root_lists_all_files: boolean;
+  // What the root ("All Files") shows: every file in the library, only its
+  // top-level folders plus a "No folder" entry, or the files most recently
+  // added or changed.
+  library_root_view: LibraryRootView;
   // Camera view settings
   camera_view_mode: 'window' | 'embedded';
   // Preferred slicer (server-side API / sidecar)
@@ -7791,6 +7796,7 @@ export const api = {
     scope?: 'internal' | 'external',
     recursive = false,
     tagIds: number[] = [],
+    recent = false,
   ) => {
     const params = new URLSearchParams();
     if (folderId !== undefined && folderId !== null) {
@@ -7813,6 +7819,10 @@ export const api = {
     for (const tagId of tagIds) {
       params.append('tag_ids', String(tagId));
     }
+    // The "recent" root: the whole library, newest first, capped server-side.
+    // Drops the folder scoping, so it is not the all-files listing even though
+    // it carries the same include_root=false.
+    if (recent) params.set('recent', 'true');
     return request<LibraryFileListItem[]>(`/library/files?${params}`);
   },
   getLibraryFolderReadme: (folderId: number) =>

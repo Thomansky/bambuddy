@@ -20,7 +20,7 @@ import {
 } from '../utils/locationSensorDefaults';
 import { describeHASensorReading, iconForHASensor } from '../utils/haSensorDisplay';
 import { PreheatFilamentTargetsEditor } from '../components/PreheatFilamentTargetsEditor';
-import type { APIKey, AppSettings, AppSettingsUpdate, PrinterHASensor, LocationHASensor, LocationHASensorReading, SmartPlug, SmartPlugStatus, NotificationProvider, NotificationTemplate, UpdateStatus, GitHubBackupStatus, CloudAuthStatus, UserCreate, UserUpdate, UserResponse, StorageUsageResponse, CalibrationMode } from '../api/client';
+import type { APIKey, AppSettings, AppSettingsUpdate, PrinterHASensor, LocationHASensor, LocationHASensorReading, SmartPlug, SmartPlugStatus, NotificationProvider, NotificationTemplate, UpdateStatus, GitHubBackupStatus, CloudAuthStatus, UserCreate, UserUpdate, UserResponse, StorageUsageResponse, CalibrationMode, LibraryRootView } from '../api/client';
 import { Card, CardContent, CardDensityProvider, CardHeader } from '../components/Card';
 import { SlicerPipelinesPanel } from '../components/SlicerPipelinesPanel';
 import { NumberSeriesSettings } from '../components/NumberSeriesSettings';
@@ -149,6 +149,22 @@ registerSettingsSearch({ labelKey: 'backup.scheduledBackup', labelFallback: 'Sch
 // A drying threshold below this can never be reached while the box is warm, so
 // auto-drying would end one cycle and immediately arm another.
 const HUMIDITY_DRYING_FLOOR = 20;
+
+// What the File Manager root lists. Three views rather than a toggle, so each
+// one gets the line that says what it puts on screen.
+const ROOT_VIEW_OPTIONS: { value: LibraryRootView; labelKey: string; descriptionKey: string }[] = [
+  { value: 'all', labelKey: 'settings.libraryRootViewAll', descriptionKey: 'settings.libraryRootViewAllDescription' },
+  {
+    value: 'folders',
+    labelKey: 'settings.libraryRootViewFolders',
+    descriptionKey: 'settings.libraryRootViewFoldersDescription',
+  },
+  {
+    value: 'recent',
+    labelKey: 'settings.libraryRootViewRecent',
+    descriptionKey: 'settings.libraryRootViewRecentDescription',
+  },
+];
 
 const STORAGE_CATEGORY_COLORS: Record<string, string> = {
   database: 'bg-blue-600',
@@ -1189,7 +1205,7 @@ export function SettingsPage() {
       baseline.ha_token !== localSettings.ha_token ||
       (baseline.library_archive_mode ?? 'ask') !== (localSettings.library_archive_mode ?? 'ask') ||
       Number(baseline.library_disk_warning_gb ?? 5) !== Number(localSettings.library_disk_warning_gb ?? 5) ||
-      (baseline.library_root_lists_all_files ?? true) !== (localSettings.library_root_lists_all_files ?? true) ||
+      (baseline.library_root_view ?? 'all') !== (localSettings.library_root_view ?? 'all') ||
       (baseline.preferred_slicer ?? 'bambu_studio') !== (localSettings.preferred_slicer ?? 'bambu_studio') ||
       resolveEngine(baseline.slice_engine) !== resolveEngine(localSettings.slice_engine) ||
       (baseline.open_in_slicer ?? null) !== (localSettings.open_in_slicer ?? null) ||
@@ -1313,7 +1329,7 @@ export function SettingsPage() {
         ha_token: localSettings.ha_token,
         library_archive_mode: localSettings.library_archive_mode,
         library_disk_warning_gb: localSettings.library_disk_warning_gb,
-        library_root_lists_all_files: localSettings.library_root_lists_all_files,
+        library_root_view: localSettings.library_root_view,
         preferred_slicer: localSettings.preferred_slicer,
         slice_engine: localSettings.slice_engine,
         open_in_slicer: localSettings.open_in_slicer,
@@ -2730,22 +2746,29 @@ export function SettingsPage() {
               </div>
 
               {/* What the File Manager's root shows */}
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-white">{t('settings.libraryRootListsAllFiles')}</p>
-                  <p className="text-xs text-bambu-gray mt-1">
-                    {t('settings.libraryRootListsAllFilesDescription')}
-                  </p>
+              <div>
+                <p className="text-sm text-bambu-gray mb-1">{t('settings.libraryRootView')}</p>
+                <div role="radiogroup" aria-label={t('settings.libraryRootView')} className="space-y-2">
+                  {ROOT_VIEW_OPTIONS.map(({ value, labelKey, descriptionKey }) => (
+                    <label key={value} className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="library-root-view"
+                        value={value}
+                        checked={(localSettings.library_root_view ?? 'all') === value}
+                        onChange={() => updateSetting('library_root_view', value)}
+                        className="accent-bambu-green mt-1 flex-shrink-0"
+                      />
+                      <span className="min-w-0">
+                        <span className="block text-white">{t(labelKey)}</span>
+                        <span className="block text-xs text-bambu-gray">{t(descriptionKey)}</span>
+                      </span>
+                    </label>
+                  ))}
                 </div>
-                <label className="relative inline-flex items-center cursor-pointer flex-shrink-0 mt-0.5">
-                  <input
-                    type="checkbox"
-                    checked={localSettings.library_root_lists_all_files ?? true}
-                    onChange={(e) => updateSetting('library_root_lists_all_files', e.target.checked)}
-                    className="sr-only peer"
-                  />
-                  <div className="w-11 h-6 bg-bambu-dark-tertiary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-bambu-green"></div>
-                </label>
+                <p className="text-xs text-bambu-gray mt-1">
+                  {t('settings.libraryRootViewDescription')}
+                </p>
               </div>
 
               {/* Auto-purge (#1008). Admin-only — users without library:purge
