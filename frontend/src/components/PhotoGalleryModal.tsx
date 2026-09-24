@@ -14,13 +14,19 @@ type PhotoSource =
 type PhotoGalleryModalProps = PhotoSource & {
   archiveName: string;
   photos: string[];
+  // Which photo to open on. A caller that opens the gallery from a per-photo
+  // grid passes the clicked index (#3077); one with a single "view photos"
+  // button leaves it at the first.
+  initialIndex?: number;
   onClose: () => void;
   onDelete?: (filename: string) => void;
 };
 
 export function PhotoGalleryModal(props: PhotoGalleryModalProps) {
-  const { archiveName, photos, onClose, onDelete } = props;
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const { archiveName, photos, initialIndex, onClose, onDelete } = props;
+  const [currentIndex, setCurrentIndex] = useState(() =>
+    Math.min(Math.max(initialIndex ?? 0, 0), Math.max(photos.length - 1, 0))
+  );
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   // Keyboard navigation
@@ -65,10 +71,18 @@ export function PhotoGalleryModal(props: PhotoGalleryModalProps) {
     }
   };
 
+  // The gallery can be rendered inside another modal's overlay, and that
+  // overlay closes on a backdrop click (#3077). Dismissing the gallery must
+  // not bubble up and take the parent — and its unsaved edits — with it.
+  const handleBackdropClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onClose();
+  };
+
   return (
     <div
       className="fixed inset-0 bg-black/90 flex items-center justify-center z-50"
-      onClick={onClose}
+      onClick={handleBackdropClick}
     >
       <div
         className="relative w-full h-full flex flex-col"
@@ -156,19 +170,24 @@ export function PhotoGalleryModal(props: PhotoGalleryModalProps) {
         )}
       </div>
 
-      {/* Delete Confirmation Modal */}
+      {/* Delete Confirmation Modal. Wrapped so that cancelling it by clicking
+          its backdrop cancels only the confirmation — the click would
+          otherwise reach the gallery backdrop below it and close the gallery
+          as well. */}
       {showDeleteConfirm && (
-        <ConfirmModal
-          title="Delete Photo"
-          message="Delete this photo? This cannot be undone."
-          confirmText="Delete"
-          variant="danger"
-          onConfirm={() => {
-            onDelete?.(currentPhoto);
-            setShowDeleteConfirm(false);
-          }}
-          onCancel={() => setShowDeleteConfirm(false)}
-        />
+        <div onClick={(e) => e.stopPropagation()}>
+          <ConfirmModal
+            title="Delete Photo"
+            message="Delete this photo? This cannot be undone."
+            confirmText="Delete"
+            variant="danger"
+            onConfirm={() => {
+              onDelete?.(currentPhoto);
+              setShowDeleteConfirm(false);
+            }}
+            onCancel={() => setShowDeleteConfirm(false)}
+          />
+        </div>
       )}
     </div>
   );

@@ -184,4 +184,67 @@ describe('LibraryFileDetailsModal', () => {
     expect(screen.getByDisplayValue('Draft not saved yet')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /save/i })).toBeEnabled();
   });
+
+  describe('lightbox', () => {
+    beforeEach(() => {
+      server.use(
+        http.get('/api/v1/library/files/7', () =>
+          HttpResponse.json({ ...details, photos: ['one.jpg', 'two.jpg', 'three.jpg'] })
+        )
+      );
+    });
+
+    it('opens on the photo that was clicked, not the first one', async () => {
+      const user = userEvent.setup();
+      render(<LibraryFileDetailsModal file={listItem} canEdit onClose={onClose} />);
+
+      const thumbnails = await screen.findAllByAltText('Photos');
+      expect(thumbnails).toHaveLength(3);
+      await user.click(thumbnails[2]);
+
+      expect(await screen.findByText('Photo 3 of 3')).toBeInTheDocument();
+      const shown = screen.getByAltText('Photo 3') as HTMLImageElement;
+      expect(shown.src).toContain('/library/files/7/photos/three.jpg');
+    });
+
+    it('keeps the details modal open when the delete confirmation is dismissed', async () => {
+      // The confirmation renders inside the details overlay, whose root closes
+      // on a backdrop click — dismissing the confirmation used to discard the
+      // unsaved notes and link along with it.
+      const user = userEvent.setup();
+      const { container } = render(<LibraryFileDetailsModal file={listItem} canEdit onClose={onClose} />);
+
+      const notes = await screen.findByDisplayValue('Print with brim');
+      await user.clear(notes);
+      await user.type(notes, 'Draft not saved yet');
+
+      await user.click(screen.getAllByAltText('Photos')[0]);
+      await screen.findByText('Photo 1 of 3');
+      await user.click(container.querySelector('.text-red-400') as HTMLElement);
+
+      const confirmation = await screen.findByText('Delete Photo');
+      await user.click(confirmation.closest('div.fixed') as HTMLElement);
+
+      await waitFor(() => expect(screen.queryByText('Delete Photo')).not.toBeInTheDocument());
+      expect(screen.getByText('Photo 1 of 3')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('Draft not saved yet')).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it('closes the details modal on Escape, and only the lightbox while that is open', async () => {
+      const user = userEvent.setup();
+      render(<LibraryFileDetailsModal file={listItem} canEdit onClose={onClose} />);
+
+      await screen.findByDisplayValue('Print with brim');
+      await user.click(screen.getAllByAltText('Photos')[1]);
+      await screen.findByText('Photo 2 of 3');
+
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(screen.queryByText('Photo 2 of 3')).not.toBeInTheDocument());
+      expect(onClose).not.toHaveBeenCalled();
+
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(onClose).toHaveBeenCalled());
+    });
+  });
 });
