@@ -14,8 +14,8 @@ The contract these tests pin:
 
 - off: nothing is asked, nothing is reserved;
 - on: one round per finished print, reading the occupied slots the AMS cannot
-  name, with the same rules, the same cap and the same per-slot memory as the
-  pre-dispatch read;
+  name, with the same rules, the same cap and the same per-slot cooldown as
+  the pre-dispatch read;
 - a loaded ``tray_now`` stands the whole round down, because that is the rule
   the transport enforces: ``ams_refresh_tray`` refuses every slot on the
   printer while that one value says anything is loaded. A printer that has
@@ -39,7 +39,8 @@ The contract these tests pin:
 - the plate-clear gate is NOT consulted: a finished plate nobody has released
   is exactly the window this exists for;
 - a print that takes the printer back ends the round at once, and a slot it
-  cut short is not remembered as unreadable;
+  cut short earns no cooldown -- nor does one the task ceiling cut short, and
+  the slots that ceiling never reached are where the next round begins;
 - the printer is reserved for the round and handed back on every exit,
   including an exception -- and the reservation outlasts the longest round it
   is ever taken for, because everything that keeps a printer safe while its AMS
@@ -68,7 +69,14 @@ from backend.app.models.printer import Printer
 from backend.app.models.settings import Settings
 from backend.app.services.bambu_mqtt import BambuMQTTClient
 from backend.app.services.print_scheduler import _RFID_REREAD_HOLD_MARKER, PrintScheduler
-from backend.tests.unit.test_scheduler_rfid_preread import _add_item, _Harness, _item, _printer_state, _tray
+from backend.tests.unit.test_scheduler_rfid_preread import (
+    _add_item,
+    _cooling,
+    _Harness,
+    _item,
+    _printer_state,
+    _tray,
+)
 
 SETTING = "ams_read_unidentified_after_print"
 UNLOAD_SETTING = "ams_unload_before_after_print_read"
@@ -1118,9 +1126,9 @@ class TestANewPrintWins:
         assert any("printing again (state=RUNNING), not reading AMS0-T3" in line for line in _lines(caplog))
 
     @pytest.mark.asyncio
-    async def test_a_slot_the_print_cut_short_is_not_remembered_as_unreadable(self, ctx):
-        """It never got its attempt. Holding it against the next round would
-        silence exactly the spool this feature exists to identify."""
+    async def test_a_slot_the_print_cut_short_earns_no_cooldown(self, ctx):
+        """It never got its attempt. Resting it now would silence exactly the
+        spool this feature exists to identify, for the next half hour."""
         await _enable(ctx)
         state = _finished(unread=(3,))
         state.tray_read_done_bits = "f"
@@ -1131,7 +1139,7 @@ class TestANewPrintWins:
 
         r = await _Round(PrintScheduler(), state, refresh=MagicMock(side_effect=refresh)).run(ctx, slot_timeout=30.0)
 
-        assert r.scheduler._rfid_unreadable == {}
+        assert _cooling(r.scheduler) == {}
 
     @pytest.mark.asyncio
     async def test_a_printer_reserved_by_the_queue_is_left_alone(self, ctx, caplog):
@@ -1263,7 +1271,17 @@ class TestTheReservation:
         assert (await _item(qctx, item_id)).waiting_reason == "Busy: X1C-01"
 
 
-class TestTheSlotNothingCanRead:
+class TestTheSlotThatReadNothing:
+    """A round that reads nothing out of a slot rests it, and the next round
+    is told how long the rest has left.
+
+    The owner reported three times that unidentified spools were never
+    identified automatically while the manual button identified the very same
+    spool every time it was pressed. The slot had been written off for the
+    life of the process on one read that ran out of budget -- and it was an
+    original Bambu spool with a perfectly good tag in it.
+    """
+
     @staticmethod
     def _nameless_but_done():
         state = _finished(unread=(3,))
@@ -1271,20 +1289,60 @@ class TestTheSlotNothingCanRead:
         return state
 
     @pytest.mark.asyncio
-    async def test_a_slot_that_stays_nameless_is_not_asked_after_the_next_print(self, ctx, caplog):
+    async def test_a_slot_that_stays_nameless_rests_over_the_next_print(self, ctx, caplog):
         await _enable(ctx)
         scheduler = PrintScheduler()
         state = self._nameless_but_done()
 
         first = await _Round(scheduler, state).run(ctx)
         assert first.refreshed == [(0, 3)]
-        assert scheduler._rfid_unreadable == {1: {(0, 3)}}
+        assert _cooling(scheduler) == {1: {(0, 3)}}
 
         with caplog.at_level(logging.INFO, logger="backend.app.services.print_scheduler"):
             second = await _Round(scheduler, state).run(ctx)
 
         assert second.refreshed == []
-        assert any("0 unread slot(s) (1 skipped: already tried)" in line for line in _lines(caplog))
+        assert any(
+            "0 unread slot(s) (1 skipped: on cooldown (AMS0-T3 (30 min left)))" in line for line in _lines(caplog)
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_rest_ends_and_the_print_after_it_asks_again(self, ctx):
+        """The whole point of a cooldown over a verdict: the spool that merely
+        read slowly gets another turn the same afternoon."""
+        await _enable(ctx)
+        scheduler = PrintScheduler()
+        state = self._nameless_but_done()
+
+        with patch("backend.app.services.print_scheduler._RFID_SLOT_COOLDOWN", 0.05):
+            first = await _Round(scheduler, state).run(ctx)
+        assert first.refreshed == [(0, 3)]
+        assert _cooling(scheduler) == {1: {(0, 3)}}
+
+        await asyncio.sleep(0.06)
+        second = await _Round(scheduler, state).run(ctx)
+
+        assert second.refreshed == [(0, 3)]
+
+    @pytest.mark.asyncio
+    async def test_pulling_the_spool_ends_the_rest_at_once(self, ctx):
+        """Without the half hour being waited out: the next roll in that slot
+        is a different roll, and it has its own tag."""
+        await _enable(ctx)
+        scheduler = PrintScheduler()
+        state = self._nameless_but_done()
+
+        await _Round(scheduler, state).run(ctx)
+        assert _cooling(scheduler) == {1: {(0, 3)}}
+
+        state.tray_exist_bits = "7"  # roll pulled
+        with _Round(scheduler, state).patched(ctx):
+            scheduler._prune_rfid_cooldowns()
+        assert _cooling(scheduler) == {}
+
+        state.tray_exist_bits = "f"  # and another one goes in
+        second = await _Round(scheduler, state).run(ctx)
+        assert second.refreshed == [(0, 3)]
 
     @pytest.mark.asyncio
     async def test_a_slot_firmware_itself_calls_unread_is_asked_every_time(self, ctx):
@@ -1293,14 +1351,37 @@ class TestTheSlotNothingCanRead:
         state = self._nameless_but_done()
 
         await _Round(scheduler, state).run(ctx)
-        assert scheduler._rfid_unreadable == {1: {(0, 3)}}
+        assert _cooling(scheduler) == {1: {(0, 3)}}
 
-        # A Bambu spool swapped in for the unreadable one: still nameless,
-        # but firmware now says it has not read this slot.
+        # A Bambu spool swapped in for the one that read nothing: still
+        # nameless, but firmware now says it has not read this slot.
         state.tray_read_done_bits = "7"
         second = await _Round(scheduler, state).run(ctx)
 
         assert second.refreshed == [(0, 3)]
+
+    @pytest.mark.asyncio
+    async def test_the_round_after_a_ceiling_starts_where_it_stopped(self, ctx):
+        """`_RFID_REREAD_TASK_TIMEOUT` bounds the round here as it does before a
+        dispatch, and both rounds share the one cursor: on a farm whose every
+        AMS slot is nameless, the slots the ceiling never reached are the next
+        round's rather than nobody's. The slot it cut short earns no rest
+        either -- it did not get the attempt a rest is meant to follow."""
+        await _enable(ctx)
+        scheduler = PrintScheduler()
+        state = _finished(unread=(0, 1, 2, 3))
+        state.tray_read_done_bits = "f"
+
+        # A ceiling shorter than one slot budget: the first slot is asked with
+        # a fraction of it, and the three behind it are never attempted.
+        with patch("backend.app.services.print_scheduler._RFID_REREAD_TASK_TIMEOUT", 0.05):
+            first = await _Round(scheduler, state).run(ctx, slot_timeout=10.0)
+        assert first.refreshed == [(0, 0)]
+        assert _cooling(scheduler) == {}
+
+        with patch("backend.app.services.print_scheduler._RFID_REREAD_TASK_TIMEOUT", 0.05):
+            second = await _Round(scheduler, state).run(ctx, slot_timeout=10.0)
+        assert second.refreshed == [(0, 1)]
 
 
 class TestSayWhatHappened:

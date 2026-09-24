@@ -85,8 +85,9 @@ def _looks_unread(tray: Mapping[str, Any]) -> bool:
     check that catches a read-done bit set on a slot the AMS never actually
     identified -- an attempt that finished having found nothing reads as
     "done" too. A non-Bambu spool the AMS has already looked at reads the
-    same way, which is why the scheduler only ever acts on this once per
-    spool.
+    same way, and so does an original Bambu spool the AMS was not given long
+    enough to read, which is why the scheduler rests a slot that answers like
+    this for a while instead of writing it off.
     """
     from backend.app.services.spool_tag_matcher import ZERO_TAG_UID
 
@@ -157,9 +158,11 @@ def slot_read_done(state: Any, ams_id: int, tray_id: int) -> bool | None:
 # The two are not interchangeable to a caller. NOT_DONE is firmware's own "I
 # have not read this one" and is worth a command every time it is seen -- it
 # is the spool-inserted-during-a-print case the pre-read exists for. NO_IDENTITY
-# is an inference drawn from empty tray fields, which stays true of a spool
-# nothing can read for as long as it sits in the slot, so a caller acting on it
-# has to bound itself to one attempt per spool.
+# is an inference drawn from empty tray fields, which stays true for as long as
+# a spool the AMS did not name sits in the slot, so a caller acting on it has
+# to rate-limit itself -- with a cooldown, not with one attempt per spool: a
+# fruitless read is not proof that the tag is unreadable, and the slot written
+# off for one is the bug `_rfid_slot_cooldown` replaced.
 UNREAD_NOT_DONE = "read-done bit clear"
 UNREAD_NO_IDENTITY = "no identity"
 
@@ -183,7 +186,7 @@ def unread_ams_slot_reasons(state: Any) -> dict[tuple[int, int], str]:
 
     The bit is asked first, so a slot firmware itself calls unread is never
     reported as the weaker inference: that distinction is what lets the
-    scheduler spend one read per unreadable spool without ever going quiet on
+    scheduler rest a spool it read nothing out of without ever going quiet on
     a slot firmware is still asking about.
 
     The queue asks for the read before a job is mapped, so the mapping sees
@@ -239,10 +242,11 @@ def detection_signals(state: Any) -> str:
 def unidentified_slots(state: Any) -> set[tuple[int, int]]:
     """Occupied slots the AMS has put no identity on: ``{(ams_id, tray_id)}``.
 
-    The scheduler remembers the slots a pre-read left like this so it stops
-    asking about a spool nothing can read, and needs to know when to forget
-    again: an entry that is no longer in this set has either lost its spool
-    or gained an identity, and the next spool gets its chance.
+    The scheduler rests the slots a pre-read left like this for a while, so a
+    spool it cannot name does not cost every job in the queue a round, and
+    needs to know when to end a rest early: an entry that is no longer in this
+    set has either lost its spool or gained an identity, and the next spool
+    gets its chance without the rest of the cooldown being waited out.
     """
     from backend.app.services.bambu_mqtt import parse_tray_bits
 
