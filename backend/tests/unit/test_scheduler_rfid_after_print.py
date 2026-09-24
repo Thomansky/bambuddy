@@ -39,7 +39,8 @@ The contract these tests pin:
 - the plate-clear gate is NOT consulted: a finished plate nobody has released
   is exactly the window this exists for;
 - a print that takes the printer back ends the round at once, and a slot it
-  cut short earns no cooldown;
+  cut short earns no cooldown -- nor does one the task ceiling cut short, and
+  the slots that ceiling never reached are where the next round begins;
 - the printer is reserved for the round and handed back on every exit,
   including an exception -- and the reservation outlasts the longest round it
   is ever taken for, because everything that keeps a printer safe while its AMS
@@ -1358,6 +1359,29 @@ class TestTheSlotThatReadNothing:
         second = await _Round(scheduler, state).run(ctx)
 
         assert second.refreshed == [(0, 3)]
+
+    @pytest.mark.asyncio
+    async def test_the_round_after_a_ceiling_starts_where_it_stopped(self, ctx):
+        """`_RFID_REREAD_TASK_TIMEOUT` bounds the round here as it does before a
+        dispatch, and both rounds share the one cursor: on a farm whose every
+        AMS slot is nameless, the slots the ceiling never reached are the next
+        round's rather than nobody's. The slot it cut short earns no rest
+        either -- it did not get the attempt a rest is meant to follow."""
+        await _enable(ctx)
+        scheduler = PrintScheduler()
+        state = _finished(unread=(0, 1, 2, 3))
+        state.tray_read_done_bits = "f"
+
+        # A ceiling shorter than one slot budget: the first slot is asked with
+        # a fraction of it, and the three behind it are never attempted.
+        with patch("backend.app.services.print_scheduler._RFID_REREAD_TASK_TIMEOUT", 0.05):
+            first = await _Round(scheduler, state).run(ctx, slot_timeout=10.0)
+        assert first.refreshed == [(0, 0)]
+        assert _cooling(scheduler) == {}
+
+        with patch("backend.app.services.print_scheduler._RFID_REREAD_TASK_TIMEOUT", 0.05):
+            second = await _Round(scheduler, state).run(ctx, slot_timeout=10.0)
+        assert second.refreshed == [(0, 1)]
 
 
 class TestSayWhatHappened:

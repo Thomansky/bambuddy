@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 import time
 import uuid
 from collections import deque
@@ -311,10 +312,11 @@ _RFID_REREAD_HOLD_MARKER = "rfid_reread"
 #
 # The task ceiling is deliberately NOT raised with it: it is what bounds a
 # whole round, so a dead AMS can never hold a printer out of the queue for
-# longer than a few passes. It now buys two silent slots rather than four,
-# and the rest of the round's slots go unattempted -- which costs them
-# nothing, because a slot never attempted is never put on cooldown. The slot
-# cap bounds the round for a farm-sized AMS array.
+# longer than a few passes. It now buys two silent slots rather than four, so
+# a round no longer covers a whole AMS -- which is why the round that follows
+# picks up at the slot the ceiling stopped at (`_rfid_reread_resume`) instead
+# of offering the head of the AMS again. The slot cap bounds the round for a
+# farm-sized AMS array.
 _RFID_REREAD_SLOT_TIMEOUT = 60.0
 _RFID_REREAD_TASK_TIMEOUT = 120.0
 _RFID_REREAD_POLL_INTERVAL = 1.0
@@ -428,6 +430,42 @@ def _rfid_cooldown_left(seconds: float) -> str:
     """``28 min`` / ``45 s``, for a cooldown that is minutes long but can end in
     seconds."""
     return f"{round(seconds / 60)} min" if seconds >= 60 else f"{round(seconds)} s"
+
+
+_RFID_COOLDOWN_COUNTDOWN = re.compile(r" \(\d+ (?:min|s) left\)")
+
+
+def _rfid_preread_verdict(detail: str) -> str:
+    """*detail* with the cooldown countdowns taken out: what one evaluation is
+    compared against the previous one.
+
+    The countdown belongs on the line -- a skipped slot has to say when it
+    will be asked again -- but "(29 min left)" a minute after "(30 min left)"
+    is the same verdict on the same slots, and letting it through
+    ``_say_rfid_preread``'s comparison would put the same news at info once a
+    minute for half an hour on every printer with a resting slot.
+    """
+    return _RFID_COOLDOWN_COUNTDOWN.sub("", detail)
+
+
+def _rfid_rotate_to(slots: list[tuple[int, int]], first: tuple[int, int] | None) -> list[tuple[int, int]]:
+    """*slots*, in their own order but beginning at *first*.
+
+    Unread slots are always offered in slot order, and `_RFID_REREAD_TASK_TIMEOUT`
+    bounds a whole round: at 60 s a slot it buys two of them, so a round no
+    longer reaches the back of a four-slot AMS. Starting the next round where
+    the last one ran out of ceiling is what keeps those slots from being asked
+    never -- their cooldowns and the head slots' expire in the same order they
+    are offered, so without this the first two would take every round's budget
+    on any farm whose prints outlast half an hour.
+
+    *first* gone from the offer -- its spool pulled, or the AMS finally naming
+    it -- leaves the order alone.
+    """
+    if first is None or first not in slots:
+        return slots
+    index = slots.index(first)
+    return slots[index:] + slots[:index]
 
 
 def _is_printing(state: Any) -> bool:
@@ -1300,9 +1338,19 @@ class PrintScheduler:
         # more attempt per slot is cheap, and a DB row about a tag that read
         # slowly once would outlive the spool.
         self._rfid_slot_cooldown: dict[int, dict[tuple[int, int], float]] = {}
+        # printer_id -> the slot a round left unattempted when it ran out of
+        # `_RFID_REREAD_TASK_TIMEOUT`, so the next round offers that one first.
+        # A round covers two silent slots, cooldowns expire in the order the
+        # slots are offered, and the offer is in slot order -- so without a
+        # cursor the head of the AMS takes every round and the slots behind it
+        # are asked never. Dropped when a round gets through everything it was
+        # given; a stale entry costs nothing, because a slot that is no longer
+        # offered does not rotate anything.
+        self._rfid_reread_resume: dict[int, tuple[int, int]] = {}
         # printer_id -> the last pre-read evaluation logged for it, without the
-        # item that asked, so a verdict that has not changed does not repeat at
-        # info every pass however many stuck items keep asking for it.
+        # item that asked and without the cooldown countdowns, so a verdict
+        # that has not changed does not repeat at info every pass however many
+        # stuck items keep asking for it.
         self._rfid_preread_said: dict[int, str] = {}
         # Refillable upload pool (#2602). Items whose FTP upload was launched by
         # an earlier pass and is still running. `_start_print` flips the row
@@ -4684,6 +4732,9 @@ class PrintScheduler:
         in_hotend = [slot for slot in slots if slot in loaded]
         if in_hotend:
             slots = [slot for slot in slots if slot not in loaded]
+        # The ceiling stops a round before the back of an AMS, so pick up where
+        # the last one stopped rather than offer the same head slots again.
+        slots = _rfid_rotate_to(slots, self._rfid_reread_resume.get(printer_id))
         if skipped:
             logger.debug(
                 "%s: %s on cooldown after a fruitless read",
@@ -4773,7 +4824,9 @@ class PrintScheduler:
         otherwise repeat the same line every 30 s for hours. Several stuck
         items are the normal shape of that, so the item is deliberately not
         part of what counts as a repeat: the same printer reporting the same
-        masks and the same verdict is the same news whoever asked.
+        masks and the same verdict is the same news whoever asked. Neither is
+        a cooldown's countdown (``_rfid_preread_verdict``) -- the line carries
+        it, but a minute going by is not a change of verdict.
 
         An after-print round (``item_id`` None) is never deduplicated. It runs
         once per finished print, a handful of times a day, and every one of
@@ -4781,10 +4834,11 @@ class PrintScheduler:
         this feature exists is that its predecessor left no evidence it ran.
         """
         message = f"{_rfid_preread_tag(printer_id, item_id)}: {detail}"
-        if item_id is not None and self._rfid_preread_said.get(printer_id) == detail:
+        verdict = _rfid_preread_verdict(detail)
+        if item_id is not None and self._rfid_preread_said.get(printer_id) == verdict:
             logger.debug("%s", message)
             return
-        self._rfid_preread_said[printer_id] = detail
+        self._rfid_preread_said[printer_id] = verdict
         logger.info("%s", message)
 
     def _printing_again(self, printer_id: int) -> bool:
@@ -5259,13 +5313,15 @@ class PrintScheduler:
         Sequential because the AMS reads one tag at a time. A refused slot
         (filament got loaded meanwhile) or one whose read never completes is
         logged and skipped; a slot that does complete gets the same K-profile
-        re-apply the manual Re-read RFID button triggers. A slot the AMS
-        still puts no identity on when its turn is over goes on cooldown, so
+        re-apply the manual Re-read RFID button triggers. A slot that had its
+        full attempt and the AMS still puts no identity on goes on cooldown, so
         the next few jobs do not ask about it again -- a rest, not a verdict,
         because a read that produced nothing is as often a slow one as an
-        absent tag. The reservation is dropped on every exit -- success,
-        ceiling, printer gone, print started, exception -- so the next pass
-        always dispatches the item.
+        absent tag. A slot the ceiling could only give a sliver of that budget
+        rests no more than one a print took back does, and the first slot the
+        round never reached at all is where the next round starts. The
+        reservation is dropped on every exit -- success, ceiling, printer gone,
+        print started, exception -- so the next pass always dispatches the item.
 
         ``item_id`` is None for the round a finished print schedules; the only
         difference is what the lines call it, because there is no item.
@@ -5315,6 +5371,7 @@ class PrintScheduler:
                     logger.info("%s: %s ams_get_rfid refused: %s", tag, label, message)
                     continue
                 timeout = min(_RFID_REREAD_SLOT_TIMEOUT, remaining)
+                whole_budget = timeout >= _RFID_REREAD_SLOT_TIMEOUT
                 waited, read_done = await self._wait_for_slot_read(
                     printer_id, ams_id, slot_id, before, done_before, timeout
                 )
@@ -5341,14 +5398,31 @@ class PrintScheduler:
                     logger.info("%s: %s ams_get_rfid accepted (%s), no read after %.0f s", tag, label, message, waited)
                 # A slot the print took back never got its fair attempt, so it
                 # earns no cooldown: the round that follows the next print has
-                # to be free to ask about it again immediately.
-                if not identified and not self._printing_again(printer_id):
+                # to be free to ask about it again immediately. Neither did one
+                # the task ceiling left a sliver of the slot budget -- an AMS
+                # that needs most of a minute is the whole reason that budget
+                # is 60 s, and resting a slot that got a second of it for half
+                # an hour is the write-off this replaced in miniature. A read
+                # firmware itself reported as finished is an answer however
+                # long it was given.
+                had_its_attempt = read_done or whole_budget
+                if not identified and had_its_attempt and not self._printing_again(printer_id):
                     self._rfid_slot_cooldown.setdefault(printer_id, {})[(ams_id, slot_id)] = (
                         time.monotonic() + _RFID_SLOT_COOLDOWN
                     )
         except Exception as e:
             logger.warning("%s: aborted: %s", tag, e, exc_info=True)
         finally:
+            # Where the next round begins. A round that got through everything
+            # it was given leaves no cursor behind; one that was cut short --
+            # by the ceiling, by a print taking the printer back, by the
+            # printer going away -- hands the first slot it never reached to
+            # the round after it, which is what stops the slots behind the
+            # ceiling from being the ones always skipped.
+            if not_attempted:
+                self._rfid_reread_resume[printer_id] = not_attempted[0]
+            else:
+                self._rfid_reread_resume.pop(printer_id, None)
             self._release_rfid_reread_hold(printer_id)
             logger.info(
                 "%s: finished — read %d, refused %d, no read %d, not attempted %d; %s",

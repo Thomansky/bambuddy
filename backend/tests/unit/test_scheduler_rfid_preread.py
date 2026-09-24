@@ -30,8 +30,12 @@ The contract these tests pin:
   written off for good: the rest ends at once when the spool is pulled or
   named, and ends anyway when the cooldown runs out -- while a slot firmware
   itself reports as unread is asked every time, whatever rests are standing;
+- a round the task ceiling cuts short hands the slots it never reached to the
+  round after it, so the head of an AMS cannot take every round's budget; and
+  a slot the ceiling left a sliver of the slot budget earns no rest at all;
 - a verdict that has not changed is not repeated at info, however many stuck
-  items keep asking the same printer for it.
+  items keep asking the same printer for it and however far a standing
+  cooldown has ticked down since.
 """
 
 import asyncio
@@ -745,6 +749,29 @@ class TestEveryDecisionIsInTheLog:
         ]
 
     @pytest.mark.asyncio
+    async def test_a_cooldown_ticking_down_is_not_a_new_verdict(self, ctx, caplog):
+        """The skip line owes its reader the remaining time, but a minute going
+        by is not news: the same slots are skipped for the same reason. With
+        the countdown inside what the deduplication compares, this line went
+        out at info once a minute for the whole half hour, on every printer
+        with a resting slot -- the repetition the deduplication exists to stop.
+        """
+        scheduler = PrintScheduler()
+        state = _printer_state(unread=(3,))
+        state.tray_read_done_bits = "f"
+        h = _Harness(ctx, scheduler, state)
+
+        with h.patched(), caplog.at_level(logging.INFO, logger="backend.app.services.print_scheduler"):
+            for minute in range(5):
+                scheduler._rfid_slot_cooldown = {1: {(0, 3): time.monotonic() + 1800.0 - minute * 60.0}}
+                scheduler._slots_to_reread(1, 100)
+
+        assert _preread_lines(caplog) == [
+            "RFID pre-read [printer 1, item 100]: setting=on tray_now=255 exist=f read_done=f "
+            "reading=- signals=masks -> 0 unread slot(s) (1 skipped: on cooldown (AMS0-T3 (30 min left)))"
+        ]
+
+    @pytest.mark.asyncio
     async def test_the_no_read_line_says_how_long_it_actually_waited(self, ctx, caplog):
         """The wait also ends when the printer stops reporting. Printing the
         budget there sends whoever reads the log after an AMS that was never
@@ -1062,6 +1089,106 @@ class TestTheSlotThatReadNothing:
 
         assert h2.client.ams_refresh_tray.call_args_list == [((0, 3),)]
         assert _cooling(scheduler) == {1: {(0, 3)}, 2: {(0, 3)}}
+
+
+class TestTheRoundTheCeilingCutsShort:
+    """`_RFID_REREAD_TASK_TIMEOUT` bounds a whole round, and at 60 s a slot it
+    pays for two of them. The slots behind that ceiling belong to the next
+    round, not to nobody: the offer picks up where the last round stopped.
+
+    Without that cursor the offer is in slot order every time, and the two
+    slots at the head of the AMS are also the two whose cooldowns expire
+    first -- so on a farm whose prints outlast half an hour they take every
+    round's budget and the slots behind them are asked never. The permanent
+    memory this branch replaced happened to act as a round-robin; the
+    cooldown took that away, and this is what puts it back.
+    """
+
+    @staticmethod
+    def _four_nameless():
+        """A 4-slot AMS whose every slot holds a spool the AMS did not name,
+        with all four read-done bits set -- the farm case, exactly."""
+        state = _printer_state(unread=(0, 1, 2, 3))
+        state.tray_read_done_bits = "f"
+        return state
+
+    @pytest.mark.asyncio
+    async def test_every_slot_is_asked_about_even_when_no_rest_ever_stands(self, ctx):
+        """The bug, from the outside: jobs further apart than the cooldown, an
+        AMS that answers nothing, and only the first two slots ever asked."""
+        await _set(ctx, "queue_rfid_reread_before_start", "true")
+        scheduler = PrintScheduler()
+        state = self._four_nameless()
+        asked: list[tuple[int, int]] = []
+
+        for position in range(1, 5):
+            item_id = await _add_item(ctx, position=position)
+            h = _Harness(ctx, scheduler, state)
+            with (
+                patch("backend.app.services.print_scheduler._RFID_REREAD_TASK_TIMEOUT", 0.09),
+                # Every job arrives after the last one's rests have run out,
+                # which is what a print longer than half an hour looks like.
+                patch("backend.app.services.print_scheduler._RFID_SLOT_COOLDOWN", 0.0),
+            ):
+                await h.run()
+            asked += [c.args for c in h.client.ams_refresh_tray.call_args_list]
+            await _retire(ctx, item_id)
+
+        assert sorted(set(asked)) == [(0, 0), (0, 1), (0, 2), (0, 3)]
+
+    @pytest.mark.asyncio
+    async def test_the_next_offer_starts_where_the_ceiling_stopped(self, ctx):
+        scheduler = PrintScheduler()
+        h = _Harness(ctx, scheduler, self._four_nameless())
+        scheduler._rfid_reread_resume = {1: (0, 2)}
+
+        with h.patched():
+            assert scheduler._slots_to_reread(1, 100) == [(0, 2), (0, 3), (0, 0), (0, 1)]
+
+    @pytest.mark.asyncio
+    async def test_a_cursor_whose_slot_is_gone_leaves_the_order_alone(self, ctx):
+        """The spool was pulled, or the AMS finally named it."""
+        scheduler = PrintScheduler()
+        h = _Harness(ctx, scheduler, self._four_nameless())
+        scheduler._rfid_reread_resume = {1: (1, 3)}
+
+        with h.patched():
+            assert scheduler._slots_to_reread(1, 100) == [(0, 0), (0, 1), (0, 2), (0, 3)]
+
+    @pytest.mark.asyncio
+    async def test_a_round_that_gets_through_its_slots_leaves_no_cursor(self, ctx):
+        await _set(ctx, "queue_rfid_reread_before_start", "true")
+        await _add_item(ctx)
+        scheduler = PrintScheduler()
+
+        await _Harness(ctx, scheduler, _printer_state(unread=(1, 3))).run()
+
+        assert scheduler._rfid_reread_resume == {}
+
+    @pytest.mark.asyncio
+    async def test_a_slot_the_ceiling_cut_short_earns_no_cooldown(self, ctx, caplog):
+        """A slot given a second of its minute did not get the attempt a rest
+        is meant to follow -- the same rule as the slot a print takes back.
+        Resting it anyway is the write-off this branch removed, in miniature:
+        the AMS that needs most of a minute is why the budget is 60 s at all.
+        """
+        await _set(ctx, "queue_rfid_reread_before_start", "true")
+        await _add_item(ctx)
+        scheduler = PrintScheduler()
+        h = _Harness(ctx, scheduler, self._four_nameless())
+
+        # The ceiling is shorter than one slot budget, so the very first slot
+        # is asked with a fraction of it and the rest are never attempted.
+        with (
+            patch("backend.app.services.print_scheduler._RFID_REREAD_TASK_TIMEOUT", 0.05),
+            caplog.at_level(logging.INFO, logger="backend.app.services.print_scheduler"),
+        ):
+            await h.run(slot_timeout=10.0)
+
+        assert [c.args for c in h.client.ams_refresh_tray.call_args_list] == [(0, 0)]
+        assert _cooling(scheduler) == {}
+        assert scheduler._rfid_reread_resume == {1: (0, 1)}
+        assert any("ceiling reached, not reading AMS0-T1, AMS0-T2, AMS0-T3" in line for line in _preread_lines(caplog))
 
 
 class TestTheHoldReasonIsSelfResolving:
