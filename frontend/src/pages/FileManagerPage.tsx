@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useMemo, useEffect, lazy, Suspense } from 'react';
+import { useState, useRef, useCallback, useMemo, useEffect, lazy, Suspense, Fragment } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -60,6 +60,8 @@ import {
   PanelLeftOpen,
   Copy,
   FolderX,
+  SlidersHorizontal,
+  Check,
   type LucideIcon,
 } from 'lucide-react';
 import { ApiError, api } from '../api/client';
@@ -1760,6 +1762,217 @@ function ColumnFileRow({ file, isSelected, isFocused, showModified, thumbnailVer
       >
         <FileActionStrip file={file} {...actionProps} tabIndex={isFocused ? 0 : -1} />
       </div>
+    </div>
+  );
+}
+
+// Folder ordering and display preferences, in the toolbar rather than in the
+// sidebar header. They drive the tiles, the columns and the path bar as much
+// as the tree, so switching the sidebar off must not take them with it — and
+// one home beats two, which is why this renders whether the tree is on screen
+// or not.
+interface FolderDisplayMenuProps {
+  sortField: 'name' | 'activity';
+  onSortFieldChange: (value: 'name' | 'activity') => void;
+  sortDirection: 'asc' | 'desc';
+  onSortDirectionChange: (value: 'asc' | 'desc') => void;
+  collapseByDefault: boolean;
+  onCollapseByDefaultChange: (value: boolean) => void;
+  wrapNames: boolean;
+  onWrapNamesChange: (value: boolean) => void;
+  t: TFunction;
+}
+
+/** Sort field and direction, which share a group; the display toggles follow. */
+const SORT_ENTRY_COUNT = 4;
+
+function FolderDisplayMenu({
+  sortField,
+  onSortFieldChange,
+  sortDirection,
+  onSortDirectionChange,
+  collapseByDefault,
+  onCollapseByDefaultChange,
+  wrapNames,
+  onWrapNamesChange,
+  t,
+}: FolderDisplayMenuProps) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handlePointerDown = (e: MouseEvent) => {
+      if (!containerRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [open]);
+
+  // Opening gives the arrow keys somewhere to start; closing hands focus back
+  // to the button it came from.
+  useEffect(() => {
+    if (open) itemRefs.current[0]?.focus();
+  }, [open]);
+
+  // Every entry stays checkable in place: this is a settings menu, and
+  // picking a sort field usually comes with picking a direction.
+  const entries: {
+    key: string;
+    label: string;
+    checked: boolean;
+    role: 'menuitemradio' | 'menuitemcheckbox';
+    startsGroup: boolean;
+    onSelect: () => void;
+  }[] = [
+    {
+      key: 'name',
+      label: t('fileManager.folderSortByName'),
+      checked: sortField === 'name',
+      role: 'menuitemradio',
+      startsGroup: false,
+      onSelect: () => onSortFieldChange('name'),
+    },
+    {
+      key: 'activity',
+      label: t('fileManager.folderSortByActivity'),
+      checked: sortField === 'activity',
+      role: 'menuitemradio',
+      startsGroup: false,
+      onSelect: () => onSortFieldChange('activity'),
+    },
+    {
+      key: 'asc',
+      label: t('fileManager.ascending'),
+      checked: sortDirection === 'asc',
+      role: 'menuitemradio',
+      startsGroup: true,
+      onSelect: () => onSortDirectionChange('asc'),
+    },
+    {
+      key: 'desc',
+      label: t('fileManager.descending'),
+      checked: sortDirection === 'desc',
+      role: 'menuitemradio',
+      startsGroup: false,
+      onSelect: () => onSortDirectionChange('desc'),
+    },
+    {
+      key: 'collapse',
+      label: t('fileManager.collapseFoldersByDefault'),
+      checked: collapseByDefault,
+      role: 'menuitemcheckbox',
+      startsGroup: false,
+      onSelect: () => onCollapseByDefaultChange(!collapseByDefault),
+    },
+    {
+      key: 'wrap',
+      label: t('fileManager.enableTextWrapping'),
+      checked: wrapNames,
+      role: 'menuitemcheckbox',
+      startsGroup: false,
+      onSelect: () => onWrapNamesChange(!wrapNames),
+    },
+  ];
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (!open) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        setOpen(true);
+      }
+      return;
+    }
+    const items = itemRefs.current.filter((el): el is HTMLButtonElement => el !== null);
+    if (items.length === 0) return;
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    switch (e.key) {
+      case 'Escape':
+        e.preventDefault();
+        setOpen(false);
+        buttonRef.current?.focus();
+        break;
+      case 'Tab':
+        setOpen(false);
+        break;
+      case 'ArrowDown':
+        e.preventDefault();
+        items[(current + 1) % items.length].focus();
+        break;
+      case 'ArrowUp':
+        e.preventDefault();
+        items[(current <= 0 ? items.length : current) - 1].focus();
+        break;
+      case 'Home':
+        e.preventDefault();
+        items[0].focus();
+        break;
+      case 'End':
+        e.preventDefault();
+        items[items.length - 1].focus();
+        break;
+    }
+  };
+
+  const renderEntry = (entry: (typeof entries)[number], index: number) => (
+    <Fragment key={entry.key}>
+      {entry.startsGroup && <div role="separator" className="my-1 border-t border-bambu-dark-tertiary" />}
+      <button
+        ref={(el) => {
+          itemRefs.current[index] = el;
+        }}
+        type="button"
+        role={entry.role}
+        aria-checked={entry.checked}
+        tabIndex={-1}
+        onClick={entry.onSelect}
+        className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm text-white hover:bg-bambu-dark focus:bg-bambu-dark focus:outline-none transition-colors"
+      >
+        <Check className={`w-3.5 h-3.5 flex-shrink-0 text-bambu-green ${entry.checked ? '' : 'invisible'}`} />
+        <span className="truncate">{entry.label}</span>
+      </button>
+    </Fragment>
+  );
+
+  return (
+    <div ref={containerRef} className="relative" onKeyDown={handleKeyDown}>
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={t('fileManager.folderDisplayMenu')}
+        title={t('fileManager.folderDisplayMenu')}
+        data-testid="folder-display-menu"
+        className="flex items-center p-2 rounded-lg bg-bambu-dark text-bambu-gray hover:text-white transition-colors"
+      >
+        <SlidersHorizontal className="w-4 h-4" />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          aria-label={t('fileManager.folderDisplayMenu')}
+          className="absolute right-0 top-full mt-1 z-30 min-w-[14rem] py-1 rounded-lg bg-bambu-dark-secondary border border-bambu-dark-tertiary shadow-xl"
+        >
+          {/* A menu owns menuitems, separators and groups — nothing generic in
+              between — so the entries are fragments and the heading sits
+              inside the group it names. */}
+          <div role="group" aria-label={t('fileManager.folderSort')}>
+            <div
+              aria-hidden="true"
+              className="px-3 py-1 text-xs font-medium uppercase tracking-wide text-bambu-gray"
+            >
+              {t('fileManager.folderSort')}
+            </div>
+            {entries.slice(0, SORT_ENTRY_COUNT).map(renderEntry)}
+          </div>
+          <div role="separator" className="my-1 border-t border-bambu-dark-tertiary" />
+          {entries.slice(SORT_ENTRY_COUNT).map((entry, i) => renderEntry(entry, i + SORT_ENTRY_COUNT))}
+        </div>
+      )}
     </div>
   );
 }
@@ -3603,6 +3816,32 @@ export function FileManagerPage() {
               <LayoutGrid className={`w-4 h-4 ${folderTilesHidden ? 'opacity-50' : ''}`} />
             </button>
           )}
+          {/* Folder ordering and display. Always here, whatever the sidebar
+              is doing: the ordering reaches the tiles, the columns and the
+              path bar, so it cannot live in a pane that can be switched off. */}
+          <FolderDisplayMenu
+            sortField={folderSortField}
+            onSortFieldChange={(value) => {
+              setFolderSortField(value);
+              localStorage.setItem('library-folder-sort-field', value);
+            }}
+            sortDirection={folderSortDirection}
+            onSortDirectionChange={(value) => {
+              setFolderSortDirection(value);
+              localStorage.setItem('library-folder-sort-direction', value);
+            }}
+            collapseByDefault={collapseFoldersByDefault}
+            onCollapseByDefaultChange={(value) => {
+              setCollapseFoldersByDefault(value);
+              localStorage.setItem('library-collapse-folders', String(value));
+            }}
+            wrapNames={wrapFolderNames}
+            onWrapNamesChange={(value) => {
+              setWrapFolderNames(value);
+              localStorage.setItem('library-wrap-folders', String(value));
+            }}
+            t={t}
+          />
           <button
             type="button"
             onClick={handleToggleSidebar}
@@ -3817,69 +4056,11 @@ export function FileManagerPage() {
               <div className="w-0.5 h-0.5 rounded-full bg-white/70" />
             </div>
           </div>
+          {/* The header carries the sidebar's own furniture and nothing else:
+              the folder sort and display preferences moved to the toolbar,
+              where they are reachable with the tree switched off too. */}
           <div className="p-3 border-b border-bambu-dark-tertiary flex items-center justify-between">
             <h2 className="text-sm font-medium text-white">{t('fileManager.folders')}</h2>
-            <div className="flex items-center gap-1">
-              {/* Folder tree sort (#1770). Dropdown drives the comparator;
-                  direction button flips asc/desc. Both persist to localStorage
-                  on change so the choice survives reloads. */}
-              <select
-                value={folderSortField}
-                onChange={(e) => {
-                  const v = e.target.value === 'activity' ? 'activity' : 'name';
-                  setFolderSortField(v);
-                  localStorage.setItem('library-folder-sort-field', v);
-                }}
-                className="text-xs px-1 py-0.5 rounded bg-bambu-dark border border-bambu-dark-tertiary text-bambu-gray focus:outline-none focus:border-bambu-green"
-                title={t('fileManager.folderSort')}
-                aria-label={t('fileManager.folderSort')}
-              >
-                <option value="name">{t('fileManager.folderSortByName')}</option>
-                <option value="activity">{t('fileManager.folderSortByActivity')}</option>
-              </select>
-              <button
-                onClick={() => {
-                  const newValue = folderSortDirection === 'asc' ? 'desc' : 'asc';
-                  setFolderSortDirection(newValue);
-                  localStorage.setItem('library-folder-sort-direction', newValue);
-                }}
-                className="text-bambu-gray hover:text-white hover:bg-bambu-dark p-1 rounded transition-colors"
-                title={folderSortDirection === 'asc' ? t('fileManager.ascending') : t('fileManager.descending')}
-                aria-label={folderSortDirection === 'asc' ? t('fileManager.ascending') : t('fileManager.descending')}
-              >
-                {folderSortDirection === 'asc' ? <SortAsc className="w-3.5 h-3.5" /> : <SortDesc className="w-3.5 h-3.5" />}
-              </button>
-              <button
-                onClick={() => {
-                  const newValue = !collapseFoldersByDefault;
-                  setCollapseFoldersByDefault(newValue);
-                  localStorage.setItem('library-collapse-folders', String(newValue));
-                }}
-                className={`text-xs px-1.5 py-0.5 rounded transition-colors ${
-                  collapseFoldersByDefault
-                    ? 'bg-bambu-green/20 text-bambu-green'
-                    : 'text-bambu-gray hover:text-white hover:bg-bambu-dark'
-                }`}
-                title={collapseFoldersByDefault ? t('fileManager.expandFoldersByDefault') : t('fileManager.collapseFoldersByDefault')}
-              >
-                {t('fileManager.collapse')}
-              </button>
-              <button
-                onClick={() => {
-                  const newValue = !wrapFolderNames;
-                  setWrapFolderNames(newValue);
-                  localStorage.setItem('library-wrap-folders', String(newValue));
-                }}
-                className={`text-xs px-1.5 py-0.5 rounded transition-colors ${
-                  wrapFolderNames
-                    ? 'bg-bambu-green/20 text-bambu-green'
-                    : 'text-bambu-gray hover:text-white hover:bg-bambu-dark'
-                }`}
-                title={wrapFolderNames ? t('fileManager.disableTextWrapping') : t('fileManager.enableTextWrapping')}
-              >
-                {t('fileManager.wrap')}
-              </button>
-            </div>
           </div>
           <div className="flex-1 overflow-y-auto p-2">
             {/* All Files = the user's own uploaded / managed-storage files
