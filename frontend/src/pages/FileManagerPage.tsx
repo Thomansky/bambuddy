@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useMemo, useEffect, lazy, Suspense } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -1764,36 +1765,319 @@ function ColumnFileRow({ file, isSelected, isFocused, showModified, thumbnailVer
   );
 }
 
+// Resolve a typed path — `Kunden/RAFI/N1125035` — against the folder tree.
+// Explorer's rules: either separator, a leading or trailing one, and case does
+// not matter. Returns the folder's id, null for the root (an empty path), and
+// undefined when no such folder exists.
+function resolveTypedPath(tree: LibraryFolderTree[], typed: string): number | null | undefined {
+  const segments = typed.split(/[\\/]+/).map((part) => part.trim()).filter(Boolean);
+  if (segments.length === 0) return null;
+  let level = tree;
+  let found: LibraryFolderTree | undefined;
+  for (const segment of segments) {
+    found = level.find((folder) => folder.name.toLowerCase() === segment.toLowerCase());
+    if (!found) return undefined;
+    level = found.children;
+  }
+  return found!.id;
+}
+
+// Both of the path bar's menus hang off a button inside the crumb row, and
+// that row clips what leaves it (`overflow-hidden`, so a long chain can never
+// push the pane wider). An in-tree popover is clipped away by exactly that: it
+// opens below a one-line row, i.e. entirely outside the clip rect, and z-index
+// does not escape an overflow clip — the list is in the DOM, visible to a test
+// that does no layout, and painted nowhere. So it goes through a portal to
+// <body>, pinned under its button with `position: fixed`, the way the project
+// cards' hover preview escapes their rounded-corner clip (#1155).
+const PATH_MENU_WIDTH = 288; // max-w-[18rem]: the widest the list gets
+const PATH_MENU_GAP = 4;
+const PATH_MENU_EDGE = 8;
+
+function pathMenuPosition(anchor: HTMLElement | null) {
+  const rect = anchor?.getBoundingClientRect();
+  if (!rect) return { left: PATH_MENU_EDGE, top: PATH_MENU_GAP };
+  // Keep the list on screen when the crumb it hangs off sits near the edge.
+  const room = window.innerWidth - PATH_MENU_WIDTH - PATH_MENU_EDGE;
+  return { left: Math.max(PATH_MENU_EDGE, Math.min(rect.left, room)), top: rect.bottom + PATH_MENU_GAP };
+}
+
+interface PathBarFolderMenuProps {
+  anchorRef: React.RefObject<HTMLElement | null>;
+  menuRef: React.RefObject<HTMLDivElement | null>;
+  folders: LibraryFolderTree[];
+  onSelect: (id: number) => void;
+  onKeyDown?: (e: React.KeyboardEvent<HTMLDivElement>) => void;
+  t: TFunction;
+}
+
+function PathBarFolderMenu({ anchorRef, menuRef, folders, onSelect, onKeyDown, t }: PathBarFolderMenuProps) {
+  const [pos, setPos] = useState(() => pathMenuPosition(anchorRef.current));
+
+  // Viewport coordinates go stale as soon as anything scrolls or resizes; the
+  // capture phase catches a scrolling pane as well as the window itself.
+  useEffect(() => {
+    const place = () => setPos(pathMenuPosition(anchorRef.current));
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
+  }, [anchorRef]);
+
+  return createPortal(
+    <div
+      ref={menuRef}
+      role="menu"
+      onKeyDown={onKeyDown}
+      style={{ left: pos.left, top: pos.top }}
+      className="fixed z-[60] min-w-[10rem] max-w-[18rem] max-h-72 overflow-y-auto py-1 rounded-lg bg-bambu-dark-secondary border border-bambu-dark-tertiary shadow-xl"
+    >
+      {folders.map((folder) => (
+        <button
+          key={folder.id}
+          type="button"
+          role="menuitem"
+          onClick={() => onSelect(folder.id)}
+          aria-label={folderLabel(folder)}
+          title={folderLabel(folder)}
+          className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm text-white hover:bg-bambu-dark transition-colors"
+        >
+          <FolderOpen className="w-3.5 h-3.5 flex-shrink-0 text-bambu-green" />
+          <FolderNumber number={folder.number} t={t} />
+          <span className="truncate">{folder.name}</span>
+        </button>
+      ))}
+    </div>,
+    document.body,
+  );
+}
+
+// The `›` between two crumbs, which also lists what sits inside the crumb to
+// its left — Explorer's sideways step, from a deep folder straight to one of
+// its uncles without walking up first. With nothing to list it stays the plain
+// glyph it was.
+interface PathSeparatorProps {
+  folders: LibraryFolderTree[];
+  onSelectFolder: (id: number) => void;
+  t: TFunction;
+}
+
+function PathSeparator({ folders, onSelectFolder, t }: PathSeparatorProps) {
+  const [open, setOpen] = useState(false);
+  // A span, not a div: the separator renders inside a crumb's <span>, which
+  // may only hold phrasing content. The list itself is portalled out.
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handlePointerDown = (e: MouseEvent) => {
+      // The list hangs off <body>, so "inside" is either half of the pair —
+      // without the menu half, the mousedown on an entry would close the list
+      // before its own click could fire.
+      const target = e.target as Node;
+      if (!triggerRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [open]);
+
+  // Focus the list as it opens, so Enter and then the arrow keys walk it
+  // without a second Tab.
+  useEffect(() => {
+    if (open) menuRef.current?.querySelector('button')?.focus();
+  }, [open]);
+
+  const glyph = <ChevronRightIcon className="w-3.5 h-3.5 flex-shrink-0 text-bambu-gray/60" aria-hidden="true" />;
+  if (folders.length === 0) return glyph;
+
+  const walk = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      setOpen(false);
+      triggerRef.current?.focus();
+      return;
+    }
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    const items = Array.from(menuRef.current?.querySelectorAll('button') ?? []);
+    const at = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next = e.key === 'ArrowDown' ? at + 1 : at - 1;
+    items[(next + items.length) % items.length]?.focus();
+  };
+
+  return (
+    <span className="inline-flex flex-shrink-0">
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={t('fileManager.pathBar.siblings')}
+        title={t('fileManager.pathBar.siblings')}
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center px-0.5 py-1 rounded text-bambu-gray hover:text-white hover:bg-bambu-dark transition-colors"
+      >
+        {glyph}
+      </button>
+      {open && (
+        <PathBarFolderMenu
+          anchorRef={triggerRef}
+          menuRef={menuRef}
+          folders={folders}
+          onSelect={(id) => {
+            setOpen(false);
+            onSelectFolder(id);
+          }}
+          onKeyDown={walk}
+          t={t}
+        />
+      )}
+    </span>
+  );
+}
+
 // Explorer-style path bar: the chain from the library root down to the
 // selected folder, above the file list in every view mode. Every ancestor is
 // a button that selects it; the current folder is plain text. The bar must
 // never wrap or push the pane wider, so a long chain keeps the root and the
-// last two crumbs and folds the rest into a menu.
+// last two crumbs and folds the rest into a menu. Clicking past the last crumb
+// — or F2 anywhere in the bar — swaps the crumbs for the path as text, the
+// other half of what Explorer does here.
 interface PathBarProps {
   rootLabel: string;
   rootIsExternal: boolean;
   path: LibraryFolderTree[];
-  // A location inside the root that is not a folder — today only the root's
-  // "No folder" listing. Shown as the trailing crumb, which turns the root
-  // crumb into the way back out.
+  // The bucket's top-level folders: what a typed path resolves against, and
+  // what the separator after the root lists.
+  tree: LibraryFolderTree[];
+  // A location inside the root that is not a folder — the root's "No folder"
+  // listing, or its "Recent" start page. Shown as the trailing crumb, which
+  // turns the root crumb into the way back out.
   leafLabel?: string;
   onSelectRoot: () => void;
   onSelectFolder: (id: number) => void;
   t: TFunction;
 }
 
-function PathBar({ rootLabel, rootIsExternal, path, leafLabel, onSelectRoot, onSelectFolder, t }: PathBarProps) {
+function PathBar({
+  rootLabel,
+  rootIsExternal,
+  path,
+  tree,
+  leafLabel,
+  onSelectRoot,
+  onSelectFolder,
+  t,
+}: PathBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const [editing, setEditing] = useState(false);
+  const [typed, setTyped] = useState('');
+  const [unknown, setUnknown] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const editAffordanceRef = useRef<HTMLButtonElement>(null);
+  const returnFocus = useRef(false);
 
   useEffect(() => {
     if (!menuOpen) return;
     const handlePointerDown = (e: MouseEvent) => {
-      if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false);
+      // Both halves: the list itself hangs off <body>, not off the trigger.
+      const target = e.target as Node;
+      if (!menuTriggerRef.current?.contains(target) && !menuRef.current?.contains(target)) setMenuOpen(false);
     };
     document.addEventListener('mousedown', handlePointerDown);
     return () => document.removeEventListener('mousedown', handlePointerDown);
   }, [menuOpen]);
+
+  // Leaving the box must not throw the user's place away. The input unmounts
+  // with the whole bar, so without this the browser falls back to <body> and
+  // the next Tab restarts at the top of the page; Escape and a resolved path
+  // both put focus back on the affordance that opened the box.
+  useEffect(() => {
+    if (editing || !returnFocus.current) return;
+    returnFocus.current = false;
+    editAffordanceRef.current?.focus();
+  }, [editing]);
+
+  const pathText = path.map((folder) => folder.name).join('/');
+
+  // Selected on open, so Ctrl+C takes the path and typing replaces it — the
+  // copy route for people who reach for the keyboard rather than the button.
+  useEffect(() => {
+    if (editing) inputRef.current?.select();
+  }, [editing]);
+
+  const startEditing = () => {
+    setTyped(pathText);
+    setUnknown(false);
+    setEditing(true);
+  };
+
+  // Closing by keyboard, which owes the keyboard its place back. A blur does
+  // not: focus has already gone somewhere the user picked.
+  const stopEditing = () => {
+    returnFocus.current = true;
+    setEditing(false);
+  };
+
+  const submit = () => {
+    const resolved = resolveTypedPath(tree, typed);
+    if (resolved === undefined) {
+      // Nothing matched: keep what was typed on screen and say so. Navigating
+      // anyway or clearing the box would both throw away the correction the
+      // user is one character away from making.
+      setUnknown(true);
+      return;
+    }
+    stopEditing();
+    if (resolved === null) onSelectRoot();
+    else onSelectFolder(resolved);
+  };
+
+  if (editing) {
+    return (
+      <div data-testid="library-path-editor" className="mb-3 min-w-0">
+        <label htmlFor="library-path-input" className="sr-only">
+          {t('fileManager.pathBar.editPath')}
+        </label>
+        <input
+          id="library-path-input"
+          ref={inputRef}
+          type="text"
+          autoFocus
+          value={typed}
+          aria-invalid={unknown}
+          aria-describedby={unknown ? 'library-path-error' : undefined}
+          onChange={(e) => {
+            setTyped(e.target.value);
+            setUnknown(false);
+          }}
+          onBlur={() => setEditing(false)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              submit();
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              stopEditing();
+            }
+          }}
+          className={`w-full px-2 py-1 rounded bg-bambu-dark border text-sm text-white focus:outline-none ${
+            unknown ? 'border-red-500 focus:border-red-500' : 'border-bambu-dark-tertiary focus:border-bambu-green'
+          }`}
+        />
+        {unknown && (
+          <p id="library-path-error" role="alert" className="mt-1 text-xs text-red-400">
+            {t('fileManager.pathBar.noSuchFolder')}
+          </p>
+        )}
+      </div>
+    );
+  }
 
   // Keep the first element and the last two; everything between them moves
   // into the ellipsis menu. Root plus three folders still fits on any pane we
@@ -1802,7 +2086,9 @@ function PathBar({ rootLabel, rootIsExternal, path, leafLabel, onSelectRoot, onS
   const collapsed = path.length > 3;
   const hidden = collapsed ? path.slice(0, path.length - 2) : [];
   const visible = collapsed ? path.slice(path.length - 2) : path;
-  const separator = <ChevronRightIcon className="w-3.5 h-3.5 flex-shrink-0 text-bambu-gray/60" aria-hidden="true" />;
+  // What the separator in front of the crumb at full-path index `index` lists:
+  // the contents of the crumb to its left, the bucket's top level at index 0.
+  const levelBefore = (index: number) => (index <= 0 ? tree : path[index - 1].children);
   const crumbClass = 'flex items-center gap-1.5 min-w-0 px-1.5 py-1 rounded transition-colors';
   const rootIcon = rootIsExternal ? (
     <FolderSymlink className="w-4 h-4 flex-shrink-0 text-purple-600 dark:text-purple-400" />
@@ -1814,6 +2100,12 @@ function PathBar({ rootLabel, rootIsExternal, path, leafLabel, onSelectRoot, onS
     <nav
       aria-label={t('fileManager.pathBar.label')}
       data-testid="library-path-bar"
+      onKeyDown={(e) => {
+        if (e.key === 'F2') {
+          e.preventDefault();
+          startEditing();
+        }
+      }}
       className="flex items-center gap-0.5 mb-3 min-w-0 overflow-hidden whitespace-nowrap text-sm"
     >
       {path.length === 0 && !leafLabel ? (
@@ -1835,9 +2127,10 @@ function PathBar({ rootLabel, rootIsExternal, path, leafLabel, onSelectRoot, onS
       )}
       {collapsed && (
         <>
-          {separator}
-          <div ref={menuRef} className="relative flex-shrink-0">
+          <PathSeparator folders={levelBefore(0)} onSelectFolder={onSelectFolder} t={t} />
+          <div className="flex-shrink-0">
             <button
+              ref={menuTriggerRef}
               type="button"
               aria-haspopup="menu"
               aria-expanded={menuOpen}
@@ -1849,38 +2142,26 @@ function PathBar({ rootLabel, rootIsExternal, path, leafLabel, onSelectRoot, onS
               <MoreHorizontal className="w-4 h-4" />
             </button>
             {menuOpen && (
-              <div
-                role="menu"
-                className="absolute left-0 top-full mt-1 z-30 min-w-[10rem] max-w-[18rem] py-1 rounded-lg bg-bambu-dark-secondary border border-bambu-dark-tertiary shadow-xl"
-              >
-                {hidden.map((folder) => (
-                  <button
-                    key={folder.id}
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setMenuOpen(false);
-                      onSelectFolder(folder.id);
-                    }}
-                    aria-label={folderLabel(folder)}
-                    title={folderLabel(folder)}
-                    className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm text-white hover:bg-bambu-dark transition-colors"
-                  >
-                    <FolderOpen className="w-3.5 h-3.5 flex-shrink-0 text-bambu-green" />
-                    <FolderNumber number={folder.number} t={t} />
-                    <span className="truncate">{folder.name}</span>
-                  </button>
-                ))}
-              </div>
+              <PathBarFolderMenu
+                anchorRef={menuTriggerRef}
+                menuRef={menuRef}
+                folders={hidden}
+                onSelect={(id) => {
+                  setMenuOpen(false);
+                  onSelectFolder(id);
+                }}
+                t={t}
+              />
             )}
           </div>
         </>
       )}
       {visible.map((folder, i) => {
         const isCurrent = !leafLabel && i === visible.length - 1;
+        const fullIndex = collapsed ? path.length - 2 + i : i;
         return (
           <span key={folder.id} className="flex items-center gap-0.5 min-w-0">
-            {separator}
+            <PathSeparator folders={levelBefore(fullIndex)} onSelectFolder={onSelectFolder} t={t} />
             {isCurrent ? (
               <span aria-current="page" title={folderLabel(folder)} className={`${crumbClass} text-white font-medium`}>
                 <FolderNumber number={folder.number} t={t} />
@@ -1903,17 +2184,28 @@ function PathBar({ rootLabel, rootIsExternal, path, leafLabel, onSelectRoot, onS
       })}
       {leafLabel && (
         <span className="flex items-center gap-0.5 min-w-0">
-          {separator}
+          <PathSeparator folders={levelBefore(path.length)} onSelectFolder={onSelectFolder} t={t} />
           <span aria-current="page" title={leafLabel} className={`${crumbClass} text-white font-medium`}>
             <span className="truncate">{leafLabel}</span>
           </span>
         </span>
       )}
+      {/* The empty stretch past the last crumb, the way Explorer does it:
+          click it (or press Enter on it, or F2 anywhere in the bar) and the
+          crumbs become the path as text. */}
+      <button
+        ref={editAffordanceRef}
+        type="button"
+        onClick={startEditing}
+        aria-label={t('fileManager.pathBar.editPath')}
+        title={t('fileManager.pathBar.editPath')}
+        className="flex-1 self-stretch min-w-[1.5rem] rounded cursor-text hover:bg-bambu-dark/50 transition-colors"
+      />
       {/* The chain as text, for Explorer / the slicer / a mail. The root has
           no path, so at the root there is nothing to copy. */}
       {path.length > 0 && (
         <CopyButton
-          value={path.map((folder) => folder.name).join('/')}
+          value={pathText}
           titleKey="fileManager.copyPath"
           copiedTitleKey="fileManager.toast.pathCopied"
           className="ml-1 flex-shrink-0 p-1 rounded text-bambu-gray hover:text-white hover:bg-bambu-dark transition-colors"
@@ -2142,6 +2434,10 @@ export function FileManagerPage() {
   // not a filter, so leaving the root drops it. Only reachable while the root
   // lists folders instead of every file.
   const [showUnfoldered, setShowUnfoldered] = useState(false);
+  // The root crumb has been used to step out of the recent start page into the
+  // flat listing it names. A location inside the root as well, so leaving the
+  // root drops it and coming back lands on the start page again.
+  const [showAllAtRoot, setShowAllAtRoot] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<number[]>([]);
   const [showNewFolderModal, setShowNewFolderModal] = useState(false);
   const [showExternalFolderModal, setShowExternalFolderModal] = useState(false);
@@ -2446,13 +2742,30 @@ export function FileManagerPage() {
     );
   }, []);
 
-  // The root either lists every file in the library — no folder, no project and
-  // no tag filter narrows the query, so the server answers with all of it — or
-  // its own top-level folders. A search or a tag filter means "look
-  // everywhere", so both restore the flat listing whatever the setting says.
+  // The root shows one of three things: every file in the library — no folder,
+  // no project and no tag filter narrows the query, so the server answers with
+  // all of it — or its own top-level folders, or the files most recently added
+  // or changed. A search or a tag filter means "look everywhere", so both
+  // restore the flat listing whatever the setting says.
   const rootQueryOverridden = searchQuery.trim().length > 0 || selectedTagIds.length > 0;
-  const rootListsFolders =
-    selectedFolderId === null && !(settings?.library_root_lists_all_files ?? true) && !rootQueryOverridden;
+  // "recent" is the only one of the three that is a window rather than a whole
+  // listing, so two more things drop it back to the flat one. A type or user
+  // filter, because the page applies those to the rows it holds: over a capped
+  // window that answers "no STL files" for a library full of them, one control
+  // away from the search box that looks everywhere. And the root crumb, which
+  // says "All Files" — at the recent root it is the only way out of the start
+  // page, since every other piece of state it clears is already clear.
+  // `folders` needs neither: its listings are complete, so filtering them here
+  // is the whole truth, and its root crumb genuinely leaves "No folder".
+  const rootWindowFiltered = filterType !== 'all' || filterUsername.trim().length > 0;
+  const configuredRootView = settings?.library_root_view ?? 'all';
+  const rootViewSetting =
+    configuredRootView === 'recent' && (rootWindowFiltered || showAllAtRoot) ? 'all' : configuredRootView;
+  const rootView = selectedFolderId === null && !rootQueryOverridden ? rootViewSetting : 'all';
+  const rootListsFolders = rootView === 'folders';
+  // The start page: the newest files across the whole library, ordered and
+  // capped by the server.
+  const rootRecentView = rootView === 'recent';
   // Inside the root, "No folder": the files that belong to no folder at all.
   const rootUnfolderedView = rootListsFolders && showUnfoldered;
   // Folder tiles only — the whole point is not to ask the server for the rows.
@@ -2464,7 +2777,15 @@ export function FileManagerPage() {
   const rootAwaitingSetting = selectedFolderId === null && settingsLoading;
 
   const { data: fetchedFiles, isLoading: filesQueryLoading } = useQuery({
-    queryKey: ['library-files', selectedFolderId, topLevelView, searchExpandsSubfolders, tagFilterKey, rootUnfolderedView],
+    queryKey: [
+      'library-files',
+      selectedFolderId,
+      topLevelView,
+      searchExpandsSubfolders,
+      tagFilterKey,
+      rootUnfolderedView,
+      rootRecentView,
+    ],
     // When a specific folder is selected we list its contents directly; when
     // no folder is selected the topLevelView pseudo-node decides whether the
     // server scopes the result to internal-managed-storage files or to the
@@ -2479,6 +2800,7 @@ export function FileManagerPage() {
         selectedFolderId === null ? topLevelView : undefined,
         searchExpandsSubfolders,
         tagFilterKey,
+        rootRecentView,
       ),
     enabled: !rootTilesOnly && !rootAwaitingSetting,
   });
@@ -2513,10 +2835,13 @@ export function FileManagerPage() {
         query: searchQuery,
         filterType,
         filterUsername,
-        sortField,
-        sortDirection,
+        // The recent root IS an order: the server picked its rows by recency
+        // and cut them off, so any other sort would show an arbitrary window
+        // in an arbitrary order. The controls say so by being disabled.
+        sortField: rootRecentView ? 'date' : sortField,
+        sortDirection: rootRecentView ? 'desc' : sortDirection,
       }),
-    [files, searchQuery, filterType, filterUsername, sortField, sortDirection],
+    [files, searchQuery, filterType, filterUsername, sortField, sortDirection, rootRecentView],
   );
 
   // Check if disk space is low
@@ -3092,15 +3417,20 @@ export function FileManagerPage() {
   const currentBucketIsExternal =
     folderPath.length > 0 ? Boolean(folderPath[0].is_external) : topLevelView === 'external';
 
+  // The current bucket's top-level folders. A typed path in the path bar
+  // resolves against these, and its root separator lists them.
+  const bucketRootFolders = useMemo(
+    () => (sortedFolders ?? []).filter((f) => Boolean(f.is_external) === currentBucketIsExternal),
+    [sortedFolders, currentBucketIsExternal],
+  );
+
   // The folders one level below where the user is standing — the bucket's
   // top-level folders at the root, otherwise the selected folder's children.
   // This is what the content area offers when the sidebar is switched off.
   const currentFolderChildren = useMemo(() => {
-    if (selectedFolderId === null) {
-      return (sortedFolders ?? []).filter((f) => Boolean(f.is_external) === currentBucketIsExternal);
-    }
+    if (selectedFolderId === null) return bucketRootFolders;
     return folderPath[folderPath.length - 1]?.children ?? [];
-  }, [sortedFolders, selectedFolderId, currentBucketIsExternal, folderPath]);
+  }, [bucketRootFolders, selectedFolderId, folderPath]);
 
   // One column per level: the top-level bucket, then the children of each
   // folder along the path. `folderId` is the folder the column is the inside
@@ -3286,10 +3616,12 @@ export function FileManagerPage() {
     setSelectedFiles([]);
   }, [selectedFolderId]);
 
-  // Descending into a folder leaves the root, and with it the root's
-  // "No folder" listing.
+  // Descending into a folder leaves the root, and with it both of the places
+  // inside it: the "No folder" listing and the step out of the start page.
   useEffect(() => {
-    if (selectedFolderId !== null) setShowUnfoldered(false);
+    if (selectedFolderId === null) return;
+    setShowUnfoldered(false);
+    setShowAllAtRoot(false);
   }, [selectedFolderId]);
 
   const rootCrumbLabel = currentBucketIsExternal ? t('fileManager.allExternal') : t('fileManager.allFiles');
@@ -3302,6 +3634,10 @@ export function FileManagerPage() {
   const selectPathRoot = () => {
     setColumnsFocusedFileId(null);
     setShowUnfoldered(false);
+    // Standing on the start page already: the crumb says "All Files", so it
+    // shows them. Without this it would set the state it is already in and the
+    // one way out of the recent view would do nothing.
+    if (rootRecentView) setShowAllAtRoot(true);
     setTopLevelView(currentBucketIsExternal ? 'external' : 'internal');
     setSelectedFolderId(null);
   };
@@ -4110,13 +4446,15 @@ export function FileManagerPage() {
               {/* Sort */}
               <div className="flex items-center gap-2">
                 <select
-                  value={sortField}
+                  value={rootRecentView ? 'date' : sortField}
+                  disabled={rootRecentView}
+                  title={rootRecentView ? t('fileManager.sortedByRecent') : undefined}
                   onChange={(e) => {
                     const newField = e.target.value as SortField;
                     setSortField(newField);
                     localStorage.setItem('library-sort-field', newField);
                   }}
-                  className="bg-bambu-dark border border-bambu-dark-tertiary rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-bambu-green"
+                  className="bg-bambu-dark border border-bambu-dark-tertiary rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-bambu-green disabled:opacity-50"
                 >
                   <option value="name">{t('common.name')}</option>
                   <option value="date">{t('common.date')}</option>
@@ -4130,10 +4468,17 @@ export function FileManagerPage() {
                     localStorage.setItem('library-sort-direction', newDir);
                     return newDir;
                   })}
-                  className="p-1.5 rounded bg-bambu-dark border border-bambu-dark-tertiary hover:border-bambu-green transition-colors"
-                  title={sortDirection === 'asc' ? t('fileManager.ascending') : t('fileManager.descending')}
+                  disabled={rootRecentView}
+                  className="p-1.5 rounded bg-bambu-dark border border-bambu-dark-tertiary hover:border-bambu-green transition-colors disabled:opacity-50"
+                  title={
+                    rootRecentView
+                      ? t('fileManager.sortedByRecent')
+                      : sortDirection === 'asc'
+                        ? t('fileManager.ascending')
+                        : t('fileManager.descending')
+                  }
                 >
-                  {sortDirection === 'asc' ? (
+                  {!rootRecentView && sortDirection === 'asc' ? (
                     <SortAsc className="w-4 h-4 text-white" />
                   ) : (
                     <SortDesc className="w-4 h-4 text-white" />
@@ -4299,12 +4644,19 @@ export function FileManagerPage() {
               root with nothing below it, where the one crumb it would draw
               only repeats the name of the view you are already looking at and
               costs a row for it. */}
-          {(folderPath.length > 0 || rootUnfolderedView) && (
+          {(folderPath.length > 0 || rootUnfolderedView || rootRecentView) && (
           <PathBar
             rootLabel={rootCrumbLabel}
             rootIsExternal={currentBucketIsExternal}
             path={folderPath}
-            leafLabel={rootUnfolderedView ? t('fileManager.noFolder') : undefined}
+            tree={bucketRootFolders}
+            leafLabel={
+              rootUnfolderedView
+                ? t('fileManager.noFolder')
+                : rootRecentView
+                  ? t('fileManager.recentCrumb')
+                  : undefined
+            }
             onSelectRoot={selectPathRoot}
             onSelectFolder={selectFolderFromChrome}
             t={t}

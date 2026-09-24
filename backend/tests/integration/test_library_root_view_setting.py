@@ -1,19 +1,18 @@
-"""The File Manager root can show folders instead of every file.
+"""What the File Manager root shows, and the counts the choice needs.
 
-`library_root_lists_all_files` defaults to True — exactly today's behaviour, so
-no existing install changes on upgrade — and the frontend turns it off to make
-the root list its top-level folders instead. Two things have to hold for that
-to work:
+`library_root_view` is one of `all` / `folders` / `recent` and defaults to
+`all` — exactly today's behaviour, so no existing install changes on upgrade.
+Three things have to hold for the setting to work:
 
-  * the flag survives a round trip as a *bool*, including from a row whose
-    stored value is not a boolean the response model can parse. The settings
-    table stores strings, and the PUT/PATCH path writes the literal "None" for
-    an explicit null; a key missing from the boolean list in
-    ``_build_settings_response`` reaches ``AppSettings(**settings_dict)`` as
-    that raw string, and validation then fails and takes the *whole* settings
-    response down with it — the #2905 failure mode, one endpoint the entire
-    app depends on. (Pydantic coerces "true"/"false" itself, so the happy
-    round trip alone does not pin that list entry.)
+  * it survives a round trip as one of the three strings, including from a row
+    whose stored value is none of them. The settings table stores strings, and
+    the PUT/PATCH path writes the literal "None" for an explicit null; without
+    the ``_coerce_library_root_view`` fallback that raw string reaches the
+    response model, fails validation and takes the *whole* settings response
+    down with it — the #2905 failure mode, one endpoint the entire app depends
+    on.
+  * a value outside the three is refused on the way in, rather than stored and
+    silently reinterpreted on the way out.
   * ``/library/stats`` reports how many files sit in no folder at all, per
     bucket. The root offers a "No folder" entry only when there is something
     behind it, and asking the listing endpoint that question would issue the
@@ -28,47 +27,57 @@ from backend.app.models.library import LibraryFile, LibraryFolder
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_root_lists_all_files_defaults_to_true(async_client: AsyncClient):
+async def test_root_view_defaults_to_all(async_client: AsyncClient):
     """An install that has never touched the setting keeps its old root."""
     response = await async_client.get("/api/v1/settings/")
     assert response.status_code == 200
-    assert response.json()["library_root_lists_all_files"] is True
+    assert response.json()["library_root_view"] == "all"
 
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_root_lists_all_files_round_trips_as_a_bool(async_client: AsyncClient):
-    """Off must read back as False, from the PATCH echo and from a fresh GET."""
-    patched = await async_client.patch("/api/v1/settings/", json={"library_root_lists_all_files": False})
+@pytest.mark.parametrize("view", ["folders", "recent", "all"])
+async def test_root_view_round_trips(async_client: AsyncClient, view: str):
+    """Each of the three reads back from the PATCH echo and from a fresh GET."""
+    patched = await async_client.patch("/api/v1/settings/", json={"library_root_view": view})
     assert patched.status_code == 200
-    assert patched.json()["library_root_lists_all_files"] is False
+    assert patched.json()["library_root_view"] == view
 
     reread = await async_client.get("/api/v1/settings/")
     assert reread.status_code == 200
-    assert reread.json()["library_root_lists_all_files"] is False
+    assert reread.json()["library_root_view"] == view
 
-    back_on = await async_client.patch("/api/v1/settings/", json={"library_root_lists_all_files": True})
-    assert back_on.json()["library_root_lists_all_files"] is True
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_a_fourth_value_is_refused(async_client: AsyncClient):
+    """Refused on the way in, so nothing unreadable is ever stored."""
+    response = await async_client.patch("/api/v1/settings/", json={"library_root_view": "everything"})
+    assert response.status_code == 422
+
+    reread = await async_client.get("/api/v1/settings/")
+    assert reread.json()["library_root_view"] == "all"
 
 
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_a_stored_none_does_not_take_the_settings_response_down(async_client: AsyncClient):
-    """The key belongs in the boolean list in ``_build_settings_response``.
+    """An unreadable row falls back to the default instead of 500ing.
 
     A null in the payload is stored as the literal string "None" (see the
-    ``value is None`` branch of ``update_settings``). Only the boolean list
-    turns that back into a bool; without it the raw string reaches the
-    response model, fails validation and 500s every settings read — not just
-    this one field.
+    ``value is None`` branch of ``update_settings``). Only the
+    ``_coerce_library_root_view`` fallback turns that back into a view;
+    without it the raw string reaches the response model, fails validation
+    and 500s every settings read — not just this one field.
     """
-    patched = await async_client.patch("/api/v1/settings/", json={"library_root_lists_all_files": None})
+    await async_client.patch("/api/v1/settings/", json={"library_root_view": "recent"})
+    patched = await async_client.patch("/api/v1/settings/", json={"library_root_view": None})
     assert patched.status_code == 200
-    assert patched.json()["library_root_lists_all_files"] is False
+    assert patched.json()["library_root_view"] == "all"
 
     reread = await async_client.get("/api/v1/settings/")
     assert reread.status_code == 200
-    assert reread.json()["library_root_lists_all_files"] is False
+    assert reread.json()["library_root_view"] == "all"
 
 
 @pytest.mark.asyncio

@@ -1353,9 +1353,10 @@ describe('FileManagerPage', () => {
       expect(pathBar().queryByRole('button', { name: 'Kunden' })).not.toBeInTheDocument();
       expect(pathBar().queryByRole('button', { name: 'RAFI' })).not.toBeInTheDocument();
 
-      // …the rest are behind the ellipsis.
+      // …the rest are behind the ellipsis. The list itself hangs off <body>:
+      // the bar clips what leaves it, so a menu inside it is painted nowhere.
       await user.click(pathBar().getByRole('button', { name: 'Show hidden folders' }));
-      const menu = within(pathBar().getByRole('menu'));
+      const menu = within(screen.getByRole('menu'));
       expect(menu.getByRole('menuitem', { name: 'Kunden' })).toBeInTheDocument();
       expect(menu.getByRole('menuitem', { name: 'RAFI' })).toBeInTheDocument();
 

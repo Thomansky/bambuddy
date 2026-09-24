@@ -8,9 +8,9 @@
  *    which of the two landed on the clipboard.
  *  - selecting the root used to issue `getLibraryFiles(null, false, …)`, which
  *    with no folder, project or tag filter means "every file in the library".
- *    With `library_root_lists_all_files` off that request must not be made at
- *    all; the assertions below watch the msw handler, not the DOM, because
- *    fetching-then-hiding would pass a DOM-only check.
+ *    With `library_root_view` on anything but `all` that request must not be
+ *    made at all; the assertions below watch the msw handler, not the DOM,
+ *    because fetching-then-hiding would pass a DOM-only check.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -83,6 +83,9 @@ const file = (over: Record<string, unknown>) => ({
 });
 
 const rootFile = file({ id: 10, filename: 'loose.3mf' });
+// Alphabetically last, chronologically first — the two orders have to disagree
+// for "newest first" to mean anything.
+const newestFile = file({ id: 13, filename: 'zuletzt.3mf', fs_modified_at: '2026-09-20T00:00:00Z' });
 const jobFile = file({ id: 11, filename: 'part.3mf', folder_id: 3 });
 const nasFile = file({ id: 12, filename: 'nas.3mf', folder_id: 9, is_external: true });
 
@@ -101,9 +104,15 @@ const mockStats = {
 
 /** Every /library/files query string the page issued, newest last. */
 let fileRequests: URLSearchParams[];
-/** The all-files listing: no folder_id, include_root=false, no tag/search scoping. */
+/** The all-files listing: no folder_id, include_root=false, no tag/search scoping.
+ *  The recent root carries the same include_root=false but drops the folder
+ *  scoping server-side and is capped, so it is explicitly not this request. */
 const allFilesRequests = () =>
-  fileRequests.filter((p) => !p.has('folder_id') && p.get('include_root') === 'false');
+  fileRequests.filter(
+    (p) => !p.has('folder_id') && p.get('include_root') === 'false' && !p.has('recent'),
+  );
+/** The recent listing: the whole library, newest first, capped server-side. */
+const recentRequests = () => fileRequests.filter((p) => p.get('recent') === 'true');
 
 /** What /library/stats answers right now — a move changes it mid-test. */
 let statsState = mockStats;
@@ -120,6 +129,9 @@ function useHandlers(settings: Record<string, unknown> = {}, stats = mockStats) 
       if (folderId === '9') return HttpResponse.json([nasFile]);
       if (folderId) return HttpResponse.json([]);
       if (params.get('include_root') === 'true') return HttpResponse.json([rootFile]);
+      // The server orders the recent listing; the page must not re-sort it by
+      // name, so these come back deliberately out of alphabetical order.
+      if (params.get('recent') === 'true') return HttpResponse.json([newestFile, jobFile, rootFile]);
       return HttpResponse.json([rootFile, jobFile, nasFile]);
     }),
     http.get('/api/v1/library/stats', () => HttpResponse.json(statsState)),
@@ -305,8 +317,8 @@ describe('FileManagerPage — what the root lists', () => {
 
   afterEach(() => vi.clearAllMocks());
 
-  it('still lists every file at the root while the setting is on (today’s behaviour)', async () => {
-    useHandlers({ library_root_lists_all_files: true });
+  it('still lists every file at the root on the default setting (today’s behaviour)', async () => {
+    useHandlers({ library_root_view: 'all' });
     render(<FileManagerPage />);
 
     await waitFor(() => expect(screen.getByText('loose.3mf')).toBeInTheDocument());
@@ -315,8 +327,8 @@ describe('FileManagerPage — what the root lists', () => {
     expect(allFilesRequests().length).toBeGreaterThan(0);
   });
 
-  it('issues no all-files request at all with the setting off, and shows the folders', async () => {
-    useHandlers({ library_root_lists_all_files: false });
+  it('issues no all-files request at all in the folders view, and shows the folders', async () => {
+    useHandlers({ library_root_view: 'folders' });
     render(<FileManagerPage />);
 
     // The tiles are the content pane now — the folder name renders in the
@@ -327,7 +339,7 @@ describe('FileManagerPage — what the root lists', () => {
   });
 
   it('offers "No folder" only when unfoldered files exist, and opens exactly their listing', async () => {
-    useHandlers({ library_root_lists_all_files: false });
+    useHandlers({ library_root_view: 'folders' });
     const user = userEvent.setup();
     render(<FileManagerPage />);
 
@@ -341,7 +353,7 @@ describe('FileManagerPage — what the root lists', () => {
   });
 
   it('leaves the folder tiles out of "No folder", which is defined as what they do not hold', async () => {
-    useHandlers({ library_root_lists_all_files: false });
+    useHandlers({ library_root_view: 'folders' });
     const user = userEvent.setup();
     render(<FileManagerPage />);
 
@@ -363,7 +375,7 @@ describe('FileManagerPage — what the root lists', () => {
     // Search is the documented way back to the flat listing with the setting
     // off. A library with no folder rows used to lose the whole toolbar here,
     // which made that override unreachable without a reload.
-    useHandlers({ library_root_lists_all_files: false });
+    useHandlers({ library_root_view: 'folders' });
     server.use(http.get('/api/v1/library/folders', () => HttpResponse.json([])));
     const user = userEvent.setup();
     render(<FileManagerPage />);
@@ -381,7 +393,7 @@ describe('FileManagerPage — what the root lists', () => {
     // The entry is driven entirely by the stats count and the root issues no
     // file listing of its own, so a move that leaves ['library-stats'] cached
     // makes the files it just moved unreachable until a reload.
-    useHandlers({ library_root_lists_all_files: false }, { ...mockStats, unfoldered_files: 0 });
+    useHandlers({ library_root_view: 'folders' }, { ...mockStats, unfoldered_files: 0 });
     let moved = false;
     server.use(
       http.get('/api/v1/library/files', ({ request }) => {
@@ -419,15 +431,15 @@ describe('FileManagerPage — what the root lists', () => {
   });
 
   it('hides "No folder" when nothing sits outside a folder', async () => {
-    useHandlers({ library_root_lists_all_files: false }, { ...mockStats, unfoldered_files: 0 });
+    useHandlers({ library_root_view: 'folders' }, { ...mockStats, unfoldered_files: 0 });
     render(<FileManagerPage />);
 
     await waitFor(() => expect(screen.getAllByText('Kunden').length).toBeGreaterThanOrEqual(2));
     expect(screen.queryByTestId('no-folder-entry')).not.toBeInTheDocument();
   });
 
-  it('brings the flat listing back for a search at the root, setting off', async () => {
-    useHandlers({ library_root_lists_all_files: false });
+  it('brings the flat listing back for a search at the root, folders view', async () => {
+    useHandlers({ library_root_view: 'folders' });
     const user = userEvent.setup();
     render(<FileManagerPage />);
 
@@ -440,12 +452,102 @@ describe('FileManagerPage — what the root lists', () => {
     expect(allFilesRequests().length).toBeGreaterThan(0);
   });
 
+  it('lists the newest files first in the recent view, and never the whole library', async () => {
+    useHandlers({ library_root_view: 'recent' });
+    render(<FileManagerPage />);
+
+    await waitFor(() => expect(screen.getByText('zuletzt.3mf')).toBeInTheDocument());
+    // The server's order survives the page's own sort: by name 'zuletzt.3mf'
+    // would come last, and the stored sort preference is name-ascending.
+    const newest = screen.getByText('zuletzt.3mf');
+    const older = screen.getByText('part.3mf');
+    expect(newest.compareDocumentPosition(older) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(recentRequests().length).toBeGreaterThan(0);
+    expect(allFilesRequests()).toHaveLength(0);
+  });
+
+  it('asks the server for the cap rather than trimming a whole-library answer', async () => {
+    // The point of the flag: the row limit is applied where the rows are, not
+    // after they have crossed the wire.
+    useHandlers({ library_root_view: 'recent' });
+    render(<FileManagerPage />);
+
+    await waitFor(() => expect(recentRequests().length).toBeGreaterThan(0));
+    expect(recentRequests()[0].get('include_root')).toBe('false');
+    expect(recentRequests()[0].has('folder_id')).toBe(false);
+    expect(allFilesRequests()).toHaveLength(0);
+  });
+
+  it('shows the folder tiles above the recent files, and "Recent" as the leaf crumb', async () => {
+    useHandlers({ library_root_view: 'recent' });
+    render(<FileManagerPage />);
+
+    await waitFor(() => expect(screen.getByText('zuletzt.3mf')).toBeInTheDocument());
+    // Sidebar entry + tile, exactly as in the other two views.
+    expect(screen.getAllByText('Kunden').length).toBeGreaterThanOrEqual(2);
+    expect(pathBar().getByText('Recent')).toBeInTheDocument();
+    // The root crumb is the way back out.
+    expect(pathBar().getByText('All Files')).toBeInTheDocument();
+  });
+
+  it('leaves the start page through the root crumb, which lists every file', async () => {
+    useHandlers({ library_root_view: 'recent' });
+    const user = userEvent.setup();
+    render(<FileManagerPage />);
+
+    await waitFor(() => expect(screen.getByText('zuletzt.3mf')).toBeInTheDocument());
+    expect(allFilesRequests()).toHaveLength(0);
+
+    // At the start page every other piece of state the crumb clears is already
+    // clear, so an enabled button that changes nothing is what this guards
+    // against — the label promises the flat listing.
+    await user.click(pathBar().getByText('All Files'));
+
+    await waitFor(() => expect(screen.getByText('nas.3mf')).toBeInTheDocument());
+    expect(allFilesRequests().length).toBeGreaterThan(0);
+    // Out means out: the leaf crumb was the bar's only content, so the bar
+    // itself goes with it and the plain root is the current page again.
+    expect(screen.queryByTestId('library-path-bar')).not.toBeInTheDocument();
+  });
+
+  it('takes a type filter at the start page to the whole library, not to its newest rows', async () => {
+    useHandlers({ library_root_view: 'recent' });
+    const user = userEvent.setup();
+    render(<FileManagerPage />);
+
+    await waitFor(() => expect(screen.getByText('zuletzt.3mf')).toBeInTheDocument());
+    expect(allFilesRequests()).toHaveLength(0);
+
+    // The recent listing is a capped window. Filtering its rows would answer
+    // "nothing of that kind" for a library full of matches, one control along
+    // from the search box that looks everywhere — so the filter drops the cap.
+    await user.selectOptions(screen.getByDisplayValue('All types'), '3mf');
+
+    await waitFor(() => expect(screen.getByText('nas.3mf')).toBeInTheDocument());
+    expect(allFilesRequests().length).toBeGreaterThan(0);
+    expect(screen.queryByTestId('library-path-bar')).not.toBeInTheDocument();
+  });
+
+  it('brings the flat listing back for a search at the root, recent view', async () => {
+    useHandlers({ library_root_view: 'recent' });
+    const user = userEvent.setup();
+    render(<FileManagerPage />);
+
+    await waitFor(() => expect(screen.getByText('zuletzt.3mf')).toBeInTheDocument());
+    expect(allFilesRequests()).toHaveLength(0);
+
+    await user.type(screen.getByPlaceholderText('Search files...'), 'nas');
+
+    await waitFor(() => expect(screen.getByText('nas.3mf')).toBeInTheDocument());
+    expect(allFilesRequests().length).toBeGreaterThan(0);
+  });
+
   it('keeps the library statistics counting the whole library either way', async () => {
     // Not the listing's length: the header comes from getLibraryStats() and
     // must still say 3 files / 4 folders while the root shows only 2 tiles.
     const statsBar = () => screen.getByText('Files:').closest('div')!.parentElement!;
 
-    useHandlers({ library_root_lists_all_files: false });
+    useHandlers({ library_root_view: 'folders' });
     const { unmount } = render(<FileManagerPage />);
     await waitFor(() => expect(screen.getAllByText('Kunden').length).toBeGreaterThanOrEqual(2));
     const foldersFirst = statsBar().textContent;
@@ -454,7 +556,7 @@ describe('FileManagerPage — what the root lists', () => {
     unmount();
 
     fileRequests = [];
-    useHandlers({ library_root_lists_all_files: true });
+    useHandlers({ library_root_view: 'all' });
     render(<FileManagerPage />);
     await waitFor(() => expect(screen.getByText('loose.3mf')).toBeInTheDocument());
     expect(statsBar().textContent).toBe(foldersFirst);
