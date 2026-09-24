@@ -1189,6 +1189,7 @@ export function SettingsPage() {
       baseline.ha_token !== localSettings.ha_token ||
       (baseline.library_archive_mode ?? 'ask') !== (localSettings.library_archive_mode ?? 'ask') ||
       Number(baseline.library_disk_warning_gb ?? 5) !== Number(localSettings.library_disk_warning_gb ?? 5) ||
+      (baseline.library_root_lists_all_files ?? true) !== (localSettings.library_root_lists_all_files ?? true) ||
       (baseline.preferred_slicer ?? 'bambu_studio') !== (localSettings.preferred_slicer ?? 'bambu_studio') ||
       resolveEngine(baseline.slice_engine) !== resolveEngine(localSettings.slice_engine) ||
       (baseline.open_in_slicer ?? null) !== (localSettings.open_in_slicer ?? null) ||
@@ -1308,6 +1309,7 @@ export function SettingsPage() {
         ha_token: localSettings.ha_token,
         library_archive_mode: localSettings.library_archive_mode,
         library_disk_warning_gb: localSettings.library_disk_warning_gb,
+        library_root_lists_all_files: localSettings.library_root_lists_all_files,
         preferred_slicer: localSettings.preferred_slicer,
         slice_engine: localSettings.slice_engine,
         open_in_slicer: localSettings.open_in_slicer,
@@ -2719,6 +2721,25 @@ export function SettingsPage() {
                 <p className="text-xs text-bambu-gray mt-1">
                   {t('settings.lowDiskSpaceDescription')}
                 </p>
+              </div>
+
+              {/* What the File Manager's root shows */}
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-white">{t('settings.libraryRootListsAllFiles')}</p>
+                  <p className="text-xs text-bambu-gray mt-1">
+                    {t('settings.libraryRootListsAllFilesDescription')}
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer flex-shrink-0 mt-0.5">
+                  <input
+                    type="checkbox"
+                    checked={localSettings.library_root_lists_all_files ?? true}
+                    onChange={(e) => updateSetting('library_root_lists_all_files', e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-bambu-dark-tertiary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-bambu-green"></div>
+                </label>
               </div>
 
               {/* Auto-purge (#1008). Admin-only — users without library:purge

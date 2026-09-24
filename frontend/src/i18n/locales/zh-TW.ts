@@ -2901,6 +2901,8 @@ export default {
     createArchiveEntryDescription: '從檔案管理器列印時，可選擇建立歸檔條目',
     lowDiskSpaceWarning: '磁碟空間不足警告',
     lowDiskSpaceDescription: '當可用磁碟空間低於此閾值時顯示警告',
+    libraryRootListsAllFiles: '根目錄列出所有檔案',
+    libraryRootListsAllFilesDescription: '開啟：「所有檔案」列出庫中的每個檔案。關閉：改為顯示頂層資料夾，以及用於不屬於任何資料夾的檔案的「無資料夾」項目。搜尋與標籤篩選一律涵蓋整個庫。',
     printerFirmware: '印表機韌體',
     checkFirmwareDescription: '檢查Bambu Lab的印表機韌體更新',
     bambuddySoftware: 'Bambuddy 軟體',
@@ -4116,6 +4118,9 @@ export default {
     },
     searchFiles: '搜尋檔案...',
     searchSubfoldersHint: '包含子資料夾',
+    pickAFolder: '選擇一個資料夾以查看其檔案',
+    copyPath: '複製路徑',
+    noFolder: '無資料夾',
     pathBar: {
       label: '位置',
       showHidden: '顯示摺疊的資料夾',
@@ -4292,6 +4297,9 @@ export default {
     toast: {
       folderCreated: '資料夾已建立',
       openInSlicerFailed: '無法在切片軟體中開啟',
+      pathCopied: '已複製路徑',
+      folderPathCopied: '已複製資料夾路徑',
+      filePathCopied: '已複製檔案路徑',
       folderDeleted: '資料夾已刪除',
       fileDeleted: '檔案已刪除',
       filesDeleted: '已刪除 {{count}} 個檔案',

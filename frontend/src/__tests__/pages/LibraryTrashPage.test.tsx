@@ -6,10 +6,11 @@
  * empty-trash bulk action, and the admin-only retention setting control.
  */
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
+import { QueryClient } from '@tanstack/react-query';
 import { render } from '../utils';
 import { server } from '../mocks/server';
 import { LibraryTrashPage } from '../../pages/LibraryTrashPage';
@@ -30,7 +31,10 @@ function trashItem(overrides: Partial<Record<string, unknown>> = {}) {
   };
 }
 
-afterEach(() => server.resetHandlers());
+afterEach(() => {
+  server.resetHandlers();
+  vi.restoreAllMocks();
+});
 
 describe('LibraryTrashPage', () => {
   it('shows the empty state when there are no trashed files', async () => {
@@ -84,6 +88,7 @@ describe('LibraryTrashPage', () => {
         return HttpResponse.json({ status: 'success', id: Number(params.id) });
       }),
     );
+    const invalidate = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
 
     render(<LibraryTrashPage />);
 
@@ -91,6 +96,11 @@ describe('LibraryTrashPage', () => {
     await userEvent.click(screen.getByRole('button', { name: /restore/i }));
 
     await waitFor(() => expect(restoreCalledFor).toBe(1));
+    // The restored file counts again, and the File Manager's folders-first
+    // root reads the unfoldered count out of the stats to decide whether to
+    // offer "No folder" — a stale count hides a file that is back.
+    const keys = invalidate.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['library-stats']));
   });
 
   it('prompts before permanently deleting a single file', async () => {

@@ -2909,6 +2909,8 @@ export default {
     createArchiveEntryDescription: 'Beim Drucken aus dem Dateimanager optional einen Archiveintrag erstellen',
     lowDiskSpaceWarning: 'Warnung bei wenig Speicherplatz',
     lowDiskSpaceDescription: 'Warnung anzeigen, wenn freier Speicherplatz unter diesen Schwellenwert fällt',
+    libraryRootListsAllFiles: 'Stammebene zeigt alle Dateien',
+    libraryRootListsAllFilesDescription: 'Ein: „Alle Dateien“ listet jede Datei der Bibliothek auf. Aus: Stattdessen werden die obersten Ordner gezeigt, dazu ein Eintrag „Ohne Ordner“ für Dateien außerhalb jedes Ordners. Suche und Tag-Filter durchsuchen immer die gesamte Bibliothek.',
     // Updates
     printerFirmware: 'Drucker-Firmware',
     checkFirmwareDescription: 'Nach Firmware-Updates von Bambu Lab suchen',
@@ -4131,6 +4133,9 @@ export default {
     },
     searchFiles: 'Dateien suchen...',
     searchSubfoldersHint: 'Inklusive Unterordner',
+    pickAFolder: 'Wähle einen Ordner, um seine Dateien zu sehen',
+    copyPath: 'Pfad kopieren',
+    noFolder: 'Ohne Ordner',
     pathBar: {
       label: 'Pfad',
       showHidden: 'Ausgeblendete Ordner anzeigen',
@@ -4307,6 +4312,9 @@ export default {
     toast: {
       folderCreated: 'Ordner erstellt',
       openInSlicerFailed: 'Konnte nicht im Slicer öffnen',
+      pathCopied: 'Pfad kopiert',
+      folderPathCopied: 'Ordnerpfad kopiert',
+      filePathCopied: 'Dateipfad kopiert',
       folderDeleted: 'Ordner gelöscht',
       fileDeleted: 'Datei gelöscht',
       filesDeleted: '{{count}} Dateien gelöscht',

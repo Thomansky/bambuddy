@@ -2930,6 +2930,8 @@ export default {
     createArchiveEntryDescription: 'When printing from File Manager, optionally create an archive entry',
     lowDiskSpaceWarning: 'Low Disk Space Warning',
     lowDiskSpaceDescription: 'Show warning when free disk space falls below this threshold',
+    libraryRootListsAllFiles: 'Root lists every file',
+    libraryRootListsAllFilesDescription: 'On: "All Files" lists every file in the library. Off: it shows the top-level folders instead, plus a "No folder" entry for the files outside any folder. Search and tag filters always look at the whole library.',
     // Updates
     printerFirmware: 'Printer Firmware',
     checkFirmwareDescription: 'Check for printer firmware updates from Bambu Lab',
@@ -4162,6 +4164,9 @@ export default {
     },
     searchFiles: 'Search files...',
     searchSubfoldersHint: 'Including subfolders',
+    pickAFolder: 'Pick a folder to see its files',
+    copyPath: 'Copy path',
+    noFolder: 'No folder',
     pathBar: {
       label: 'Location',
       showHidden: 'Show hidden folders',
@@ -4338,6 +4343,9 @@ export default {
     toast: {
       folderCreated: 'Folder created',
       openInSlicerFailed: 'Could not open in slicer',
+      pathCopied: 'Path copied',
+      folderPathCopied: 'Folder path copied',
+      filePathCopied: 'File path copied',
       folderDeleted: 'Folder deleted',
       fileDeleted: 'File deleted',
       filesDeleted: 'Deleted {{count}} files',

@@ -6384,6 +6384,17 @@ async def get_library_stats(
     total_folders_result = await db.execute(select(func.count(LibraryFolder.id)))
     total_folders = total_folders_result.scalar() or 0
 
+    # Files that belong to no folder, split by bucket. The File Manager's root
+    # offers a "No folder" entry only when such files exist, and asking the
+    # listing endpoint just to find that out is exactly the query the
+    # folders-first root setting exists to avoid.
+    unfoldered_result = await db.execute(
+        select(LibraryFile.is_external, func.count(LibraryFile.id))
+        .where(*file_filters, LibraryFile.folder_id.is_(None))
+        .group_by(LibraryFile.is_external)
+    )
+    unfoldered = {bool(is_external): count for is_external, count in unfoldered_result.all()}
+
     # Total size
     total_size_result = await db.execute(select(func.sum(LibraryFile.file_size)).where(*file_filters))
     total_size = total_size_result.scalar() or 0
@@ -6413,6 +6424,8 @@ async def get_library_stats(
     return {
         "total_files": total_files,
         "total_folders": total_folders,
+        "unfoldered_files": unfoldered.get(False, 0),
+        "unfoldered_external_files": unfoldered.get(True, 0),
         "total_size_bytes": total_size,
         "files_by_type": files_by_type,
         "total_prints": total_prints,

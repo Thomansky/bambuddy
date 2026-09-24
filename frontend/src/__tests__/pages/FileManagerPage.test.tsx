@@ -719,7 +719,7 @@ describe('FileManagerPage', () => {
       await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
       const listBenchy = actionTitlesOf(listRow('Benchy'));
       const listBracket = actionTitlesOf(listRow('bracket.stl'));
-      expect(listBenchy).toEqual(['Print', '3D Preview', 'Download', 'File details', 'Rename', 'Delete']);
+      expect(listBenchy).toEqual(['Print', '3D Preview', 'Download', 'File details', 'Rename', 'Copy path', 'Delete']);
       expect(listBracket).toContain('Generate Thumbnail');
 
       await user.click(screen.getByTitle('Column view'));

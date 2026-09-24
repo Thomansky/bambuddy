@@ -2909,6 +2909,8 @@ export default {
     createArchiveEntryDescription: 'Dosya Yöneticisinden yazdırırken isteğe bağlı olarak bir arşiv girişi oluştur',
     lowDiskSpaceWarning: 'Düşük Disk Alanı Uyarısı',
     lowDiskSpaceDescription: 'Boş disk alanı bu eşiğin altına düştüğünde uyarı göster',
+    libraryRootListsAllFiles: 'Kök tüm dosyaları listeler',
+    libraryRootListsAllFilesDescription: 'Açık: "Tüm Dosyalar" kitaplıktaki her dosyayı listeler. Kapalı: bunun yerine en üst düzey klasörleri ve hiçbir klasörde olmayan dosyalar için bir "Klasörsüz" girdisini gösterir. Arama ve etiket filtreleri her zaman kitaplığın tamamını kapsar.',
     // Güncellemeler
     printerFirmware: 'Yazıcı Firmware',
     checkFirmwareDescription: "Bambu Lab'dan yazıcı firmware güncellemelerini kontrol et",
@@ -4123,6 +4125,9 @@ export default {
     },
     searchFiles: 'Dosyalarda ara...',
     searchSubfoldersHint: 'Alt klasörler dahil',
+    pickAFolder: 'Dosyalarını görmek için bir klasör seçin',
+    copyPath: 'Yolu kopyala',
+    noFolder: 'Klasörsüz',
     pathBar: {
       label: 'Konum',
       showHidden: 'Gizlenen klasörleri göster',
@@ -4299,6 +4304,9 @@ export default {
     toast: {
       folderCreated: 'Klasör oluşturuldu',
       openInSlicerFailed: 'Dilimleyicide açılamadı',
+      pathCopied: 'Yol kopyalandı',
+      folderPathCopied: 'Klasör yolu kopyalandı',
+      filePathCopied: 'Dosya yolu kopyalandı',
       folderDeleted: 'Klasör silindi',
       fileDeleted: 'Dosya silindi',
       filesDeleted: '{{count}} dosya silindi',

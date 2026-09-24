@@ -2929,6 +2929,8 @@ export default {
     createArchiveEntryDescription: 'Bij afdrukken vanuit Bestandsbeheer optioneel een archiefitem maken',
     lowDiskSpaceWarning: 'Waarschuwing weinig schijfruimte',
     lowDiskSpaceDescription: 'Waarschuwing tonen wanneer vrije schijfruimte onder deze drempel komt',
+    libraryRootListsAllFiles: 'Hoofdniveau toont alle bestanden',
+    libraryRootListsAllFilesDescription: 'Aan: "Alle bestanden" toont elk bestand in de bibliotheek. Uit: het hoofdniveau toont de mappen van het bovenste niveau en een item "Zonder map" voor bestanden die in geen enkele map staan. Zoeken en tagfilters doorzoeken altijd de hele bibliotheek.',
     // Updates
     printerFirmware: 'Printerfirmware',
     checkFirmwareDescription: 'Controleren op printerfirmware-updates van Bambu Lab',
@@ -4161,6 +4163,9 @@ export default {
     },
     searchFiles: 'Bestanden zoeken...',
     searchSubfoldersHint: 'Inclusief submappen',
+    pickAFolder: 'Kies een map om de bestanden te zien',
+    copyPath: 'Pad kopiëren',
+    noFolder: 'Zonder map',
     pathBar: {
       label: 'Locatie',
       showHidden: 'Verborgen mappen tonen',
@@ -4337,6 +4342,9 @@ export default {
     toast: {
       folderCreated: 'Map gemaakt',
       openInSlicerFailed: 'Kon niet openen in slicer',
+      pathCopied: 'Pad gekopieerd',
+      folderPathCopied: 'Mappad gekopieerd',
+      filePathCopied: 'Bestandspad gekopieerd',
       folderDeleted: 'Map verwijderd',
       fileDeleted: 'Bestand verwijderd',
       filesDeleted: '{{count}} bestanden verwijderd',

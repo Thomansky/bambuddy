@@ -2770,6 +2770,8 @@ export default {
     createArchiveEntryDescription: '파일 관리자에서 인쇄할 때 선택적으로 아카이브 항목 생성',
     lowDiskSpaceWarning: '디스크 공간 부족 경고',
     lowDiskSpaceDescription: '여유 디스크 공간이 이 임계값 아래로 떨어지면 경고 표시',
+    libraryRootListsAllFiles: '루트에 모든 파일 표시',
+    libraryRootListsAllFilesDescription: '켬: "모든 파일"이 라이브러리의 모든 파일을 나열합니다. 끔: 대신 최상위 폴더와, 어느 폴더에도 속하지 않는 파일을 위한 "폴더 없음" 항목을 표시합니다. 검색과 태그 필터는 항상 라이브러리 전체를 대상으로 합니다.',
     printerFirmware: '프린터 펌웨어',
     checkFirmwareDescription: 'Bambu Lab의 프린터 펌웨어 업데이트 확인',
     bambuddySoftware: 'Bambuddy 소프트웨어',
@@ -3938,6 +3940,9 @@ export default {
     },
     searchFiles: '파일 검색...',
     searchSubfoldersHint: '하위 폴더 포함',
+    pickAFolder: '폴더를 선택하면 해당 파일이 표시됩니다',
+    copyPath: '경로 복사',
+    noFolder: '폴더 없음',
     pathBar: {
       label: '위치',
       showHidden: '생략된 폴더 표시',
@@ -4113,6 +4118,9 @@ export default {
     toast: {
       folderCreated: '폴더 생성됨',
       openInSlicerFailed: '슬라이서에서 열 수 없습니다',
+      pathCopied: '경로가 복사되었습니다',
+      folderPathCopied: '폴더 경로가 복사되었습니다',
+      filePathCopied: '파일 경로가 복사되었습니다',
       folderDeleted: '폴더 삭제됨',
       fileDeleted: '파일 삭제됨',
       filesDeleted: '{{count}}개 파일 삭제됨',

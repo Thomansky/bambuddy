@@ -13,6 +13,38 @@ interface CopyButtonProps {
 }
 
 /**
+ * Write `value` to the clipboard, falling back to `execCommand` off a secure
+ * context. Resolves to whether anything was actually copied.
+ *
+ * Exported because call sites that are menu entries rather than buttons (the
+ * File Manager's "Copy path") need the same fallback without the tick.
+ */
+export async function copyTextToClipboard(value: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+    // Legacy execCommand path via an off-screen textarea, matching the
+    // pattern used by CameraTokensPage's plaintext-token modal.
+    const ta = document.createElement('textarea');
+    ta.value = value;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    try {
+      ta.select();
+      return document.execCommand('copy');
+    } finally {
+      document.body.removeChild(ta);
+    }
+  } catch {
+    // Both paths failed (no clipboard API, no execCommand).
+    return false;
+  }
+}
+
+/**
  * Copy-to-clipboard button with the plain-HTTP fallback (#1174).
  *
  * Lifted out of PrinterInfoModal when the Docker update instructions needed
@@ -33,31 +65,10 @@ export function CopyButton({
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
-    try {
-      if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(value);
-      } else {
-        // Legacy execCommand path via an off-screen textarea, matching the
-        // pattern used by CameraTokensPage's plaintext-token modal.
-        const ta = document.createElement('textarea');
-        ta.value = value;
-        ta.style.position = 'fixed';
-        ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        try {
-          ta.select();
-          const ok = document.execCommand('copy');
-          if (!ok) return;
-        } finally {
-          document.body.removeChild(ta);
-        }
-      }
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Both paths failed (no clipboard API, no execCommand). Leave the icon
-      // unchanged so the user knows nothing was copied.
-    }
+    // Nothing copied leaves the icon unchanged, so the user knows.
+    if (!(await copyTextToClipboard(value))) return;
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   return (

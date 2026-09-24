@@ -2771,6 +2771,8 @@ export default {
     createArchiveEntryDescription: "При запуске печати из файлового менеджера при необходимости создавать запись в архиве",
     lowDiskSpaceWarning: "Предупреждение о нехватке места",
     lowDiskSpaceDescription: "Показывать предупреждение, когда свободного места остаётся меньше указанного порога",
+    libraryRootListsAllFiles: "В корне показывать все файлы",
+    libraryRootListsAllFilesDescription: "Включено: «Все файлы» показывает все файлы библиотеки. Выключено: вместо этого показываются папки верхнего уровня и пункт «Без папки» для файлов вне папок. Поиск и фильтры по меткам всегда охватывают всю библиотеку.",
     printerFirmware: "Прошивка принтера",
     checkFirmwareDescription: "Проверять наличие обновлений прошивки принтера у Bambu Lab",
     bambuddySoftware: "Программное обеспечение Bambuddy",
@@ -3930,6 +3932,9 @@ export default {
     },
     searchFiles: "Поиск файлов...",
     searchSubfoldersHint: "С учётом вложенных папок",
+    pickAFolder: "Выберите папку, чтобы увидеть её файлы",
+    copyPath: "Скопировать путь",
+    noFolder: "Без папки",
     pathBar: {
       label: "Расположение",
       showHidden: "Показать скрытые папки",
@@ -4105,6 +4110,9 @@ export default {
     toast: {
       folderCreated: "Папка создана",
       openInSlicerFailed: "Не удалось открыть в слайсере",
+      pathCopied: "Путь скопирован",
+      folderPathCopied: "Путь к папке скопирован",
+      filePathCopied: "Путь к файлу скопирован",
       folderDeleted: "Папка удалена",
       fileDeleted: "Файл удалён",
       filesDeleted: "Удалено файлов: {{count}}",

@@ -298,6 +298,14 @@ class AppSettings(BaseModel):
         default=5.0,
         description="Show warning when free disk space falls below this threshold (GB)",
     )
+    library_root_lists_all_files: bool = Field(
+        default=True,
+        description=(
+            "File Manager root ('All Files'): list every file in the library. "
+            "When false the root shows its top-level folders instead, plus an "
+            "entry for the files that belong to no folder"
+        ),
+    )
 
     # Camera view settings
     camera_view_mode: str = Field(
@@ -779,6 +787,7 @@ class AppSettingsUpdate(BaseModel):
     ha_token: str | None = None
     library_archive_mode: str | None = None
     library_disk_warning_gb: float | None = None
+    library_root_lists_all_files: bool | None = None
     camera_view_mode: str | None = None
     preferred_slicer: str | None = None
     open_in_slicer: str | None = None
