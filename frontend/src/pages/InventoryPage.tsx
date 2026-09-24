@@ -74,6 +74,12 @@ function spoolGroupKey(s: InventorySpool): string {
 // Column definitions for the inventory table
 const COLUMN_CONFIG_KEY = 'bambuddy-inventory-columns';
 
+// Sentinel for the "no material number" slot in the filter dropdown (#2870).
+// The other chips use a readable '__none__', but a material number is free
+// text and could literally be '__none__'. SpoolBase caps the column at 64
+// characters, so a 65-character sentinel is one no spool can ever carry.
+const MATERIAL_NUMBER_NONE = 'none'.padStart(65, '_');
+
 const DEFAULT_COLUMNS: ColumnConfig[] = [
   { id: 'id', label: '#', visible: true },
   { id: 'added_time', label: 'Added', visible: true },
@@ -1282,10 +1288,10 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
       }
     }
 
-    // Material number dropdown (#2870). `__none__` finds spools that have
+    // Material number dropdown (#2870). The sentinel finds spools that have
     // no number assigned yet.
     if (materialNumberFilter) {
-      if (materialNumberFilter === '__none__') {
+      if (materialNumberFilter === MATERIAL_NUMBER_NONE) {
         filtered = filtered.filter((s) => !s.material_number?.trim());
       } else {
         filtered = filtered.filter((s) => s.material_number === materialNumberFilter);
@@ -1960,7 +1966,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
               <option key={n} value={n}>{n}</option>
             ))}
             {hasUnnumbered && (
-              <option value="__none__">{t('inventory.materialNumberNone')}</option>
+              <option value={MATERIAL_NUMBER_NONE}>{t('inventory.materialNumberNone')}</option>
             )}
           </select>
         )}
@@ -2508,6 +2514,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
         availableMaterialNumbers={dedupeAndSort((spools ?? []).map((s) => s.material_number))}
         availableSlicerFilaments={dedupeAndSort((spools ?? []).map((s) => s.slicer_filament))}
         availableSlicerFilamentNames={dedupeAndSort((spools ?? []).map((s) => s.slicer_filament_name))}
+        spoolmanMode={spoolmanMode}
         onClose={() => setBulkEditOpen(false)}
         onApply={(patch) => bulkUpdateMutation.mutate({ ids: [...selectedIds], update: patch })}
       />
