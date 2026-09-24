@@ -2575,9 +2575,10 @@ describe('FileManagerPage', () => {
         expect(within(screen.getByTestId('folder-sidebar')).getByText('Brackets')).toBeInTheDocument();
       });
 
-      // The Collapse button sits next to Wrap in the sidebar header.
-      // Its text content is "Collapse" (from fileManager.collapse).
-      await user.click(screen.getByRole('button', { name: 'Collapse' }));
+      // The preference lives in the toolbar's folder display menu now, not in
+      // the sidebar header — see the "folder display menu" describe below.
+      await user.click(screen.getByTestId('folder-display-menu'));
+      await user.click(screen.getByRole('menuitemcheckbox', { name: 'Collapse folders by default' }));
 
       await waitFor(() => {
         expect(within(screen.getByTestId('folder-sidebar')).queryByText('Brackets')).not.toBeInTheDocument();
@@ -2597,7 +2598,8 @@ describe('FileManagerPage', () => {
       });
       expect(within(screen.getByTestId('folder-sidebar')).queryByText('Brackets')).not.toBeInTheDocument();
 
-      await user.click(screen.getByRole('button', { name: 'Collapse' }));
+      await user.click(screen.getByTestId('folder-display-menu'));
+      await user.click(screen.getByRole('menuitemcheckbox', { name: 'Collapse folders by default' }));
 
       await waitFor(() => {
         expect(within(screen.getByTestId('folder-sidebar')).getByText('Brackets')).toBeInTheDocument();

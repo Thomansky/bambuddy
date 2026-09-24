@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useMemo, useEffect, lazy, Suspense } from 'react';
+import { useState, useRef, useCallback, useMemo, useEffect, useLayoutEffect, lazy, Suspense } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -61,6 +61,8 @@ import {
   PanelLeftOpen,
   Copy,
   FolderX,
+  SlidersHorizontal,
+  Check,
   type LucideIcon,
 } from 'lucide-react';
 import { ApiError, api } from '../api/client';
@@ -97,6 +99,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { formatDuration, parseUTCDate, formatDate } from '../utils/date';
 import { formatFileSize } from '../utils/file';
 import { folderLabel, folderText } from '../utils/folder';
+import { fitPathCrumbs } from '../utils/pathBarFit';
 import { assignableProjects } from '../utils/projectTree';
 import { openInSlicer, resolveDesktopSlicer, type SlicerType } from '../utils/slicer';
 import { isSlicedLibraryFile, isSliceableLibraryFile } from '../utils/libraryFiles';
@@ -1765,6 +1768,219 @@ function ColumnFileRow({ file, isSelected, isFocused, showModified, thumbnailVer
   );
 }
 
+// Folder ordering and display preferences, in the toolbar rather than in the
+// sidebar header. They drive the tiles, the columns and the path bar as much
+// as the tree, so switching the sidebar off must not take them with it — and
+// one home beats two, which is why this renders whether the tree is on screen
+// or not.
+interface FolderDisplayMenuProps {
+  sortField: 'name' | 'activity';
+  onSortFieldChange: (value: 'name' | 'activity') => void;
+  sortDirection: 'asc' | 'desc';
+  onSortDirectionChange: (value: 'asc' | 'desc') => void;
+  collapseByDefault: boolean;
+  onCollapseByDefaultChange: (value: boolean) => void;
+  wrapNames: boolean;
+  onWrapNamesChange: (value: boolean) => void;
+  t: TFunction;
+}
+
+/** The sort field, then the sort direction, then the display toggles. Field
+ *  and direction are two two-way choices, so they are two radio sets and not
+ *  one: a `menuitemradio` is checked against the others in its group, and a
+ *  group with two of four checked describes neither choice. */
+const SORT_FIELD_ENTRY_COUNT = 2;
+const SORT_ENTRY_COUNT = 4;
+
+function FolderDisplayMenu({
+  sortField,
+  onSortFieldChange,
+  sortDirection,
+  onSortDirectionChange,
+  collapseByDefault,
+  onCollapseByDefaultChange,
+  wrapNames,
+  onWrapNamesChange,
+  t,
+}: FolderDisplayMenuProps) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handlePointerDown = (e: MouseEvent) => {
+      if (!containerRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [open]);
+
+  // Opening gives the arrow keys somewhere to start; closing hands focus back
+  // to the button it came from.
+  useEffect(() => {
+    if (open) itemRefs.current[0]?.focus();
+  }, [open]);
+
+  // Every entry stays checkable in place: this is a settings menu, and
+  // picking a sort field usually comes with picking a direction.
+  const entries: {
+    key: string;
+    label: string;
+    checked: boolean;
+    role: 'menuitemradio' | 'menuitemcheckbox';
+    onSelect: () => void;
+  }[] = [
+    {
+      key: 'name',
+      label: t('fileManager.folderSortByName'),
+      checked: sortField === 'name',
+      role: 'menuitemradio',
+      onSelect: () => onSortFieldChange('name'),
+    },
+    {
+      key: 'activity',
+      label: t('fileManager.folderSortByActivity'),
+      checked: sortField === 'activity',
+      role: 'menuitemradio',
+      onSelect: () => onSortFieldChange('activity'),
+    },
+    {
+      key: 'asc',
+      label: t('fileManager.ascending'),
+      checked: sortDirection === 'asc',
+      role: 'menuitemradio',
+      onSelect: () => onSortDirectionChange('asc'),
+    },
+    {
+      key: 'desc',
+      label: t('fileManager.descending'),
+      checked: sortDirection === 'desc',
+      role: 'menuitemradio',
+      onSelect: () => onSortDirectionChange('desc'),
+    },
+    {
+      key: 'collapse',
+      label: t('fileManager.collapseFoldersByDefault'),
+      checked: collapseByDefault,
+      role: 'menuitemcheckbox',
+      onSelect: () => onCollapseByDefaultChange(!collapseByDefault),
+    },
+    {
+      key: 'wrap',
+      label: t('fileManager.enableTextWrapping'),
+      checked: wrapNames,
+      role: 'menuitemcheckbox',
+      onSelect: () => onWrapNamesChange(!wrapNames),
+    },
+  ];
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (!open) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        setOpen(true);
+      }
+      return;
+    }
+    const items = itemRefs.current.filter((el): el is HTMLButtonElement => el !== null);
+    if (items.length === 0) return;
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    switch (e.key) {
+      case 'Escape':
+        e.preventDefault();
+        setOpen(false);
+        buttonRef.current?.focus();
+        break;
+      case 'Tab':
+        setOpen(false);
+        break;
+      case 'ArrowDown':
+        e.preventDefault();
+        items[(current + 1) % items.length].focus();
+        break;
+      case 'ArrowUp':
+        e.preventDefault();
+        items[(current <= 0 ? items.length : current) - 1].focus();
+        break;
+      case 'Home':
+        e.preventDefault();
+        items[0].focus();
+        break;
+      case 'End':
+        e.preventDefault();
+        items[items.length - 1].focus();
+        break;
+    }
+  };
+
+  const renderEntry = (entry: (typeof entries)[number], index: number) => (
+    <button
+      key={entry.key}
+      ref={(el) => {
+        itemRefs.current[index] = el;
+      }}
+      type="button"
+      role={entry.role}
+      aria-checked={entry.checked}
+      tabIndex={-1}
+      onClick={entry.onSelect}
+      className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm text-white hover:bg-bambu-dark focus:bg-bambu-dark focus:outline-none transition-colors"
+    >
+      <Check className={`w-3.5 h-3.5 flex-shrink-0 text-bambu-green ${entry.checked ? '' : 'invisible'}`} />
+      <span className="truncate">{entry.label}</span>
+    </button>
+  );
+
+  return (
+    <div ref={containerRef} className="relative" onKeyDown={handleKeyDown}>
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={t('fileManager.folderDisplayMenu')}
+        title={t('fileManager.folderDisplayMenu')}
+        data-testid="folder-display-menu"
+        className="flex items-center p-2 rounded-lg bg-bambu-dark text-bambu-gray hover:text-white transition-colors"
+      >
+        <SlidersHorizontal className="w-4 h-4" />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          aria-label={t('fileManager.folderDisplayMenu')}
+          className="absolute right-0 top-full mt-1 z-30 min-w-[14rem] py-1 rounded-lg bg-bambu-dark-secondary border border-bambu-dark-tertiary shadow-xl"
+        >
+          {/* A menu owns menuitems, separators and groups — nothing generic in
+              between — so the entries are fragments and the heading sits
+              inside the group it names. One group per choice: the group is
+              what a radio is checked against. */}
+          <div role="group" aria-label={t('fileManager.folderSort')}>
+            <div
+              aria-hidden="true"
+              className="px-3 py-1 text-xs font-medium uppercase tracking-wide text-bambu-gray"
+            >
+              {t('fileManager.folderSort')}
+            </div>
+            {entries.slice(0, SORT_FIELD_ENTRY_COUNT).map(renderEntry)}
+          </div>
+          <div role="separator" className="my-1 border-t border-bambu-dark-tertiary" />
+          <div role="group" aria-label={t('fileManager.folderSortDirection')}>
+            {entries
+              .slice(SORT_FIELD_ENTRY_COUNT, SORT_ENTRY_COUNT)
+              .map((entry, i) => renderEntry(entry, i + SORT_FIELD_ENTRY_COUNT))}
+          </div>
+          <div role="separator" className="my-1 border-t border-bambu-dark-tertiary" />
+          {entries.slice(SORT_ENTRY_COUNT).map((entry, i) => renderEntry(entry, i + SORT_ENTRY_COUNT))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Resolve a typed path — `Kunden/RAFI/N1125035` — against the folder tree.
 // Explorer's rules: either separator, a leading or trailing one, and case does
 // not matter. Returns the folder's id, null for the root (an empty path), and
@@ -1942,10 +2158,10 @@ function PathSeparator({ folders, onSelectFolder, t }: PathSeparatorProps) {
 // Explorer-style path bar: the chain from the library root down to the
 // selected folder, above the file list in every view mode. Every ancestor is
 // a button that selects it; the current folder is plain text. The bar must
-// never wrap or push the pane wider, so a long chain keeps the root and the
-// last two crumbs and folds the rest into a menu. Clicking past the last crumb
-// — or F2 anywhere in the bar — swaps the crumbs for the path as text, the
-// other half of what Explorer does here.
+// never wrap or push the pane wider, so a long chain keeps the root and as
+// many trailing crumbs as measurably fit and folds the rest into a menu.
+// Clicking past the last crumb — or F2 anywhere in the bar — swaps the crumbs
+// for the path as text, the other half of what Explorer does here.
 interface PathBarProps {
   rootLabel: string;
   rootIsExternal: boolean;
@@ -1981,6 +2197,7 @@ function PathBar({
   const inputRef = useRef<HTMLInputElement>(null);
   const editAffordanceRef = useRef<HTMLButtonElement>(null);
   const returnFocus = useRef(false);
+  const { i18n } = useTranslation();
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -2010,6 +2227,54 @@ function PathBar({
   useEffect(() => {
     if (editing) inputRef.current?.select();
   }, [editing]);
+
+  // How many crumbs fit is measured, not counted: see utils/pathBarFit.ts.
+  // `null` means the measurement produced nothing usable.
+  const barRef = useRef<HTMLDivElement>(null);
+  const rootMeasureRef = useRef<HTMLSpanElement>(null);
+  const ellipsisMeasureRef = useRef<HTMLSpanElement>(null);
+  const leafMeasureRef = useRef<HTMLSpanElement>(null);
+  const crumbMeasureRefs = useRef<(HTMLSpanElement | null)[]>([]);
+  const trailingRef = useRef<HTMLSpanElement>(null);
+  const [fittedCount, setFittedCount] = useState<number | null>(null);
+
+  const measure = useCallback(() => {
+    const bar = barRef.current;
+    if (!bar) return;
+    // One pass: read every width, then set state only if the answer changed.
+    // Returning the previous value makes React bail out of the re-render, so
+    // a resize that does not move the boundary costs no layout.
+    const first = rootMeasureRef.current;
+    const second = ellipsisMeasureRef.current;
+    const gap =
+      first && second ? Math.max(0, second.offsetLeft - first.offsetLeft - first.offsetWidth) : 0;
+    const next = fitPathCrumbs({
+      available: bar.clientWidth,
+      gap,
+      rootWidth: first?.offsetWidth ?? 0,
+      ellipsisWidth: second?.offsetWidth ?? 0,
+      crumbWidths: path.map((_, index) => crumbMeasureRefs.current[index]?.offsetWidth ?? 0),
+      leafWidth: leafMeasureRef.current?.offsetWidth ?? 0,
+      reservedWidth: trailingRef.current?.offsetWidth ?? 0,
+    });
+    setFittedCount((prev) => (prev === next ? prev : next));
+  }, [path]);
+
+  // Re-measure when the pane resizes, when the path changes, when the language
+  // changes — translated labels are not the same width — and when the crumbs
+  // come back from the editor, which takes the bar and the twin it measures
+  // against off screen for as long as it is open.
+  useLayoutEffect(() => {
+    measure();
+  }, [measure, rootLabel, leafLabel, i18n.language, editing]);
+
+  useEffect(() => {
+    const bar = barRef.current;
+    if (!bar || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => measure());
+    observer.observe(bar);
+    return () => observer.disconnect();
+  }, [measure, editing]);
 
   const startEditing = () => {
     setTyped(pathText);
@@ -2079,16 +2344,20 @@ function PathBar({
     );
   }
 
-  // Keep the first element and the last two; everything between them moves
-  // into the ellipsis menu. Root plus three folders still fits on any pane we
-  // target, so folding only starts beyond that — collapsing a chain that fits
-  // hides an ancestor for nothing.
-  const collapsed = path.length > 3;
-  const hidden = collapsed ? path.slice(0, path.length - 2) : [];
-  const visible = collapsed ? path.slice(path.length - 2) : path;
+  // Keep the root and the last crumbs that fit; everything between them moves
+  // into the ellipsis menu. When the widths cannot be measured at all — jsdom,
+  // or a pane that is display:none — the old depth rule stands in, which is
+  // still a sane answer rather than folding everything or nothing.
+  const shown = fittedCount ?? (path.length > 3 ? 2 : path.length);
+  const collapsed = shown < path.length;
+  const hidden = collapsed ? path.slice(0, path.length - shown) : [];
+  const visible = collapsed ? path.slice(path.length - shown) : path;
   // What the separator in front of the crumb at full-path index `index` lists:
   // the contents of the crumb to its left, the bucket's top level at index 0.
   const levelBefore = (index: number) => (index <= 0 ? tree : path[index - 1].children);
+  // The twin is never clicked, so it gets the bare glyph rather than the
+  // separator's menu button — same box, none of the behaviour.
+  const separator = <ChevronRightIcon className="w-3.5 h-3.5 flex-shrink-0 text-bambu-gray/60" aria-hidden="true" />;
   const crumbClass = 'flex items-center gap-1.5 min-w-0 px-1.5 py-1 rounded transition-colors';
   const rootIcon = rootIsExternal ? (
     <FolderSymlink className="w-4 h-4 flex-shrink-0 text-purple-600 dark:text-purple-400" />
@@ -2097,17 +2366,73 @@ function PathBar({
   );
 
   return (
-    <nav
-      aria-label={t('fileManager.pathBar.label')}
-      data-testid="library-path-bar"
-      onKeyDown={(e) => {
-        if (e.key === 'F2') {
-          e.preventDefault();
-          startEditing();
-        }
-      }}
-      className="flex items-center gap-0.5 mb-3 min-w-0 overflow-hidden whitespace-nowrap text-sm"
-    >
+    <div ref={barRef} className="relative mb-3 min-w-0 whitespace-nowrap text-sm">
+      {/* The bar only contains the crumbs it shows, so the widths of the
+          folded ones have to come from somewhere: the twin below renders the
+          whole chain at its natural width. Out of the accessibility tree, out
+          of flow and outside the <nav>, so it costs neither a tab stop, nor a
+          line, nor a second hit for anything looking inside the bar.
+          It is wider than the pane by definition, and the clip that keeps it
+          from giving the page a horizontal scrollbar belongs on a box of its
+          own: on the twin it would do nothing (its children cannot shrink, so
+          its own box is as wide as they are), and on the bar or the <nav> it
+          would cut away the folded-crumb menu below them. This box is the
+          twin's containing block, so its overflow rule reaches it. Clipping
+          changes no box's layout width, so the measurement stands. */}
+      <div aria-hidden="true" className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute left-0 top-0 flex items-center gap-0.5 invisible">
+          <span ref={rootMeasureRef} className={`${crumbClass} flex-shrink-0`}>
+            {rootIcon}
+            <span>{rootLabel}</span>
+          </span>
+          <span ref={ellipsisMeasureRef} className="flex items-center gap-0.5 flex-shrink-0">
+            {separator}
+            <span className="flex items-center px-1.5 py-1">
+              <MoreHorizontal className="w-4 h-4" />
+            </span>
+          </span>
+          {path.map((folder, index) => (
+            <span
+              key={folder.id}
+              ref={(el) => {
+                crumbMeasureRefs.current[index] = el;
+              }}
+              className="flex items-center gap-0.5 flex-shrink-0"
+            >
+              {separator}
+              <span className={`${crumbClass} font-medium`}>
+                <FolderNumber number={folder.number} t={t} />
+                <span>{folder.name}</span>
+              </span>
+            </span>
+          ))}
+          {leafLabel && (
+            <span ref={leafMeasureRef} className="flex items-center gap-0.5 flex-shrink-0">
+              {separator}
+              <span className={`${crumbClass} font-medium`}>{leafLabel}</span>
+            </span>
+          )}
+        </div>
+      </div>
+      {/* No overflow clip anywhere on this nav or above it: the folded-crumb
+          menus are positioned against a button inside it and drop below its
+          bottom edge, so a clipping ancestor paints none of them and they stop
+          being hit-testable — the folded ancestors would have no way back.
+          (They are portalled out to <body> on top of that, which a clip here
+          would not reach; both halves of the rule earn their keep.) Nothing
+          overflows here anyway now that the crumbs are measured to fit, and
+          what is left over truncates per crumb. */}
+      <nav
+        aria-label={t('fileManager.pathBar.label')}
+        data-testid="library-path-bar"
+        onKeyDown={(e) => {
+          if (e.key === 'F2') {
+            e.preventDefault();
+            startEditing();
+          }
+        }}
+        className="flex items-center gap-0.5 min-w-0"
+      >
       {path.length === 0 && !leafLabel ? (
         <span aria-current="page" className={`${crumbClass} text-white font-medium`}>
           {rootIcon}
@@ -2158,7 +2483,7 @@ function PathBar({
       )}
       {visible.map((folder, i) => {
         const isCurrent = !leafLabel && i === visible.length - 1;
-        const fullIndex = collapsed ? path.length - 2 + i : i;
+        const fullIndex = path.length - visible.length + i;
         return (
           <span key={folder.id} className="flex items-center gap-0.5 min-w-0">
             <PathSeparator folders={levelBefore(fullIndex)} onSelectFolder={onSelectFolder} t={t} />
@@ -2202,16 +2527,21 @@ function PathBar({
         className="flex-1 self-stretch min-w-[1.5rem] rounded cursor-text hover:bg-bambu-dark/50 transition-colors"
       />
       {/* The chain as text, for Explorer / the slicer / a mail. The root has
-          no path, so at the root there is nothing to copy. */}
+          no path, so at the root there is nothing to copy. The wrapper is the
+          measuring handle: whatever the bar always shows beside the crumbs is
+          width the crumbs do not get. */}
       {path.length > 0 && (
-        <CopyButton
-          value={pathText}
-          titleKey="fileManager.copyPath"
-          copiedTitleKey="fileManager.toast.pathCopied"
-          className="ml-1 flex-shrink-0 p-1 rounded text-bambu-gray hover:text-white hover:bg-bambu-dark transition-colors"
-        />
+        <span ref={trailingRef} className="flex items-center flex-shrink-0">
+          <CopyButton
+            value={pathText}
+            titleKey="fileManager.copyPath"
+            copiedTitleKey="fileManager.toast.pathCopied"
+            className="ml-1 flex-shrink-0 p-1 rounded text-bambu-gray hover:text-white hover:bg-bambu-dark transition-colors"
+          />
+        </span>
       )}
-    </nav>
+      </nav>
+    </div>
   );
 }
 
@@ -3939,6 +4269,32 @@ export function FileManagerPage() {
               <LayoutGrid className={`w-4 h-4 ${folderTilesHidden ? 'opacity-50' : ''}`} />
             </button>
           )}
+          {/* Folder ordering and display. Always here, whatever the sidebar
+              is doing: the ordering reaches the tiles, the columns and the
+              path bar, so it cannot live in a pane that can be switched off. */}
+          <FolderDisplayMenu
+            sortField={folderSortField}
+            onSortFieldChange={(value) => {
+              setFolderSortField(value);
+              localStorage.setItem('library-folder-sort-field', value);
+            }}
+            sortDirection={folderSortDirection}
+            onSortDirectionChange={(value) => {
+              setFolderSortDirection(value);
+              localStorage.setItem('library-folder-sort-direction', value);
+            }}
+            collapseByDefault={collapseFoldersByDefault}
+            onCollapseByDefaultChange={(value) => {
+              setCollapseFoldersByDefault(value);
+              localStorage.setItem('library-collapse-folders', String(value));
+            }}
+            wrapNames={wrapFolderNames}
+            onWrapNamesChange={(value) => {
+              setWrapFolderNames(value);
+              localStorage.setItem('library-wrap-folders', String(value));
+            }}
+            t={t}
+          />
           <button
             type="button"
             onClick={handleToggleSidebar}
@@ -4153,69 +4509,11 @@ export function FileManagerPage() {
               <div className="w-0.5 h-0.5 rounded-full bg-white/70" />
             </div>
           </div>
+          {/* The header carries the sidebar's own furniture and nothing else:
+              the folder sort and display preferences moved to the toolbar,
+              where they are reachable with the tree switched off too. */}
           <div className="p-3 border-b border-bambu-dark-tertiary flex items-center justify-between">
             <h2 className="text-sm font-medium text-white">{t('fileManager.folders')}</h2>
-            <div className="flex items-center gap-1">
-              {/* Folder tree sort (#1770). Dropdown drives the comparator;
-                  direction button flips asc/desc. Both persist to localStorage
-                  on change so the choice survives reloads. */}
-              <select
-                value={folderSortField}
-                onChange={(e) => {
-                  const v = e.target.value === 'activity' ? 'activity' : 'name';
-                  setFolderSortField(v);
-                  localStorage.setItem('library-folder-sort-field', v);
-                }}
-                className="text-xs px-1 py-0.5 rounded bg-bambu-dark border border-bambu-dark-tertiary text-bambu-gray focus:outline-none focus:border-bambu-green"
-                title={t('fileManager.folderSort')}
-                aria-label={t('fileManager.folderSort')}
-              >
-                <option value="name">{t('fileManager.folderSortByName')}</option>
-                <option value="activity">{t('fileManager.folderSortByActivity')}</option>
-              </select>
-              <button
-                onClick={() => {
-                  const newValue = folderSortDirection === 'asc' ? 'desc' : 'asc';
-                  setFolderSortDirection(newValue);
-                  localStorage.setItem('library-folder-sort-direction', newValue);
-                }}
-                className="text-bambu-gray hover:text-white hover:bg-bambu-dark p-1 rounded transition-colors"
-                title={folderSortDirection === 'asc' ? t('fileManager.ascending') : t('fileManager.descending')}
-                aria-label={folderSortDirection === 'asc' ? t('fileManager.ascending') : t('fileManager.descending')}
-              >
-                {folderSortDirection === 'asc' ? <SortAsc className="w-3.5 h-3.5" /> : <SortDesc className="w-3.5 h-3.5" />}
-              </button>
-              <button
-                onClick={() => {
-                  const newValue = !collapseFoldersByDefault;
-                  setCollapseFoldersByDefault(newValue);
-                  localStorage.setItem('library-collapse-folders', String(newValue));
-                }}
-                className={`text-xs px-1.5 py-0.5 rounded transition-colors ${
-                  collapseFoldersByDefault
-                    ? 'bg-bambu-green/20 text-bambu-green'
-                    : 'text-bambu-gray hover:text-white hover:bg-bambu-dark'
-                }`}
-                title={collapseFoldersByDefault ? t('fileManager.expandFoldersByDefault') : t('fileManager.collapseFoldersByDefault')}
-              >
-                {t('fileManager.collapse')}
-              </button>
-              <button
-                onClick={() => {
-                  const newValue = !wrapFolderNames;
-                  setWrapFolderNames(newValue);
-                  localStorage.setItem('library-wrap-folders', String(newValue));
-                }}
-                className={`text-xs px-1.5 py-0.5 rounded transition-colors ${
-                  wrapFolderNames
-                    ? 'bg-bambu-green/20 text-bambu-green'
-                    : 'text-bambu-gray hover:text-white hover:bg-bambu-dark'
-                }`}
-                title={wrapFolderNames ? t('fileManager.disableTextWrapping') : t('fileManager.enableTextWrapping')}
-              >
-                {t('fileManager.wrap')}
-              </button>
-            </div>
           </div>
           <div className="flex-1 overflow-y-auto p-2">
             {/* All Files = the user's own uploaded / managed-storage files
