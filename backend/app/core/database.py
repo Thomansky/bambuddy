@@ -5401,6 +5401,37 @@ async def run_migrations(conn):
                 {"k": "library_root_lists_all_files"},
             )
 
+    # Migration: WebDAV became a three-way choice (off / read / readwrite), so
+    # the boolean ``webdav_enabled`` gives way to the string ``webdav_mode``. A
+    # stored "true" becomes ``read``, deliberately NOT ``readwrite``: the
+    # install that switched WebDAV on was offered a read-only share and opted
+    # into that, and an upgrade must not hand a mapped drive the ability to
+    # delete the library. Anything else maps to ``off``, and the old row is
+    # dropped so the two keys cannot disagree afterwards.
+    async with conn.begin_nested():
+        _webdav_row = (
+            await conn.execute(
+                text("SELECT value FROM settings WHERE key = :k"),
+                {"k": "webdav_enabled"},
+            )
+        ).fetchone()
+        if _webdav_row is not None:
+            _webdav_mode = "read" if str(_webdav_row[0]).strip().lower() == "true" else "off"
+            if is_sqlite():
+                await conn.execute(
+                    text("INSERT OR IGNORE INTO settings (key, value) VALUES (:k, :v)"),
+                    {"k": "webdav_mode", "v": _webdav_mode},
+                )
+            else:
+                await conn.execute(
+                    text("INSERT INTO settings (key, value) VALUES (:k, :v) ON CONFLICT (key) DO NOTHING"),
+                    {"k": "webdav_mode", "v": _webdav_mode},
+                )
+            await conn.execute(
+                text("DELETE FROM settings WHERE key = :k"),
+                {"k": "webdav_enabled"},
+            )
+
     # Migration: repair the tare of spools the RFID auto-add gave the wrong
     # Bambu spool row (#2909). Runs last so the spool catalogue it reads is
     # whatever this database actually holds.
