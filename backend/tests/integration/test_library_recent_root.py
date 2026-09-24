@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import event
 
 from backend.app.api.routes.library import RECENT_ROOT_FILE_LIMIT
 from backend.app.models.library import LibraryFile, LibraryFolder
@@ -77,17 +78,43 @@ async def test_recent_falls_back_to_created_at_without_a_filesystem_mtime(async_
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_recent_is_capped_in_the_query(async_client: AsyncClient, db_session):
-    """The cap is the reason for the flag: the rows never leave the database."""
+async def test_recent_is_capped_in_the_query(async_client: AsyncClient, db_session, test_engine):
+    """The cap is the reason for the flag: the rows never leave the database.
+
+    A response of exactly ``RECENT_ROOT_FILE_LIMIT`` rows proves nothing about
+    that — a whole-library SELECT followed by ``files[:100]`` in Python looks
+    identical from here, while fetching the entire library on every visit to
+    the start page. So this reads the statement the database was actually
+    given: the row limit has to be in the SQL.
+    """
     total = RECENT_ROOT_FILE_LIMIT + 5
     db_session.add_all([_file(f"f{i:04d}.3mf", fs_modified_at=BASE - timedelta(minutes=i)) for i in range(total)])
     await db_session.commit()
 
-    response = await async_client.get("/api/v1/library/files?include_root=false&recent=true")
+    statements: list[tuple[str, object]] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append((statement, parameters))
+
+    event.listen(test_engine.sync_engine, "before_cursor_execute", record)
+    try:
+        response = await async_client.get("/api/v1/library/files?include_root=false&recent=true")
+    finally:
+        event.remove(test_engine.sync_engine, "before_cursor_execute", record)
+
     body = response.json()
     assert len(body) == RECENT_ROOT_FILE_LIMIT
     # The newest end is the end that is kept.
     assert body[0]["filename"] == "f0000.3mf"
+
+    listings = [(sql, params) for sql, params in statements if "FROM library_files" in sql and "ORDER BY" in sql]
+    assert listings, f"no library_files listing was issued: {statements}"
+    # SQLAlchemy binds the limit, so the number is in the parameters rather
+    # than in the SQL text on every dialect.
+    for sql, params in listings:
+        assert "LIMIT" in sql, sql
+        bound = tuple(params.values()) if isinstance(params, dict) else tuple(params or ())
+        assert RECENT_ROOT_FILE_LIMIT in bound, (sql, params)
 
     # Without the flag the same request is the all-files listing it always was.
     plain = await async_client.get("/api/v1/library/files?include_root=false")

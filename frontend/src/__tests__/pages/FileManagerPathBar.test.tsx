@@ -118,6 +118,22 @@ function useHandlers() {
 const sidebar = () => within(screen.getByTestId('folder-sidebar'));
 const pathBar = () => within(screen.getByTestId('library-path-bar'));
 
+/**
+ * The crumb row clips whatever leaves it, so a long chain can never push the
+ * pane wider — which also clips away a menu rendered inside it: the list opens
+ * below a one-line row, entirely outside the clip rect, and z-index does not
+ * escape an overflow clip. jsdom applies no stylesheet and lays nothing out,
+ * so that is invisible to a click here; what a test can pin is that the list
+ * is not inside the element doing the clipping. The class list is the only
+ * record of it without a layout engine.
+ */
+function clippingAncestorOf(el: HTMLElement): HTMLElement | null {
+  for (let node = el.parentElement; node && node !== document.body; node = node.parentElement) {
+    if (node.classList.contains('overflow-hidden')) return node;
+  }
+  return null;
+}
+
 /** Select Kunden › RAFI › N1125035 through the tree and wait for the crumbs. */
 async function standInTheJobFolder(user: ReturnType<typeof userEvent.setup>) {
   render(<FileManagerPage />);
@@ -232,6 +248,19 @@ describe('FileManagerPage — typing a path into the bar', () => {
     expect(folderRequests).toEqual([]);
   });
 
+  it('hands focus back to the bar on Escape, rather than dropping it on <body>', async () => {
+    await standInTheJobFolder(user);
+
+    await user.click(pathBar().getByLabelText('Edit path'));
+    await user.clear(await screen.findByLabelText('Edit path'));
+    await user.keyboard('{Escape}');
+
+    await waitFor(() => expect(screen.getByTestId('library-path-bar')).toBeInTheDocument());
+    // The input unmounts with the whole bar; without a hand-back the browser
+    // falls to <body> and the next Tab restarts at the top of the page.
+    expect(pathBar().getByLabelText('Edit path')).toHaveFocus();
+  });
+
   it('restores the crumbs on blur, so a click elsewhere never navigates', async () => {
     await standInTheJobFolder(user);
 
@@ -296,6 +325,61 @@ describe('FileManagerPage — stepping sideways from a separator', () => {
 
     await waitFor(() => expect(pathBar().getByText('Intern')).toBeInTheDocument());
     expect(folderRequests).toContain('5');
+  });
+
+  it('opens the list outside the row that clips, so it is on screen at all', async () => {
+    await standInTheJobFolder(user);
+
+    await user.click(pathBar().getAllByLabelText('Folders at this level')[0]);
+    const menu = await screen.findByRole('menu');
+
+    // Inside the bar the list would be painted into the clipped strip below a
+    // one-line row: present to this test, invisible and unclickable in a
+    // browser. It hangs off <body> instead, pinned under its button.
+    expect(screen.getByTestId('library-path-bar').contains(menu)).toBe(false);
+    expect(clippingAncestorOf(menu)).toBeNull();
+    expect(menu.parentElement).toBe(document.body);
+  });
+
+  it('opens the collapsed-middle list outside the clipper too', async () => {
+    // Root plus four folders is the first chain that folds, so the ellipsis
+    // menu — same row, same clip — only appears this deep.
+    server.use(
+      http.get('/api/v1/library/folders', () =>
+        HttpResponse.json([
+          folder({
+            id: 1,
+            name: 'Kunden',
+            children: [
+              folder({
+                id: 2,
+                name: 'RAFI',
+                parent_id: 1,
+                children: [
+                  folder({
+                    id: 3,
+                    name: 'N1125035',
+                    parent_id: 2,
+                    children: [folder({ id: 6, name: 'Freigabe', parent_id: 3, file_count: 1 })],
+                  }),
+                ],
+              }),
+            ],
+          }),
+        ]),
+      ),
+    );
+    render(<FileManagerPage />);
+    await waitFor(() => expect(screen.getByTestId('folder-sidebar')).toBeInTheDocument());
+    await user.click(sidebar().getByText('Freigabe'));
+    await waitFor(() => expect(pathBar().getByText('Freigabe')).toBeInTheDocument());
+
+    await user.click(pathBar().getByLabelText('Show hidden folders'));
+    const menu = await screen.findByRole('menu');
+
+    expect(within(menu).getByText('Kunden')).toBeInTheDocument();
+    expect(screen.getByTestId('library-path-bar').contains(menu)).toBe(false);
+    expect(clippingAncestorOf(menu)).toBeNull();
   });
 
   it('walks the list with the arrow keys and closes on Escape', async () => {

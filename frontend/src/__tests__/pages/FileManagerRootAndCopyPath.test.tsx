@@ -489,6 +489,43 @@ describe('FileManagerPage — what the root lists', () => {
     expect(pathBar().getByText('All Files')).toBeInTheDocument();
   });
 
+  it('leaves the start page through the root crumb, which lists every file', async () => {
+    useHandlers({ library_root_view: 'recent' });
+    const user = userEvent.setup();
+    render(<FileManagerPage />);
+
+    await waitFor(() => expect(screen.getByText('zuletzt.3mf')).toBeInTheDocument());
+    expect(allFilesRequests()).toHaveLength(0);
+
+    // At the start page every other piece of state the crumb clears is already
+    // clear, so an enabled button that changes nothing is what this guards
+    // against — the label promises the flat listing.
+    await user.click(pathBar().getByText('All Files'));
+
+    await waitFor(() => expect(screen.getByText('nas.3mf')).toBeInTheDocument());
+    expect(allFilesRequests().length).toBeGreaterThan(0);
+    // Out means out: no leaf crumb left, so the root is the current page again.
+    expect(pathBar().queryByText('Recent')).not.toBeInTheDocument();
+  });
+
+  it('takes a type filter at the start page to the whole library, not to its newest rows', async () => {
+    useHandlers({ library_root_view: 'recent' });
+    const user = userEvent.setup();
+    render(<FileManagerPage />);
+
+    await waitFor(() => expect(screen.getByText('zuletzt.3mf')).toBeInTheDocument());
+    expect(allFilesRequests()).toHaveLength(0);
+
+    // The recent listing is a capped window. Filtering its rows would answer
+    // "nothing of that kind" for a library full of matches, one control along
+    // from the search box that looks everywhere — so the filter drops the cap.
+    await user.selectOptions(screen.getByDisplayValue('All types'), '3mf');
+
+    await waitFor(() => expect(screen.getByText('nas.3mf')).toBeInTheDocument());
+    expect(allFilesRequests().length).toBeGreaterThan(0);
+    expect(pathBar().queryByText('Recent')).not.toBeInTheDocument();
+  });
+
   it('brings the flat listing back for a search at the root, recent view', async () => {
     useHandlers({ library_root_view: 'recent' });
     const user = userEvent.setup();

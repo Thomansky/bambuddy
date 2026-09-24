@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useMemo, useEffect, lazy, Suspense } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -1781,6 +1782,78 @@ function resolveTypedPath(tree: LibraryFolderTree[], typed: string): number | nu
   return found!.id;
 }
 
+// Both of the path bar's menus hang off a button inside the crumb row, and
+// that row clips what leaves it (`overflow-hidden`, so a long chain can never
+// push the pane wider). An in-tree popover is clipped away by exactly that: it
+// opens below a one-line row, i.e. entirely outside the clip rect, and z-index
+// does not escape an overflow clip — the list is in the DOM, visible to a test
+// that does no layout, and painted nowhere. So it goes through a portal to
+// <body>, pinned under its button with `position: fixed`, the way the project
+// cards' hover preview escapes their rounded-corner clip (#1155).
+const PATH_MENU_WIDTH = 288; // max-w-[18rem]: the widest the list gets
+const PATH_MENU_GAP = 4;
+const PATH_MENU_EDGE = 8;
+
+function pathMenuPosition(anchor: HTMLElement | null) {
+  const rect = anchor?.getBoundingClientRect();
+  if (!rect) return { left: PATH_MENU_EDGE, top: PATH_MENU_GAP };
+  // Keep the list on screen when the crumb it hangs off sits near the edge.
+  const room = window.innerWidth - PATH_MENU_WIDTH - PATH_MENU_EDGE;
+  return { left: Math.max(PATH_MENU_EDGE, Math.min(rect.left, room)), top: rect.bottom + PATH_MENU_GAP };
+}
+
+interface PathBarFolderMenuProps {
+  anchorRef: React.RefObject<HTMLElement | null>;
+  menuRef: React.RefObject<HTMLDivElement | null>;
+  folders: LibraryFolderTree[];
+  onSelect: (id: number) => void;
+  onKeyDown?: (e: React.KeyboardEvent<HTMLDivElement>) => void;
+  t: TFunction;
+}
+
+function PathBarFolderMenu({ anchorRef, menuRef, folders, onSelect, onKeyDown, t }: PathBarFolderMenuProps) {
+  const [pos, setPos] = useState(() => pathMenuPosition(anchorRef.current));
+
+  // Viewport coordinates go stale as soon as anything scrolls or resizes; the
+  // capture phase catches a scrolling pane as well as the window itself.
+  useEffect(() => {
+    const place = () => setPos(pathMenuPosition(anchorRef.current));
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
+  }, [anchorRef]);
+
+  return createPortal(
+    <div
+      ref={menuRef}
+      role="menu"
+      onKeyDown={onKeyDown}
+      style={{ left: pos.left, top: pos.top }}
+      className="fixed z-[60] min-w-[10rem] max-w-[18rem] max-h-72 overflow-y-auto py-1 rounded-lg bg-bambu-dark-secondary border border-bambu-dark-tertiary shadow-xl"
+    >
+      {folders.map((folder) => (
+        <button
+          key={folder.id}
+          type="button"
+          role="menuitem"
+          onClick={() => onSelect(folder.id)}
+          aria-label={folderLabel(folder)}
+          title={folderLabel(folder)}
+          className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm text-white hover:bg-bambu-dark transition-colors"
+        >
+          <FolderOpen className="w-3.5 h-3.5 flex-shrink-0 text-bambu-green" />
+          <FolderNumber number={folder.number} t={t} />
+          <span className="truncate">{folder.name}</span>
+        </button>
+      ))}
+    </div>,
+    document.body,
+  );
+}
+
 // The `›` between two crumbs, which also lists what sits inside the crumb to
 // its left — Explorer's sideways step, from a deep folder straight to one of
 // its uncles without walking up first. With nothing to list it stays the plain
@@ -1793,15 +1866,19 @@ interface PathSeparatorProps {
 
 function PathSeparator({ folders, onSelectFolder, t }: PathSeparatorProps) {
   const [open, setOpen] = useState(false);
-  // Spans, not divs: the separator renders inside a crumb's <span>, which may
-  // only hold phrasing content.
-  const wrapRef = useRef<HTMLSpanElement>(null);
-  const menuRef = useRef<HTMLSpanElement>(null);
+  // A span, not a div: the separator renders inside a crumb's <span>, which
+  // may only hold phrasing content. The list itself is portalled out.
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
     const handlePointerDown = (e: MouseEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+      // The list hangs off <body>, so "inside" is either half of the pair —
+      // without the menu half, the mousedown on an entry would close the list
+      // before its own click could fire.
+      const target = e.target as Node;
+      if (!triggerRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
     };
     document.addEventListener('mousedown', handlePointerDown);
     return () => document.removeEventListener('mousedown', handlePointerDown);
@@ -1816,11 +1893,11 @@ function PathSeparator({ folders, onSelectFolder, t }: PathSeparatorProps) {
   const glyph = <ChevronRightIcon className="w-3.5 h-3.5 flex-shrink-0 text-bambu-gray/60" aria-hidden="true" />;
   if (folders.length === 0) return glyph;
 
-  const walk = (e: React.KeyboardEvent<HTMLSpanElement>) => {
+  const walk = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'Escape') {
       e.stopPropagation();
       setOpen(false);
-      wrapRef.current?.querySelector('button')?.focus();
+      triggerRef.current?.focus();
       return;
     }
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
@@ -1832,8 +1909,9 @@ function PathSeparator({ folders, onSelectFolder, t }: PathSeparatorProps) {
   };
 
   return (
-    <span ref={wrapRef} className="relative inline-flex flex-shrink-0">
+    <span className="inline-flex flex-shrink-0">
       <button
+        ref={triggerRef}
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
@@ -1845,31 +1923,17 @@ function PathSeparator({ folders, onSelectFolder, t }: PathSeparatorProps) {
         {glyph}
       </button>
       {open && (
-        <span
-          ref={menuRef}
-          role="menu"
+        <PathBarFolderMenu
+          anchorRef={triggerRef}
+          menuRef={menuRef}
+          folders={folders}
+          onSelect={(id) => {
+            setOpen(false);
+            onSelectFolder(id);
+          }}
           onKeyDown={walk}
-          className="absolute left-0 top-full mt-1 z-30 block min-w-[10rem] max-w-[18rem] max-h-72 overflow-y-auto py-1 rounded-lg bg-bambu-dark-secondary border border-bambu-dark-tertiary shadow-xl"
-        >
-          {folders.map((folder) => (
-            <button
-              key={folder.id}
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setOpen(false);
-                onSelectFolder(folder.id);
-              }}
-              aria-label={folderLabel(folder)}
-              title={folderLabel(folder)}
-              className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm text-white hover:bg-bambu-dark transition-colors"
-            >
-              <FolderOpen className="w-3.5 h-3.5 flex-shrink-0 text-bambu-green" />
-              <FolderNumber number={folder.number} t={t} />
-              <span className="truncate">{folder.name}</span>
-            </button>
-          ))}
-        </span>
+          t={t}
+        />
       )}
     </span>
   );
@@ -1909,20 +1973,35 @@ function PathBar({
   t,
 }: PathBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState(false);
   const [typed, setTyped] = useState('');
   const [unknown, setUnknown] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const editAffordanceRef = useRef<HTMLButtonElement>(null);
+  const returnFocus = useRef(false);
 
   useEffect(() => {
     if (!menuOpen) return;
     const handlePointerDown = (e: MouseEvent) => {
-      if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false);
+      // Both halves: the list itself hangs off <body>, not off the trigger.
+      const target = e.target as Node;
+      if (!menuTriggerRef.current?.contains(target) && !menuRef.current?.contains(target)) setMenuOpen(false);
     };
     document.addEventListener('mousedown', handlePointerDown);
     return () => document.removeEventListener('mousedown', handlePointerDown);
   }, [menuOpen]);
+
+  // Leaving the box must not throw the user's place away. The input unmounts
+  // with the whole bar, so without this the browser falls back to <body> and
+  // the next Tab restarts at the top of the page; Escape and a resolved path
+  // both put focus back on the affordance that opened the box.
+  useEffect(() => {
+    if (editing || !returnFocus.current) return;
+    returnFocus.current = false;
+    editAffordanceRef.current?.focus();
+  }, [editing]);
 
   const pathText = path.map((folder) => folder.name).join('/');
 
@@ -1938,6 +2017,13 @@ function PathBar({
     setEditing(true);
   };
 
+  // Closing by keyboard, which owes the keyboard its place back. A blur does
+  // not: focus has already gone somewhere the user picked.
+  const stopEditing = () => {
+    returnFocus.current = true;
+    setEditing(false);
+  };
+
   const submit = () => {
     const resolved = resolveTypedPath(tree, typed);
     if (resolved === undefined) {
@@ -1947,7 +2033,7 @@ function PathBar({
       setUnknown(true);
       return;
     }
-    setEditing(false);
+    stopEditing();
     if (resolved === null) onSelectRoot();
     else onSelectFolder(resolved);
   };
@@ -1977,7 +2063,7 @@ function PathBar({
               submit();
             } else if (e.key === 'Escape') {
               e.preventDefault();
-              setEditing(false);
+              stopEditing();
             }
           }}
           className={`w-full px-2 py-1 rounded bg-bambu-dark border text-sm text-white focus:outline-none ${
@@ -2042,8 +2128,9 @@ function PathBar({
       {collapsed && (
         <>
           <PathSeparator folders={levelBefore(0)} onSelectFolder={onSelectFolder} t={t} />
-          <div ref={menuRef} className="relative flex-shrink-0">
+          <div className="flex-shrink-0">
             <button
+              ref={menuTriggerRef}
               type="button"
               aria-haspopup="menu"
               aria-expanded={menuOpen}
@@ -2055,29 +2142,16 @@ function PathBar({
               <MoreHorizontal className="w-4 h-4" />
             </button>
             {menuOpen && (
-              <div
-                role="menu"
-                className="absolute left-0 top-full mt-1 z-30 min-w-[10rem] max-w-[18rem] py-1 rounded-lg bg-bambu-dark-secondary border border-bambu-dark-tertiary shadow-xl"
-              >
-                {hidden.map((folder) => (
-                  <button
-                    key={folder.id}
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setMenuOpen(false);
-                      onSelectFolder(folder.id);
-                    }}
-                    aria-label={folderLabel(folder)}
-                    title={folderLabel(folder)}
-                    className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm text-white hover:bg-bambu-dark transition-colors"
-                  >
-                    <FolderOpen className="w-3.5 h-3.5 flex-shrink-0 text-bambu-green" />
-                    <FolderNumber number={folder.number} t={t} />
-                    <span className="truncate">{folder.name}</span>
-                  </button>
-                ))}
-              </div>
+              <PathBarFolderMenu
+                anchorRef={menuTriggerRef}
+                menuRef={menuRef}
+                folders={hidden}
+                onSelect={(id) => {
+                  setMenuOpen(false);
+                  onSelectFolder(id);
+                }}
+                t={t}
+              />
             )}
           </div>
         </>
@@ -2120,6 +2194,7 @@ function PathBar({
           click it (or press Enter on it, or F2 anywhere in the bar) and the
           crumbs become the path as text. */}
       <button
+        ref={editAffordanceRef}
         type="button"
         onClick={startEditing}
         aria-label={t('fileManager.pathBar.editPath')}
@@ -2359,6 +2434,10 @@ export function FileManagerPage() {
   // not a filter, so leaving the root drops it. Only reachable while the root
   // lists folders instead of every file.
   const [showUnfoldered, setShowUnfoldered] = useState(false);
+  // The root crumb has been used to step out of the recent start page into the
+  // flat listing it names. A location inside the root as well, so leaving the
+  // root drops it and coming back lands on the start page again.
+  const [showAllAtRoot, setShowAllAtRoot] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<number[]>([]);
   const [showNewFolderModal, setShowNewFolderModal] = useState(false);
   const [showExternalFolderModal, setShowExternalFolderModal] = useState(false);
@@ -2669,8 +2748,20 @@ export function FileManagerPage() {
   // or changed. A search or a tag filter means "look everywhere", so both
   // restore the flat listing whatever the setting says.
   const rootQueryOverridden = searchQuery.trim().length > 0 || selectedTagIds.length > 0;
-  const rootView =
-    selectedFolderId === null && !rootQueryOverridden ? (settings?.library_root_view ?? 'all') : 'all';
+  // "recent" is the only one of the three that is a window rather than a whole
+  // listing, so two more things drop it back to the flat one. A type or user
+  // filter, because the page applies those to the rows it holds: over a capped
+  // window that answers "no STL files" for a library full of them, one control
+  // away from the search box that looks everywhere. And the root crumb, which
+  // says "All Files" — at the recent root it is the only way out of the start
+  // page, since every other piece of state it clears is already clear.
+  // `folders` needs neither: its listings are complete, so filtering them here
+  // is the whole truth, and its root crumb genuinely leaves "No folder".
+  const rootWindowFiltered = filterType !== 'all' || filterUsername.trim().length > 0;
+  const configuredRootView = settings?.library_root_view ?? 'all';
+  const rootViewSetting =
+    configuredRootView === 'recent' && (rootWindowFiltered || showAllAtRoot) ? 'all' : configuredRootView;
+  const rootView = selectedFolderId === null && !rootQueryOverridden ? rootViewSetting : 'all';
   const rootListsFolders = rootView === 'folders';
   // The start page: the newest files across the whole library, ordered and
   // capped by the server.
@@ -3519,10 +3610,12 @@ export function FileManagerPage() {
     setSelectedFiles([]);
   }, [selectedFolderId]);
 
-  // Descending into a folder leaves the root, and with it the root's
-  // "No folder" listing.
+  // Descending into a folder leaves the root, and with it both of the places
+  // inside it: the "No folder" listing and the step out of the start page.
   useEffect(() => {
-    if (selectedFolderId !== null) setShowUnfoldered(false);
+    if (selectedFolderId === null) return;
+    setShowUnfoldered(false);
+    setShowAllAtRoot(false);
   }, [selectedFolderId]);
 
   const rootCrumbLabel = currentBucketIsExternal ? t('fileManager.allExternal') : t('fileManager.allFiles');
@@ -3535,6 +3628,10 @@ export function FileManagerPage() {
   const selectPathRoot = () => {
     setColumnsFocusedFileId(null);
     setShowUnfoldered(false);
+    // Standing on the start page already: the crumb says "All Files", so it
+    // shows them. Without this it would set the state it is already in and the
+    // one way out of the recent view would do nothing.
+    if (rootRecentView) setShowAllAtRoot(true);
     setTopLevelView(currentBucketIsExternal ? 'external' : 'internal');
     setSelectedFolderId(null);
   };
