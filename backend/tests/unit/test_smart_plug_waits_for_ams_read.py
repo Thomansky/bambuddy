@@ -17,11 +17,15 @@ tests pin it there:
 - a pending off waits while a round holds the printer, whichever mode it is in;
 - it goes straight through when no round does;
 - it gives up rather than leave a printer powered for ever;
-- the queue's own per-job toggle goes through the same wait.
+- the queue's own per-job toggle goes through the same wait;
+- it waits for a round announced but not yet started, and keeps waiting past
+  the ordinary dispatch-hold timeout -- the two ways the wait ended early and
+  silently, with the plug switching mid-retraction and nothing in the log.
 """
 
 import asyncio
 import logging
+import time
 from contextlib import ExitStack
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -82,6 +86,22 @@ class _Rig:
     def reading(self, printer_id=1):
         """Put the printer under an after-print read round's reservation."""
         self.scheduler._reserve_for_rfid_reread(printer_id, None)
+
+    def reading_since(self, seconds: float, printer_id=1):
+        """The same reservation, taken *seconds* ago."""
+        self.reading(printer_id)
+        started, marker, subtask = self.scheduler._dispatch_holds[printer_id]
+        self.scheduler._dispatch_holds[printer_id] = (started - seconds, marker, subtask)
+
+    async def announced(self, printer_id=1):
+        """A round the print-complete callback has promised but not spawned."""
+        row = SimpleNamespace(key="ams_read_unidentified_after_print", value="true")
+        session = AsyncMock()
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock()
+        session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=row)))
+        with patch("backend.app.services.print_scheduler.async_session", MagicMock(return_value=session)):
+            await self.scheduler.expect_after_print_read(printer_id)
 
     def done_reading(self, printer_id=1):
         self.scheduler._release_rfid_reread_hold(printer_id)
@@ -186,6 +206,82 @@ class TestAPendingOffWaits:
         pending off behind an unrelated reservation."""
         rig = _Rig()
         rig.scheduler._mark_printer_dispatched(1, "FINISH", None)
+
+        with ExitStack() as stack:
+            rig.patched(stack)
+            await asyncio.wait_for(rig.delayed_off(), timeout=5)
+
+        assert rig.switched_off
+
+
+class TestTheWaitCoversTheWholeRound:
+    """Two ways this wait used to end early, both of them silently.
+
+    It ends when ``rfid_read_in_flight`` goes false, and that is read off the
+    round's reservation. A reservation that expires while the round is still
+    retracting therefore switches the plug with no deadline passed and no
+    "powering down anyway" line -- the log does not even record that power was
+    cut early. And a reservation that has not been taken yet, because the off
+    was scheduled a thousand lines before the round was spawned, is not there
+    to be read at all.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_round_past_the_dispatch_timeout_still_holds_the_plug(self):
+        """An unload phase is minutes long: a dual-nozzle round that spends it
+        is past ``_dispatch_max_hold`` while filament is still moving. The
+        reservation has its own, longer ceiling for exactly this."""
+        rig = _Rig(off_delay_minutes=0)
+        rig.reading_since(rig.scheduler._dispatch_max_hold + 1.0)
+
+        with ExitStack() as stack:
+            rig.patched(stack)
+            task = rig.delayed_off(delay_seconds=0)
+            await _settle()
+
+            assert not rig.switched_off, "power was cut with the AMS still moving filament"
+
+            rig.done_reading()
+            await asyncio.wait_for(task, timeout=5)
+
+        assert rig.switched_off
+
+    @pytest.mark.asyncio
+    async def test_an_announced_round_holds_the_plug_before_it_starts(self):
+        """``on_print_complete`` schedules this off long before it spawns the
+        round, so at this moment nothing has been reserved. Without the
+        announcement the off sails through and the round starts unloading into
+        a printer whose mains is already going."""
+        rig = _Rig(off_delay_minutes=0)
+        await rig.announced()
+
+        with ExitStack() as stack:
+            rig.patched(stack)
+            task = rig.delayed_off(delay_seconds=0)
+            await _settle()
+
+            assert not rig.switched_off
+
+            # The round starts for real, takes the reservation, and drops the
+            # announcement the way `read_unidentified_slots_after_print` does.
+            rig.reading()
+            rig.scheduler._rfid_read_pending.pop(1, None)
+            await _settle()
+
+            assert not rig.switched_off
+
+            rig.done_reading()
+            await asyncio.wait_for(task, timeout=5)
+
+        assert rig.switched_off
+
+    @pytest.mark.asyncio
+    async def test_an_announcement_nobody_answers_does_not_keep_a_printer_powered(self):
+        """A round that is never spawned at all. The marker is a grace window,
+        not a latch."""
+        rig = _Rig(off_delay_minutes=0)
+        await rig.announced()
+        rig.scheduler._rfid_read_pending[1] = time.monotonic() - 1.0
 
         with ExitStack() as stack:
             rig.patched(stack)

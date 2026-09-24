@@ -6991,8 +6991,17 @@ async def on_print_complete(printer_id: int, data: dict):
             # `off_delay_minutes` may be 0. The AMS read is not gated here but
             # in `_wait_for_ams_read`, which every scheduled off passes through
             # right before it switches the plug — this call site only schedules.
+            #
+            # `_wait_for_ams_read` asks whether a round is in flight, though,
+            # and at this point none is: the round is spawned a thousand lines
+            # below, after a stretch of awaited database and archive work. A
+            # zero-delay off would reach that gate an event-loop tick from now,
+            # find nothing to wait for and switch the plug — so the round is
+            # announced first. `expect_after_print_read` is a no-op unless the
+            # feature is on, and the round drops the announcement itself.
             if queue_auto_off:
                 try:
+                    await print_scheduler.expect_after_print_read(printer_id)
                     async with async_session() as db:
                         await smart_plug_manager.schedule_off_after_queue_job(printer_id, db)
                 except Exception as e:

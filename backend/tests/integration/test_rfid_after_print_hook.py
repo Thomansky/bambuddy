@@ -18,6 +18,7 @@ about the wiring around it.
 import asyncio
 import logging
 from contextlib import ExitStack
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -48,6 +49,7 @@ def _setup(stack, *, read_after_print=None):
     mock_pm.get_printer.return_value = None
     mock_scheduler = stack.enter_context(patch("backend.app.main.print_scheduler"))
     mock_scheduler.read_unidentified_slots_after_print = read_after_print or AsyncMock()
+    mock_scheduler.expect_after_print_read = AsyncMock()
 
     mock_session = AsyncMock()
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -55,6 +57,41 @@ def _setup(stack, *, read_after_print=None):
     mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
     mock_session_maker.return_value = mock_session
     return mock_scheduler, mock_plug
+
+
+def _with_queue_item(stack, *, auto_off=True):
+    """Make the callback find a "printing" queue item, optionally one that
+    opted into ``auto_off_after``.
+
+    ``on_print_complete`` reads it under ``run_with_retry``, which it imports
+    inside itself, so the patch goes on the module it comes from.
+    """
+    item = SimpleNamespace(
+        id=7,
+        archive_id=None,
+        library_file_id=None,
+        status="printing",
+        completed_at=None,
+        error_message=None,
+        billing_run_id=None,
+        created_by_id=None,
+        cost_center_id=None,
+        plate_id=None,
+        auto_off_after=auto_off,
+    )
+    db = AsyncMock()
+    db.execute = AsyncMock(
+        return_value=MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[item]))))
+    )
+    db.commit = AsyncMock()
+
+    async def run_with_retry(fn, *_args, **_kwargs):
+        return await fn(db)
+
+    stack.enter_context(patch("backend.app.core.database.run_with_retry", run_with_retry))
+    stack.enter_context(patch("backend.app.main._completion_belongs_to_queue_item", AsyncMock(return_value=True)))
+    stack.enter_context(patch("backend.app.main._bump_library_file_usage_if_completed", AsyncMock()))
+    return item
 
 
 async def _fire(status="completed"):
@@ -165,12 +202,53 @@ class TestAutoOffWaitsForTheRound:
         """The ceiling only has a job if it is longer than the round it waits
         for; set below the round's own budget it would cut every slow round
         short instead of catching the ones that died. Retracting a hotend is
-        tens of seconds of that budget, so the unload phase counts too."""
-        from backend.app.main import RFID_AFTER_PRINT_MAX_WAIT
-        from backend.app.services.print_scheduler import (
-            _RFID_REREAD_TASK_TIMEOUT,
-            _RFID_UNLOAD_MAX_HOTENDS,
-            _RFID_UNLOAD_TIMEOUT,
-        )
+        tens of seconds of that budget, so the unload phase counts too.
 
-        assert RFID_AFTER_PRINT_MAX_WAIT > (_RFID_UNLOAD_TIMEOUT * _RFID_UNLOAD_MAX_HOTENDS + _RFID_REREAD_TASK_TIMEOUT)
+        The other half of this relationship -- the reservation the *second*
+        gate reads outlasting the same budget -- is pinned in
+        ``backend/tests/unit/test_scheduler_rfid_after_print.py``
+        (``TestTheReservationOutlastsTheRound``). This assertion on its own was
+        false assurance once already: it stayed true while the hold under the
+        round expired in the middle of it."""
+        from backend.app.main import RFID_AFTER_PRINT_MAX_WAIT
+        from backend.app.services.print_scheduler import _RFID_REREAD_MAX_HOLD, _RFID_REREAD_ROUND_BUDGET
+
+        assert RFID_AFTER_PRINT_MAX_WAIT > _RFID_REREAD_ROUND_BUDGET
+        assert RFID_AFTER_PRINT_MAX_WAIT > _RFID_REREAD_MAX_HOLD
+
+
+class TestThePerJobAutoOffIsAnnouncedFirst:
+    """The queue's own ``auto_off_after`` is handed to the smart-plug manager
+    about a thousand lines before the round is spawned, with awaited database
+    and archive work in between. Its gate asks whether a round is in flight,
+    and at that point none is -- so the round is announced before the off is
+    scheduled rather than after.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_round_is_announced_before_the_off_is_scheduled(self):
+        order: list[str] = []
+        tasks_before = set(asyncio.all_tasks())
+        with ExitStack() as stack:
+            scheduler, plug = _setup(stack)
+            _with_queue_item(stack)
+            scheduler.expect_after_print_read = AsyncMock(side_effect=lambda _pid: order.append("announced"))
+            plug.schedule_off_after_queue_job = AsyncMock(side_effect=lambda _pid, _db: order.append("scheduled"))
+            await _fire()
+            await _drain(tasks_before)
+
+        assert order == ["announced", "scheduled"]
+
+    @pytest.mark.asyncio
+    async def test_a_job_that_did_not_opt_in_announces_nothing(self):
+        """The announcement exists to cover this one call site. A print nobody
+        asked to power down must not have its round announced from here."""
+        tasks_before = set(asyncio.all_tasks())
+        with ExitStack() as stack:
+            scheduler, plug = _setup(stack)
+            _with_queue_item(stack, auto_off=False)
+            await _fire()
+            await _drain(tasks_before)
+
+        scheduler.expect_after_print_read.assert_not_awaited()
+        plug.schedule_off_after_queue_job.assert_not_awaited()
