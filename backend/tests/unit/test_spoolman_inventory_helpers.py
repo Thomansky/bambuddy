@@ -114,8 +114,14 @@ class TestMapSpoolmanSpool:
 
     def test_missing_or_blank_article_number_maps_to_none(self):
         assert _map_spoolman_spool(MINIMAL_SPOOL)["material_number"] is None
-        blank = {**MINIMAL_SPOOL, "filament": {**MINIMAL_SPOOL["filament"], "article_number": ""}}
-        assert _map_spoolman_spool(blank)["material_number"] is None
+        for value in ("", "   "):
+            blank = {**MINIMAL_SPOOL, "filament": {**MINIMAL_SPOOL["filament"], "article_number": value}}
+            assert _map_spoolman_spool(blank)["material_number"] is None
+
+    def test_padded_article_number_is_trimmed(self):
+        """The filter chip matches exactly against trimmed options (#2870)."""
+        spool = {**MINIMAL_SPOOL, "filament": {**MINIMAL_SPOOL["filament"], "article_number": " 15 "}}
+        assert _map_spoolman_spool(spool)["material_number"] == "15"
 
     def test_remaining_weight_drives_synthetic_used_for_parity(self):
         """When remaining_weight is set, weight_used = label - remaining and
