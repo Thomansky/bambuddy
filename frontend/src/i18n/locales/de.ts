@@ -1659,6 +1659,7 @@ export default {
     materialNumbers: {
       title: 'Nach Materialnummer',
       empty: 'Noch keine Materialnummern vergeben. Weise sie Spulen im Bestand zu, um Verbrauch und Kosten hier zu gruppieren.',
+      loadFailed: 'Die Materialnummern-Statistik konnte nicht geladen werden.',
       spools: 'Spulen',
       remaining: 'Verbleibend',
       consumed: 'Verbraucht',

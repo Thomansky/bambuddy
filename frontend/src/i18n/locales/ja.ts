@@ -1658,6 +1658,7 @@ export default {
     materialNumbers: {
       title: '資材番号別',
       empty: 'まだ資材番号が割り当てられていません。在庫のスプールに資材番号を追加すると、ここで消費量とコストをまとめて確認できます。',
+      loadFailed: '資材番号の統計を読み込めませんでした。',
       spools: 'スプール',
       remaining: '残量',
       consumed: '消費量',

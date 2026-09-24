@@ -1659,6 +1659,7 @@ export default {
     materialNumbers: {
       title: 'Par numéro de matière',
       empty: 'Aucun numéro de matière attribué pour l\'instant. Ajoutez-en aux bobines dans l\'inventaire pour regrouper ici la consommation et les coûts.',
+      loadFailed: 'Impossible de charger les statistiques par numéro de matière.',
       spools: 'Bobines',
       remaining: 'Restant',
       consumed: 'Consommé',

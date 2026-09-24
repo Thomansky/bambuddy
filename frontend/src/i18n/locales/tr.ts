@@ -1660,6 +1660,7 @@ export default {
     materialNumbers: {
       title: 'Malzeme Numarasına Göre',
       empty: 'Henüz malzeme numarası atanmadı. Tüketim ve maliyetleri burada gruplamak için envanterdeki makaralara malzeme numarası ekleyin.',
+      loadFailed: 'Malzeme numarası istatistikleri yüklenemedi.',
       spools: 'Makaralar',
       remaining: 'Kalan',
       consumed: 'Tüketilen',

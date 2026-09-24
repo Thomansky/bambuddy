@@ -1,8 +1,9 @@
 """API coverage for the spool material number (#2870).
 
 The material number is the internal purchasing identifier shared by all
-spools of a product. Pinned here: CRUD round-trip, inheritance on the create
-paths, the per-number statistics aggregate, and the CSV round-trip.
+spools of a product. Pinned here: CRUD round-trip, server-side normalisation,
+inheritance on the create paths, the per-number statistics aggregate and its
+dashboard timeframe, and the CSV round-trip.
 """
 
 import pytest
@@ -73,6 +74,93 @@ class TestMaterialNumberCrud:
             json={"material": "PLA", "material_number": "x" * 65},
         )
         assert resp.status_code == 422
+
+
+class TestMaterialNumberNormalisation:
+    """One validator on the schema, so every write path normalises (#2870).
+
+    Without it "15" and "15 " are two groups in the statistics aggregate and
+    two entries in the inventory filter chip, and the chip's exact match
+    never finds the padded one.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_create_strips_surrounding_whitespace(self, async_client: AsyncClient):
+        resp = await async_client.post(
+            "/api/v1/inventory/spools",
+            json={"material": "PLA", "material_number": "  15 "},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["material_number"] == "15"
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_create_maps_blank_to_none(self, async_client: AsyncClient):
+        resp = await async_client.post(
+            "/api/v1/inventory/spools",
+            json={"material": "PLA", "material_number": "   "},
+        )
+        assert resp.status_code == 200
+        # NULL, not "" — "has no number" stays a single state to query for.
+        assert resp.json()["material_number"] is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_patch_strips_surrounding_whitespace(self, async_client: AsyncClient, spool_factory):
+        spool = await spool_factory(material_number="15")
+
+        resp = await async_client.patch(
+            f"/api/v1/inventory/spools/{spool.id}",
+            json={"material_number": " 16 "},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["material_number"] == "16"
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_bulk_edit_strips_surrounding_whitespace(self, async_client: AsyncClient, spool_factory):
+        spool = await spool_factory()
+
+        resp = await async_client.post(
+            "/api/v1/inventory/spools/bulk-update",
+            json={"ids": [spool.id], "update": {"material_number": " 15 "}},
+        )
+        assert resp.status_code == 200
+
+        listing = await async_client.get("/api/v1/inventory/spools")
+        assert [s["material_number"] for s in listing.json()] == ["15"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_csv_import_strips_surrounding_whitespace(self, async_client: AsyncClient):
+        csv = "material,brand,material_number\nPLA,Bambu Lab, 15 \n"
+        resp = await async_client.post(
+            "/api/v1/inventory/spools/import",
+            files={"file": ("spools.csv", csv.encode("utf-8"), "text/csv")},
+        )
+        assert resp.status_code == 200, resp.text
+
+        listing = await async_client.get("/api/v1/inventory/spools")
+        assert [s["material_number"] for s in listing.json()] == ["15"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_padded_duplicate_does_not_become_a_second_group(self, async_client: AsyncClient, spool_factory):
+        await async_client.post("/api/v1/inventory/spools", json={"material": "PLA", "material_number": "15"})
+        await async_client.post("/api/v1/inventory/spools", json={"material": "PLA", "material_number": "15 "})
+
+        resp = await async_client.get("/api/v1/inventory/stats/material-numbers")
+        assert [r["material_number"] for r in resp.json()] == ["15"]
+        assert resp.json()[0]["spool_count"] == 2
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_blank_number_is_not_offered_as_a_group(self, async_client: AsyncClient):
+        await async_client.post("/api/v1/inventory/spools", json={"material": "PLA", "material_number": "  "})
+
+        resp = await async_client.get("/api/v1/inventory/stats/material-numbers")
+        assert resp.json() == []
 
 
 class TestMaterialNumberInheritance:
@@ -220,6 +308,99 @@ class TestMaterialNumberStats:
         assert rows["15"]["spool_count"] == 0
         assert rows["15"]["remaining_g"] == 0
         assert rows["15"]["consumed_g"] == pytest.approx(300)
+
+
+class TestMaterialNumberStatsTimeframe:
+    """The widget sits in the stats dashboard, so it follows its timeframe.
+
+    Usage history is the per-period half; stock is point-in-time and stays
+    whole — "how much do I hold" has no date range.
+    """
+
+    @staticmethod
+    async def _usage(db_session, spool_id, *, days_ago, grams, cost):
+        from datetime import datetime, timedelta, timezone
+
+        row = SpoolUsageHistory(
+            spool_id=spool_id, weight_used=grams, percent_used=grams / 10, status="completed", cost=cost
+        )
+        # created_at is a server default, so set it explicitly to age the row.
+        row.created_at = (datetime.now(timezone.utc) - timedelta(days=days_ago)).replace(tzinfo=None)
+        db_session.add(row)
+        await db_session.commit()
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_date_from_excludes_older_consumption(
+        self, async_client: AsyncClient, spool_factory, db_session: AsyncSession
+    ):
+        from datetime import datetime, timedelta, timezone
+
+        spool = await spool_factory(material_number="15", label_weight=1000, weight_used=400)
+        await self._usage(db_session, spool.id, days_ago=200, grams=1000, cost=20.0)
+        await self._usage(db_session, spool.id, days_ago=2, grams=10, cost=0.2)
+
+        since = (datetime.now(timezone.utc) - timedelta(days=30)).date().isoformat()
+        resp = await async_client.get(f"/api/v1/inventory/stats/material-numbers?date_from={since}")
+        assert resp.status_code == 200
+        row = resp.json()[0]
+        assert row["consumed_g"] == pytest.approx(10)
+        assert row["cost"] == pytest.approx(0.2)
+        # Stock is point-in-time: unaffected by the range.
+        assert row["spool_count"] == 1
+        assert row["remaining_g"] == pytest.approx(600)
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_date_to_excludes_newer_consumption(
+        self, async_client: AsyncClient, spool_factory, db_session: AsyncSession
+    ):
+        from datetime import datetime, timedelta, timezone
+
+        spool = await spool_factory(material_number="15")
+        await self._usage(db_session, spool.id, days_ago=200, grams=1000, cost=20.0)
+        await self._usage(db_session, spool.id, days_ago=2, grams=10, cost=0.2)
+
+        until = (datetime.now(timezone.utc) - timedelta(days=30)).date().isoformat()
+        resp = await async_client.get(f"/api/v1/inventory/stats/material-numbers?date_to={until}")
+        assert resp.json()[0]["consumed_g"] == pytest.approx(1000)
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_no_range_still_reports_lifetime_totals(
+        self, async_client: AsyncClient, spool_factory, db_session: AsyncSession
+    ):
+        spool = await spool_factory(material_number="15")
+        await self._usage(db_session, spool.id, days_ago=200, grams=1000, cost=20.0)
+        await self._usage(db_session, spool.id, days_ago=2, grams=10, cost=0.2)
+
+        resp = await async_client.get("/api/v1/inventory/stats/material-numbers")
+        assert resp.json()[0]["consumed_g"] == pytest.approx(1010)
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_number_with_no_usage_in_range_still_lists_its_stock(
+        self, async_client: AsyncClient, spool_factory, db_session: AsyncSession
+    ):
+        from datetime import datetime, timedelta, timezone
+
+        spool = await spool_factory(material_number="15", label_weight=1000, weight_used=250)
+        await self._usage(db_session, spool.id, days_ago=200, grams=250, cost=5.0)
+
+        since = (datetime.now(timezone.utc) - timedelta(days=30)).date().isoformat()
+        resp = await async_client.get(f"/api/v1/inventory/stats/material-numbers?date_from={since}")
+        row = resp.json()[0]
+        assert row["consumed_g"] == 0
+        assert row["remaining_g"] == pytest.approx(750)
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_ties_sort_by_number_so_the_order_is_stable(self, async_client: AsyncClient, spool_factory):
+        await spool_factory(material_number="16", color_name="Black")
+        await spool_factory(material_number="15")
+
+        resp = await async_client.get("/api/v1/inventory/stats/material-numbers")
+        assert [r["material_number"] for r in resp.json()] == ["15", "16"]
 
 
 class TestMaterialNumberCsv:

@@ -1659,6 +1659,7 @@ export default {
     materialNumbers: {
       title: '按物料号',
       empty: '尚未分配物料号。在库存中为料盘添加物料号，即可在此按其汇总消耗量和成本。',
+      loadFailed: '无法加载物料号统计数据。',
       spools: '料盘',
       remaining: '剩余',
       consumed: '已消耗',

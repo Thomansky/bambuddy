@@ -63,6 +63,19 @@ def normalize_extra_colors(value: str | None) -> str | None:
     return ",".join(tokens)
 
 
+def normalize_material_number(value: str | None) -> str | None:
+    """Trim the material number and treat a blank one as unset (#2870).
+
+    Every write path lands here (form, bulk edit, CSV import, direct API), so
+    "15" and "15 " can never become two groups in the statistics aggregate or
+    two entries in the inventory filter. Blank collapses to NULL rather than
+    "", which keeps "has no number" a single state to query for.
+    """
+    if value is None:
+        return None
+    return value.strip() or None
+
+
 def normalize_effect_type(value: str | None) -> str | None:
     if value is None:
         return None
@@ -124,6 +137,12 @@ class SpoolBase(BaseModel):
     # Internal material / article number (#2870) — the purchasing identifier,
     # shared by all spools of the same product. Free text, no uniqueness.
     material_number: str | None = Field(default=None, max_length=64)
+
+    @field_validator("material_number")
+    @classmethod
+    def _validate_material_number(cls, v: str | None) -> str | None:
+        return normalize_material_number(v)
+
     # Free-text storage location, distinct from `location` (AMS slot
     # assignment). Column has lived on the ORM since the inventory rework
     # but was missing from this schema, so writes were silently dropped (#1291).
@@ -179,6 +198,12 @@ class SpoolUpdate(BaseModel):
     low_stock_threshold_pct: int | None = Field(default=None, ge=1, le=99)
     # Internal material / article number (#2870).
     material_number: str | None = Field(default=None, max_length=64)
+
+    @field_validator("material_number")
+    @classmethod
+    def _validate_material_number(cls, v: str | None) -> str | None:
+        return normalize_material_number(v)
+
     storage_location: str | None = Field(default=None, max_length=255)
     location_id: int | None = Field(default=None, gt=0)
 

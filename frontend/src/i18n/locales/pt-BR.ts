@@ -1659,6 +1659,7 @@ export default {
     materialNumbers: {
       title: 'Por Número de Material',
       empty: 'Nenhum número de material atribuído ainda. Adicione-os aos carretéis no inventário para agrupar consumo e custos aqui.',
+      loadFailed: 'Não foi possível carregar as estatísticas por número de material.',
       spools: 'Carretéis',
       remaining: 'Restante',
       consumed: 'Consumido',

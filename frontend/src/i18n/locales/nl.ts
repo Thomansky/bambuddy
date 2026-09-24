@@ -1676,6 +1676,7 @@ export default {
     materialNumbers: {
       title: 'Per materiaalnummer',
       empty: 'Nog geen materiaalnummers toegewezen. Voeg ze toe aan spoelen in de voorraad om verbruik en kosten hier te groeperen.',
+      loadFailed: 'De statistieken per materiaalnummer konden niet worden geladen.',
       spools: 'Spoelen',
       remaining: 'Resterend',
       consumed: 'Verbruikt',

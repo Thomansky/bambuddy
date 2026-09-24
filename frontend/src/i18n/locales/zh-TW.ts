@@ -1659,6 +1659,7 @@ export default {
     materialNumbers: {
       title: '依料號統計',
       empty: '尚未指定任何料號。請在庫存中為料盤新增料號，即可在此依料號統整消耗量與成本。',
+      loadFailed: '無法載入料號統計資料。',
       spools: '料盤',
       remaining: '剩餘',
       consumed: '已消耗',

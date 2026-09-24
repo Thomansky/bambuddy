@@ -10,6 +10,10 @@ import { api } from '../api/client';
 
 interface MaterialNumberStatsProps {
   currency: string;
+  // Dashboard timeframe. Narrows the consumption/cost columns only — the
+  // spool count and remaining weight are point-in-time stock.
+  dateFrom?: string;
+  dateTo?: string;
 }
 
 function formatGrams(g: number): string {
@@ -17,11 +21,11 @@ function formatGrams(g: number): string {
   return `${Math.round(g)} g`;
 }
 
-export function MaterialNumberStats({ currency }: MaterialNumberStatsProps) {
+export function MaterialNumberStats({ currency, dateFrom, dateTo }: MaterialNumberStatsProps) {
   const { t } = useTranslation();
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['material-number-stats'],
-    queryFn: api.getMaterialNumberStats,
+    queryKey: ['material-number-stats', dateFrom ?? null, dateTo ?? null],
+    queryFn: () => api.getMaterialNumberStats({ dateFrom, dateTo }),
   });
 
   if (isLoading) {
@@ -32,7 +36,15 @@ export function MaterialNumberStats({ currency }: MaterialNumberStatsProps) {
     );
   }
 
-  if (isError || !data || data.length === 0) {
+  // A failed request is not an empty inventory: telling someone who has
+  // numbered their spools to go and number them (because of a 403 from a
+  // missing INVENTORY_READ, or a dropped connection) sends them looking for
+  // a problem that isn't there.
+  if (isError) {
+    return <p className="text-sm text-red-700 dark:text-red-400 py-4">{t('stats.materialNumbers.loadFailed')}</p>;
+  }
+
+  if (!data || data.length === 0) {
     return <p className="text-sm text-bambu-gray py-4">{t('stats.materialNumbers.empty')}</p>;
   }
 

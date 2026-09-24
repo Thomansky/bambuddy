@@ -6625,9 +6625,15 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(data),
     }),
-  // Per-material-number inventory aggregate (#2870).
-  getMaterialNumberStats: () =>
-    request<MaterialNumberStats[]>('/inventory/stats/material-numbers'),
+  // Per-material-number inventory aggregate (#2870). The date range narrows
+  // the usage half only — stock is point-in-time.
+  getMaterialNumberStats: (options?: { dateFrom?: string; dateTo?: string }) => {
+    const params = new URLSearchParams();
+    if (options?.dateFrom) params.set('date_from', options.dateFrom);
+    if (options?.dateTo) params.set('date_to', options.dateTo);
+    const qs = params.toString();
+    return request<MaterialNumberStats[]>(`/inventory/stats/material-numbers${qs ? `?${qs}` : ''}`);
+  },
   getSpoolUsageHistory: (spoolId: number, limit = 50) =>
     request<SpoolUsageRecord[]>(`/inventory/spools/${spoolId}/usage?limit=${limit}`),
   getAllUsageHistory: (limit = 100, printerId?: number) =>

@@ -1659,6 +1659,7 @@ export default {
     materialNumbers: {
       title: 'Por número de material',
       empty: 'Aún no hay números de material asignados. Añádelos a las bobinas en el inventario para agrupar aquí el consumo y los costes.',
+      loadFailed: 'No se han podido cargar las estadísticas por número de material.',
       spools: 'Bobinas',
       remaining: 'Restante',
       consumed: 'Consumido',

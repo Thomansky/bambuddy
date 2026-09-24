@@ -1,5 +1,6 @@
 import json
 import logging
+from datetime import date, datetime, time, timezone
 
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -1259,6 +1260,10 @@ async def import_spools_csv(
     created = 0
     for row in preview.rows:
         if row.status == "valid" and row.spool is not None:
+            # Deliberately no material-number inheritance here (#2870), unlike
+            # the other create paths: the file is authoritative. A CSV that
+            # leaves the column blank is stating "no number", not asking for
+            # one to be guessed from whatever else is in the inventory.
             db.add(Spool(**row.spool))
             created += 1
 
@@ -2187,6 +2192,8 @@ async def get_spool_usage_history(
 
 @router.get("/stats/material-numbers", response_model=list[MaterialNumberStats])
 async def get_material_number_stats(
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_READ),
 ):
@@ -2197,11 +2204,25 @@ async def get_material_number_stats(
     by — unlike brand+material+colour. Two queries: active-spool counts and
     remaining weight from the spool table, consumption and cost from the
     recorded usage history (archived spools included — their consumption
-    happened). Sorted by consumption, heaviest first.
+    happened).
+
+    ``date_from``/``date_to`` narrow the usage half only, so the widget can
+    follow the dashboard timeframe the rest of the stats page uses. Stock is
+    point-in-time by nature and stays unfiltered — "how much do I hold" has
+    no date range. Sorted by consumption, heaviest first, then by number so
+    a range where nothing was consumed still lists in a stable order.
     """
     from backend.app.models.spool_usage_history import SpoolUsageHistory
 
-    has_number = Spool.material_number.is_not(None) & (Spool.material_number != "")
+    # material_number is normalised to NULL-or-non-empty by the schema
+    # validator, so NULL is the only "unset" state to exclude here.
+    has_number = Spool.material_number.is_not(None)
+
+    usage_filters = [has_number]
+    if date_from:
+        usage_filters.append(SpoolUsageHistory.created_at >= datetime.combine(date_from, time.min, tzinfo=timezone.utc))
+    if date_to:
+        usage_filters.append(SpoolUsageHistory.created_at <= datetime.combine(date_to, time.max, tzinfo=timezone.utc))
 
     inventory_rows = await db.execute(
         select(
@@ -2220,7 +2241,7 @@ async def get_material_number_stats(
             func.sum(SpoolUsageHistory.cost),
         )
         .join(Spool, SpoolUsageHistory.spool_id == Spool.id)
-        .where(has_number)
+        .where(*usage_filters)
         .group_by(Spool.material_number)
     )
 
@@ -2243,7 +2264,7 @@ async def get_material_number_stats(
         entry.consumed_g = float(consumed or 0)
         entry.cost = float(cost or 0)
 
-    return sorted(stats.values(), key=lambda s: s.consumed_g, reverse=True)
+    return sorted(stats.values(), key=lambda s: (-s.consumed_g, s.material_number))
 
 
 @router.get("/usage", response_model=list[SpoolUsageHistoryResponse])

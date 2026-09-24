@@ -1592,6 +1592,7 @@ export default {
     materialNumbers: {
       title: '자재 번호별',
       empty: '아직 지정된 자재 번호가 없습니다. 인벤토리에서 스풀에 자재 번호를 추가하면 여기에서 소비량과 비용을 그룹화할 수 있습니다.',
+      loadFailed: '자재 번호 통계를 불러오지 못했습니다.',
       spools: '스풀',
       remaining: '남은 양',
       consumed: '소비량',
