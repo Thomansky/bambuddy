@@ -302,11 +302,20 @@ RFID_REREAD_HOLD = "rfid_reread"
 # the entry itself; the watchdog never sees one of these.
 _RFID_REREAD_HOLD_MARKER = "rfid_reread"
 
-# One `ams_get_rfid` moves filament to the reader and back; 25 s covers a slow
-# read with margin. The task ceiling bounds the whole round so a dead AMS can
-# never hold a printer out of the queue for longer than a few passes, and the
-# slot cap bounds it for a farm-sized AMS array.
-_RFID_REREAD_SLOT_TIMEOUT = 25.0
+# One `ams_get_rfid` moves filament to the reader and back, and 25 s was not
+# enough for it: a farm log has an H2S taking longer than that on an original
+# Bambu spool the manual button then read without trouble. The manual path
+# never waits at all, which is why it "always works" -- it lets the identity
+# arrive over MQTT whenever the AMS is done. 60 s is the wait that makes this
+# round agree with that button on the same hardware.
+#
+# The task ceiling is deliberately NOT raised with it: it is what bounds a
+# whole round, so a dead AMS can never hold a printer out of the queue for
+# longer than a few passes. It now buys two silent slots rather than four,
+# and the rest of the round's slots go unattempted -- which costs them
+# nothing, because a slot never attempted is never put on cooldown. The slot
+# cap bounds the round for a farm-sized AMS array.
+_RFID_REREAD_SLOT_TIMEOUT = 60.0
 _RFID_REREAD_TASK_TIMEOUT = 120.0
 _RFID_REREAD_POLL_INTERVAL = 1.0
 _RFID_REREAD_MAX_SLOTS = 8
@@ -5327,8 +5336,8 @@ class PrintScheduler:
                 else:
                     timed_out.append(label)
                     # `waited`, not the budget: the wait also returns early
-                    # when the printer stops reporting, and a line claiming
-                    # 25 s of AMS silence sends the reader after the AMS.
+                    # when the printer stops reporting, and a line claiming a
+                    # full minute of AMS silence sends the reader after the AMS.
                     logger.info("%s: %s ams_get_rfid accepted (%s), no read after %.0f s", tag, label, message, waited)
                 # A slot the print took back never got its fair attempt, so it
                 # earns no cooldown: the round that follows the next print has
