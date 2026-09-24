@@ -190,11 +190,12 @@ describe('FileManagerPage — Copy path', () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('Kunden/RAFI/N1125035'));
   });
 
-  it('offers no copy control at the root, where there is no path', async () => {
+  it('draws no bar at all at the root, so there is nothing to copy', async () => {
     render(<FileManagerPage />);
 
-    await waitFor(() => expect(screen.getByTestId('library-path-bar')).toBeInTheDocument());
-    expect(pathBar().queryByTitle('Copy path')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('folder-sidebar')).toBeInTheDocument());
+    expect(screen.queryByTestId('library-path-bar')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('Copy path')).not.toBeInTheDocument();
   });
 
   it('copies a managed folder its library path, and says so', async () => {

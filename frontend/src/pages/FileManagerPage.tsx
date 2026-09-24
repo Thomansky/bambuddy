@@ -3045,8 +3045,14 @@ export function FileManagerPage() {
   // would sit beside results it doesn't scope. "No folder" is the same case
   // from the other side — it is defined as the files those very folders do
   // not hold, so showing them inside it would contradict its own crumb.
+  // With the tree switched off, ContentFolderNav already draws this level's
+  // folders — and it carries the kebab and the bucket switch the tree used to.
+  // Drawing the tiles as well put every folder on screen twice, in exactly the
+  // two views that have both.
+  const contentNavDrawsFolders = !folderSidebarVisible && viewMode !== 'columns';
   const showFolderTiles =
     !folderTilesHidden &&
+    !contentNavDrawsFolders &&
     visibleSubfolders.length > 0 &&
     !searchQuery.trim() &&
     selectedTagIds.length === 0 &&
@@ -3592,7 +3598,7 @@ export function FileManagerPage() {
               aria-label={t('fileManager.folderTilesToggle.label')}
               title={folderTilesHidden ? t('fileManager.folderTilesToggle.show') : t('fileManager.folderTilesToggle.hide')}
               data-testid="toggle-folder-tiles"
-              className="hidden lg:flex items-center p-2 rounded-lg bg-bambu-dark text-bambu-gray hover:text-white transition-colors"
+              className="hidden md:flex items-center p-2 rounded-lg bg-bambu-dark text-bambu-gray hover:text-white transition-colors"
             >
               <LayoutGrid className={`w-4 h-4 ${folderTilesHidden ? 'opacity-50' : ''}`} />
             </button>
@@ -3604,7 +3610,7 @@ export function FileManagerPage() {
             aria-label={t('fileManager.sidebarToggle.label')}
             title={folderSidebarVisible ? t('fileManager.sidebarToggle.hide') : t('fileManager.sidebarToggle.show')}
             data-testid="toggle-folder-sidebar"
-            className="hidden lg:flex items-center p-2 rounded-lg bg-bambu-dark text-bambu-gray hover:text-white transition-colors"
+            className="hidden md:flex items-center p-2 rounded-lg bg-bambu-dark text-bambu-gray hover:text-white transition-colors"
           >
             {folderSidebarVisible ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
           </button>
@@ -4289,7 +4295,11 @@ export function FileManagerPage() {
 
           {/* Path bar: where you are, and one click back to any ancestor.
               Rendered in every view mode, driven by the same selection the
-              sidebar, the tiles and the columns all write to. */}
+              sidebar, the tiles and the columns all write to — but not at the
+              root with nothing below it, where the one crumb it would draw
+              only repeats the name of the view you are already looking at and
+              costs a row for it. */}
+          {(folderPath.length > 0 || rootUnfolderedView) && (
           <PathBar
             rootLabel={rootCrumbLabel}
             rootIsExternal={currentBucketIsExternal}
@@ -4299,6 +4309,7 @@ export function FileManagerPage() {
             onSelectFolder={selectFolderFromChrome}
             t={t}
           />
+          )}
 
           {/* With the tree switched off the content area carries the way down
               (and the bucket switch) — the path bar only ever walks up. The

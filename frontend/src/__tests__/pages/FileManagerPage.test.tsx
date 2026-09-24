@@ -1293,7 +1293,9 @@ describe('FileManagerPage', () => {
       render(<FileManagerPage />);
       await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
 
-      expect(currentCrumb()).toHaveTextContent('All Files');
+      // At the root the bar would hold one crumb repeating the view's own
+      // name, so it is not drawn at all until there is a path to show.
+      expect(screen.queryByTestId('library-path-bar')).not.toBeInTheDocument();
 
       await user.click(sidebar().getByText('Brackets'));
 
@@ -1315,8 +1317,9 @@ describe('FileManagerPage', () => {
       await user.click(pathBar().getByRole('button', { name: 'Functional Parts' }));
       await waitFor(() => expect(currentCrumb()).toHaveTextContent('Functional Parts'));
 
+      // Back at the root the bar has nothing left to say and goes away.
       await user.click(pathBar().getByRole('button', { name: 'All Files' }));
-      await waitFor(() => expect(currentCrumb()).toHaveTextContent('All Files'));
+      await waitFor(() => expect(screen.queryByTestId('library-path-bar')).not.toBeInTheDocument());
     });
 
     it('keeps a root-plus-three chain whole rather than folding a crumb that fits', async () => {
@@ -1411,9 +1414,9 @@ describe('FileManagerPage', () => {
 
       expect(screen.queryByTestId('folder-sidebar')).not.toBeInTheDocument();
       expect(toggle()).toHaveAttribute('aria-pressed', 'false');
-      // Files and the path bar stay…
+      // The files stay; the bar has nothing to draw at the root…
       expect(screen.getByText('Benchy')).toBeInTheDocument();
-      expect(currentCrumb()).toHaveTextContent('All Files');
+      expect(screen.queryByTestId('library-path-bar')).not.toBeInTheDocument();
       // …and the way DOWN is in the content area now.
       expect(contentNav().getByText('Functional Parts')).toBeInTheDocument();
       expect(contentNav().getByText('Art Projects')).toBeInTheDocument();
@@ -1482,13 +1485,12 @@ describe('FileManagerPage', () => {
 
       await user.click(contentNav().getByRole('button', { name: /External/ }));
 
-      await waitFor(() => expect(currentCrumb()).toHaveTextContent('External'));
-      expect(contentNav().getByText('NAS Library')).toBeInTheDocument();
+      await waitFor(() => expect(contentNav().getByText('NAS Library')).toBeInTheDocument());
       expect(contentNav().queryByText('Functional Parts')).not.toBeInTheDocument();
 
       await user.click(contentNav().getByRole('button', { name: /All Files/ }));
-      await waitFor(() => expect(currentCrumb()).toHaveTextContent('All Files'));
-      expect(contentNav().getByText('Functional Parts')).toBeInTheDocument();
+      await waitFor(() => expect(contentNav().getByText('Functional Parts')).toBeInTheDocument());
+      expect(contentNav().queryByText('NAS Library')).not.toBeInTheDocument();
     });
 
     it('lists the folders as rows in the list view', async () => {
@@ -1523,8 +1525,9 @@ describe('FileManagerPage', () => {
       expect(within(tile).getByRole('button', { name: 'Change Link...' })).toBeInTheDocument();
       expect(within(tile).getByRole('button', { name: 'Delete' })).toBeInTheDocument();
 
-      // Opening the menu is not navigation.
-      expect(currentCrumb()).toHaveTextContent('All Files');
+      // Opening the menu is not navigation: still at the root, where the bar
+      // has nothing to draw.
+      expect(screen.queryByTestId('library-path-bar')).not.toBeInTheDocument();
 
       await user.click(within(tile).getByRole('button', { name: 'Rename' }));
       expect(await screen.findByDisplayValue('Art Projects')).toBeInTheDocument();
@@ -1574,6 +1577,21 @@ describe('FileManagerPage', () => {
       await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
       expect(screen.queryByTestId('folder-sidebar')).not.toBeInTheDocument();
       expect(toggle()).toHaveAttribute('aria-pressed', 'false');
+    });
+
+    it('draws every folder once when the tree is off, not twice', async () => {
+      const user = userEvent.setup();
+      getItemMock.mockImplementation(storedHidden);
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      // The stand-in nav is the folders' one home while the tree is away; the
+      // tiles used to repeat it, which put each folder on screen twice.
+      expect(screen.getByTestId('content-folder-nav')).toBeInTheDocument();
+      expect(screen.getAllByText('Functional Parts')).toHaveLength(1);
+
+      await user.click(screen.getByTitle('List view'));
+      expect(screen.getAllByText('Functional Parts')).toHaveLength(1);
     });
 
     it('hides the folder tiles on its own, without touching the tree', async () => {
