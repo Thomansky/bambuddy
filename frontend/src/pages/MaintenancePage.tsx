@@ -59,13 +59,10 @@ import { getMaintenanceWikiUrl } from '../utils/maintenanceWikiUrls';
 import { maintenanceTypeLabel } from '../utils/maintenanceTypeLabels';
 import {
   MAINTENANCE_KIND_BADGE_CLASS,
-  MAINTENANCE_KIND_FILTERS,
   MAINTENANCE_KIND_LABEL_KEYS,
   isAutomatedMaintenance,
   maintenanceKind,
-  matchesKindFilter,
 } from '../utils/maintenanceKind';
-import type { MaintenanceKindFilter } from '../utils/maintenanceKind';
 import { formatDate } from '../utils/date';
 import { Card, CardContent } from '../components/Card';
 import { Button } from '../components/Button';
@@ -110,6 +107,14 @@ type TFunction = (key: string, options?: Record<string, unknown>) => string;
 // Manual versus automated (#3127). The same badge on an item card and on the
 // type it comes from; only the card knows a trigger, so only it can say
 // "Runs on request".
+// The two halves of the types tab. Order matters: the ones that run by
+// themselves come first, because those are the ones a new install wants to
+// know about.
+const MAINTENANCE_KIND_SECTIONS = [
+  { kind: 'automatic' as const, isKind: (action: MaintenanceAction | null) => isAutomatedMaintenance(action) },
+  { kind: 'manual' as const, isKind: (action: MaintenanceAction | null) => !isAutomatedMaintenance(action) },
+];
+
 function KindBadge({
   action,
   triggerMode,
@@ -725,7 +730,6 @@ function PrinterSection({
   onRun,
   onCancelRun,
   onSetHours,
-  kindFilter,
   hasPermission,
   language,
   t,
@@ -738,7 +742,6 @@ function PrinterSection({
   onRun: (id: number) => void;
   onCancelRun: (runId: number) => void;
   onSetHours: (printerId: number, hours: number) => void;
-  kindFilter: MaintenanceKindFilter;
   hasPermission: (permission: Permission) => boolean;
   language: string;
   t: TFunction;
@@ -766,10 +769,8 @@ function PrinterSection({
   const activeItems = sortedItems.filter((item) => item.enabled);
   const automaticCount = activeItems.filter((item) => isAutomatedMaintenance(item.action)).length;
   const manualCount = activeItems.length - automaticCount;
-  const visibleItems = activeItems.filter((item) => matchesKindFilter(item.action, kindFilter));
-  const disabledItems = sortedItems.filter(
-    (item) => !item.enabled && matchesKindFilter(item.action, kindFilter)
-  );
+  const visibleItems = activeItems;
+  const disabledItems = sortedItems.filter((item) => !item.enabled);
 
   // Switching an item off on its card moves it into the disclosure rather
   // than making it vanish.
@@ -927,11 +928,9 @@ function PrinterSection({
             ))}
             {visibleItems.length === 0 && (
               <p className="text-sm text-bambu-gray py-2">
-                {/* With the filter on "All" an empty list means the items are
-                    switched off, not filtered away (#3127). */}
-                {activeItems.length === 0 && disabledItems.length > 0
+                {disabledItems.length > 0
                   ? t('maintenance.allItemsSwitchedOff')
-                  : t('maintenance.noItemsForFilter')}
+                  : t('maintenance.noItems')}
               </p>
             )}
           </div>
@@ -1251,8 +1250,232 @@ function SettingsSection({
     items: p.maintenance_items.sort((a, b) => a.maintenance_type_id - b.maintenance_type_id),
   })).sort((a, b) => a.printerName.localeCompare(b.printerName)) || [];
 
+  // Split by what the type IS, not by where it came from: when you are deciding
+  // which maintenance to set up, "does this run by itself" is the question, and
+  // it used to be answerable only from a 10px badge on the card. System and
+  // custom types keep their order inside each group.
   const systemTypes = types.filter(t => t.is_system);
   const customTypes = types.filter(t => !t.is_system);
+
+  const renderSystemType = (type: MaintenanceType) => {
+            const Icon = getIcon(type.icon);
+            const intervalType = type.interval_type || 'hours';
+            const isExpanded = expandedType === type.id;
+            return (
+              <div key={type.id} className="bg-bambu-dark-secondary rounded-xl p-4 border border-bambu-dark-tertiary">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-bambu-dark rounded-lg">
+                    <Icon className="w-5 h-5 text-bambu-gray" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-white truncate">{maintenanceTypeLabel(type.name, t)}</span>
+                      <KindBadge action={type.action} t={t} />
+                    </div>
+                    <div className="text-xs text-bambu-gray mt-0.5 flex items-center gap-1 flex-wrap">
+                      {intervalType === 'days' ? <Calendar className="w-3 h-3" /> : <Timer className="w-3 h-3" />}
+                      {formatIntervalLabel(type.default_interval_hours, intervalType, t)}
+                      <span aria-hidden="true">·</span>
+                      <TypeCoverage type={type} t={t} />
+                      {type.action && (
+                        <span className="ml-1 px-1.5 py-0.5 rounded-full bg-bambu-green/20 text-bambu-green flex items-center gap-1">
+                          <Play className="w-2.5 h-2.5" />
+                          {t('maintenance.calibration.runsCalibration')}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setExpandedType(isExpanded ? null : type.id)}
+                    className="px-2 py-1 rounded-lg border border-bambu-dark-tertiary bg-bambu-dark text-bambu-gray hover:text-white transition-colors flex items-center gap-1"
+                    title={t('maintenance.printersPanelTitle')}
+                  >
+                    <Printer className="w-3 h-3" />
+                    <span className="text-xs font-medium">{t('maintenance.printersButton')}</span>
+                    <ChevronDown className={`w-3 h-3 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (!hasPermission('maintenance:delete')) return;
+                      setPendingSystemDelete(type);
+                    }}
+                    disabled={!hasPermission('maintenance:delete')}
+                    title={!hasPermission('maintenance:delete') ? t('maintenance.noPermissionDeleteTypes') : undefined}
+                    className={`p-2 rounded-lg hover:bg-bambu-dark text-bambu-gray hover:text-red-600 dark:hover:text-red-400 transition-colors ${!hasPermission('maintenance:delete') ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+                {isExpanded && (
+                  <TypePrintersPanel
+                    type={type}
+                    printers={printers}
+                    itemFor={itemFor}
+                    onAssignType={onAssignType}
+                    onSetItemEnabled={onSetItemEnabled}
+                    onRemoveItem={onRemoveItem}
+                    hasPermission={hasPermission}
+                    t={t}
+                  />
+                )}
+              </div>
+            );
+  };
+
+  const renderCustomType = (type: MaintenanceType) => {
+            const Icon = getIcon(type.icon);
+            const intervalType = type.interval_type || 'hours';
+            const isEditing = editingType?.id === type.id;
+
+            if (isEditing) {
+              return (
+                <div key={type.id} className="bg-bambu-dark-secondary rounded-xl p-4 border border-bambu-green">
+                  <div className="space-y-3">
+                    <input
+                      type="text"
+                      value={editTypeName}
+                      onChange={(e) => setEditTypeName(e.target.value)}
+                      className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:border-bambu-green focus:outline-none"
+                      placeholder={t('common.name')}
+                      autoFocus
+                    />
+                    <div className="flex gap-2">
+                      <select
+                        value={editTypeIntervalType}
+                        onChange={(e) => setEditTypeIntervalType(e.target.value as 'hours' | 'days')}
+                        className="flex-1 px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:border-bambu-green focus:outline-none"
+                      >
+                        <option value="hours">{t('maintenance.printHours')}</option>
+                        <option value="days">{t('maintenance.calendarDays')}</option>
+                      </select>
+                      <input
+                        type="number"
+                        value={editTypeInterval}
+                        onChange={(e) => setEditTypeInterval(e.target.value)}
+                        className="w-24 px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:border-bambu-green focus:outline-none"
+                        min="1"
+                      />
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {Object.keys(iconMap).map((iconName) => {
+                        const IconComp = iconMap[iconName];
+                        return (
+                          <button
+                            key={iconName}
+                            type="button"
+                            onClick={() => setEditTypeIcon(iconName)}
+                            className={`p-1.5 rounded transition-colors ${
+                              editTypeIcon === iconName
+                                ? 'bg-bambu-green text-white'
+                                : 'bg-bambu-dark text-bambu-gray hover:text-white'
+                            }`}
+                          >
+                            <IconComp className="w-3.5 h-3.5" />
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <input
+                      type="url"
+                      value={editTypeWikiUrl}
+                      onChange={(e) => setEditTypeWikiUrl(e.target.value)}
+                      className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:border-bambu-green focus:outline-none"
+                      placeholder={t('maintenance.documentationLink')}
+                    />
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={handleSaveEditType} disabled={!editTypeName.trim()}>
+                        {t('common.save')}
+                      </Button>
+                      <Button size="sm" variant="secondary" onClick={() => setEditingType(null)}>
+                        {t('common.cancel')}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+
+            const isExpanded = expandedType === type.id;
+
+            return (
+              <div key={type.id} className="bg-bambu-dark-secondary rounded-xl p-4 border border-bambu-green/30">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-bambu-green/20 rounded-lg">
+                    <Icon className="w-5 h-5 text-bambu-green" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-white truncate">{type.name}</span>
+                      <span className="px-1.5 py-0.5 bg-bambu-green/20 text-bambu-green text-[10px] font-medium rounded">
+                        {t('maintenance.custom')}
+                      </span>
+                      <KindBadge action={type.action} t={t} />
+                    </div>
+                    <div className="text-xs text-bambu-gray mt-0.5 flex items-center gap-1 flex-wrap">
+                      {intervalType === 'days' ? <Calendar className="w-3 h-3" /> : <Timer className="w-3 h-3" />}
+                      {formatIntervalLabel(type.default_interval_hours, intervalType, t)}
+                      <span aria-hidden="true">·</span>
+                      <TypeCoverage type={type} t={t} />
+                      {type.action && (
+                        <span className="ml-1 px-1.5 py-0.5 rounded-full bg-bambu-green/20 text-bambu-green flex items-center gap-1">
+                          <Play className="w-2.5 h-2.5" />
+                          {t('maintenance.calibration.runsCalibration')}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setExpandedType(isExpanded ? null : type.id)}
+                    className={`px-2 py-1 rounded-lg border transition-colors flex items-center gap-1 ${
+                      type.printer_count > 0
+                        ? 'border-bambu-green/50 bg-bambu-green/10 text-bambu-green hover:bg-bambu-green/20'
+                        : 'border-orange-300 bg-orange-50 text-orange-700 hover:bg-orange-100 dark:border-orange-400/50 dark:bg-orange-400/10 dark:text-orange-400 dark:hover:bg-orange-400/20'
+                    }`}
+                    title={t('maintenance.printersPanelTitle')}
+                  >
+                    <Printer className="w-3 h-3" />
+                    <span className="text-xs font-medium">{t('maintenance.printersButton')}</span>
+                    <ChevronDown className={`w-3 h-3 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                  </button>
+                  <button
+                    onClick={() => startEditType(type)}
+                    disabled={!hasPermission('maintenance:update')}
+                    title={!hasPermission('maintenance:update') ? t('maintenance.noPermissionEditTypes') : undefined}
+                    className={`p-2 rounded-lg hover:bg-bambu-dark text-bambu-gray hover:text-white transition-colors ${!hasPermission('maintenance:update') ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  >
+                    <Edit3 className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (confirm(t('maintenance.deleteTypeConfirm', { name: type.name }))) {
+                        onDeleteType(type.id);
+                      }
+                    }}
+                    disabled={!hasPermission('maintenance:delete')}
+                    title={!hasPermission('maintenance:delete') ? t('maintenance.noPermissionDeleteTypes') : undefined}
+                    className={`p-2 rounded-lg hover:bg-bambu-dark text-bambu-gray hover:text-red-600 dark:hover:text-red-400 transition-colors ${!hasPermission('maintenance:delete') ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Printer assignment management */}
+                {isExpanded && (
+                  <TypePrintersPanel
+                    type={type}
+                    printers={printers}
+                    itemFor={itemFor}
+                    onAssignType={onAssignType}
+                    onSetItemEnabled={onSetItemEnabled}
+                    onRemoveItem={onRemoveItem}
+                    hasPermission={hasPermission}
+                    t={t}
+                  />
+                )}
+              </div>
+            );
+  };
+
 
   return (
     <div className="space-y-8">
@@ -1423,227 +1646,24 @@ function SettingsSection({
         )}
 
         {/* Types grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-          {/* System types */}
-          {systemTypes.map((type) => {
-            const Icon = getIcon(type.icon);
-            const intervalType = type.interval_type || 'hours';
-            const isExpanded = expandedType === type.id;
-            return (
-              <div key={type.id} className="bg-bambu-dark-secondary rounded-xl p-4 border border-bambu-dark-tertiary">
-                <div className="flex items-center gap-3">
-                  <div className="p-2.5 bg-bambu-dark rounded-lg">
-                    <Icon className="w-5 h-5 text-bambu-gray" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-white truncate">{maintenanceTypeLabel(type.name, t)}</span>
-                      <KindBadge action={type.action} t={t} />
-                    </div>
-                    <div className="text-xs text-bambu-gray mt-0.5 flex items-center gap-1 flex-wrap">
-                      {intervalType === 'days' ? <Calendar className="w-3 h-3" /> : <Timer className="w-3 h-3" />}
-                      {formatIntervalLabel(type.default_interval_hours, intervalType, t)}
-                      <span aria-hidden="true">·</span>
-                      <TypeCoverage type={type} t={t} />
-                      {type.action && (
-                        <span className="ml-1 px-1.5 py-0.5 rounded-full bg-bambu-green/20 text-bambu-green flex items-center gap-1">
-                          <Play className="w-2.5 h-2.5" />
-                          {t('maintenance.calibration.runsCalibration')}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => setExpandedType(isExpanded ? null : type.id)}
-                    className="px-2 py-1 rounded-lg border border-bambu-dark-tertiary bg-bambu-dark text-bambu-gray hover:text-white transition-colors flex items-center gap-1"
-                    title={t('maintenance.printersPanelTitle')}
-                  >
-                    <Printer className="w-3 h-3" />
-                    <span className="text-xs font-medium">{t('maintenance.printersButton')}</span>
-                    <ChevronDown className={`w-3 h-3 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (!hasPermission('maintenance:delete')) return;
-                      setPendingSystemDelete(type);
-                    }}
-                    disabled={!hasPermission('maintenance:delete')}
-                    title={!hasPermission('maintenance:delete') ? t('maintenance.noPermissionDeleteTypes') : undefined}
-                    className={`p-2 rounded-lg hover:bg-bambu-dark text-bambu-gray hover:text-red-600 dark:hover:text-red-400 transition-colors ${!hasPermission('maintenance:delete') ? 'opacity-50 cursor-not-allowed' : ''}`}
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-                {isExpanded && (
-                  <TypePrintersPanel
-                    type={type}
-                    printers={printers}
-                    itemFor={itemFor}
-                    onAssignType={onAssignType}
-                    onSetItemEnabled={onSetItemEnabled}
-                    onRemoveItem={onRemoveItem}
-                    hasPermission={hasPermission}
-                    t={t}
-                  />
-                )}
+        {/* One section per kind, because "does this run by itself" is the
+            question you are answering when you set a maintenance up. Inside a
+            section the built-in types still come before the custom ones. */}
+        {MAINTENANCE_KIND_SECTIONS.map(({ kind, isKind }) => {
+          const sectionSystem = systemTypes.filter((type) => isKind(type.action));
+          const sectionCustom = customTypes.filter((type) => isKind(type.action));
+          if (sectionSystem.length === 0 && sectionCustom.length === 0) return null;
+          return (
+            <div key={kind} className="mb-6" data-testid={`type-section-${kind}`}>
+              <h3 className="text-sm font-semibold text-white">{t(`maintenance.section.${kind}`)}</h3>
+              <p className="text-xs text-bambu-gray mt-0.5 mb-3">{t(`maintenance.section.${kind}Hint`)}</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {sectionSystem.map(renderSystemType)}
+                {sectionCustom.map(renderCustomType)}
               </div>
-            );
-          })}
-          {/* Custom types */}
-          {customTypes.map((type) => {
-            const Icon = getIcon(type.icon);
-            const intervalType = type.interval_type || 'hours';
-            const isEditing = editingType?.id === type.id;
-
-            if (isEditing) {
-              return (
-                <div key={type.id} className="bg-bambu-dark-secondary rounded-xl p-4 border border-bambu-green">
-                  <div className="space-y-3">
-                    <input
-                      type="text"
-                      value={editTypeName}
-                      onChange={(e) => setEditTypeName(e.target.value)}
-                      className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:border-bambu-green focus:outline-none"
-                      placeholder={t('common.name')}
-                      autoFocus
-                    />
-                    <div className="flex gap-2">
-                      <select
-                        value={editTypeIntervalType}
-                        onChange={(e) => setEditTypeIntervalType(e.target.value as 'hours' | 'days')}
-                        className="flex-1 px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:border-bambu-green focus:outline-none"
-                      >
-                        <option value="hours">{t('maintenance.printHours')}</option>
-                        <option value="days">{t('maintenance.calendarDays')}</option>
-                      </select>
-                      <input
-                        type="number"
-                        value={editTypeInterval}
-                        onChange={(e) => setEditTypeInterval(e.target.value)}
-                        className="w-24 px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:border-bambu-green focus:outline-none"
-                        min="1"
-                      />
-                    </div>
-                    <div className="flex flex-wrap gap-1">
-                      {Object.keys(iconMap).map((iconName) => {
-                        const IconComp = iconMap[iconName];
-                        return (
-                          <button
-                            key={iconName}
-                            type="button"
-                            onClick={() => setEditTypeIcon(iconName)}
-                            className={`p-1.5 rounded transition-colors ${
-                              editTypeIcon === iconName
-                                ? 'bg-bambu-green text-white'
-                                : 'bg-bambu-dark text-bambu-gray hover:text-white'
-                            }`}
-                          >
-                            <IconComp className="w-3.5 h-3.5" />
-                          </button>
-                        );
-                      })}
-                    </div>
-                    <input
-                      type="url"
-                      value={editTypeWikiUrl}
-                      onChange={(e) => setEditTypeWikiUrl(e.target.value)}
-                      className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:border-bambu-green focus:outline-none"
-                      placeholder={t('maintenance.documentationLink')}
-                    />
-                    <div className="flex gap-2">
-                      <Button size="sm" onClick={handleSaveEditType} disabled={!editTypeName.trim()}>
-                        {t('common.save')}
-                      </Button>
-                      <Button size="sm" variant="secondary" onClick={() => setEditingType(null)}>
-                        {t('common.cancel')}
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              );
-            }
-
-            const isExpanded = expandedType === type.id;
-
-            return (
-              <div key={type.id} className="bg-bambu-dark-secondary rounded-xl p-4 border border-bambu-green/30">
-                <div className="flex items-center gap-3">
-                  <div className="p-2.5 bg-bambu-green/20 rounded-lg">
-                    <Icon className="w-5 h-5 text-bambu-green" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-white truncate">{type.name}</span>
-                      <span className="px-1.5 py-0.5 bg-bambu-green/20 text-bambu-green text-[10px] font-medium rounded">
-                        {t('maintenance.custom')}
-                      </span>
-                      <KindBadge action={type.action} t={t} />
-                    </div>
-                    <div className="text-xs text-bambu-gray mt-0.5 flex items-center gap-1 flex-wrap">
-                      {intervalType === 'days' ? <Calendar className="w-3 h-3" /> : <Timer className="w-3 h-3" />}
-                      {formatIntervalLabel(type.default_interval_hours, intervalType, t)}
-                      <span aria-hidden="true">·</span>
-                      <TypeCoverage type={type} t={t} />
-                      {type.action && (
-                        <span className="ml-1 px-1.5 py-0.5 rounded-full bg-bambu-green/20 text-bambu-green flex items-center gap-1">
-                          <Play className="w-2.5 h-2.5" />
-                          {t('maintenance.calibration.runsCalibration')}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => setExpandedType(isExpanded ? null : type.id)}
-                    className={`px-2 py-1 rounded-lg border transition-colors flex items-center gap-1 ${
-                      type.printer_count > 0
-                        ? 'border-bambu-green/50 bg-bambu-green/10 text-bambu-green hover:bg-bambu-green/20'
-                        : 'border-orange-300 bg-orange-50 text-orange-700 hover:bg-orange-100 dark:border-orange-400/50 dark:bg-orange-400/10 dark:text-orange-400 dark:hover:bg-orange-400/20'
-                    }`}
-                    title={t('maintenance.printersPanelTitle')}
-                  >
-                    <Printer className="w-3 h-3" />
-                    <span className="text-xs font-medium">{t('maintenance.printersButton')}</span>
-                    <ChevronDown className={`w-3 h-3 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
-                  </button>
-                  <button
-                    onClick={() => startEditType(type)}
-                    disabled={!hasPermission('maintenance:update')}
-                    title={!hasPermission('maintenance:update') ? t('maintenance.noPermissionEditTypes') : undefined}
-                    className={`p-2 rounded-lg hover:bg-bambu-dark text-bambu-gray hover:text-white transition-colors ${!hasPermission('maintenance:update') ? 'opacity-50 cursor-not-allowed' : ''}`}
-                  >
-                    <Edit3 className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (confirm(t('maintenance.deleteTypeConfirm', { name: type.name }))) {
-                        onDeleteType(type.id);
-                      }
-                    }}
-                    disabled={!hasPermission('maintenance:delete')}
-                    title={!hasPermission('maintenance:delete') ? t('maintenance.noPermissionDeleteTypes') : undefined}
-                    className={`p-2 rounded-lg hover:bg-bambu-dark text-bambu-gray hover:text-red-600 dark:hover:text-red-400 transition-colors ${!hasPermission('maintenance:delete') ? 'opacity-50 cursor-not-allowed' : ''}`}
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-
-                {/* Printer assignment management */}
-                {isExpanded && (
-                  <TypePrintersPanel
-                    type={type}
-                    printers={printers}
-                    itemFor={itemFor}
-                    onAssignType={onAssignType}
-                    onSetItemEnabled={onSetItemEnabled}
-                    onRemoveItem={onRemoveItem}
-                    hasPermission={hasPermission}
-                    t={t}
-                  />
-                )}
-              </div>
-            );
-          })}
-        </div>
+            </div>
+          );
+        })}
 
         {/* Deleted types (#3127): hidden, not gone — they come back with
             their printer items and their history. */}
@@ -1827,35 +1847,12 @@ function SettingsSection({
 
 type TabType = 'status' | 'settings';
 
-// The Automatic / Manual filter is a view preference, remembered per browser
-// like the archive view mode (#3127).
-const KIND_FILTER_KEY = 'maintenanceKindFilter';
-
-function storedKindFilter(): MaintenanceKindFilter {
-  try {
-    const stored = localStorage.getItem(KIND_FILTER_KEY) as MaintenanceKindFilter | null;
-    return stored && MAINTENANCE_KIND_FILTERS.includes(stored) ? stored : 'all';
-  } catch {
-    return 'all';
-  }
-}
-
 export function MaintenancePage() {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
   const { hasPermission } = useAuth();
   const [activeTab, setActiveTab] = useState<TabType>('status');
-  const [kindFilter, setKindFilter] = useState<MaintenanceKindFilter>(storedKindFilter);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(KIND_FILTER_KEY, kindFilter);
-    } catch {
-      // A browser that refuses storage still filters, it just forgets.
-    }
-  }, [kindFilter]);
-
   const { data: overview, isLoading } = useQuery({
     queryKey: ['maintenanceOverview'],
     queryFn: api.getMaintenanceOverview,
@@ -2128,25 +2125,6 @@ export function MaintenancePage() {
         >
           {t('maintenance.settingsTab')}
         </button>
-        {activeTab === 'status' && (
-          <div className="ml-auto flex items-center gap-1 pb-1.5" role="group" aria-label={t('maintenance.filterKind')}>
-            {MAINTENANCE_KIND_FILTERS.map((option) => (
-              <button
-                key={option}
-                type="button"
-                onClick={() => setKindFilter(option)}
-                aria-pressed={kindFilter === option}
-                className={`px-2.5 py-1 text-xs font-medium rounded-lg transition-colors ${
-                  kindFilter === option
-                    ? 'bg-bambu-green text-white'
-                    : 'bg-bambu-dark text-bambu-gray hover:text-white hover:bg-bambu-dark-tertiary'
-                }`}
-              >
-                {t(`maintenance.filter.${option}`)}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
 
       {/* Tab content */}
@@ -2170,7 +2148,6 @@ export function MaintenancePage() {
                 onRun={(id) => runMutation.mutate(id)}
                 onCancelRun={(runId) => cancelRunMutation.mutate(runId)}
                 onSetHours={handleSetHours}
-                kindFilter={kindFilter}
                 hasPermission={hasPermission}
                 language={i18n.language}
                 t={t}

@@ -186,6 +186,27 @@ describe('MaintenancePage types tab', () => {
     });
   });
 
+  describe('the two sections', () => {
+    it('puts the action types under "runs by itself" and the reminders under "you do it yourself"', async () => {
+      await openSettingsTab();
+
+      const automatic = screen.getByTestId('type-section-automatic');
+      const manual = screen.getByTestId('type-section-manual');
+      expect(within(automatic).getByTestId(`type-coverage-${VISION_TYPE}`)).toBeInTheDocument();
+      expect(within(manual).getByTestId(`type-coverage-${PLATE_TYPE}`)).toBeInTheDocument();
+      // and not the other way round
+      expect(within(automatic).queryByTestId(`type-coverage-${PLATE_TYPE}`)).not.toBeInTheDocument();
+      expect(within(manual).queryByTestId(`type-coverage-${VISION_TYPE}`)).not.toBeInTheDocument();
+    });
+
+    it('says what each section means, so the difference does not rest on a badge', async () => {
+      await openSettingsTab();
+
+      expect(within(screen.getByTestId('type-section-automatic')).getByText(/Bambuddy starts these/)).toBeInTheDocument();
+      expect(within(screen.getByTestId('type-section-manual')).getByText(/the work and the tick-off are yours/i)).toBeInTheDocument();
+    });
+  });
+
   describe('the printers panel', () => {
     it('offers one checkbox per eligible printer, ticked where the item is on', async () => {
       await openSettingsTab();

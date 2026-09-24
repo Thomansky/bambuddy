@@ -1,7 +1,7 @@
 /**
- * Manual versus automated on the status tab (#3127): the badge on each card,
- * the per-printer count next to the due chips, and the All / Automatic /
- * Manual filter, which is remembered across a remount.
+ * Manual versus automated (#3127): the badge on each status card, the
+ * per-printer count next to the due chips, and — where the distinction
+ * actually has to be readable — the two sections of the types tab.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -142,40 +142,16 @@ describe('MaintenancePage manual vs automated', () => {
     });
   });
 
-  describe('the filter', () => {
-    it('hides the reminders under Automatic', async () => {
+  describe('the status tab', () => {
+    it('lists the automatic and the manual items together, with no kind filter', async () => {
+      // The filter chips are gone: the distinction is made where the types are
+      // set up, not by hiding half the printer's list.
       await expandPrinter();
-      fireEvent.click(screen.getByRole('button', { name: 'Automatic', pressed: false }));
 
-      await waitFor(() => expect(screen.queryByText('Check PTFE Tube')).not.toBeInTheDocument());
       expect(screen.getByText('Printer Calibration')).toBeInTheDocument();
-      expect(screen.getByText('Vision Encoder Calibration')).toBeInTheDocument();
-    });
-
-    it('hides the action items under Manual', async () => {
-      await expandPrinter();
-      fireEvent.click(screen.getByRole('button', { name: 'Manual', pressed: false }));
-
-      await waitFor(() => expect(screen.queryByText('Printer Calibration')).not.toBeInTheDocument());
       expect(screen.getByText('Check PTFE Tube')).toBeInTheDocument();
-    });
-
-    it('survives a remount', async () => {
-      const first = render(<MaintenancePage />);
-      fireEvent.click(await screen.findByRole('button', { name: 'Manual', pressed: false }));
-      await waitFor(() =>
-        expect(localStorage.setItem).toHaveBeenCalledWith('maintenanceKindFilter', 'manual')
-      );
-      first.unmount();
-
-      vi.mocked(localStorage.getItem).mockImplementation((key) =>
-        key === 'maintenanceKindFilter' ? 'manual' : null
-      );
-      render(<MaintenancePage />);
-      fireEvent.click(await screen.findByRole('button', { name: /expand/i }));
-      expect(await screen.findByText('Check PTFE Tube')).toBeInTheDocument();
-      expect(screen.queryByText('Printer Calibration')).not.toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Manual' })).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.queryByRole('button', { name: 'Automatic' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Manual' })).not.toBeInTheDocument();
     });
   });
 
