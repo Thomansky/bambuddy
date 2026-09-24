@@ -187,7 +187,7 @@ async def queue_factory(tmp_path):
         await engine.dispose()
 
 
-async def _dispatch_library_item(ctx, *, archive_failure=False, unlink_side_effect=None):
+async def _dispatch_library_item(ctx, *, archive_failure=False, unlink_side_effect=None, cleanup_commit_failure=False):
     scheduler = PrintScheduler()
 
     async def archive_print(
@@ -257,8 +257,38 @@ async def _dispatch_library_item(ctx, *, archive_failure=False, unlink_side_effe
             stack.enter_context(patcher)
 
         async with ctx.session_maker() as db:
+            if cleanup_commit_failure:
+                _arm_commit_failure_on_library_delete(db)
             item = await db.get(PrintQueueItem, ctx.queue_item_id)
             await scheduler._start_print(db, item)
+
+
+def _arm_commit_failure_on_library_delete(db):
+    """Make the one commit that removes the library row raise, once.
+
+    Stands in for the "database is locked" cascades the commit's own comment
+    cites (#1853). Armed by the delete rather than by a call count so it
+    cannot drift onto a different commit.
+    """
+    original_delete = db.delete
+    original_commit = db.commit
+    armed = False
+
+    async def delete(obj):
+        nonlocal armed
+        if isinstance(obj, LibraryFile):
+            armed = True
+        return await original_delete(obj)
+
+    async def commit():
+        nonlocal armed
+        if armed:
+            armed = False
+            raise RuntimeError("database is locked")
+        return await original_commit()
+
+    db.delete = delete
+    db.commit = commit
 
 
 async def _queue_snapshot(ctx):
@@ -341,6 +371,29 @@ async def test_archive_creation_failure_keeps_the_photos(queue_factory):
     assert archive is None
     assert library_file is not None
     assert (ctx.photos_dir / "a1b2c3d4.jpg").is_file()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_commit_failure_keeps_the_photos_with_the_library_file(queue_factory):
+    """The photos move after the delete commits, not before it (#3077).
+
+    The commit that removes the library row can fail; the except branch rolls
+    it back and the file is in the library again. Photos moved ahead of that
+    commit would be gone from under it — the row would name a directory that
+    no longer exists, and the pictures would sit under an archive that was
+    rolled back too.
+    """
+    ctx = await queue_factory(cleanup=True, photos=["a1b2c3d4.jpg"])
+
+    await _dispatch_library_item(ctx, cleanup_commit_failure=True)
+
+    item, library_file, archive = await _queue_snapshot(ctx)
+    assert item.status == "failed"
+    assert archive is None
+    assert library_file is not None
+    assert library_file.photos == ["a1b2c3d4.jpg"]
+    assert (ctx.photos_dir / "a1b2c3d4.jpg").read_bytes() == b"photo a1b2c3d4.jpg"
+    assert not (ctx.base_dir / "archives" / "photos").exists()
 
 
 @pytest.mark.asyncio

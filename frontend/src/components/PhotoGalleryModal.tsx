@@ -29,8 +29,12 @@ export function PhotoGalleryModal(props: PhotoGalleryModalProps) {
   );
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
-  // Keyboard navigation
+  // Keyboard navigation. Stands down while the delete confirmation is up:
+  // that has its own Escape handler, so one press would cancel the prompt and
+  // close the gallery underneath it, and arrow keys would move the selection
+  // out from under a confirmation already naming a photo.
   useEffect(() => {
+    if (showDeleteConfirm) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
       if (e.key === 'ArrowLeft') setCurrentIndex((i) => Math.max(0, i - 1));
@@ -38,7 +42,7 @@ export function PhotoGalleryModal(props: PhotoGalleryModalProps) {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, photos.length]);
+  }, [onClose, photos.length, showDeleteConfirm]);
 
   // Reset index if photos change
   useEffect(() => {

@@ -103,7 +103,14 @@ export function LibraryFileDetailsModal({ file, canEdit, onClose }: LibraryFileD
   const handlePhotoDelete = async (filename: string) => {
     try {
       const result = await api.deleteLibraryFilePhoto(file.id, filename);
-      setPhotos(result.photos ?? []);
+      const remaining = result.photos ?? [];
+      setPhotos(remaining);
+      // Deleting the last photo unmounts the lightbox through the render
+      // guard below before its own "nothing left to show" branch can call
+      // onClose, so the index has to be cleared here. Left set, it keeps
+      // Escape disabled for good and re-opens the lightbox unasked as soon
+      // as another photo is uploaded.
+      if (remaining.length === 0) setGalleryIndex(null);
       invalidate();
     } catch {
       showToast(t('fileManager.details.deleteFailed'), 'error');

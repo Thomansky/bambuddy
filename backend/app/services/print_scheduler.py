@@ -6353,6 +6353,10 @@ class PrintScheduler:
         file_path = None
         filename = None
         cleanup_disk_paths: list[Path] = []
+        # Set when a dispatch consumes its library file, so the photos can be
+        # carried over after the commit that removes the row (#3077).
+        consumed_library_file_id: int | None = None
+        consumed_photos: list[str] = []
 
         if item.archive_id:
             # Print from archive
@@ -6454,18 +6458,9 @@ class PrintScheduler:
                             archive_id=archive.id,
                             dispatched_item_id=item.id,
                         )
-                        # The photos follow the file into the archive that
-                        # replaces it, for the same reason the siblings do
-                        # (#3077). Leaving them behind orphaned the directory
-                        # on disk and lost the pictures of a print that still
-                        # has a record.
-                        carried_photos = move_library_photos(
-                            consumed_library_file_id,
-                            library_file.photos or [],
-                            archive_photos_dir(archive),
-                        )
-                        if carried_photos:
-                            archive.photos = list(archive.photos or []) + carried_photos
+                        # Read while the row is still here; the photos move
+                        # below, once the delete has actually committed.
+                        consumed_photos = list(library_file.photos or [])
                         await db.delete(library_file)
                         file_path = settings.base_dir / archive.file_path
                         filename = archive.filename
@@ -6506,6 +6501,34 @@ class PrintScheduler:
                 logger.error("Queue item %s: Archive creation from library file returned no archive", item.id)
                 await self._power_off_if_needed(db, item)
                 return
+
+            # The photos follow the file into the archive that replaces it, for
+            # the same reason the siblings do (#3077). After the commit above,
+            # never before it: that commit can fail ("database is locked",
+            # #1853) and roll the library row back, and photos already moved
+            # would leave it naming a directory that no longer exists. The
+            # file and thumbnail unlinks are deferred for the same reason.
+            if consumed_library_file_id is not None and consumed_photos:
+                try:
+                    carried_photos = move_library_photos(
+                        consumed_library_file_id,
+                        consumed_photos,
+                        archive_photos_dir(archive),
+                    )
+                    if carried_photos:
+                        archive.photos = list(archive.photos or []) + carried_photos
+                        await db.commit()
+                except Exception as e:
+                    # The archive and the delete are already committed; the
+                    # print goes ahead either way. Worst case the pictures sit
+                    # unnamed in the archive's own directory.
+                    logger.warning(
+                        "Queue item %s: failed to carry library photos into archive %s: %s",
+                        item.id,
+                        archive.id,
+                        e,
+                    )
+                    await db.rollback()
 
         else:
             # Neither archive nor library file specified
