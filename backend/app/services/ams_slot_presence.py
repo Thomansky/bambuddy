@@ -183,7 +183,7 @@ def unread_ams_slot_reasons(state: Any) -> dict[tuple[int, int], str]:
 
     The bit is asked first, so a slot firmware itself calls unread is never
     reported as the weaker inference: that distinction is what lets the
-    scheduler spend one read per unreadable spool without ever going quiet on
+    scheduler rest a spool it read nothing out of without ever going quiet on
     a slot firmware is still asking about.
 
     The queue asks for the read before a job is mapped, so the mapping sees

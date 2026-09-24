@@ -26,15 +26,17 @@ The contract these tests pin:
 - every evaluation says what it decided and on what masks, at info, once --
   the first report of this feature was "the setting is on, the items are
   stamped, and the log says nothing at all";
-- a slot the AMS reads without finding anything is tried once and then left
-  alone until its spool changes -- while a slot firmware itself reports as
-  unread is asked every time, whatever that memory holds;
+- a slot the AMS reads without finding anything is rested for a cooldown, not
+  written off for good: the rest ends at once when the spool is pulled or
+  named, and ends anyway when the cooldown runs out -- while a slot firmware
+  itself reports as unread is asked every time, whatever rests are standing;
 - a verdict that has not changed is not repeated at info, however many stuck
   items keep asking the same printer for it.
 """
 
 import asyncio
 import logging
+import time
 from contextlib import ExitStack
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -120,6 +122,21 @@ async def _retire(ctx, item_id):
 async def _item(ctx, item_id):
     async with ctx.session_maker() as db:
         return (await db.execute(select(PrintQueueItem).where(PrintQueueItem.id == item_id))).scalar_one()
+
+
+def _preread_lines(caplog):
+    """Every pre-read line the feature logged at info, in order."""
+    return [r.getMessage() for r in caplog.records if r.levelno == logging.INFO and "RFID pre-read" in r.getMessage()]
+
+
+def _cooling(scheduler):
+    """The cooldown map as ``{printer_id: {slot}}``.
+
+    Most of these tests are about *which* slots are resting, not about how
+    much longer; the ones that care about the remaining time read the log
+    line, which is what a farm owner has too.
+    """
+    return {printer_id: set(slots) for printer_id, slots in scheduler._rfid_slot_cooldown.items()}
 
 
 def _tray(tray_id, *, read=True, tray_type="PLA"):
@@ -631,12 +648,6 @@ class TestEveryDecisionIsInTheLog:
     surprise. So every evaluation says what it saw and what it decided, at
     info, and the masks go in verbatim."""
 
-    @staticmethod
-    def _preread_lines(caplog):
-        return [
-            r.getMessage() for r in caplog.records if r.levelno == logging.INFO and "RFID pre-read" in r.getMessage()
-        ]
-
     @pytest.mark.asyncio
     async def test_nothing_unread_is_said_out_loud_with_the_masks(self, ctx, caplog):
         await _set(ctx, "queue_rfid_reread_before_start", "true")
@@ -645,7 +656,7 @@ class TestEveryDecisionIsInTheLog:
         with caplog.at_level(logging.INFO, logger="backend.app.services.print_scheduler"):
             await _Harness(ctx, PrintScheduler(), _printer_state(unread=())).run()
 
-        assert self._preread_lines(caplog) == [
+        assert _preread_lines(caplog) == [
             f"RFID pre-read [printer 1, item {item_id}]: setting=on tray_now=255 exist=f "
             "read_done=f reading=- signals=masks -> 0 unread slot(s)"
         ]
@@ -658,7 +669,7 @@ class TestEveryDecisionIsInTheLog:
         with caplog.at_level(logging.INFO, logger="backend.app.services.print_scheduler"):
             await _Harness(ctx, PrintScheduler(), _printer_state(tray_now=3)).run()
 
-        assert self._preread_lines(caplog) == [
+        assert _preread_lines(caplog) == [
             f"RFID pre-read [printer 1, item {item_id}]: setting=on tray_now=3 exist=f "
             "read_done=7 reading=- signals=masks -> 1 unread slot(s), skipped: filament loaded"
         ]
@@ -671,7 +682,7 @@ class TestEveryDecisionIsInTheLog:
         with caplog.at_level(logging.INFO, logger="backend.app.services.print_scheduler"):
             await _Harness(ctx, PrintScheduler(), _printer_state(unread=(1, 3))).run()
 
-        lines = self._preread_lines(caplog)
+        lines = _preread_lines(caplog)
         assert lines[0] == (
             f"RFID pre-read [printer 1, item {item_id}]: setting=on tray_now=255 exist=f "
             "read_done=5 reading=- signals=masks -> 2 unread slot(s): "
@@ -693,7 +704,7 @@ class TestEveryDecisionIsInTheLog:
             await _Harness(ctx, PrintScheduler(), _printer_state(), refresh=refresh).run()
 
         assert any(
-            "AMS0-T3 ams_get_rfid refused: Please unload filament first" in line for line in self._preread_lines(caplog)
+            "AMS0-T3 ams_get_rfid refused: Please unload filament first" in line for line in _preread_lines(caplog)
         )
 
     @pytest.mark.asyncio
@@ -712,7 +723,7 @@ class TestEveryDecisionIsInTheLog:
         assert h.client.ams_refresh_tray.call_args_list == [((0, 3),)]
         assert (
             "exist=- read_done=- reading=- signals=tray fields -> 1 unread slot(s): AMS0-T3 (no identity)"
-            in self._preread_lines(caplog)[0]
+            in _preread_lines(caplog)[0]
         )
 
     @pytest.mark.asyncio
@@ -728,7 +739,7 @@ class TestEveryDecisionIsInTheLog:
                 for item_id in (100, 101):
                     scheduler._slots_to_reread(1, item_id)
 
-        assert self._preread_lines(caplog) == [
+        assert _preread_lines(caplog) == [
             "RFID pre-read [printer 1, item 100]: setting=on tray_now=255 exist=f "
             "read_done=f reading=- signals=masks -> 0 unread slot(s)"
         ]
@@ -758,16 +769,23 @@ class TestEveryDecisionIsInTheLog:
             for task in h.tasks:
                 await task
 
-        assert [line for line in self._preread_lines(caplog) if "no read after" in line] == [
+        assert [line for line in _preread_lines(caplog) if "no read after" in line] == [
             f"RFID pre-read [printer 1, item {item_id}]: AMS0-T3 ams_get_rfid accepted (Refreshing), no read after 0 s"
         ]
 
 
-class TestTheSlotNothingCanRead:
+class TestTheSlotThatReadNothing:
     """Firmware sets the read-done bit for an attempt that finished, whether
-    or not it found a tag. A slot left occupied and nameless is read once --
-    and then left alone, or a third-party spool would cost every job in the
-    queue an `ams_get_rfid` and 25 s of waiting."""
+    or not it found a tag. A slot left occupied and nameless is read, and then
+    rested: a third-party roll must not cost every job in the queue an
+    `ams_get_rfid` and a minute of waiting.
+
+    A rest, and not the permanent memory this replaced. "Firmware says
+    read-done and we see no identity" is not proof that a tag cannot be read:
+    the farm log that prompted this has every read-done bit set on an AMS
+    whose slot 0 then answered a fresh `ams_get_rfid` perfectly well, and the
+    slot that was written off for the life of the process was holding an
+    original Bambu spool."""
 
     @staticmethod
     def _nameless_but_done():
@@ -786,14 +804,19 @@ class TestTheSlotNothingCanRead:
         assert h.client.ams_refresh_tray.call_args_list == [((0, 3),)]
 
     @pytest.mark.asyncio
-    async def test_a_fruitless_read_is_not_repeated_for_the_next_job(self, ctx, caplog):
+    async def test_a_fruitless_read_rests_the_slot_for_the_next_job(self, ctx, caplog):
+        """And the line says the slot is resting and for how much longer.
+
+        Whoever reads this log after an episode like the one that prompted
+        the change deserves to be told when the slot will be asked again,
+        not that nothing can read it."""
         await _set(ctx, "queue_rfid_reread_before_start", "true")
         first = await _add_item(ctx, position=1)
         scheduler = PrintScheduler()
         state = self._nameless_but_done()
 
         await _Harness(ctx, scheduler, state).run()
-        assert scheduler._rfid_unreadable == {1: {(0, 3)}}
+        assert _cooling(scheduler) == {1: {(0, 3)}}
         await _retire(ctx, first)
 
         second = await _add_item(ctx, position=2)
@@ -802,12 +825,87 @@ class TestTheSlotNothingCanRead:
 
         h2.client.ams_refresh_tray.assert_not_called()
         assert h2.dispatched() == [[second]]
-        assert any("0 unread slot(s) (1 skipped: already tried)" in r.getMessage() for r in caplog.records)
+        assert any(
+            "0 unread slot(s) (1 skipped: on cooldown (AMS0-T3 (30 min left)))" in r.getMessage()
+            for r in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_read_that_never_completes_is_asked_again_once_the_rest_is_over(self, ctx):
+        """The bug, in one test. A slot whose read timed out was skipped for
+        every job from then on, and only a restart brought it back -- while
+        the manual Re-read button, which never waits at all, identified the
+        very same spool every time it was pressed."""
+        await _set(ctx, "queue_rfid_reread_before_start", "true")
+        first = await _add_item(ctx, position=1)
+        scheduler = PrintScheduler()
+        state = self._nameless_but_done()
+
+        # The AMS never answers: the read runs out its budget.
+        with patch("backend.app.services.print_scheduler._RFID_SLOT_COOLDOWN", 0.05):
+            await _Harness(ctx, scheduler, state).run()
+        assert _cooling(scheduler) == {1: {(0, 3)}}
+        await _retire(ctx, first)
+
+        await asyncio.sleep(0.06)
+        await _add_item(ctx, position=2)
+        h2 = await _Harness(ctx, scheduler, state).run()
+
+        assert h2.client.ams_refresh_tray.call_args_list == [((0, 3),)]
+
+    @pytest.mark.asyncio
+    async def test_a_resting_slot_is_named_on_the_round_that_reads_the_others(self, ctx, caplog):
+        """Not only on the line that reads nothing at all. "1 unread slot(s)"
+        with a second one sitting out unmentioned is how a slot came to be
+        quietly skipped for a fortnight."""
+        await _set(ctx, "queue_rfid_reread_before_start", "true")
+        first = await _add_item(ctx, position=1)
+        scheduler = PrintScheduler()
+        state = self._nameless_but_done()
+
+        await _Harness(ctx, scheduler, state).run()
+        assert _cooling(scheduler) == {1: {(0, 3)}}
+        await _retire(ctx, first)
+
+        # A second roll goes into slot 1 while the printer prints: nameless
+        # too, and with no rest of its own.
+        second = await _add_item(ctx, position=2)
+        state.raw_data["ams"][0]["tray"][1] = _tray(1, read=False)
+        with caplog.at_level(logging.INFO, logger="backend.app.services.print_scheduler"):
+            h2 = await _Harness(ctx, scheduler, state).run()
+
+        assert h2.client.ams_refresh_tray.call_args_list == [((0, 1),)]
+        # By item, not by level alone: the first round's own lines are in
+        # `caplog.records` too whenever another test has left this logger at
+        # info, and the line under test is the second item's.
+        assert [line for line in _preread_lines(caplog) if f"item {second}]" in line and "unread slot(s)" in line] == [
+            f"RFID pre-read [printer 1, item {second}]: setting=on tray_now=255 exist=f "
+            "read_done=f reading=- signals=masks -> 1 unread slot(s), "
+            "1 skipped: on cooldown (AMS0-T3 (30 min left)): AMS0-T1 (no identity) "
+            "-> holding the item for one pass"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_an_expired_cooldown_is_dropped_by_the_sweep_too(self, ctx):
+        """Not only by the evaluation: a farm whose queue is empty still has
+        to stop calling a slot rested an hour after it stopped being."""
+        scheduler = PrintScheduler()
+        scheduler._rfid_slot_cooldown = {1: {(0, 3): time.monotonic() - 1.0}}
+
+        with patch(
+            "backend.app.services.print_scheduler.printer_manager.get_status",
+            MagicMock(return_value=self._nameless_but_done()),
+        ):
+            scheduler._prune_rfid_cooldowns()
+
+        assert _cooling(scheduler) == {}
 
     @pytest.mark.asyncio
     async def test_the_next_spool_gets_its_own_attempt(self, ctx):
-        """The memory is about the spool, not the slot: it goes when the
-        presence bit says the slot was emptied.
+        """The cooldown is about the spool, not the slot: it ends the moment
+        the presence bit says the slot was emptied, with the whole half hour
+        still to run. Waiting it out would be the old bug in slow motion --
+        the next roll in that slot is a different roll.
 
         Nothing evaluates a printer while it prints, which is when spools get
         swapped, so the empty slot is never in front of the dispatch path --
@@ -819,15 +917,15 @@ class TestTheSlotNothingCanRead:
         state = self._nameless_but_done()
 
         h = await _Harness(ctx, scheduler, state).run()
-        assert scheduler._rfid_unreadable == {1: {(0, 3)}}
+        assert _cooling(scheduler) == {1: {(0, 3)}}
         await _retire(ctx, first)
 
         # Roll pulled mid-print. No queue pass evaluates this printer while
         # the slot stands empty.
         state.tray_exist_bits = "7"
         with h.patched():
-            scheduler._prune_rfid_unreadable()
-        assert scheduler._rfid_unreadable == {}
+            scheduler._prune_rfid_cooldowns()
+        assert _cooling(scheduler) == {}
 
         # Another spool goes in, and it is asked about.
         await _add_item(ctx, position=2)
@@ -841,7 +939,7 @@ class TestTheSlotNothingCanRead:
         it samples the slot exactly when a job is about to go out, and never
         while the printer is printing or the queue is empty."""
         scheduler = PrintScheduler()
-        scheduler._rfid_unreadable = {1: {(0, 3)}}
+        scheduler._rfid_slot_cooldown = {1: {(0, 3): time.monotonic() + 3600.0}}
         scheduler._check_interval = 0
         state = self._nameless_but_done()
         state.tray_exist_bits = "7"
@@ -862,21 +960,21 @@ class TestTheSlotNothingCanRead:
             )
             await scheduler.run()
 
-        assert scheduler._rfid_unreadable == {}
+        assert _cooling(scheduler) == {}
 
     @pytest.mark.asyncio
     async def test_a_slot_firmware_itself_calls_unread_is_always_asked(self, ctx, caplog):
-        """The memory silences an inference of ours, never firmware's own "not
-        read yet". A Bambu spool swapped in for the unreadable one comes back
-        with its read-done bit clear -- and gets its command, however many
-        fruitless attempts the slot has behind it."""
+        """A cooldown silences an inference of ours, never firmware's own "not
+        read yet". A Bambu spool swapped in for the one that read nothing comes
+        back with its read-done bit clear -- and gets its command, whatever
+        rest the slot is standing."""
         await _set(ctx, "queue_rfid_reread_before_start", "true")
         first = await _add_item(ctx, position=1)
         scheduler = PrintScheduler()
         state = self._nameless_but_done()
 
         await _Harness(ctx, scheduler, state).run()
-        assert scheduler._rfid_unreadable == {1: {(0, 3)}}
+        assert _cooling(scheduler) == {1: {(0, 3)}}
         await _retire(ctx, first)
 
         # Swapped while the printer printed: still nameless (the AMS cannot
@@ -897,16 +995,16 @@ class TestTheSlotNothingCanRead:
         state = self._nameless_but_done()
 
         await _Harness(ctx, scheduler, state).run()
-        assert scheduler._rfid_unreadable == {1: {(0, 3)}}
+        assert _cooling(scheduler) == {1: {(0, 3)}}
         await _retire(ctx, first)
 
         await _add_item(ctx, position=2)
         state.raw_data["ams"][0]["tray"][3] = _tray(3)
         await _Harness(ctx, scheduler, state).run()
-        assert scheduler._rfid_unreadable == {}
+        assert _cooling(scheduler) == {}
 
     @pytest.mark.asyncio
-    async def test_a_read_that_finds_a_spool_is_not_remembered(self, ctx):
+    async def test_a_read_that_finds_a_spool_earns_no_cooldown(self, ctx):
         await _set(ctx, "queue_rfid_reread_before_start", "true")
         await _add_item(ctx)
         scheduler = PrintScheduler()
@@ -919,10 +1017,10 @@ class TestTheSlotNothingCanRead:
 
         await _Harness(ctx, scheduler, state, refresh=MagicMock(side_effect=refresh)).run()
 
-        assert scheduler._rfid_unreadable == {}
+        assert _cooling(scheduler) == {}
 
     @pytest.mark.asyncio
-    async def test_a_refused_slot_is_not_remembered(self, ctx):
+    async def test_a_refused_slot_earns_no_cooldown(self, ctx):
         """A refusal says nothing about the tag -- only that the AMS could not
         move filament just then."""
         await _set(ctx, "queue_rfid_reread_before_start", "true")
@@ -932,17 +1030,17 @@ class TestTheSlotNothingCanRead:
 
         await _Harness(ctx, scheduler, _printer_state(), refresh=refresh).run()
 
-        assert scheduler._rfid_unreadable == {}
+        assert _cooling(scheduler) == {}
 
     @pytest.mark.asyncio
-    async def test_the_memory_does_not_leak_between_printers(self, ctx):
+    async def test_cooldowns_do_not_leak_between_printers(self, ctx):
         await _set(ctx, "queue_rfid_reread_before_start", "true")
         first = await _add_item(ctx, printer_id=1, position=1)
         scheduler = PrintScheduler()
         state = self._nameless_but_done()
 
         await _Harness(ctx, scheduler, state).run()
-        assert scheduler._rfid_unreadable == {1: {(0, 3)}}
+        assert _cooling(scheduler) == {1: {(0, 3)}}
         await _retire(ctx, first)
 
         async with ctx.session_maker() as db:
@@ -963,7 +1061,7 @@ class TestTheSlotNothingCanRead:
         h2 = await _Harness(ctx, scheduler, state).run()
 
         assert h2.client.ams_refresh_tray.call_args_list == [((0, 3),)]
-        assert scheduler._rfid_unreadable == {1: {(0, 3)}, 2: {(0, 3)}}
+        assert _cooling(scheduler) == {1: {(0, 3)}, 2: {(0, 3)}}
 
 
 class TestTheHoldReasonIsSelfResolving:

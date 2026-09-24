@@ -311,6 +311,16 @@ _RFID_REREAD_TASK_TIMEOUT = 120.0
 _RFID_REREAD_POLL_INTERVAL = 1.0
 _RFID_REREAD_MAX_SLOTS = 8
 
+# How long a slot rests after a read that put no identity on it before it is
+# asked again. It is a cooldown and not a verdict on purpose: "firmware says
+# read-done and we still see no identity" is not proof that a tag cannot be
+# read -- the same farm log has all four read-done bits set on an AMS whose
+# slot 0 then answered a fresh `ams_get_rfid` perfectly well. Half an hour is
+# long enough that a genuinely tagless third-party roll does not cost every
+# job in the queue a round, and short enough that a spool which merely read
+# slowly is tried again the same afternoon instead of after the next restart.
+_RFID_SLOT_COOLDOWN = 30 * 60.0
+
 # An unload is a different order of magnitude from a tag read: the printer
 # heats the nozzle and pulls the strand back out of it before the slot reports
 # free. Two hotends is the most any machine Bambuddy speaks to has, and the cap
@@ -389,6 +399,26 @@ def _rfid_preread_tag(printer_id: int, item_id: int | None) -> str:
 
 def _rfid_slot_labels(slots: list[tuple[int, int]] | tuple[tuple[int, int], ...]) -> str:
     return ", ".join(f"AMS{ams_id}-T{slot_id}" for ams_id, slot_id in slots)
+
+
+def _rfid_cooldown_labels(cooling: dict[tuple[int, int], float]) -> str:
+    """``AMS0-T3 (28 min left)`` per resting slot, in slot order.
+
+    Same shape as ``_rfid_slot_report``'s per-slot parenthetical, so one grep
+    reads both. The remaining time is the whole point of the line: a slot that
+    is skipped has to say when it will be asked again, or the log reads exactly
+    like the permanent memory this replaced.
+    """
+    return ", ".join(
+        f"AMS{ams_id}-T{slot_id} ({_rfid_cooldown_left(left)} left)"
+        for (ams_id, slot_id), left in sorted(cooling.items())
+    )
+
+
+def _rfid_cooldown_left(seconds: float) -> str:
+    """``28 min`` / ``45 s``, for a cooldown that is minutes long but can end in
+    seconds."""
+    return f"{round(seconds / 60)} min" if seconds >= 60 else f"{round(seconds)} s"
 
 
 def _is_printing(state: Any) -> bool:
@@ -1244,19 +1274,23 @@ class PrintScheduler:
         # saying "reading" rather than "busy" on the passes in between. Both
         # are dropped together by the read task.
         self._rfid_rereads: dict[int, int | None] = {}
-        # printer_id -> the slots a pre-read already asked about and got no
-        # identity out of. An unreadable spool -- a third-party roll, a torn
-        # tag -- would otherwise be asked about before every single job, so it
-        # is tried once and then left alone. It silences only the slots that
-        # are unread by inference (empty tray fields under a set read-done
-        # bit); a slot firmware itself reports as not read is always asked.
-        # Entries are pruned in `_forget_readable_slots`, from the evaluation
-        # and from the per-pass sweep, as soon as the slot loses its spool or
-        # gains an identity, which is what gives the next spool its turn. In
-        # memory on purpose: after a restart one more attempt per slot is
-        # cheap, and a DB row about a tag that cannot be read would outlive
-        # the spool.
-        self._rfid_unreadable: dict[int, set[tuple[int, int]]] = {}
+        # printer_id -> {slot: monotonic time it may be asked about again}.
+        # A pre-read that got no identity out of a slot earns that slot a rest
+        # of `_RFID_SLOT_COOLDOWN`, not a life sentence: a third-party roll
+        # with no tag must not cost every single job a round, but a fruitless
+        # read is NOT evidence that the tag is unreadable -- it is just as
+        # often an AMS that needed longer than the slot budget, and the slot
+        # that was written off permanently for that is the bug this replaced.
+        # It silences only the slots that are unread by inference (empty tray
+        # fields under a set read-done bit); a slot firmware itself reports as
+        # not read is always asked. Entries are dropped in
+        # `_active_slot_cooldowns`, from the evaluation and from the per-pass
+        # sweep, as soon as they expire or the slot loses its spool or gains
+        # an identity, which is what gives the next spool its turn without
+        # waiting the cooldown out. In memory on purpose: after a restart one
+        # more attempt per slot is cheap, and a DB row about a tag that read
+        # slowly once would outlive the spool.
+        self._rfid_slot_cooldown: dict[int, dict[tuple[int, int], float]] = {}
         # printer_id -> the last pre-read evaluation logged for it, without the
         # item that asked, so a verdict that has not changed does not repeat at
         # info every pass however many stuck items keep asking for it.
@@ -1337,7 +1371,7 @@ class PrintScheduler:
                 self._sample_chamber_temps()
                 # Every pass, not only the ones that evaluate an item: a spool
                 # swapped while the printer printed is seen nowhere else.
-                self._prune_rfid_unreadable()
+                self._prune_rfid_cooldowns()
                 # No-op while any upload is in flight; on a quiet tick it releases
                 # a claim whose best-effort clear failed (e.g. the database was
                 # briefly unreachable), instead of leaving the row wedged until
@@ -4586,7 +4620,7 @@ class PrintScheduler:
         client or status yet); an empty list when it can but there is
         nothing to read -- every occupied slot already identified, filament
         loaded (the AMS has to move filament to reach a tag), or nothing left
-        after the slots an earlier read already proved unreadable.
+        after the slots an earlier fruitless read put on cooldown.
 
         ``item_id`` is None for the round a finished print schedules. It is
         evaluated by the same rules as the pre-dispatch read, ``tray_now``
@@ -4624,13 +4658,15 @@ class PrintScheduler:
 
         evaluated = f"setting=on {_rfid_preread_masks(state)}"
         reasons = unread_ams_slot_reasons(state)
-        # The memory only ever silences the inferred rule. A slot whose
+        # A cooldown only ever silences the inferred rule. A slot whose
         # read-done bit firmware left clear is firmware itself saying it has
         # not read that spool, and gets its command however many fruitless
-        # attempts the slot has behind it -- otherwise one unreadable roll
-        # would blind the slot to every spool that follows it.
+        # attempts the slot has behind it -- otherwise one slow roll would
+        # blind the slot to every spool that follows it.
         skipped = {
-            slot for slot in self._forget_readable_slots(printer_id, state) if reasons.get(slot) == UNREAD_NO_IDENTITY
+            slot: left
+            for slot, left in self._active_slot_cooldowns(printer_id, state).items()
+            if reasons.get(slot) == UNREAD_NO_IDENTITY
         }
         slots = [slot for slot in reasons if slot not in skipped]
         # A hotend that is about to be retracted is not a hotend that hides its
@@ -4641,14 +4677,14 @@ class PrintScheduler:
             slots = [slot for slot in slots if slot not in loaded]
         if skipped:
             logger.debug(
-                "%s: %s already tried, nothing readable there",
+                "%s: %s on cooldown after a fruitless read",
                 _rfid_preread_tag(printer_id, item_id),
-                _rfid_slot_labels(sorted(skipped)),
+                _rfid_cooldown_labels(skipped),
             )
         if not slots:
             notes = []
             if skipped:
-                notes.append(f"{len(skipped)} skipped: already tried")
+                notes.append(f"{len(skipped)} skipped: on cooldown ({_rfid_cooldown_labels(skipped)})")
             if in_hotend:
                 notes.append(f"{len(in_hotend)} skipped: loaded ({_rfid_slot_labels(in_hotend)})")
             tail = f" ({'; '.join(notes)})" if notes else ""
@@ -4662,6 +4698,10 @@ class PrintScheduler:
         capped = slots[:_RFID_REREAD_MAX_SLOTS]
         report = _rfid_slot_report(capped, reasons)
         reading = f"reading {report}" if len(capped) < len(slots) else report
+        # A resting slot is named here as well as on the line that reads
+        # nothing at all. "2 unread slot(s)" while a third sits out unmentioned
+        # is how a slot came to be quietly skipped for a fortnight.
+        resting = f", {len(skipped)} skipped: on cooldown ({_rfid_cooldown_labels(skipped)})" if skipped else ""
         loaded_note = f", {len(in_hotend)} skipped: loaded ({_rfid_slot_labels(in_hotend)})" if in_hotend else ""
         if unloading:
             held = " -> unloading first"
@@ -4670,12 +4710,13 @@ class PrintScheduler:
         self._say_rfid_preread(
             printer_id,
             item_id,
-            f"{evaluated} -> {len(slots)} unread slot(s){loaded_note}: {reading}{held}",
+            f"{evaluated} -> {len(slots)} unread slot(s){resting}{loaded_note}: {reading}{held}",
         )
         return capped
 
-    def _prune_rfid_unreadable(self) -> None:
-        """Drop every pre-read memory whose slot lost its spool or gained a name.
+    def _prune_rfid_cooldowns(self) -> None:
+        """Drop every cooldown that has run out, or whose slot lost its spool
+        or gained a name.
 
         Called once per scheduler pass, for the printers that have one. The
         evaluation path prunes what it is about to use, but it only runs for a
@@ -4684,30 +4725,35 @@ class PrintScheduler:
         here is what lets a slot emptied between two jobs be offered again
         without a restart.
         """
-        for printer_id in list(self._rfid_unreadable):
-            state = printer_manager.get_status(printer_id)
-            # A printer that is not reporting says nothing either way; its
-            # memory waits for a report rather than being thrown away.
-            if state is not None:
-                self._forget_readable_slots(printer_id, state)
+        for printer_id in list(self._rfid_slot_cooldown):
+            self._active_slot_cooldowns(printer_id, printer_manager.get_status(printer_id))
 
-    def _forget_readable_slots(self, printer_id: int, state: Any) -> set[tuple[int, int]]:
-        """The slots on *printer_id* a pre-read already found nothing in, pruned.
+    def _active_slot_cooldowns(self, printer_id: int, state: Any) -> dict[tuple[int, int], float]:
+        """The slots on *printer_id* still resting after a fruitless read, each
+        with the seconds it has left, pruned.
 
-        An entry survives only while its slot is still occupied and still
-        without any identity. Pull the spool, swap it, or let the AMS finally
-        name it and the entry goes: the next spool gets its own attempt. Both
-        the evaluation and the per-pass sweep prune through here, because a
-        swap seen only while the printer was busy would otherwise never be
-        seen at all.
+        An entry survives only until its cooldown expires, and only while its
+        slot is still occupied and still without any identity. Pull the spool,
+        swap it, or let the AMS finally name it and the entry goes at once,
+        without the rest of the cooldown being waited out: the next spool gets
+        its own attempt. Both the evaluation and the per-pass sweep prune
+        through here, because a swap seen only while the printer was busy
+        would otherwise never be seen at all.
         """
-        tried = self._rfid_unreadable.get(printer_id)
-        if not tried:
-            return set()
-        tried &= unidentified_slots(state)
-        if not tried:
-            self._rfid_unreadable.pop(printer_id, None)
-        return tried
+        cooling = self._rfid_slot_cooldown.get(printer_id)
+        if not cooling:
+            return {}
+        now = time.monotonic()
+        # A printer that is not reporting says nothing about what is in its
+        # slots, so those entries wait for a report rather than being thrown
+        # away -- but a cooldown that has run out is over whether or not
+        # anyone is listening.
+        named: set[tuple[int, int]] = set() if state is None else set(cooling) - unidentified_slots(state)
+        for slot in [s for s, until in cooling.items() if until <= now or s in named]:
+            del cooling[slot]
+        if not cooling:
+            self._rfid_slot_cooldown.pop(printer_id, None)
+        return {slot: until - now for slot, until in cooling.items()}
 
     def _say_rfid_preread(self, printer_id: int, item_id: int | None, detail: str) -> None:
         """Log one pre-read evaluation, at info unless it repeats what it said.
@@ -5205,10 +5251,12 @@ class PrintScheduler:
         (filament got loaded meanwhile) or one whose read never completes is
         logged and skipped; a slot that does complete gets the same K-profile
         re-apply the manual Re-read RFID button triggers. A slot the AMS
-        still puts no identity on when its turn is over is remembered, so the
-        next job does not ask about it again. The reservation is dropped on
-        every exit -- success, ceiling, printer gone, print started, exception
-        -- so the next pass always dispatches the item.
+        still puts no identity on when its turn is over goes on cooldown, so
+        the next few jobs do not ask about it again -- a rest, not a verdict,
+        because a read that produced nothing is as often a slow one as an
+        absent tag. The reservation is dropped on every exit -- success,
+        ceiling, printer gone, print started, exception -- so the next pass
+        always dispatches the item.
 
         ``item_id`` is None for the round a finished print schedules; the only
         difference is what the lines call it, because there is no item.
@@ -5283,10 +5331,12 @@ class PrintScheduler:
                     # 25 s of AMS silence sends the reader after the AMS.
                     logger.info("%s: %s ams_get_rfid accepted (%s), no read after %.0f s", tag, label, message, waited)
                 # A slot the print took back never got its fair attempt, so it
-                # is not remembered as unreadable: the round that follows the
-                # next print has to be free to ask about it again.
+                # earns no cooldown: the round that follows the next print has
+                # to be free to ask about it again immediately.
                 if not identified and not self._printing_again(printer_id):
-                    self._rfid_unreadable.setdefault(printer_id, set()).add((ams_id, slot_id))
+                    self._rfid_slot_cooldown.setdefault(printer_id, {})[(ams_id, slot_id)] = (
+                        time.monotonic() + _RFID_SLOT_COOLDOWN
+                    )
         except Exception as e:
             logger.warning("%s: aborted: %s", tag, e, exc_info=True)
         finally:
@@ -5308,8 +5358,8 @@ class PrintScheduler:
 
         False only when the slot is reported, still holds a spool and still
         carries no tag, no preset and no type -- the shape a read that found
-        nothing leaves behind. A slot whose spool is gone is not remembered as
-        unreadable: there is nothing there to be unreadable.
+        nothing leaves behind. A slot whose spool is gone earns no cooldown:
+        there is nothing there to rest.
         """
         state = printer_manager.get_status(printer_id)
         if state is None:
