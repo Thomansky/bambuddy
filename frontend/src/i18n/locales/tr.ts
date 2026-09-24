@@ -5730,8 +5730,6 @@ export default {
     filamentCount_other: '{{count}} filament',
     eta: 'ETA {{minutes}} dk',
     noPreview: 'Bu dosya için önizleme yok',
-    fullscreen: 'Tam ekran',
-    exitFullscreen: 'Tam ekrandan çık',
     pagination: {
       pageOf: '{{total}} sayfadan {{current}} tanesi',
       prev: 'Önceki',

@@ -5767,8 +5767,6 @@ export default {
     filamentCount_other: '{{count}} フィラメント',
     eta: '予想時間 {{minutes}} 分',
     noPreview: 'このファイルのプレビューは利用できません',
-    fullscreen: 'フルスクリーン',
-    exitFullscreen: 'フルスクリーンを終了',
     pagination: {
       pageOf: 'ページ {{current}} / {{total}}',
       prev: '前へ',

@@ -5500,8 +5500,6 @@ export default {
     filamentCount_other: '필라멘트 {{count}}개',
     eta: '예상 {{minutes}}분',
     noPreview: '이 파일에 대한 미리보기를 사용할 수 없습니다',
-    fullscreen: '전체 화면',
-    exitFullscreen: '전체 화면 종료',
     pagination: {
       pageOf: '{{total}}페이지 중 {{current}}',
       prev: '이전',

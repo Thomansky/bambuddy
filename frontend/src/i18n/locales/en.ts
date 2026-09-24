@@ -5817,8 +5817,6 @@ export default {
     filamentCount_other: '{{count}} filaments',
     eta: 'ETA {{minutes}} min',
     noPreview: 'No preview available for this file',
-    fullscreen: 'Fullscreen',
-    exitFullscreen: 'Exit fullscreen',
     pagination: {
       pageOf: 'Page {{current}} of {{total}}',
       prev: 'Prev',

@@ -5488,8 +5488,6 @@ export default {
     filamentCount_other: "{{count}} филаментов",
     eta: "Осталось {{minutes}} мин",
     noPreview: "Для этого файла нет предпросмотра",
-    fullscreen: "На весь экран",
-    exitFullscreen: "Выйти из полноэкранного режима",
     pagination: {
       pageOf: "Страница {{current}} из {{total}}",
       prev: "Назад",

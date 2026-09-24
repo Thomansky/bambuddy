@@ -5755,8 +5755,6 @@ export default {
     filamentCount_other: '{{count}} 种耗材',
     eta: '预计 {{minutes}} 分钟',
     noPreview: '此文件无可用预览',
-    fullscreen: '全屏',
-    exitFullscreen: '退出全屏',
     pagination: {
       pageOf: '第 {{current}} / {{total}} 页',
       prev: '上一页',
