@@ -4121,6 +4121,7 @@ export default {
     folderSort: 'Klasörleri sırala',
     folderSortByName: 'Ada göre',
     folderSortByActivity: 'Son etkinliğe göre',
+    folderSortDirection: 'Sıralama yönü',
     folderDisplayMenu: 'Klasörleri sırala ve görüntüle',
     dragToResizeTooltip: 'Yeniden boyutlandırmak için sürükleyin, sıfırlamak için çift tıklayın',
     folderTilesToggle: {

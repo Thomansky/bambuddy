@@ -5,8 +5,9 @@
  * proxy for "does not fit" and a poor one — root plus three customer names
  * still overflows a narrow pane, and four short names collapse for nothing.
  * jsdom measures every box as zero, so these tests stub the layout metrics the
- * component reads; the last test leaves them alone to pin the depth fallback
- * that has to hold when nothing can be measured.
+ * component reads; the two fallback tests leave them alone to pin the depth
+ * rule that has to hold when nothing can be measured, and the last one pins
+ * the clipping the folded-ancestor menu has to stay out of.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -249,12 +250,56 @@ describe('FileManagerPage — the path bar folds by width', () => {
 
   it('falls back to the depth rule when the widths cannot be measured', async () => {
     // No layout stub: jsdom answers 0 for every box, as it does for a pane
-    // that is display:none. The bar has to stay sensible rather than fold
-    // everything or nothing.
+    // that is display:none. Three crumbs are what tells the depth rule apart
+    // from the floor — the rule keeps all three, the floor would keep two and
+    // fold Kunden away for nothing.
+    render(<FileManagerPage />);
+    await waitFor(() => expect(screen.getByTestId('folder-sidebar')).toBeInTheDocument());
+    await user.click(sidebar().getByText('N1125035'));
+    await waitFor(() => expect(pathBar().getByText('N1125035')).toBeInTheDocument());
+
+    expect(crumbNames()).toEqual(['Kunden', 'RAFI', 'N1125035']);
+    expect(pathBar().queryByTitle('Show hidden folders')).not.toBeInTheDocument();
+  });
+
+  it('folds the middle of a deep chain when the widths cannot be measured', async () => {
+    // The other half of the fallback: unmeasurable and deep folds to the last
+    // two rather than showing everything and overflowing the pane.
     render(<FileManagerPage />);
     await openDeepestFolder(user);
 
     expect(crumbNames()).toEqual(['Bauteile', 'Freigabe']);
     expect(pathBar().getByTitle('Show hidden folders')).toBeInTheDocument();
+  });
+
+  it('keeps the folded-ancestor menu out of every clipping box', async () => {
+    containerWidth = 300;
+    stubLayout();
+    render(<FileManagerPage />);
+    await openDeepestFolder(user);
+    await user.click(pathBar().getByTitle('Show hidden folders'));
+
+    // jsdom lays nothing out and clips nothing, so what the menu's contents
+    // prove is only that they mounted. The clip is the part that has to be
+    // pinned here: the menu hangs below the bar's bottom edge, so an ancestor
+    // that hides its overflow paints none of it and swallows the click too —
+    // measured in Chromium, elementFromPoint on the first item returns
+    // <body> as soon as the bar or the nav clips.
+    const bar = screen.getByTestId('library-path-bar');
+    const wrapper = bar.parentElement as HTMLElement;
+    const menu = screen.getByRole('menu');
+    for (let el: HTMLElement | null = menu; el; el = el === wrapper ? null : el.parentElement) {
+      expect(el.className).not.toMatch(/overflow-(hidden|clip|auto|scroll)/);
+    }
+
+    // Something still has to clip the measuring twin, or the widest chain
+    // gives the page a horizontal scrollbar. Not the twin itself — its
+    // children cannot shrink, so its own box is exactly as wide as they are
+    // (also measured: scrollWidth stays 205px past the viewport). The clip
+    // belongs on the positioned box around it, which the menu is not in.
+    const clip = wrapper.firstElementChild as HTMLElement;
+    expect(clip.className).toMatch(/\babsolute\b/);
+    expect(clip.className).toMatch(/\boverflow-hidden\b/);
+    expect(clip.contains(menu)).toBe(false);
   });
 });

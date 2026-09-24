@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useMemo, useEffect, useLayoutEffect, lazy, Suspense, Fragment } from 'react';
+import { useState, useRef, useCallback, useMemo, useEffect, useLayoutEffect, lazy, Suspense } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -1784,7 +1784,11 @@ interface FolderDisplayMenuProps {
   t: TFunction;
 }
 
-/** Sort field and direction, which share a group; the display toggles follow. */
+/** The sort field, then the sort direction, then the display toggles. Field
+ *  and direction are two two-way choices, so they are two radio sets and not
+ *  one: a `menuitemradio` is checked against the others in its group, and a
+ *  group with two of four checked describes neither choice. */
+const SORT_FIELD_ENTRY_COUNT = 2;
 const SORT_ENTRY_COUNT = 4;
 
 function FolderDisplayMenu({
@@ -1825,7 +1829,6 @@ function FolderDisplayMenu({
     label: string;
     checked: boolean;
     role: 'menuitemradio' | 'menuitemcheckbox';
-    startsGroup: boolean;
     onSelect: () => void;
   }[] = [
     {
@@ -1833,7 +1836,6 @@ function FolderDisplayMenu({
       label: t('fileManager.folderSortByName'),
       checked: sortField === 'name',
       role: 'menuitemradio',
-      startsGroup: false,
       onSelect: () => onSortFieldChange('name'),
     },
     {
@@ -1841,7 +1843,6 @@ function FolderDisplayMenu({
       label: t('fileManager.folderSortByActivity'),
       checked: sortField === 'activity',
       role: 'menuitemradio',
-      startsGroup: false,
       onSelect: () => onSortFieldChange('activity'),
     },
     {
@@ -1849,7 +1850,6 @@ function FolderDisplayMenu({
       label: t('fileManager.ascending'),
       checked: sortDirection === 'asc',
       role: 'menuitemradio',
-      startsGroup: true,
       onSelect: () => onSortDirectionChange('asc'),
     },
     {
@@ -1857,7 +1857,6 @@ function FolderDisplayMenu({
       label: t('fileManager.descending'),
       checked: sortDirection === 'desc',
       role: 'menuitemradio',
-      startsGroup: false,
       onSelect: () => onSortDirectionChange('desc'),
     },
     {
@@ -1865,7 +1864,6 @@ function FolderDisplayMenu({
       label: t('fileManager.collapseFoldersByDefault'),
       checked: collapseByDefault,
       role: 'menuitemcheckbox',
-      startsGroup: false,
       onSelect: () => onCollapseByDefaultChange(!collapseByDefault),
     },
     {
@@ -1873,7 +1871,6 @@ function FolderDisplayMenu({
       label: t('fileManager.enableTextWrapping'),
       checked: wrapNames,
       role: 'menuitemcheckbox',
-      startsGroup: false,
       onSelect: () => onWrapNamesChange(!wrapNames),
     },
   ];
@@ -1918,23 +1915,21 @@ function FolderDisplayMenu({
   };
 
   const renderEntry = (entry: (typeof entries)[number], index: number) => (
-    <Fragment key={entry.key}>
-      {entry.startsGroup && <div role="separator" className="my-1 border-t border-bambu-dark-tertiary" />}
-      <button
-        ref={(el) => {
-          itemRefs.current[index] = el;
-        }}
-        type="button"
-        role={entry.role}
-        aria-checked={entry.checked}
-        tabIndex={-1}
-        onClick={entry.onSelect}
-        className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm text-white hover:bg-bambu-dark focus:bg-bambu-dark focus:outline-none transition-colors"
-      >
-        <Check className={`w-3.5 h-3.5 flex-shrink-0 text-bambu-green ${entry.checked ? '' : 'invisible'}`} />
-        <span className="truncate">{entry.label}</span>
-      </button>
-    </Fragment>
+    <button
+      key={entry.key}
+      ref={(el) => {
+        itemRefs.current[index] = el;
+      }}
+      type="button"
+      role={entry.role}
+      aria-checked={entry.checked}
+      tabIndex={-1}
+      onClick={entry.onSelect}
+      className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm text-white hover:bg-bambu-dark focus:bg-bambu-dark focus:outline-none transition-colors"
+    >
+      <Check className={`w-3.5 h-3.5 flex-shrink-0 text-bambu-green ${entry.checked ? '' : 'invisible'}`} />
+      <span className="truncate">{entry.label}</span>
+    </button>
   );
 
   return (
@@ -1960,7 +1955,8 @@ function FolderDisplayMenu({
         >
           {/* A menu owns menuitems, separators and groups — nothing generic in
               between — so the entries are fragments and the heading sits
-              inside the group it names. */}
+              inside the group it names. One group per choice: the group is
+              what a radio is checked against. */}
           <div role="group" aria-label={t('fileManager.folderSort')}>
             <div
               aria-hidden="true"
@@ -1968,7 +1964,13 @@ function FolderDisplayMenu({
             >
               {t('fileManager.folderSort')}
             </div>
-            {entries.slice(0, SORT_ENTRY_COUNT).map(renderEntry)}
+            {entries.slice(0, SORT_FIELD_ENTRY_COUNT).map(renderEntry)}
+          </div>
+          <div role="separator" className="my-1 border-t border-bambu-dark-tertiary" />
+          <div role="group" aria-label={t('fileManager.folderSortDirection')}>
+            {entries
+              .slice(SORT_FIELD_ENTRY_COUNT, SORT_ENTRY_COUNT)
+              .map((entry, i) => renderEntry(entry, i + SORT_FIELD_ENTRY_COUNT))}
           </div>
           <div role="separator" className="my-1 border-t border-bambu-dark-tertiary" />
           {entries.slice(SORT_ENTRY_COUNT).map((entry, i) => renderEntry(entry, i + SORT_ENTRY_COUNT))}
@@ -2073,55 +2075,64 @@ function PathBar({ rootLabel, rootIsExternal, path, leafLabel, onSelectRoot, onS
   );
 
   return (
-    <div ref={barRef} className="relative mb-3 min-w-0 overflow-hidden whitespace-nowrap text-sm">
+    <div ref={barRef} className="relative mb-3 min-w-0 whitespace-nowrap text-sm">
       {/* The bar only contains the crumbs it shows, so the widths of the
-          folded ones have to come from somewhere: this twin renders the whole
-          chain at its natural width. Out of the accessibility tree, out of
-          flow and outside the <nav>, so it costs neither a tab stop, nor a
-          line, nor a second hit for anything looking inside the bar. It is
-          wider than the pane by definition — hence overflow-hidden above, or
-          a deep chain would give the page a horizontal scrollbar. Clipping
-          does not change a box's layout width, so the measurement stands. */}
-      <div
-        aria-hidden="true"
-        className="absolute left-0 top-0 flex items-center gap-0.5 invisible pointer-events-none"
-      >
-        <span ref={rootMeasureRef} className={`${crumbClass} flex-shrink-0`}>
-          {rootIcon}
-          <span>{rootLabel}</span>
-        </span>
-        <span ref={ellipsisMeasureRef} className="flex items-center gap-0.5 flex-shrink-0">
-          {separator}
-          <span className="flex items-center px-1.5 py-1">
-            <MoreHorizontal className="w-4 h-4" />
+          folded ones have to come from somewhere: the twin below renders the
+          whole chain at its natural width. Out of the accessibility tree, out
+          of flow and outside the <nav>, so it costs neither a tab stop, nor a
+          line, nor a second hit for anything looking inside the bar.
+          It is wider than the pane by definition, and the clip that keeps it
+          from giving the page a horizontal scrollbar belongs on a box of its
+          own: on the twin it would do nothing (its children cannot shrink, so
+          its own box is as wide as they are), and on the bar or the <nav> it
+          would cut away the folded-crumb menu below them. This box is the
+          twin's containing block, so its overflow rule reaches it. Clipping
+          changes no box's layout width, so the measurement stands. */}
+      <div aria-hidden="true" className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute left-0 top-0 flex items-center gap-0.5 invisible">
+          <span ref={rootMeasureRef} className={`${crumbClass} flex-shrink-0`}>
+            {rootIcon}
+            <span>{rootLabel}</span>
           </span>
-        </span>
-        {path.map((folder, index) => (
-          <span
-            key={folder.id}
-            ref={(el) => {
-              crumbMeasureRefs.current[index] = el;
-            }}
-            className="flex items-center gap-0.5 flex-shrink-0"
-          >
+          <span ref={ellipsisMeasureRef} className="flex items-center gap-0.5 flex-shrink-0">
             {separator}
-            <span className={`${crumbClass} font-medium`}>
-              <FolderNumber number={folder.number} t={t} />
-              <span>{folder.name}</span>
+            <span className="flex items-center px-1.5 py-1">
+              <MoreHorizontal className="w-4 h-4" />
             </span>
           </span>
-        ))}
-        {leafLabel && (
-          <span ref={leafMeasureRef} className="flex items-center gap-0.5 flex-shrink-0">
-            {separator}
-            <span className={`${crumbClass} font-medium`}>{leafLabel}</span>
-          </span>
-        )}
+          {path.map((folder, index) => (
+            <span
+              key={folder.id}
+              ref={(el) => {
+                crumbMeasureRefs.current[index] = el;
+              }}
+              className="flex items-center gap-0.5 flex-shrink-0"
+            >
+              {separator}
+              <span className={`${crumbClass} font-medium`}>
+                <FolderNumber number={folder.number} t={t} />
+                <span>{folder.name}</span>
+              </span>
+            </span>
+          ))}
+          {leafLabel && (
+            <span ref={leafMeasureRef} className="flex items-center gap-0.5 flex-shrink-0">
+              {separator}
+              <span className={`${crumbClass} font-medium`}>{leafLabel}</span>
+            </span>
+          )}
+        </div>
       </div>
+      {/* No overflow clip anywhere on this nav or above it: the ellipsis menu
+          is positioned against a crumb inside it and drops below its bottom
+          edge, so a clipping ancestor paints none of it and it stops being
+          hit-testable — the folded ancestors would have no way back. Nothing
+          overflows here anyway now that the crumbs are measured to fit, and
+          what is left over truncates per crumb. */}
       <nav
         aria-label={t('fileManager.pathBar.label')}
         data-testid="library-path-bar"
-        className="flex items-center gap-0.5 min-w-0 overflow-hidden"
+        className="flex items-center gap-0.5 min-w-0"
       >
       {path.length === 0 && !leafLabel ? (
         <span aria-current="page" className={`${crumbClass} text-white font-medium`}>

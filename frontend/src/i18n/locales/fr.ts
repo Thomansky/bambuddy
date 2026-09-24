@@ -4115,6 +4115,7 @@ export default {
     folderSort: 'Trier les dossiers',
     folderSortByName: 'Par nom',
     folderSortByActivity: 'Par activité récente',
+    folderSortDirection: 'Sens du tri',
     folderDisplayMenu: 'Trier et afficher les dossiers',
     dragToResizeTooltip: 'Glisser pour redimensionner, double-clic reset',
     folderTilesToggle: {

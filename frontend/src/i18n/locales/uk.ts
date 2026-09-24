@@ -4154,6 +4154,7 @@ export default {
     folderSort: "Сортування папок",
     folderSortByName: "За назвою",
     folderSortByActivity: "За останніми діями",
+    folderSortDirection: "Напрямок сортування",
     folderDisplayMenu: "Сортування та відображення папок",
     dragToResizeTooltip: "Перетягніть, щоб змінити розмір, двічі клацніть, щоб скинути",
     folderTilesToggle: {

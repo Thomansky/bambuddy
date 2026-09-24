@@ -133,6 +133,36 @@ describe('FileManagerPage — folder display menu', () => {
     ).toBeInTheDocument();
   });
 
+  it('keeps the sort field and the sort direction in separate radio sets', async () => {
+    render(<FileManagerPage />);
+    await waitFor(() => expect(screen.getByTestId('folder-sidebar')).toBeInTheDocument());
+
+    const menu = await openMenu(user);
+    // A menuitemradio is checked against the others in its group, so two
+    // two-way choices need a group each. One set carrying both "By name" and
+    // "Ascending" as checked describes neither of them, and a separator
+    // between the pairs does not split the set.
+    const groups = within(menu)
+      .getAllByRole('group')
+      .filter((group) => within(group).queryAllByRole('menuitemradio').length > 0);
+    expect(groups).toHaveLength(2);
+    for (const group of groups) {
+      const radios = within(group).getAllByRole('menuitemradio');
+      expect(radios).toHaveLength(2);
+      expect(radios.filter((radio) => radio.getAttribute('aria-checked') === 'true')).toHaveLength(1);
+    }
+    expect(groups[0]).toHaveAttribute('aria-label', 'Sort folders');
+    expect(within(groups[0]).getByRole('menuitemradio', { name: 'By name' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+    expect(groups[1]).toHaveAttribute('aria-label', 'Sort direction');
+    expect(within(groups[1]).getByRole('menuitemradio', { name: 'Ascending' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+  });
+
   it('is in the toolbar with the sidebar shown and with it hidden', async () => {
     render(<FileManagerPage />);
     await waitFor(() => expect(screen.getByTestId('folder-sidebar')).toBeInTheDocument());

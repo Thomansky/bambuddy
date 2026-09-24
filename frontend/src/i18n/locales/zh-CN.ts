@@ -4114,6 +4114,7 @@ export default {
     folderSort: '文件夹排序',
     folderSortByName: '按名称',
     folderSortByActivity: '按最近活动',
+    folderSortDirection: '排序方向',
     folderDisplayMenu: '文件夹排序与显示',
     dragToResizeTooltip: '拖动调整大小，双击重置',
     folderTilesToggle: {

@@ -4159,6 +4159,7 @@ export default {
     folderSort: 'Mappen sorteren',
     folderSortByName: 'Op naam',
     folderSortByActivity: 'Op recente activiteit',
+    folderSortDirection: 'Sorteerrichting',
     folderDisplayMenu: 'Mappen sorteren en weergeven',
     dragToResizeTooltip: 'Sleep om grootte te wijzigen, dubbelklik om te resetten',
     folderTilesToggle: {

@@ -4114,6 +4114,7 @@ export default {
     folderSort: '資料夾排序',
     folderSortByName: '依名稱',
     folderSortByActivity: '依最近活動',
+    folderSortDirection: '排序方向',
     folderDisplayMenu: '資料夾排序與顯示',
     dragToResizeTooltip: '拖曳調整大小，雙擊重設',
     folderTilesToggle: {

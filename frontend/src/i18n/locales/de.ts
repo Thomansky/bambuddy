@@ -4129,6 +4129,7 @@ export default {
     folderSort: 'Ordner sortieren',
     folderSortByName: 'Nach Name',
     folderSortByActivity: 'Nach letzter Aktivität',
+    folderSortDirection: 'Sortierrichtung',
     folderDisplayMenu: 'Ordner sortieren und anzeigen',
     dragToResizeTooltip: 'Ziehen zum Ändern der Größe, Doppelklick zum Zurücksetzen',
     folderTilesToggle: {

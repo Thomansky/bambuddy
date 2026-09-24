@@ -4114,6 +4114,7 @@ export default {
     folderSort: 'Ordenar pastas',
     folderSortByName: 'Por nome',
     folderSortByActivity: 'Por atividade recente',
+    folderSortDirection: 'Direção da ordenação',
     folderDisplayMenu: 'Ordenar e exibir pastas',
     dragToResizeTooltip: 'Arraste para redimensionar, clique duas vezes para redefinir',
     folderTilesToggle: {

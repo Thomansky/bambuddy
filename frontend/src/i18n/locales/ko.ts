@@ -3936,6 +3936,7 @@ export default {
     folderSort: '폴더 정렬',
     folderSortByName: '이름순',
     folderSortByActivity: '최근 활동순',
+    folderSortDirection: '정렬 방향',
     folderDisplayMenu: '폴더 정렬 및 표시',
     dragToResizeTooltip: '드래그하여 크기 조정, 더블클릭하여 초기화',
     folderTilesToggle: {
