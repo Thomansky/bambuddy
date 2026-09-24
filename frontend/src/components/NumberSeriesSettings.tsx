@@ -9,6 +9,7 @@ import { useToast } from '../contexts/ToastContext';
 const SERIES_LABEL_KEYS: Record<string, string> = {
   project: 'settings.numberSeries.project',
   queue_job: 'settings.numberSeries.queueJob',
+  library_folder: 'settings.numberSeries.libraryFolder',
 };
 
 /** One series row. Its own component so each keeps its own draft state — the

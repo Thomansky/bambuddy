@@ -488,6 +488,7 @@ export const handlers = [
   http.get('/api/v1/maintenance/overview', () => HttpResponse.json([])),
   http.get('/api/v1/makerworld/recent-imports', () => HttpResponse.json([])),
   http.get('/api/v1/notification-templates', () => HttpResponse.json([])),
+  http.get('/api/v1/number-series/', () => HttpResponse.json([])),
   http.get('/api/v1/pending-uploads/', () => HttpResponse.json([])),
   http.get('/api/v1/printers/:id/ams-labels', () => HttpResponse.json([])),
   http.get('/api/v1/printers/:id/inventory-remain', () =>

@@ -1,19 +1,52 @@
 """Pydantic schemas for library (File Manager) functionality."""
 
 from datetime import datetime
+from typing import Annotated
 
 from pydantic import BaseModel, Field, field_validator
 
 # ============ Folder Schemas ============
 
 
+def _normalize_folder_number(value: str | None) -> str | None:
+    """Trim the hand-typed folder number; an emptied field means "no number".
+
+    Mirrors ``_normalize_project_number``: a number the user typed always wins
+    over the series, and clearing one must not make the next save allocate.
+    """
+    if value is None:
+        return None
+    trimmed = value.strip()
+    return trimmed or None
+
+
 class FolderCreate(BaseModel):
     """Schema for creating a new folder."""
 
-    name: str = Field(..., min_length=1, max_length=255)
+    # An order folder that is only a number is the normal case for a farm that
+    # files enquiries by number, so the name may be empty — but only when the
+    # create also assigns a number. ``create_folder`` enforces that pairing;
+    # a nameless, numberless folder is still refused.
+    name: str = Field("", max_length=255)
     parent_id: int | None = None
     project_id: int | None = None
     archive_id: int | None = None
+    # Left out (or empty) means "let the series decide"; anything else is kept
+    # verbatim and the counter does not move.
+    number: Annotated[str | None, Field(max_length=32)] = None
+    # Take the next number from the `library_folder` series. Ignored when that
+    # series is off, and never overrides a number the caller typed.
+    use_number_series: bool = False
+
+    @field_validator("name")
+    @classmethod
+    def _trim_name(cls, v: str) -> str:
+        return v.strip()
+
+    @field_validator("number")
+    @classmethod
+    def _check_number(cls, v: str | None) -> str | None:
+        return _normalize_folder_number(v)
 
 
 class ExternalFolderCreate(BaseModel):
@@ -29,10 +62,26 @@ class ExternalFolderCreate(BaseModel):
 class FolderUpdate(BaseModel):
     """Schema for updating a folder."""
 
-    name: str | None = Field(None, min_length=1, max_length=255)
+    # May be emptied, but only on a folder that carries a number — the same
+    # pairing ``create_folder`` enforces, checked in ``update_folder`` once the
+    # new name and the new number are both known.
+    name: str | None = Field(None, max_length=255)
     parent_id: int | None = None
     project_id: int | None = None  # 0 to unlink
     archive_id: int | None = None  # 0 to unlink
+    # Sent-but-null clears the number, omitted leaves it alone — the same rule
+    # ProjectUpdate.number follows, so a rename can never drop a number.
+    number: Annotated[str | None, Field(max_length=32)] = None
+
+    @field_validator("name")
+    @classmethod
+    def _trim_name(cls, v: str | None) -> str | None:
+        return v.strip() if v is not None else None
+
+    @field_validator("number")
+    @classmethod
+    def _check_number(cls, v: str | None) -> str | None:
+        return _normalize_folder_number(v)
 
 
 class FolderResponse(BaseModel):
@@ -40,6 +89,9 @@ class FolderResponse(BaseModel):
 
     id: int
     name: str
+    # Running number of the order folder, rendered before the name wherever a
+    # folder is drawn. None for every folder created before the series was on.
+    number: str | None = None
     parent_id: int | None
     project_id: int | None = None
     archive_id: int | None = None
@@ -81,6 +133,9 @@ class FolderTreeItem(BaseModel):
 
     id: int
     name: str
+    # See FolderResponse.number — carried here so every place that draws a
+    # folder from the tree can show it.
+    number: str | None = None
     parent_id: int | None
     project_id: int | None = None
     archive_id: int | None = None

@@ -15,6 +15,12 @@ class LibraryFolder(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255))
+    # Running number from the `library_folder` series. The order starts life as
+    # a folder, so this is where the number is born; the project made from the
+    # folder inherits it rather than drawing one of its own. Unique so a quote
+    # and an invoice can never name two folders; NULL is the "no number" case
+    # and repeats freely, which is what every folder predating the series keeps.
+    number: Mapped[str | None] = mapped_column(String(32), nullable=True, unique=True, index=True)
     parent_id: Mapped[int | None] = mapped_column(ForeignKey("library_folders.id", ondelete="CASCADE"), nullable=True)
 
     # External folder flags (for folders that point to external paths)

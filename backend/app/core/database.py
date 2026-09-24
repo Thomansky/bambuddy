@@ -5222,6 +5222,12 @@ async def run_migrations(conn):
     # unique index, so the unnumbered projects an upgrade starts with do not
     # collide with each other.
     await _safe_execute(conn, "CREATE UNIQUE INDEX IF NOT EXISTS ix_projects_number ON projects (number)")
+    # The order folder the enquiry is filed in carries the same kind of number,
+    # one step earlier: the project made from the folder inherits this value
+    # instead of drawing its own, so the two columns hold the same string and
+    # each must be unique on its own side.
+    await _safe_execute(conn, "ALTER TABLE library_folders ADD COLUMN number VARCHAR(32)")
+    await _safe_execute(conn, "CREATE UNIQUE INDEX IF NOT EXISTS ix_library_folders_number ON library_folders (number)")
 
     # Migration: storage location sensor alerts (#2824), own column rather than
     # reusing on_ha_sensor_alert. That column can be scoped to one printer

@@ -1,4 +1,4 @@
-"""Running numbers for projects and queued jobs.
+"""Running numbers for order folders, projects and queued jobs.
 
 A print farm's paperwork runs on one identifier: the enquiry becomes a job, the
 job is quoted, printed, delivered and invoiced under the same number. This
@@ -22,12 +22,17 @@ logger = logging.getLogger(__name__)
 
 SERIES_PROJECT = "project"
 SERIES_QUEUE_JOB = "queue_job"
+# The order folder an enquiry is filed in before it is a project at all. Its
+# number is the one the project inherits when the order is placed, so the
+# enquiry, the quote, the print and the invoice all read the same.
+SERIES_LIBRARY_FOLDER = "library_folder"
 
-# The two series every install starts with. Seeded disabled so nothing changes
-# for an existing install until someone turns one on.
-DEFAULT_SERIES_KEYS: tuple[str, ...] = (SERIES_PROJECT, SERIES_QUEUE_JOB)
+# The series every install starts with. Seeded disabled so nothing changes for
+# an existing install until someone turns one on.
+DEFAULT_SERIES_KEYS: tuple[str, ...] = (SERIES_PROJECT, SERIES_QUEUE_JOB, SERIES_LIBRARY_FOLDER)
 
-# Width of projects.number / print_queue.job_number / print_archives.job_number.
+# Width of projects.number / library_folders.number / print_queue.job_number /
+# print_archives.job_number.
 # PostgreSQL rejects an over-long value outright and SQLite would store it,
 # leaving the same series rendering differently on two installs — so a
 # combination that cannot fit is refused when it is saved, not when it is used.
@@ -104,7 +109,7 @@ async def allocate_number(db: AsyncSession, key: str) -> str | None:
 
         # The lock is taken only once the series is known to be on. PostgreSQL
         # holds a FOR UPDATE row lock until the caller's transaction ends, not
-        # until the statement ends, and both series ship disabled — locking
+        # until the statement ends, and every series ships disabled — locking
         # first would serialise every project create and every queue add on one
         # row for a feature the install never switched on.
         if not is_sqlite():

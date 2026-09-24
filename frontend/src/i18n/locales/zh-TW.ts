@@ -3109,9 +3109,10 @@ export default {
     // the Workflow tab's Queue & Dispatch sub-tab.
     numberSeries: {
       title: '編號規則',
-      description: '為每個新建專案和每個排入佇列的工作分配流水號。既有資料不會重新編號。',
+      description: '為每個新建的訂單資料夾、專案和列印佇列工作指派連續編號。既有項目不會重新編號。',
       project: '專案',
       queueJob: '佇列工作',
+      libraryFolder: '訂單資料夾',
       enable: '分配編號',
       prefix: '前綴',
       suffix: '後綴',
@@ -4040,6 +4041,10 @@ export default {
     newFolder: '新增資料夾',
     folderName: '資料夾名稱',
     folderNamePlaceholder: '例如：功能零件',
+    folderNumber: '資料夾編號',
+    assignNumber: '指派編號',
+    nextNumber: '下一個編號：{{value}}',
+    folderNumberTaken: '該編號已被其他資料夾使用。',
     renameFile: '重新命名檔案',
     renameFolder: '重新命名資料夾',
     invalidFilenameChar: '列印檔案名稱中不允許使用字元 "{{char}}"。印表機 SD 卡拒絕以下字元: < > : " / \\ | ? *',

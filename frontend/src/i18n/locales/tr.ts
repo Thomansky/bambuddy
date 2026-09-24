@@ -3124,9 +3124,10 @@ export default {
     // the Workflow tab's Queue & Dispatch sub-tab.
     numberSeries: {
       title: 'Numara serisi',
-      description: 'Her yeni projeye ve kuyruğa eklenen her işe sıra numarası verir. Hâlihazırda var olanlar yeniden numaralandırılmaz.',
+      description: 'Her yeni sipariş klasörüne, projeye ve kuyruk işine sıralı bir numara verir. Hâlihazırda var olanlar yeniden numaralandırılmaz.',
       project: 'Projeler',
       queueJob: 'Kuyruk işleri',
+      libraryFolder: 'Sipariş klasörleri',
       enable: 'Numara ver',
       prefix: 'Ön ek',
       suffix: 'Son ek',
@@ -4047,6 +4048,10 @@ export default {
     newFolder: 'Yeni Klasör',
     folderName: 'Klasör Adı',
     folderNamePlaceholder: 'örn., Fonksiyonel Parçalar',
+    folderNumber: 'Klasör numarası',
+    assignNumber: 'Numara ver',
+    nextNumber: 'Sonraki numara: {{value}}',
+    folderNumberTaken: 'Bu numara zaten başka bir klasöre verilmiş.',
     renameFile: 'Dosyayı Yeniden Adlandır',
     renameFolder: 'Klasörü Yeniden Adlandır',
     invalidFilenameChar: 'Baskı dosya adlarında "{{char}}" karakterine izin verilmiyor. Yazıcının SD kartı şu karakterleri reddeder: < > : " / \\ | ? *',

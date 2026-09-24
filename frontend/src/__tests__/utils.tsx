@@ -28,13 +28,17 @@ function createTestQueryClient() {
 
 interface AllProvidersProps {
   children: React.ReactNode;
+  // A test that cares about caching — staleTime, invalidation — has to drive
+  // the same client App.tsx builds; the default one here is deliberately
+  // cache-free and would hide the bug.
+  queryClient?: QueryClient;
 }
 
-function AllProviders({ children }: AllProvidersProps) {
-  const queryClient = createTestQueryClient();
+function AllProviders({ children, queryClient }: AllProvidersProps) {
+  const [client] = React.useState(() => queryClient ?? createTestQueryClient());
 
   return (
-    <QueryClientProvider client={queryClient}>
+    <QueryClientProvider client={client}>
       <BrowserRouter>
         {/* ThemeProvider is now mounted inside AuthProvider in App.tsx so
             its initial ``api.getSettings()`` sync can gate on auth state.
@@ -56,9 +60,13 @@ function AllProviders({ children }: AllProvidersProps) {
  */
 function customRender(
   ui: React.ReactElement,
-  options?: Omit<RenderOptions, 'wrapper'>
+  options?: Omit<RenderOptions, 'wrapper'> & { queryClient?: QueryClient }
 ) {
-  return render(ui, { wrapper: AllProviders, ...options });
+  const { queryClient, ...rest } = options ?? {};
+  const wrapper = ({ children }: { children: React.ReactNode }) => (
+    <AllProviders queryClient={queryClient}>{children}</AllProviders>
+  );
+  return render(ui, { wrapper, ...rest });
 }
 
 // Re-export everything from testing-library

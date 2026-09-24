@@ -427,4 +427,24 @@ describe('ProjectDetailPage', () => {
       expect(row!.textContent).toContain('1');
     });
   });
+
+  describe('the linked order folder', () => {
+    it('draws the folder number, so a folder that is only a number is not a blank row', async () => {
+      // This list is the order folder the project came out of, and in this
+      // workflow that folder usually carries nothing but its number.
+      server.use(
+        http.get('/api/v1/library/folders/by-project/:id', () =>
+          HttpResponse.json([{ ...mockFolder, name: '', number: 'A-0007' }]),
+        ),
+        http.get('/api/v1/library/files', () => HttpResponse.json([])),
+      );
+
+      render(<ProjectDetailPage />);
+
+      const badge = await screen.findByTestId('folder-number');
+      expect(badge).toHaveTextContent('A-0007');
+      // Nameless is not unlabelled: the number stands in for the missing name.
+      expect(badge.parentElement).toHaveAttribute('title', 'A-0007');
+    });
+  });
 });

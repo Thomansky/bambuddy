@@ -50,6 +50,11 @@ class ProjectCreate(BaseModel):
     budget: float | None = None
     parent_id: int | None = None  # For sub-projects
     url: str | None = None
+    # The order folder this project comes out of. The project inherits that
+    # folder's number instead of drawing one from the project series — the
+    # enquiry was already filed under it — and the folder is linked to the new
+    # project. A number the caller typed still wins over both.
+    library_folder_id: int | None = None
 
     @field_validator("url")
     @classmethod
@@ -144,6 +149,13 @@ class ProjectResponse(BaseModel):
     id: int
     name: str
     number: str | None = None  # Running number from the `project` series
+    # Where a project created from an order folder got its number: "folder"
+    # when it inherited the folder's, "series" when that number was already on
+    # another project and the project series issued a fresh one, and "none"
+    # when the fallback had nothing to give either because the project series
+    # is off — the project is then created unnumbered and this says so. Only a
+    # create from a folder sets it; every other response leaves it None.
+    number_source: str | None = None
     description: str | None
     color: str | None
     status: str
@@ -325,7 +337,15 @@ class BOMItemExport(BaseModel):
 class LinkedFolderExport(BaseModel):
     """Schema for exporting a linked library folder."""
 
-    name: str
+    name: str = ""
+    # An order folder can be nothing but a number, and then the number is the
+    # only thing an import can match it on. None for every folder exported
+    # before the folder series existed.
+    number: str | None = None
+    # The one directory component the folder's files live under inside the ZIP.
+    # None in an export that predates it, where the name was always that
+    # component.
+    path: str | None = None
 
 
 class ProjectExport(BaseModel):

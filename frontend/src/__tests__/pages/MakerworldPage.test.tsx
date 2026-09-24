@@ -362,4 +362,44 @@ describe('MakerworldPage', () => {
     // And no literal ``<script>`` text leaks into the document.
     expect(document.body.innerHTML).not.toContain('window.__pwned');
   });
+
+  it('names a number-only order folder in the import destination picker', async () => {
+    // The destination list is drawn from the folder tree, where an order
+    // folder often carries nothing but its number — dropping it leaves a blank
+    // option the operator cannot pick out.
+    useAuthedHandlers();
+    server.use(
+      http.get('*/library/folders', () =>
+        HttpResponse.json([
+          {
+            id: 7,
+            name: '',
+            number: 'A-0007',
+            parent_id: null,
+            project_id: null,
+            archive_id: null,
+            project_name: null,
+            archive_name: null,
+            is_external: false,
+            external_path: null,
+            external_readonly: false,
+            external_show_hidden: false,
+            file_count: 0,
+            latest_activity_at: null,
+            children: [],
+          },
+        ]),
+      ),
+      http.post('*/makerworld/resolve', () => HttpResponse.json(resolveResponse())),
+    );
+    render(<MakerworldPage />);
+    await userEvent.type(
+      await screen.findByPlaceholderText(/https:\/\/makerworld\.com/i),
+      'https://makerworld.com/en/models/1400373',
+    );
+    await userEvent.click(screen.getByRole('button', { name: /Resolve/i }));
+
+    await screen.findByText('Seed Starter');
+    expect(screen.getByRole('option', { name: 'A-0007' })).toBeInTheDocument();
+  });
 });

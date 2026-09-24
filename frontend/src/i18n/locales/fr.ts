@@ -3110,9 +3110,10 @@ export default {
     // the Workflow tab's Queue & Dispatch sub-tab.
     numberSeries: {
       title: 'Série de numérotation',
-      description: 'Attribue un numéro séquentiel à chaque nouveau projet et à chaque travail mis en file. Rien de ce qui existe déjà n’est renuméroté.',
+      description: "Attribue un numéro séquentiel à chaque nouveau dossier de commande, projet et travail en file d'attente. Rien de ce qui existe déjà n'est renuméroté.",
       project: 'Projets',
       queueJob: 'Travaux en file',
+      libraryFolder: 'Dossiers de commande',
       enable: 'Attribuer des numéros',
       prefix: 'Préfixe',
       suffix: 'Suffixe',
@@ -4041,6 +4042,10 @@ export default {
     newFolder: 'Nouveau dossier',
     folderName: 'Nom du dossier',
     folderNamePlaceholder: 'ex: Pièces Utiles',
+    folderNumber: 'Numéro de dossier',
+    assignNumber: 'Attribuer un numéro',
+    nextNumber: 'Prochain numéro : {{value}}',
+    folderNumberTaken: "Ce numéro est déjà attribué à un autre dossier.",
     renameFile: 'Renommer fichier',
     renameFolder: 'Renommer dossier',
     invalidFilenameChar: 'Le caractère "{{char}}" n\'est pas autorisé dans les noms de fichier d\'impression. La carte SD de l\'imprimante refuse : < > : " / \\ | ? *',

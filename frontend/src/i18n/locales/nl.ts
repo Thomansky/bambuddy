@@ -3147,9 +3147,10 @@ export default {
     // the Workflow tab's Queue & Dispatch sub-tab.
     numberSeries: {
       title: 'Nummerreeks',
-      description: 'Geeft elk nieuw project en elke nieuwe wachtrijtaak een doorlopend nummer. Wat er al is, wordt niet opnieuw genummerd.',
+      description: 'Geeft elke nieuwe ordermap, elk nieuw project en elke nieuwe wachtrijtaak een doorlopend nummer. Bestaande items worden niet opnieuw genummerd.',
       project: 'Projecten',
       queueJob: 'Wachtrijtaken',
+      libraryFolder: 'Ordermappen',
       enable: 'Nummers uitgeven',
       prefix: 'Voorvoegsel',
       suffix: 'Achtervoegsel',
@@ -4085,6 +4086,10 @@ export default {
     newFolder: 'Nieuwe map',
     folderName: 'Mapnaam',
     folderNamePlaceholder: 'bijv. Functionele onderdelen',
+    folderNumber: 'Mapnummer',
+    assignNumber: 'Nummer toekennen',
+    nextNumber: 'Volgend nummer: {{value}}',
+    folderNumberTaken: 'Dat nummer is al aan een andere map toegekend.',
     renameFile: 'Bestand hernoemen',
     renameFolder: 'Map hernoemen',
     invalidFilenameChar: 'Het teken "{{char}}" is niet toegestaan in bestandsnamen voor afdrukken. De SD-kaart van de printer weigert: < > : " / \\ | ? *',

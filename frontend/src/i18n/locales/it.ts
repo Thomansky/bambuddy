@@ -3110,9 +3110,10 @@ export default {
     // the Workflow tab's Queue & Dispatch sub-tab.
     numberSeries: {
       title: 'Serie di numerazione',
-      description: 'Assegna un numero progressivo a ogni nuovo progetto e a ogni lavoro in coda. Nulla di ciò che esiste già viene rinumerato.',
+      description: 'Assegna un numero progressivo a ogni nuova cartella ordine, progetto e lavoro in coda. Nulla di già esistente viene rinumerato.',
       project: 'Progetti',
       queueJob: 'Lavori in coda',
+      libraryFolder: 'Cartelle ordine',
       enable: 'Assegna numeri',
       prefix: 'Prefisso',
       suffix: 'Suffisso',
@@ -4041,6 +4042,10 @@ export default {
     newFolder: 'Nuova cartella',
     folderName: 'Nome cartella',
     folderNamePlaceholder: 'es., Parti funzionali',
+    folderNumber: 'Numero cartella',
+    assignNumber: 'Assegna un numero',
+    nextNumber: 'Prossimo numero: {{value}}',
+    folderNumberTaken: "Questo numero è già assegnato a un'altra cartella.",
     renameFile: 'Rinomina file',
     renameFolder: 'Rinomina cartella',
     invalidFilenameChar: 'Il carattere "{{char}}" non è consentito nei nomi dei file di stampa. La scheda SD della stampante rifiuta: < > : " / \\ | ? *',

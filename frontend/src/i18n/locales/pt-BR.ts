@@ -3109,9 +3109,10 @@ export default {
     // the Workflow tab's Queue & Dispatch sub-tab.
     numberSeries: {
       title: 'Série de numeração',
-      description: 'Dá um número sequencial a cada novo projeto e a cada trabalho na fila. Nada do que já existe é renumerado.',
+      description: 'Atribui um número sequencial a cada nova pasta de pedido, projeto e trabalho na fila. Nada do que já existe é renumerado.',
       project: 'Projetos',
       queueJob: 'Trabalhos na fila',
+      libraryFolder: 'Pastas de pedido',
       enable: 'Atribuir números',
       prefix: 'Prefixo',
       suffix: 'Sufixo',
@@ -4040,6 +4041,10 @@ export default {
     newFolder: 'Nova Pasta',
     folderName: 'Nome da Pasta',
     folderNamePlaceholder: 'ex.: Peças Funcionais',
+    folderNumber: 'Número da pasta',
+    assignNumber: 'Atribuir um número',
+    nextNumber: 'Próximo número: {{value}}',
+    folderNumberTaken: 'Esse número já está atribuído a outra pasta.',
     renameFile: 'Renomear Arquivo',
     renameFolder: 'Renomear Pasta',
     invalidFilenameChar: 'O caractere "{{char}}" não é permitido em nomes de arquivos de impressão. O cartão SD da impressora rejeita: < > : " / \\ | ? *',

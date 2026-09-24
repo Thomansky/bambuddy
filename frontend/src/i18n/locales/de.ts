@@ -3124,9 +3124,10 @@ export default {
     // the Workflow tab's Queue & Dispatch sub-tab.
     numberSeries: {
       title: 'Nummernkreis',
-      description: 'Vergibt an jedes neue Projekt und jeden neuen Auftrag eine fortlaufende Nummer. Bereits vorhandene Einträge werden nicht nachträglich nummeriert.',
+      description: 'Vergibt an jeden neuen Auftragsordner, jedes neue Projekt und jeden neuen Druckauftrag eine fortlaufende Nummer. Bereits vorhandene Einträge werden nicht nachträglich nummeriert.',
       project: 'Projekte',
       queueJob: 'Druckaufträge',
+      libraryFolder: 'Auftragsordner',
       enable: 'Nummern vergeben',
       prefix: 'Präfix',
       suffix: 'Suffix',
@@ -4055,6 +4056,10 @@ export default {
     newFolder: 'Neuer Ordner',
     folderName: 'Ordnername',
     folderNamePlaceholder: 'z.B. Funktionsteile',
+    folderNumber: 'Ordnernummer',
+    assignNumber: 'Nummer vergeben',
+    nextNumber: 'Nächste Nummer: {{value}}',
+    folderNumberTaken: 'Diese Nummer ist bereits für einen anderen Ordner vergeben.',
     renameFile: 'Datei umbenennen',
     renameFolder: 'Ordner umbenennen',
     invalidFilenameChar: 'Das Zeichen "{{char}}" ist in Druck-Dateinamen nicht erlaubt. Die SD-Karte des Druckers lehnt folgende Zeichen ab: < > : " / \\ | ? *',

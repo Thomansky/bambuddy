@@ -20,6 +20,7 @@ from stat import S_ISREG
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse as FastAPIFileResponse, StreamingResponse
 from sqlalchemy import distinct, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -80,7 +81,14 @@ from backend.app.services.design_settings import (
     overrides_from_config,
 )
 from backend.app.services.filament_requirements import annotate_rack_groups
-from backend.app.services.number_series import SERIES_QUEUE_JOB, allocate_number
+from backend.app.services.folder_numbers import folder_number_taken, inherit_folder_number
+from backend.app.services.number_series import (
+    SERIES_LIBRARY_FOLDER,
+    SERIES_QUEUE_JOB,
+    NumbersAlreadyInUse,
+    allocate_number,
+    allocate_unused_number,
+)
 from backend.app.services.pdf_thumbnail import generate_pdf_thumbnail
 from backend.app.services.plate_thumbnail import inject_plate_thumbnails_if_missing
 from backend.app.services.print_confirmation import confirm_outcome_for_new_queue_item
@@ -991,6 +999,7 @@ async def list_folders(
         folder_item = FolderTreeItem(
             id=folder.id,
             name=folder.name,
+            number=folder.number,
             parent_id=folder.parent_id,
             project_id=folder.project_id,
             archive_id=folder.archive_id,
@@ -1080,6 +1089,7 @@ async def get_folders_by_project(
             FolderResponse(
                 id=folder.id,
                 name=folder.name,
+                number=folder.number,
                 parent_id=folder.parent_id,
                 project_id=folder.project_id,
                 archive_id=folder.archive_id,
@@ -1141,6 +1151,7 @@ async def get_folders_by_archive(
             FolderResponse(
                 id=folder.id,
                 name=folder.name,
+                number=folder.number,
                 parent_id=folder.parent_id,
                 project_id=folder.project_id,
                 archive_id=folder.archive_id,
@@ -1160,6 +1171,49 @@ async def get_folders_by_archive(
     return folders
 
 
+async def _assert_folder_number_free(db: AsyncSession, number: str, exclude_id: int | None = None) -> None:
+    """Answer 409 before writing, so the common case keeps its transaction.
+
+    Racy on its own — two creates can both pass it — which is why the unique
+    index and :func:`_flush_folder_number` are the actual guard.
+    """
+    if await folder_number_taken(db, number, exclude_id):
+        raise HTTPException(status_code=409, detail=f"Folder number '{number}' is already in use")
+
+
+async def _flush_folder_number(db: AsyncSession, number: str | None) -> None:
+    """Flush a pending folder write, turning a duplicate number into a 409.
+
+    ``number`` is the only unique constraint on ``library_folders``, so that is
+    what an IntegrityError here means; without this the caller would read a 500
+    for a plain "that number is taken".
+    """
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=f"Folder number '{number}' is already in use") from None
+
+
+async def _allocate_folder_number(db: AsyncSession) -> str | None:
+    """Take the next folder number the table does not already hold.
+
+    Same reasoning as ``_allocate_project_number``: a number the series reaches
+    can already be on a folder, and rolling the counter back over it would park
+    the series there for good, so it is consumed and the next one taken.
+    """
+    try:
+        return await allocate_unused_number(db, SERIES_LIBRARY_FOLDER, lambda number: folder_number_taken(db, number))
+    except NumbersAlreadyInUse as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"The folder number series has run into numbers that are already in use "
+                f"(last tried '{exc.last_tried}') — raise its next number in Settings"
+            ),
+        ) from None
+
+
 @router.post("/folders", response_model=FolderResponse)
 @router.post("/folders/", response_model=FolderResponse)
 async def create_folder(
@@ -1176,6 +1230,7 @@ async def create_folder(
 
     # Verify project exists if specified
     project_name = None
+    project = None
     if data.project_id is not None:
         project_result = await db.execute(select(Project).where(Project.id == data.project_id))
         project = project_result.scalar_one_or_none()
@@ -1192,19 +1247,41 @@ async def create_folder(
             raise HTTPException(status_code=404, detail="Archive not found")
         archive_name = archive.print_name
 
+    # Allocated before the row exists so a create that fails afterwards rolls
+    # the counter back with it. A number the caller typed always wins and does
+    # not move the counter; the flag is simply ignored while the series is off.
+    number = data.number
+    if number:
+        await _assert_folder_number_free(db, number)
+    elif data.use_number_series:
+        number = await _allocate_folder_number(db)
+
+    # An order folder is often only a number, so an empty name is allowed as
+    # long as the folder has one — the number is what it is filed under. A
+    # folder with neither is nameless in every view there is.
+    if not data.name and not number:
+        raise HTTPException(status_code=400, detail="Folder name is required unless the folder is given a number")
+
     folder = LibraryFolder(
         name=data.name,
+        number=number,
         parent_id=data.parent_id,
         project_id=data.project_id,
         archive_id=data.archive_id,
     )
     db.add(folder)
+    await _flush_folder_number(db, number)
+    # A folder created straight onto a project hands its number over at once;
+    # the project only takes it if it has none of its own.
+    if project is not None:
+        await inherit_folder_number(db, project, folder)
     await db.commit()
     await db.refresh(folder)
 
     return FolderResponse(
         id=folder.id,
         name=folder.name,
+        number=folder.number,
         parent_id=folder.parent_id,
         project_id=folder.project_id,
         archive_id=folder.archive_id,
@@ -1265,6 +1342,7 @@ async def get_folder(
     return FolderResponse(
         id=folder.id,
         name=folder.name,
+        number=folder.number,
         parent_id=folder.parent_id,
         project_id=folder.project_id,
         archive_id=folder.archive_id,
@@ -1368,6 +1446,18 @@ async def update_folder(
     if data.name is not None:
         folder.name = data.name
 
+    # Sent-but-null clears the number, omitted leaves it alone — a rename must
+    # never drop the number the folder is filed under.
+    if "number" in data.model_fields_set:
+        if data.number:
+            await _assert_folder_number_free(db, data.number, exclude_id=folder_id)
+        folder.number = data.number
+
+    # Same pairing as on create, checked once both halves are in: a folder with
+    # neither a name nor a number is nameless in every view there is.
+    if not folder.name and not folder.number:
+        raise HTTPException(status_code=400, detail="Folder name is required unless the folder is given a number")
+
     if data.parent_id is not None:
         # Prevent circular reference
         if data.parent_id == folder_id:
@@ -1387,13 +1477,15 @@ async def update_folder(
             folder.parent_id = None
 
     # Update project_id (0 to unlink)
+    linked_project = None
     if data.project_id is not None:
         if data.project_id == 0:
             folder.project_id = None
         else:
             # Verify project exists
             project_result = await db.execute(select(Project).where(Project.id == data.project_id))
-            if not project_result.scalar_one_or_none():
+            linked_project = project_result.scalar_one_or_none()
+            if not linked_project:
                 raise HTTPException(status_code=404, detail="Project not found")
             folder.project_id = data.project_id
 
@@ -1408,6 +1500,13 @@ async def update_folder(
                 raise HTTPException(status_code=404, detail="Archive not found")
             folder.archive_id = data.archive_id
 
+    # Linking a project to a numbered folder gives the project that number —
+    # but only when it has none of its own. A project already numbered has been
+    # quoted under that number, and renumbering it would strand the paperwork.
+    if linked_project is not None:
+        await inherit_folder_number(db, linked_project, folder)
+
+    await _flush_folder_number(db, folder.number)
     await db.commit()
     await db.refresh(folder)
 
@@ -1438,6 +1537,7 @@ async def update_folder(
     return FolderResponse(
         id=folder.id,
         name=folder.name,
+        number=folder.number,
         parent_id=folder.parent_id,
         project_id=folder.project_id,
         archive_id=folder.archive_id,
@@ -1769,6 +1869,7 @@ async def create_external_folder(
     return FolderResponse(
         id=folder.id,
         name=folder.name,
+        number=folder.number,
         parent_id=folder.parent_id,
         project_id=None,
         archive_id=None,

@@ -127,12 +127,32 @@ describe('NumberSeriesSettings', () => {
     vi.mocked(api.getNumberSeries).mockResolvedValue([
       series({ key: 'project', prefix: 'P-' }),
       series({ key: 'queue_job', prefix: 'J-' }),
+      series({ key: 'library_folder', prefix: 'A-' }),
     ]);
 
     render(<NumberSeriesSettings />);
 
     expect(await screen.findByText('Projects')).toBeInTheDocument();
     expect(screen.getByText('Queue jobs')).toBeInTheDocument();
-    expect(screen.getAllByLabelText('Prefix')).toHaveLength(2);
+    // The label map is hand-maintained; a series missing from it would show
+    // its raw key to the user.
+    expect(screen.getByText('Order folders')).toBeInTheDocument();
+    expect(screen.getAllByLabelText('Prefix')).toHaveLength(3);
+  });
+
+  it('switches the order-folder series on through the API', async () => {
+    vi.mocked(api.getNumberSeries).mockResolvedValue([series({ key: 'library_folder' })]);
+    vi.mocked(api.updateNumberSeries).mockResolvedValue(
+      series({ key: 'library_folder', enabled: true }),
+    );
+
+    render(<NumberSeriesSettings />);
+    const toggle = await screen.findByRole('checkbox', { name: /Order folders/ });
+
+    fireEvent.click(toggle);
+
+    await waitFor(() =>
+      expect(api.updateNumberSeries).toHaveBeenCalledWith('library_folder', { enabled: true }),
+    );
   });
 });
