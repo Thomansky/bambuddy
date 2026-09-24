@@ -79,6 +79,7 @@ from backend.app.api.routes import (
     user_notifications,
     users,
     virtual_printers,
+    webdav,
     webhook,
     websocket,
 )
@@ -10304,6 +10305,16 @@ app.include_router(obico.router, prefix=app_settings.api_prefix)
 app.include_router(metrics.router, prefix=app_settings.api_prefix)
 app.include_router(virtual_printers.router, prefix=app_settings.api_prefix)
 app.include_router(spoolbuddy.router, prefix=app_settings.api_prefix)
+
+# WebDAV (#3152) — mounted at /webdav, NOT under the API prefix, and registered
+# here so it precedes the SPA catch-all: a WebDAV GET that fell through to
+# `serve_spa` would answer index.html with 200 and a mapped drive would read
+# every file as HTML. Deliberately outside /api/ for a second reason too —
+# `auth_middleware` guards that prefix with Bearer tokens, and no OS WebDAV
+# client can send one, so a /api/v1/webdav router would have needed an entry in
+# PUBLIC_API_PREFIXES (the /api/v1/archives/confirm/ pattern) to reach its own
+# Basic-auth gate at all. The router authenticates every request itself.
+app.include_router(webdav.router)
 
 
 # Serve static files (React build)
