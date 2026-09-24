@@ -1,4 +1,4 @@
-"""API routes for the running-number series (projects, queued jobs)."""
+"""API routes for the running-number series (order folders, projects, queued jobs)."""
 
 import logging
 

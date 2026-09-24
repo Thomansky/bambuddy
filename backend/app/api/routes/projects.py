@@ -45,6 +45,7 @@ from backend.app.schemas.project import (
     ProjectUpdate,
     TimelineEvent,
 )
+from backend.app.services.folder_numbers import inherit_folder_number, project_number_taken
 from backend.app.services.number_series import (
     SERIES_PROJECT,
     NumbersAlreadyInUse,
@@ -413,20 +414,13 @@ async def _flush_project_number(db: AsyncSession, number: str | None) -> None:
         raise HTTPException(status_code=409, detail=f"Project number '{number}' is already in use") from None
 
 
-async def _project_number_taken(db: AsyncSession, number: str, exclude_id: int | None = None) -> bool:
-    query = select(Project.id).where(Project.number == number)
-    if exclude_id is not None:
-        query = query.where(Project.id != exclude_id)
-    return (await db.execute(query.limit(1))).scalar_one_or_none() is not None
-
-
 async def _assert_project_number_free(db: AsyncSession, number: str, exclude_id: int | None = None) -> None:
     """Answer 409 before writing, so the common case keeps its transaction.
 
     Racy on its own — two creates can both pass it — which is why the unique
     index and :func:`_flush_project_number` are the actual guard.
     """
-    if await _project_number_taken(db, number, exclude_id):
+    if await project_number_taken(db, number, exclude_id):
         raise HTTPException(status_code=409, detail=f"Project number '{number}' is already in use")
 
 
@@ -440,7 +434,7 @@ async def _allocate_project_number(db: AsyncSession) -> str | None:
     consumed and the next one taken instead (#2603).
     """
     try:
-        return await allocate_unused_number(db, SERIES_PROJECT, lambda number: _project_number_taken(db, number))
+        return await allocate_unused_number(db, SERIES_PROJECT, lambda number: project_number_taken(db, number))
     except NumbersAlreadyInUse as exc:
         raise HTTPException(
             status_code=409,
@@ -595,12 +589,41 @@ async def create_project(
             raise HTTPException(status_code=400, detail="Parent project not found")
         parent_name = parent.name
 
+    # The order folder this project comes out of, if any. Looked up before the
+    # allocator runs so a bad id costs no number.
+    folder = None
+    if data.library_folder_id is not None:
+        folder_result = await db.execute(select(LibraryFolder).where(LibraryFolder.id == data.library_folder_id))
+        folder = folder_result.scalar_one_or_none()
+        if not folder:
+            raise HTTPException(status_code=400, detail="Library folder not found")
+
     # Allocated before the row exists so a create that fails afterwards rolls
     # the counter back with it. A number the caller typed always wins, and it
     # does not move the counter.
     number = data.number
+    number_source = None
     if number:
         await _assert_project_number_free(db, number)
+    elif folder is not None and folder.number:
+        # The order was filed under the folder's number long before it became a
+        # project, so the project carries that number and the project counter
+        # does not move.
+        number = folder.number
+        number_source = "folder"
+        if await project_number_taken(db, number):
+            # Another project already holds it. Falling back keeps the create,
+            # which matters more than the identity: an order that cannot be
+            # turned into a project is worse than one filed under a second
+            # number, and the response says which happened.
+            logger.warning(
+                "Folder %d carries number %r, which is already on another project — "
+                "the new project takes a fresh number from the project series",
+                folder.id,
+                number,
+            )
+            number = await _allocate_project_number(db)
+            number_source = "series"
     else:
         number = await _allocate_project_number(db)
 
@@ -622,6 +645,11 @@ async def create_project(
     )
     db.add(project)
     await _flush_project_number(db, number)
+    if folder is not None:
+        # The folder the order lived in becomes the project's folder; its own
+        # number stays where it is, so the two read the same either way.
+        folder.project_id = project.id
+        await db.flush()
     await db.refresh(project)
 
     stats = await compute_project_stats(db, project.id, project.target_count, project.target_parts_count)
@@ -630,6 +658,7 @@ async def create_project(
         id=project.id,
         name=project.name,
         number=project.number,
+        number_source=number_source,
         description=project.description,
         color=project.color,
         status=project.status,
@@ -2147,6 +2176,10 @@ async def import_project(
         if existing_folder:
             # Link existing folder to project
             existing_folder.project_id = project.id
+            # An import that lands on an order folder that already carries a
+            # number is the same handover as any other: the project takes it
+            # unless it has one already.
+            await inherit_folder_number(db, project, existing_folder)
         else:
             # Create new folder linked to project
             new_folder = LibraryFolder(
@@ -2288,6 +2321,9 @@ async def import_project_file(
             # Link existing folder to project
             existing_folder.project_id = project.id
             folder = existing_folder
+            # Same handover as the JSON import above: an order folder that
+            # already has a number hands it to the project it now belongs to.
+            await inherit_folder_number(db, project, existing_folder)
         else:
             # Create new folder
             folder = LibraryFolder(

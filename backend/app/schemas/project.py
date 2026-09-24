@@ -50,6 +50,11 @@ class ProjectCreate(BaseModel):
     budget: float | None = None
     parent_id: int | None = None  # For sub-projects
     url: str | None = None
+    # The order folder this project comes out of. The project inherits that
+    # folder's number instead of drawing one from the project series — the
+    # enquiry was already filed under it — and the folder is linked to the new
+    # project. A number the caller typed still wins over both.
+    library_folder_id: int | None = None
 
     @field_validator("url")
     @classmethod
@@ -144,6 +149,11 @@ class ProjectResponse(BaseModel):
     id: int
     name: str
     number: str | None = None  # Running number from the `project` series
+    # Where a project created from an order folder got its number: "folder"
+    # when it inherited the folder's, "series" when that number was already on
+    # another project and the project series had to step in. Only a create from
+    # a folder sets it; every other response leaves it None.
+    number_source: str | None = None
     description: str | None
     color: str | None
     status: str

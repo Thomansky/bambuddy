@@ -9,10 +9,10 @@ from backend.app.core.database import Base
 class NumberSeries(Base):
     """A named running counter whose next value is handed out on create.
 
-    One row per thing that carries a number (``project``, ``queue_job``), so a
-    fork or an install can add its own without a schema change. Both rows are
-    seeded disabled: an existing install keeps behaving exactly as before until
-    someone turns a series on.
+    One row per thing that carries a number (``project``, ``queue_job``,
+    ``library_folder``), so a fork or an install can add its own without a
+    schema change. Every row is seeded disabled: an existing install keeps
+    behaving exactly as before until someone turns a series on.
     """
 
     __tablename__ = "number_series"
