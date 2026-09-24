@@ -30,6 +30,7 @@ from __future__ import annotations
 import base64
 import binascii
 import contextlib
+import errno
 import mimetypes
 import os
 import shutil
@@ -546,6 +547,39 @@ def _split_path(dav_path: str) -> list[str]:
     return [segment for segment in dav_path.split("/") if segment]
 
 
+def _match_child(children: Sequence[_Entry], name: str) -> _Entry | None:
+    """The child a path segment names, matched the way the client matches it.
+
+    Exactly first, then case-insensitively. Windows is case-insensitive and
+    Explorer decides from its own listing: it compares the name it is about to
+    write against what PROPFIND returned, offers "replace the file in the
+    destination?" — and then writes using the *source* file's spelling. A
+    case-sensitive lookup turns that confirmed replace into a second row,
+    leaving one folder holding two names Windows cannot tell apart.
+
+    An ambiguous fold matches nothing. Only a library that already held
+    ``part.3mf`` and ``PART.3MF`` can produce one, and picking either of them
+    for a write would be a guess about which file the client meant.
+    """
+    for child in children:
+        if child.name == name:
+            return child
+    folded = name.casefold()
+    matches = [child for child in children if child.name.casefold() == folded]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _is_same_entry(left: _Entry | None, right: _Entry | None) -> bool:
+    """Whether two entries are the same row, reached under two spellings."""
+    if left is None or right is None:
+        return False
+    if left.file is not None and right.file is not None:
+        return left.file.id == right.file.id
+    if left.folder is not None and right.folder is not None:
+        return left.folder.id == right.folder.id
+    return False
+
+
 async def _resolve(db: AsyncSession, segments: Sequence[str], principal: _Principal) -> _Entry:
     """Walk the projection from the root to *segments*, or raise 404.
 
@@ -560,7 +594,7 @@ async def _resolve(db: AsyncSession, segments: Sequence[str], principal: _Princi
     for segment in segments:
         if not entry.is_collection:
             raise _not_found()
-        match = next((child for child in await _children(db, entry, principal) if child.name == segment), None)
+        match = _match_child(await _children(db, entry, principal), segment)
         if match is None:
             raise _not_found()
         entry = match
@@ -787,6 +821,43 @@ def _require_ownership(user: User, file: LibraryFile, all_permission: Permission
     raise _forbidden(f"Missing permission: {all_permission.value}")
 
 
+def _require_update(user: User, file: LibraryFile) -> None:
+    """The permission a write onto an existing row needs.
+
+    Normally the update pair, the same one the REST route asks for. The one
+    exception is a row this caller created and never filled: because Windows
+    creates the file empty and sends the bytes in a *second* request, the back
+    half of a single save always looks like an update of a row that exists only
+    because its front half made it. A group holding ``library:upload`` and no
+    update permission — "may add files, may not change the ones already there",
+    which the REST upload serves in one request — could otherwise never finish
+    a save over the share, and would be left with a 0-byte row it has no
+    permission to remove either.
+    """
+    if (
+        file.ingest_pending
+        and file.file_hash is None
+        and file.created_by_id is not None
+        and file.created_by_id == user.id
+        and user.has_permission(Permission.LIBRARY_UPLOAD.value)
+    ):
+        return
+    _require_ownership(user, file, Permission.LIBRARY_UPDATE_ALL, Permission.LIBRARY_UPDATE_OWN)
+
+
+def _require_delete(user: User, file: LibraryFile) -> None:
+    """The permission for a write that ends a row's existence.
+
+    The same rule ``webdav_delete`` applies, asked wherever a row is destroyed
+    rather than only where the method is called DELETE.
+    """
+    if user.has_permission(Permission.LIBRARY_DELETE_ALL.value):
+        return
+    _require_permission(user, Permission.LIBRARY_DELETE_OWN)
+    if file.created_by_id is None or file.created_by_id != user.id:
+        raise _forbidden(f"Missing permission: {Permission.LIBRARY_DELETE_ALL.value}")
+
+
 def _check_no_traversal(segments: Sequence[str]) -> None:
     """Refuse a path with a ``..`` or a separator anywhere in it.
 
@@ -852,7 +923,7 @@ async def _resolve_target(
         raise HTTPException(status_code=409, detail="The parent of that path is a file")
 
     name = segments[-1]
-    entry = next((child for child in await _children(db, parent, principal) if child.name == name), None)
+    entry = _match_child(await _children(db, parent, principal), name)
     if entry is None and validate_name:
         _check_new_name(name)
     return _Target(parent=parent, name=name, entry=entry)
@@ -981,6 +1052,36 @@ async def _discard_body(request: Request) -> None:
         pass
 
 
+def _write_failed(exc: OSError) -> HTTPException:
+    """The answer for a filesystem that refused a write once it had started.
+
+    A 500 is the wrong one for every case here: the caller can act on "the
+    share went read-only" and on "the disk is full", and neither is a bug in
+    the server.
+    """
+    if isinstance(exc, PermissionError):
+        return _forbidden("The folder this file belongs to is not writable")
+    if exc.errno in (errno.ENOSPC, errno.EDQUOT):
+        return HTTPException(status_code=507, detail="The storage behind this share is full")
+    return HTTPException(status_code=409, detail=f"The file could not be written: {exc.strerror or exc}")
+
+
+def _require_writable_dir(directory: Path) -> None:
+    """Ask the filesystem, not only the database, whether a write can land here.
+
+    ``external_readonly`` is a flag somebody set once; the mount it describes
+    can be remounted read-only or lose its credentials afterwards, which is how
+    a share in a farm usually becomes read-only. The create path asks through
+    ``_resolve_upload_destination``, so an overwrite has to ask too — otherwise
+    saving over a file answers 500 from the ``open()`` a moment later while
+    creating one in the same folder answers a clean 400.
+    """
+    if not directory.is_dir():
+        raise HTTPException(status_code=409, detail="The folder this file belongs to is not accessible")
+    if not os.access(directory, os.W_OK):
+        raise _forbidden("The folder this file belongs to is not writable")
+
+
 async def _stream_to_temp(request: Request, directory: Path) -> tuple[Path, int]:
     """Stream the body into a scratch file beside its destination.
 
@@ -994,17 +1095,19 @@ async def _stream_to_temp(request: Request, directory: Path) -> tuple[Path, int]
     on the local disk where an unmounted share used to be, and a write that
     lands under a dead mount point is worse than one that fails.
     """
-    if not directory.is_dir():
-        raise HTTPException(status_code=409, detail="The folder this file belongs to is not accessible")
+    _require_writable_dir(directory)
     temp = directory / f".bambuddy-dav-{uuid.uuid4().hex}.part"
     written = 0
     try:
-        with open(temp, "wb") as handle:
-            async for chunk in request.stream():
-                written += len(chunk)
-                if written > MAX_PUT_BYTES:
-                    raise _too_large()
-                handle.write(chunk)
+        try:
+            with open(temp, "wb") as handle:
+                async for chunk in request.stream():
+                    written += len(chunk)
+                    if written > MAX_PUT_BYTES:
+                        raise _too_large()
+                    handle.write(chunk)
+        except OSError as exc:
+            raise _write_failed(exc) from None
     except BaseException:
         with contextlib.suppress(OSError):
             temp.unlink(missing_ok=True)
@@ -1016,15 +1119,52 @@ def _move_into_place(temp: Path, destination: Path) -> None:
     """Put a finished scratch file where it belongs, replacing what is there.
 
     ``os.replace`` is atomic and overwrites on both platforms, so a reader
-    never sees a half-written file; the fallback is for the one case it cannot
-    serve, a destination on another filesystem.
+    never sees a half-written file. The fallback is for the one case it cannot
+    serve — a destination on another filesystem, which is every managed-to-
+    external move, since the blob lives under ``DATA_DIR`` and the share does
+    not — and it has to keep the same promise. So it copies to a scratch file
+    beside the destination and renames that into place: copying straight onto
+    the destination truncates it at ``open()``, and a mount that drops halfway
+    through would leave somebody's file cut in half with nothing to restore it
+    from and a row still describing the bytes that used to be there.
     """
     try:
         os.replace(temp, destination)
+        return
     except OSError:
-        shutil.copy2(temp, destination)
+        pass
+    scratch = destination.parent / f".bambuddy-dav-{uuid.uuid4().hex}.part"
+    try:
+        shutil.copy2(temp, scratch)
+        os.replace(scratch, destination)
+    except OSError as exc:
         with contextlib.suppress(OSError):
-            temp.unlink(missing_ok=True)
+            scratch.unlink(missing_ok=True)
+        raise _write_failed(exc) from None
+    with contextlib.suppress(OSError):
+        temp.unlink(missing_ok=True)
+
+
+def _copy_into_place(source: Path, destination: Path) -> None:
+    """Copy *source* to *destination* without ever truncating what is there.
+
+    A COPY onto an existing name replaces a file that stays live until the copy
+    finishes, so the bytes land beside it and are renamed over it — the same
+    promise ``_move_into_place`` makes, for the same reason.
+    """
+    _require_writable_dir(destination.parent)
+    scratch = destination.parent / f".bambuddy-dav-{uuid.uuid4().hex}.part"
+    try:
+        shutil.copy2(source, scratch)
+        _move_into_place(scratch, destination)
+    except OSError as exc:
+        with contextlib.suppress(OSError):
+            scratch.unlink(missing_ok=True)
+        raise _write_failed(exc) from None
+    except HTTPException:
+        with contextlib.suppress(OSError):
+            scratch.unlink(missing_ok=True)
+        raise
 
 
 def _replacement_destination(file: LibraryFile) -> Path:
@@ -1079,13 +1219,46 @@ def _blob_destination(name: str) -> Path:
     return get_library_files_dir() / f"{uuid.uuid4().hex}{os.path.splitext(name)[1].lower()}"
 
 
+async def _is_unclaimed_name(db: AsyncSession, folder: LibraryFolder | None, name: str) -> bool:
+    """Whether a name in an external folder belongs to no library row at all.
+
+    Deleting an external file removes its row and leaves the bytes on the share
+    — the File Manager's own rule, and the reason the next scan finds the file
+    again. In between, the name is absent from every listing while the
+    directory still holds it, so re-saving the name you just deleted was told
+    that a file exists which nothing shows. A PUT says "these bytes, at this
+    path", so the file on the share is replaced and the row comes back.
+
+    Deliberately not filtered by what the caller may see, and deliberately
+    counting trashed rows too: a file somebody else owns is missing from *this*
+    listing, and overwriting it because it is invisible from here is the exact
+    mistake this question exists to prevent.
+    """
+    if folder is None or not folder.is_external:
+        return False
+    claimed = await db.scalar(
+        select(func.count(LibraryFile.id)).where(
+            LibraryFile.folder_id == folder.id,
+            func.lower(LibraryFile.filename) == name.lower(),
+        )
+    )
+    return not claimed
+
+
 async def _forget_row(db: AsyncSession, file: LibraryFile) -> None:
     """Drop a row whose bytes have moved to another row, without touching disk.
 
-    Not the trash: the row is the source side of a rename, and a client that
-    renamed ``foo.tmp`` onto ``foo.3mf`` has not asked for a ``foo.tmp`` in the
-    trash. The same dependent cleanup the delete routes do, because a queue
-    entry pointing at a row that no longer exists is a 500 waiting to happen.
+    Not the trash, and it cannot be: the bytes this row used to name belong to
+    the row that replaced it now, and for a managed rename they are the very
+    same blob. A trashed row pointing at a live file is a file the sweeper
+    deletes out from under the row that is still using it — worse than the
+    thing the trash is for. A client that renamed ``foo.tmp`` onto ``foo.3mf``
+    has not asked for a ``foo.tmp`` in the trash either.
+
+    So this destroys a row, and the caller has to have established that the
+    user may destroy one (``_require_delete``). The same dependent cleanup the
+    delete routes do, because a queue entry pointing at a row that no longer
+    exists is a 500 waiting to happen.
     """
     from backend.app.services.library_trash import delete_dependent_variants, release_queue_references
     from backend.app.utils.library_paths import remove_library_photos_dir
@@ -1153,10 +1326,12 @@ async def webdav_put(
         _refuse_readonly(folder)
         # The upload route's own resolver: it picks the managed blob or the
         # real path on the mount, and refuses a read-only or unreachable one.
-        destination, is_external = _resolve_upload_destination(folder, target.name)
+        destination, is_external = _resolve_upload_destination(
+            folder, target.name, allow_existing=await _is_unclaimed_name(db, folder, target.name)
+        )
     else:
         folder = target.parent.folder
-        _require_ownership(principal.user, existing, Permission.LIBRARY_UPDATE_ALL, Permission.LIBRARY_UPDATE_OWN)
+        _require_update(principal.user, existing)
         _refuse_readonly_row(existing, folder)
         destination = _replacement_destination(existing)
         is_external = existing.is_external
@@ -1168,7 +1343,12 @@ async def webdav_put(
             temp.unlink(missing_ok=True)
         return Response(status_code=204)
 
-    _move_into_place(temp, destination)
+    try:
+        _move_into_place(temp, destination)
+    except HTTPException:
+        with contextlib.suppress(OSError):
+            temp.unlink(missing_ok=True)
+        raise
 
     if existing is not None:
         existing.file_path = _stored_file_path(destination, is_external)
@@ -1351,8 +1531,17 @@ async def _resolve_transfer(
     db: AsyncSession,
     dav_path: str,
     principal: _Principal,
+    *,
+    fold_is_rename: bool,
 ) -> tuple[_Target, _Target]:
-    """The (source, destination) pair a MOVE or COPY names, both validated."""
+    """The (source, destination) pair a MOVE or COPY names, both validated.
+
+    ``fold_is_rename`` says what a destination that folds onto the source
+    itself means — the two spellings of one case-insensitive name. For a MOVE
+    it is a rename in place, of a file or of a folder. For a COPY it is the
+    same path twice, and answering it would put two names in one folder that
+    the client which sent them cannot tell apart.
+    """
     source = await _resolve_target(db, _split_path(dav_path), principal, validate_name=False)
     if source.entry is None:
         raise _not_found()
@@ -1365,6 +1554,15 @@ async def _resolve_transfer(
         # The name is one the share drops on the floor, so landing a real file
         # on it would delete the file while answering success.
         raise _forbidden(f"{destination.name!r} is a name this share does not store")
+
+    if _is_same_entry(source.entry, destination.entry):
+        if not fold_is_rename:
+            raise _forbidden("The source and the destination are the same path")
+        # Neither a replace — which would hand the row its own bytes and then
+        # delete it — nor "that name is taken", which is what the collection
+        # check below would have called it.
+        _check_new_name(destination.name)
+        destination = _Target(parent=destination.parent, name=destination.name, entry=None)
 
     if destination.entry is not None:
         if not _overwrite_allowed(request):
@@ -1395,7 +1593,7 @@ async def webdav_move(
     the content, and the source row goes away.
     """
     _refuse_unless_writable(principal)
-    source, destination = await _resolve_transfer(request, db, dav_path, principal)
+    source, destination = await _resolve_transfer(request, db, dav_path, principal, fold_is_rename=True)
     created = destination.entry is None
 
     if source.entry.is_collection:
@@ -1410,6 +1608,12 @@ async def webdav_move(
     _refuse_readonly(target_folder)
     replaced = destination.entry.file if destination.entry is not None else None
     if replaced is not None:
+        # The destination row keeps its identity and takes the content, so it
+        # is the *source* row that stops existing. Ending a row is the delete
+        # permission's business whatever the method is called: without this a
+        # role that may edit but not delete could destroy one by renaming it
+        # onto a name that is already taken.
+        _require_delete(principal.user, file)
         _require_ownership(principal.user, replaced, Permission.LIBRARY_UPDATE_ALL, Permission.LIBRARY_UPDATE_OWN)
         _refuse_readonly_row(replaced, destination.parent.folder)
 
@@ -1422,7 +1626,13 @@ async def webdav_move(
 
     target_is_external = target_folder is not None and target_folder.is_external
     if target_is_external:
-        new_path = safe_join_under(_external_directory(target_folder), destination.name)
+        # The row that ends up here is the one that names the file on the
+        # share, and a replaced row keeps its own filename — writing the
+        # destination's spelling instead would leave the share holding a name
+        # no row claims, for the next scan to adopt as a second file.
+        new_path = safe_join_under(
+            _external_directory(target_folder), replaced.filename if replaced is not None else destination.name
+        )
         if new_path.exists() and new_path != source_path and replaced is None:
             # Something is on the share that the library does not know about.
             # Overwriting it would destroy a file nobody asked about.
@@ -1454,7 +1664,12 @@ async def webdav_move(
         file.folder_id = target_folder.id if target_folder is not None else None
         file.is_external = target_is_external
         file.file_path = _stored_file_path(new_path, target_is_external)
-        if file.ingest_pending or renamed:
+        # The third case is a scanned external file pulled into managed
+        # storage under the same name: the scan stores no hash, and without
+        # one the file it has just become can never match a duplicate. The
+        # REST bulk move computes it at the same boundary and for the same
+        # reason.
+        if file.ingest_pending or renamed or (file.file_hash is None and not target_is_external):
             _adopt_content(file, new_path)
 
     await db.commit()
@@ -1523,7 +1738,7 @@ async def webdav_copy(
     round anyway, with a MKCOL and one PUT per file.
     """
     _refuse_unless_writable(principal)
-    source, destination = await _resolve_transfer(request, db, dav_path, principal)
+    source, destination = await _resolve_transfer(request, db, dav_path, principal, fold_is_rename=False)
     if source.entry.is_collection:
         raise _forbidden("Copy the files; a folder is copied by creating it and copying into it")
 
@@ -1550,10 +1765,7 @@ async def webdav_copy(
     else:
         new_path, is_external = _resolve_upload_destination(target_folder, destination.name)
 
-    try:
-        shutil.copy2(source_path, new_path)
-    except OSError as exc:
-        raise HTTPException(status_code=409, detail=f"Could not copy the file: {exc}") from None
+    _copy_into_place(source_path, new_path)
 
     if replaced is not None:
         replaced.file_path = _stored_file_path(new_path, is_external)

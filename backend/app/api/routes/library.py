@@ -307,7 +307,9 @@ def validate_print_file_upload(filename: str, content: bytes) -> None:
         )
 
 
-def _resolve_upload_destination(target_folder: LibraryFolder | None, filename: str) -> tuple[Path, bool]:
+def _resolve_upload_destination(
+    target_folder: LibraryFolder | None, filename: str, *, allow_existing: bool = False
+) -> tuple[Path, bool]:
     """Resolve the on-disk destination for an uploaded file.
 
     Non-external target: returns ``(<library_files_dir>/<uuid><ext>, False)``.
@@ -318,6 +320,11 @@ def _resolve_upload_destination(target_folder: LibraryFolder | None, filename: s
     filename collisions on the external mount (409). See #1112 — previously
     uploads to writable external folders were silently misrouted to the
     internal library dir.
+
+    ``allow_existing`` drops that last refusal, for a caller that has already
+    established the name belongs to no library row — a WebDAV PUT replacing a
+    file left on the share by a delete that only removed the row. An upload
+    from the browser never sets it: there the collision is news to the user.
     """
     if target_folder is not None and target_folder.is_external:
         if target_folder.external_readonly:
@@ -342,7 +349,7 @@ def _resolve_upload_destination(target_folder: LibraryFolder | None, filename: s
             dest.relative_to(ext_dir.resolve())
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid filename")
-        if dest.exists():
+        if dest.exists() and not allow_existing:
             raise HTTPException(
                 status_code=409,
                 detail=f"A file named {filename!r} already exists in the external folder",
