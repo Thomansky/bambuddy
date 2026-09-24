@@ -5365,6 +5365,37 @@ async def run_migrations(conn):
     else:
         await _safe_execute(conn, "ALTER TABLE spool ADD COLUMN cost_vat_included BOOLEAN NOT NULL DEFAULT TRUE")
 
+    # Migration: what the File Manager root shows became a three-way choice
+    # (all / folders / recent), so the boolean ``library_root_lists_all_files``
+    # gives way to the string ``library_root_view``. The old row is read once,
+    # mapped and dropped; the new key is the only source from here on. The test
+    # is the one the old settings response used -- ``value.lower() == "true"``
+    # -- so an install whose row holds anything else (the literal "None" an
+    # explicit null stored, say) keeps the root it was actually showing.
+    async with conn.begin_nested():
+        _root_view_row = (
+            await conn.execute(
+                text("SELECT value FROM settings WHERE key = :k"),
+                {"k": "library_root_lists_all_files"},
+            )
+        ).fetchone()
+        if _root_view_row is not None:
+            _root_view = "all" if str(_root_view_row[0]).strip().lower() == "true" else "folders"
+            if is_sqlite():
+                await conn.execute(
+                    text("INSERT OR IGNORE INTO settings (key, value) VALUES (:k, :v)"),
+                    {"k": "library_root_view", "v": _root_view},
+                )
+            else:
+                await conn.execute(
+                    text("INSERT INTO settings (key, value) VALUES (:k, :v) ON CONFLICT (key) DO NOTHING"),
+                    {"k": "library_root_view", "v": _root_view},
+                )
+            await conn.execute(
+                text("DELETE FROM settings WHERE key = :k"),
+                {"k": "library_root_lists_all_files"},
+            )
+
     # Migration: repair the tare of spools the RFID auto-add gave the wrong
     # Bambu spool row (#2909). Runs last so the spool catalogue it reads is
     # whatever this database actually holds.

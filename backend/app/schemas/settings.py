@@ -1,10 +1,32 @@
 import json
 import re
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, BeforeValidator, Field, ValidationInfo, field_validator
 
 from backend.app.schemas.print_queue import TriState
 from backend.app.utils.printer_models import MAX_CHAMBER_TEMP_C
+
+LIBRARY_ROOT_VIEWS = ("all", "folders", "recent")
+
+
+def _coerce_library_root_view(value: object) -> object:
+    """Read any stored ``library_root_view`` as one of the three views.
+
+    The settings table holds strings and the update path writes the literal
+    "None" for an explicit null, so an unrecognised row would fail validation
+    and take the *whole* settings response with it (#2905). Falling back to the
+    default keeps that one endpoint alive.
+    """
+    if isinstance(value, str) and value.strip().lower() in LIBRARY_ROOT_VIEWS:
+        return value.strip().lower()
+    return "all"
+
+
+LibraryRootView = Annotated[
+    Literal["all", "folders", "recent"],
+    BeforeValidator(_coerce_library_root_view),
+]
 
 # Outbound service URLs validated on save, so a bad value is rejected at
 # configuration time with a clear message rather than failing opaquely at
@@ -298,12 +320,13 @@ class AppSettings(BaseModel):
         default=5.0,
         description="Show warning when free disk space falls below this threshold (GB)",
     )
-    library_root_lists_all_files: bool = Field(
-        default=True,
+    library_root_view: LibraryRootView = Field(
+        default="all",
         description=(
-            "File Manager root ('All Files'): list every file in the library. "
-            "When false the root shows its top-level folders instead, plus an "
-            "entry for the files that belong to no folder"
+            "What the File Manager root ('All Files') shows: 'all' lists every "
+            "file in the library, 'folders' only its top-level folders plus an "
+            "entry for the files that belong to no folder, and 'recent' the "
+            "files most recently added or changed"
         ),
     )
 
@@ -807,7 +830,7 @@ class AppSettingsUpdate(BaseModel):
     ha_token: str | None = None
     library_archive_mode: str | None = None
     library_disk_warning_gb: float | None = None
-    library_root_lists_all_files: bool | None = None
+    library_root_view: Literal["all", "folders", "recent"] | None = None
     camera_view_mode: str | None = None
     preferred_slicer: str | None = None
     open_in_slicer: str | None = None
