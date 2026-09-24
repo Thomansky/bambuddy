@@ -147,6 +147,7 @@ from backend.app.services.spoolman_tracking import (
 )
 from backend.app.services.tasmota import tasmota_service
 from backend.app.utils.ams_drying import is_drying_active, temperature_alarm_suppressed
+from backend.app.utils.ams_humidity import ams_humidity_percent
 from backend.app.utils.filament_types import printer_filament_type
 from backend.app.utils.fts_routing import extruder_for_inlet
 from backend.app.utils.local_time import utcnow_naive
@@ -2022,6 +2023,7 @@ async def on_ams_change(printer_id: int, ams_data: list):
             from backend.app.api.routes.inventory import _find_tray_in_ams_data
             from backend.app.models.spool import Spool as _Spool
             from backend.app.models.spool_assignment import SpoolAssignment as SA
+            from backend.app.services.ams_slot_presence import spool_present
             from backend.app.services.inventory_mode import spoolman_owns_assignments
 
             # Built-in assignments only. Since #2812 they survive a switch to
@@ -2138,7 +2140,18 @@ async def on_ams_change(printer_id: int, ams_data: list):
                     # (#1322). The state ∉ {9,10} guard keeps the firmware's
                     # explicit "empty" signals authoritative over any stale
                     # tray_type that might survive the relay's auto-clearing.
-                    loaded = cur_state == 11 or (cur_state not in (9, 10) and cur_type.strip())
+                    #
+                    # tray_exist_bits comes first because that guard cannot tell
+                    # a firmware "empty" from Bambuddy's own: apply_tray_exist_bits
+                    # writes state=9 when the bit is 0 and leaves it there when the
+                    # bit returns. A non-RFID spool inserted into a pre-assigned
+                    # slot brings no tray_type with it, so the stale 9 made this
+                    # expression false forever and the deferred config never fired
+                    # — the deadlock #1322 removed from the assign path, still in
+                    # place here (#3084, #3100).
+                    loaded = spool_present(current_tray) is True or (
+                        cur_state == 11 or (cur_state not in (9, 10) and cur_type.strip())
+                    )
                     if not fp_type.strip() and loaded and assignment.spool:
                         try:
                             from backend.app.api.routes.inventory import (
@@ -2183,6 +2196,23 @@ async def on_ams_change(printer_id: int, ams_data: list):
                             logger.info(
                                 "Auto-unlink skipped: spool %d AMS%d-T%d — tray data cleared during a running print "
                                 "(runout?)",
+                                assignment.spool_id,
+                                assignment.ams_id,
+                                assignment.tray_id,
+                            )
+                            continue
+                        # Same reasoning off the print, on firmware's own say-so:
+                        # a blank tray report from a slot whose tray_exist_bits
+                        # bit is set describes a spool the AMS cannot identify —
+                        # a non-RFID one, or one whose slot was reset — not a
+                        # spool that was taken out. Deleting the assignment there
+                        # threw away the identity the user had supplied, which is
+                        # the only place it existed (#3100). A slot the bit calls
+                        # empty, or one that carries no bit at all, still unlinks.
+                        if spool_present(current_tray) is True and not cur_color.strip() and not cur_type.strip():
+                            logger.info(
+                                "Auto-unlink skipped: spool %d AMS%d-T%d — slot still occupied, "
+                                "tray reports no filament data yet",
                                 assignment.spool_id,
                                 assignment.ams_id,
                                 assignment.tray_id,
@@ -2594,6 +2624,7 @@ async def on_ams_change(printer_id: int, ams_data: list):
 
             from backend.app.models.spool_assignment import SpoolAssignment
             from backend.app.models.spoolman_slot_assignment import SpoolmanSlotAssignment
+            from backend.app.services.ams_slot_presence import spool_present
             from backend.app.services.inventory_mode import spoolman_owns_assignments
 
             # Built-in remaining weight, used by sync_ams_tray only when the
@@ -2662,7 +2693,16 @@ async def on_ams_change(printer_id: int, ams_data: list):
                         # completion (#1459), so deleting the row mid-print
                         # loses the runout segment's usage — the same failure
                         # the internal inventory's auto-unlink had.
-                        if not printing_now:
+                        #
+                        # Nor when firmware's presence bit says the slot is
+                        # occupied. parse_ams_tray calls a tray with no type or
+                        # no colour empty, and a spool the AMS cannot read has
+                        # neither until something configures it — so a tag-less
+                        # spool assigned through the UI had its row deleted by
+                        # the first idle push after it was inserted. Same
+                        # deletion as the internal inventory's in #3100, same
+                        # answer, so the two modes stay in step.
+                        if not printing_now and spool_present(tray_data) is not True:
                             empty_slots.append((ams_id, tray_id_raw))
                         _clear_unknown_tag_dedup(printer_id, ams_id, tray_id_raw)
                         continue
@@ -4224,6 +4264,15 @@ async def on_print_start(printer_id: int, data: dict):
         # transfer, not the file, is what failed, and that does not last (#3063).
         ftp_transfer_failed = False
 
+        # The print's name, for a fallback archive whose `subtask_name` the
+        # plate guard below had to disown. Display only, and deliberately kept
+        # apart from `subtask_name`: that variable is what every file lookup
+        # here is built from, and once a name has been shown to fetch another
+        # plate's 3MF it must not key `_active_prints` either, or the cover
+        # endpoint hands the same contradicted file to
+        # `_recover_fallback_archive` and fills the row in with it (#3126).
+        display_name_after_plate_reject: str | None = None
+
         # Get FTP retry settings
         ftp_retry_enabled, ftp_retry_count, ftp_retry_delay, ftp_timeout = await get_ftp_retry_settings()
 
@@ -4562,13 +4611,24 @@ async def on_print_start(printer_id: int, data: dict):
                     # so the row would be filled in with another plate's
                     # filament and cost, the exact swap #2957 removed (#3063).
                     ftp_transfer_failed = False
-                    # Override the stale subtask_name so the fallback archive's
-                    # print_name reflects the correct plate. Prefer the swapped
-                    # name when we have one; otherwise let filename win.
-                    if corrected_subtask:
-                        subtask_name = corrected_subtask
-                    else:
-                        subtask_name = ""
+                    # Disown the name for *lookups*: it has just been shown to
+                    # fetch another plate's 3MF, and it keys `_active_prints`
+                    # below, where the cover endpoint's own download of that
+                    # same name would find this archive and fill it in with the
+                    # file we are discarding here.
+                    #
+                    # Keep it for the *title*, which is a separate question.
+                    # ``swap_plate_suffix`` returns None both for a name that
+                    # carries no "- Plate N" / "_plate_N" suffix and for no
+                    # name at all, and those are not the same situation: a name
+                    # without a suffix holds no stale plate number to be wrong
+                    # about. Blanking both uses at once dropped the project
+                    # name too, and the row fell through to the gcode_file path
+                    # titled "plate_1" though the real name was in hand.
+                    # #1204's own premise is consecutive plates *of the same
+                    # model*, so the project part is right either way (#3126).
+                    display_name_after_plate_reject = corrected_subtask or subtask_name or None
+                    subtask_name = corrected_subtask or ""
 
         if not downloaded_filename or not temp_path:
             logger.warning("Could not find 3MF file for print: %s", filename or subtask_name)
@@ -4591,8 +4651,11 @@ async def on_print_start(printer_id: int, data: dict):
                 else:
                     no_3mf_reason = storage.reason
 
-                # Derive print name from subtask_name or filename
-                print_name = subtask_name or filename
+                # Derive print name from subtask_name or filename. The
+                # plate guard's disowned name comes second: it is a real name
+                # for a real print, and only the gcode_file path is left
+                # otherwise -- which titles the row "plate_1" (#3126).
+                print_name = subtask_name or display_name_after_plate_reject or filename
                 if print_name:
                     # Clean up the name (remove extensions, path parts)
                     print_name = print_name.split("/")[-1]
@@ -4639,7 +4702,7 @@ async def on_print_start(printer_id: int, data: dict):
                         # switch on a setting that is already on and would not
                         # have helped (#2780).
                         "no_3mf_reason": no_3mf_reason,
-                        "original_subtask": subtask_name,
+                        "original_subtask": subtask_name or display_name_after_plate_reject or "",
                         "_print_data": data,
                     },
                 )
@@ -7997,6 +8060,11 @@ _ams_cleanup_counter = 0  # Track recordings to trigger periodic cleanup
 # Track alarm cooldowns (printer_id:ams_id:type -> last_alarm_time)
 _ams_alarm_cooldown: dict[str, datetime] = {}
 AMS_ALARM_COOLDOWN_MINUTES = 60  # Don't send same alarm more than once per hour
+# (printer_id, ams_id) already reported as sending the drop index and no
+# percentage. Logged once each so a supported printer that turns out to do this
+# shows up in a support bundle rather than as a user wondering where the
+# humidity reading went -- see the note at the read site below (#3140).
+_ams_index_only_logged: set[tuple[int, int]] = set()
 
 
 def _resolve_temp_alarm_threshold(fair_threshold: float, raw_alarm_value: str | None) -> float:
@@ -8234,20 +8302,30 @@ async def record_ams_history():
                     for ams_data in raw_data["ams"]:
                         ams_id = int(ams_data.get("id", 0))
 
-                        # Get humidity (prefer humidity_raw)
-                        humidity_raw = ams_data.get("humidity_raw")
-                        humidity_idx = ams_data.get("humidity")
-                        humidity = None
-                        if humidity_raw is not None:
-                            try:
-                                humidity = float(humidity_raw)
-                            except (ValueError, TypeError):
-                                pass  # Skip unparseable humidity; will try fallback
-                        if humidity is None and humidity_idx is not None:
-                            try:
-                                humidity = float(humidity_idx)
-                            except (ValueError, TypeError):
-                                pass  # Skip unparseable humidity index value
+                        # Percentage only. The 1-5 index is inverted, so
+                        # charting it as a percentage drew the wettest units as
+                        # the driest (#3140); a unit that reports no percentage
+                        # leaves a gap in the chart instead. See
+                        # utils/ams_humidity.
+                        humidity = ams_humidity_percent(ams_data)
+
+                        # No supported printer is known to send the index
+                        # alone -- the report came from unsupported firmware,
+                        # and no install has been seen using the old fallback.
+                        # "Known" is doing work there, so say so once per unit:
+                        # the alternative is a silent blank card.
+                        if humidity is None and ams_data.get("humidity") is not None:
+                            unit_key = (printer.id, ams_id)
+                            if unit_key not in _ams_index_only_logged:
+                                _ams_index_only_logged.add(unit_key)
+                                logger.info(
+                                    "[%s] AMS %d reports the 1-5 humidity index but no usable humidity_raw "
+                                    "percentage. The index is inverted and is not shown as a percentage "
+                                    "(#3140), so this unit has no humidity reading, chart or alarm. "
+                                    "Please report this with the printer and AMS firmware versions.",
+                                    printer.name,
+                                    ams_id,
+                                )
 
                         # Get temperature
                         temperature = None
@@ -8267,7 +8345,12 @@ async def record_ams_history():
                             printer_id=printer.id,
                             ams_id=ams_id,
                             humidity=humidity,
-                            humidity_raw=float(humidity_raw) if humidity_raw else None,
+                            # Both columns hold the same reading now that the
+                            # index can no longer reach ``humidity``. Writing it
+                            # through the same value also stops a genuine 0%
+                            # from being stored as NULL, which the old truthiness
+                            # test did.
+                            humidity_raw=humidity,
                             temperature=temperature,
                         )
                         db.add(history)
@@ -9099,7 +9182,7 @@ async def lifespan(app: FastAPI):
     import httpx as _httpx
 
     from backend.app.services.bambu_cloud import set_shared_http_client
-    from backend.app.services.makerworld import (
+    from backend.app.services.model_providers.makerworld.service import (
         set_shared_http_client as set_shared_makerworld_http_client,
     )
     from backend.app.services.orca_cloud import (
