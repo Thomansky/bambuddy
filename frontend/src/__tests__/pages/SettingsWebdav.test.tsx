@@ -1,12 +1,16 @@
 /**
- * The WebDAV switch in the File Manager settings card (#3152).
+ * The three-way WebDAV setting in the File Manager settings card (#3152).
  *
- * The setting exposes a whole library over a second protocol, so the four
- * things an operator has to know before turning it on — that it is read-only,
- * that Basic credentials travel with every request so it belongs behind HTTPS,
- * that Windows will not send those credentials over plain HTTP until a registry
- * value is changed, and that a two-factor account cannot open the share at all
- * — are part of the contract, not decoration.
+ * The setting exposes a whole library over a second protocol, so what an
+ * operator has to know before turning it on — what each of the three modes
+ * actually allows, that Basic credentials travel with every request so it
+ * belongs behind HTTPS, that Windows will not send those credentials over plain
+ * HTTP until a registry value is changed, and that a two-factor account cannot
+ * open the share at all — is part of the contract, not decoration.
+ *
+ * The write mode adds one more: what a save from a mapped drive does to the
+ * library entry it lands on. "Read and write" is the option that can lose
+ * somebody's work, so it does not get to be the one with no explanation.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -27,13 +31,13 @@ const mockSettings = {
   library_archive_mode: 'ask',
   library_disk_warning_gb: 5,
   library_root_view: 'all',
-  webdav_enabled: false,
+  webdav_mode: 'off',
   check_updates: false,
   check_printer_firmware: false,
 };
 
-const TOGGLE_LABEL = 'WebDAV access (read-only)';
-const READ_ONLY_HINT = /Read-only: files can be opened and copied/;
+const READ_ONLY_HINT = /nothing done on the mapped drive changes the library/;
+const WRITE_HINT = /keeps the same library entry, with its tags and notes/;
 const WINDOWS_HINT = /BasicAuthLevel is set to 2/;
 const TWO_FACTOR_HINT = /two-factor authentication cannot open the share/;
 
@@ -66,26 +70,36 @@ describe('SettingsPage — WebDAV', () => {
     );
   });
 
-  it('offers the switch off, and says nothing about a share that is not served', async () => {
+  it('offers the three modes, off, and says nothing about a share that is not served', async () => {
     render(<SettingsPage />);
 
-    const toggle = await findToggle();
-    expect(toggle).not.toBeChecked();
-    expect(screen.queryByText(READ_ONLY_HINT)).not.toBeInTheDocument();
+    expect(await findOption('Off')).toBeChecked();
+    expect(await findOption('Read-only')).not.toBeChecked();
+    expect(await findOption('Read and write')).not.toBeChecked();
     expect(screen.queryByText(WINDOWS_HINT)).not.toBeInTheDocument();
     expect(screen.queryByText(TWO_FACTOR_HINT)).not.toBeInTheDocument();
   });
 
-  it('spells out read-only, HTTPS, the Windows registry gate and the 2FA limit once it is on', async () => {
+  it('spells out what each mode allows, whichever one is selected', async () => {
+    render(<SettingsPage />);
+    await findOption('Off');
+
+    // The choice itself has to be legible before it is made: "read and write"
+    // is the option that can lose work, and it is the reason the modes carry a
+    // line each rather than just a label.
+    expect(screen.getByText(READ_ONLY_HINT)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Saving, renaming, moving and deleting from the drive as well/)
+    ).toBeInTheDocument();
+  });
+
+  it('spells out HTTPS, the Windows registry gate and the 2FA limit once it is on', async () => {
     server.use(
-      http.get('/api/v1/settings/', () =>
-        HttpResponse.json({ ...mockSettings, webdav_enabled: true })
-      )
+      http.get('/api/v1/settings/', () => HttpResponse.json({ ...mockSettings, webdav_mode: 'read' }))
     );
     render(<SettingsPage />);
 
-    expect(await findToggle()).toBeChecked();
-    expect(screen.getByText(READ_ONLY_HINT)).toBeInTheDocument();
+    expect(await findOption('Read-only')).toBeChecked();
     expect(screen.getByText(WINDOWS_HINT)).toBeInTheDocument();
     // The address a client maps, and the two buckets it will find there.
     expect(screen.getByText(/\/webdav/)).toBeInTheDocument();
@@ -94,23 +108,45 @@ describe('SettingsPage — WebDAV', () => {
     // ...and an account that needs a second code cannot present one over Basic,
     // so the share refuses it rather than serving the library on a password.
     expect(screen.getByText(TWO_FACTOR_HINT)).toBeInTheDocument();
+    // A read-only share has nothing to say about overwriting.
+    expect(screen.queryByText(WRITE_HINT)).not.toBeInTheDocument();
   });
 
-  it('persists the switch — a setting missing from the save list never reaches the server', async () => {
+  it('says what a save from the drive does, but only in the writable mode', async () => {
+    server.use(
+      http.get('/api/v1/settings/', () =>
+        HttpResponse.json({ ...mockSettings, webdav_mode: 'readwrite' })
+      )
+    );
+    render(<SettingsPage />);
+
+    expect(await findOption('Read and write')).toBeChecked();
+    expect(screen.getByText(WRITE_HINT)).toBeInTheDocument();
+    expect(screen.getByText(/Deleting moves the file to the trash/)).toBeInTheDocument();
+  });
+
+  it('persists the mode — a setting missing from the save list never reaches the server', async () => {
     const user = userEvent.setup();
     render(<SettingsPage />);
 
-    await user.click(await findToggle());
+    // SettingsPage ignores edits for the first 100ms after its settings arrive
+    // (isInitialLoadRef), so a click inside that window never reaches the
+    // debounced save and the assertion below would be measuring the race
+    // rather than the save list.
+    expect(await findOption('Off')).toBeChecked();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    await user.click(await findOption('Read and write'));
 
     await waitFor(
       () => {
-        expect(saved.some((body) => body.webdav_enabled === true)).toBe(true);
+        expect(saved.some((body) => body.webdav_mode === 'readwrite')).toBe(true);
       },
       { timeout: 5000 }
     );
   });
 });
 
-function findToggle(): Promise<HTMLElement> {
-  return screen.findByRole('checkbox', { name: TOGGLE_LABEL });
+function findOption(name: string): Promise<HTMLElement> {
+  return screen.findByRole('radio', { name: new RegExp(name) });
 }
