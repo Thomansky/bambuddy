@@ -2435,6 +2435,8 @@ export default {
     rfidRereadDescription: 'Carretéis inseridos enquanto a impressora estava ocupada não são identificados pelo AMS. Com esta opção, a fila pede ao AMS que leia cada slot ocupado mas não identificado antes de o trabalho ser mapeado e iniciado — uma vez por trabalho, e o trabalho inicia independentemente do resultado.',
     rfidAfterPrintLabel: 'Ler carretéis AMS não identificados após uma impressão',
     rfidAfterPrintDescription: 'A mesma leitura na outra ponta: quando uma impressão termina a impressora está livre, o AMS pode movimentar filamento e nenhum trabalho espera pela resposta. Roda depois de cada impressão, concluída ou com falha. O AMS só consegue ler com nada carregado — as impressoras normalmente retraem o filamento ao terminar —, então uma que ainda tenha um carretel no bico fica para depois da próxima impressão. Para na hora se uma nova impressão começar e o desligamento automático espera a leitura terminar.',
+    rfidAfterPrintUnloadLabel: 'Descarregar antes de ler',
+    rfidAfterPrintUnloadDescription: 'Uma impressora que ainda tem filamento carregado quando a impressão termina não consegue ler nenhuma etiqueta: o AMS precisa movimentar filamento para alcançá-la. Com esta opção ligada, o filamento é primeiro retraído para o AMS e só então a leitura acontece. A impressora fica descarregada depois; a próxima impressão carrega o que precisar. Uma impressora que já retraiu o filamento, o caso habitual, nunca recebe um comando de descarga.',
     staggeredStart: 'Início escalonado',
     staggeredStartDescription: 'Tamanho de grupo e intervalo padrão ao escalonar inícios de lotes multi-impressora. Pode ser sobrescrito por lote no modal de impressão.',
     preheatTitle: 'Pré-aquecimento & Heat Soak',

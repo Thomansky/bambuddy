@@ -205,6 +205,7 @@ async def _build_settings_response(db: AsyncSession, is_api_key: bool = False) -
             "queue_shortest_first",
             "queue_rfid_reread_before_start",
             "ams_read_unidentified_after_print",
+            "ams_unload_before_after_print_read",
             # default_bed_levelling / default_flow_cali / default_nozzle_offset_cali
             # are tri-state strings (off/on/auto) — parsed via the raw-string else
             # branch; the TriState validator coerces legacy "true"/"false" rows.

@@ -321,6 +321,34 @@ class TestSettingsAPI:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    async def test_ams_unload_before_after_print_read_round_trips(self, async_client: AsyncClient):
+        """The unload qualifier, off by default.
+
+        Default false matters more here than for most toggles: on it makes the
+        printer retract filament, so an existing install must never find itself
+        doing that because a row was missing. Like its neighbour it is built
+        from a hand-maintained list of boolean keys, so a key left out of it
+        reads back as the raw string ``"true"`` and the switch never settles.
+        """
+        response = await async_client.get("/api/v1/settings/")
+        assert response.status_code == 200
+        assert response.json()["ams_unload_before_after_print_read"] is False
+
+        response = await async_client.put("/api/v1/settings/", json={"ams_unload_before_after_print_read": True})
+        assert response.status_code == 200
+        assert response.json()["ams_unload_before_after_print_read"] is True
+        # Turning the qualifier on must not turn the read it qualifies on.
+        assert response.json()["ams_read_unidentified_after_print"] is False
+
+        response = await async_client.get("/api/v1/settings/")
+        assert response.json()["ams_unload_before_after_print_read"] is True
+
+        response = await async_client.put("/api/v1/settings/", json={"ams_unload_before_after_print_read": False})
+        assert response.status_code == 200
+        assert (await async_client.get("/api/v1/settings/")).json()["ams_unload_before_after_print_read"] is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_update_notification_language(self, async_client: AsyncClient):
         """Verify notification language can be updated."""
         response = await async_client.put("/api/v1/settings/", json={"notification_language": "de"})

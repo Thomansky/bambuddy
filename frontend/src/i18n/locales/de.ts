@@ -2481,6 +2481,8 @@ export default {
     rfidRereadDescription: 'Spulen, die eingesetzt wurden, während der Drucker beschäftigt war, werden vom AMS nicht identifiziert. Mit dieser Option lässt die Warteschlange das AMS jeden belegten, aber nicht identifizierten Slot einlesen, bevor der Auftrag zugeordnet und gestartet wird – einmal pro Auftrag, und der Auftrag startet unabhängig vom Ergebnis.',
     rfidAfterPrintLabel: 'Nicht erkannte AMS-Spulen nach dem Druck lesen',
     rfidAfterPrintDescription: 'Dieselbe Abfrage am anderen Ende: Wenn ein Druck endet, ist der Drucker frei, das AMS kann Filament bewegen und kein Auftrag wartet auf die Antwort. Läuft nach jedem Druck, ob abgeschlossen oder fehlgeschlagen. Das AMS kann nur lesen, wenn nichts geladen ist – Drucker ziehen das Filament am Ende normalerweise zurück –, daher wird ein Drucker, in dessen Düse noch eine Spule steckt, erst nach dem nächsten Druck gelesen. Bricht sofort ab, wenn ein neuer Druck startet; die automatische Abschaltung wartet, bis die Abfrage fertig ist.',
+    rfidAfterPrintUnloadLabel: 'Vor dem Lesen entladen',
+    rfidAfterPrintUnloadDescription: 'Ein Drucker, in dem am Druckende noch Filament steckt, kann keinen Tag lesen – das AMS muss Filament bewegen, um an einen heranzukommen. Mit dieser Option wird das Filament zuerst ins AMS zurückgezogen und erst danach gelesen. Der Drucker bleibt danach entladen; der nächste Druck lädt, was er braucht. Ein Drucker, der bereits zurückgezogen hat – der Normalfall –, bekommt nie einen Entladebefehl.',
     staggeredStart: 'Versetzter Start',
     staggeredStartDescription: 'Standard-Gruppengröße und -Intervall beim Staffeln von Mehrdrucker-Batchstarts. Pro Batch im Druck-Dialog überschreibbar.',
     preheatTitle: 'Vorheizen & Heat Soak',
