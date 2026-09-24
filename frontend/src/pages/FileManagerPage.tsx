@@ -2217,6 +2217,30 @@ export function FileManagerPage() {
     return localStorage.getItem('library-sidebar-hidden') === 'true';
   });
 
+  // The folders of the current level are drawn twice on a wide screen: in the
+  // tree on the left and as tiles above the files. Which of the two you want is
+  // a matter of taste, so it is a switch rather than a rule — independent of
+  // the sidebar, because somebody may well want the tiles and no tree.
+  const [folderTilesHidden, setFolderTilesHidden] = useState(() => {
+    try {
+      return localStorage.getItem('library-folder-tiles-hidden') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const handleToggleFolderTiles = useCallback(() => {
+    setFolderTilesHidden((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('library-folder-tiles-hidden', String(next));
+      } catch {
+        // A browser that refuses storage still toggles, it just forgets.
+      }
+      return next;
+    });
+  }, []);
+
   // Handle sidebar resize
   useEffect(() => {
     if (!isResizing) return;
@@ -3022,7 +3046,11 @@ export function FileManagerPage() {
   // from the other side — it is defined as the files those very folders do
   // not hold, so showing them inside it would contradict its own crumb.
   const showFolderTiles =
-    visibleSubfolders.length > 0 && !searchQuery.trim() && selectedTagIds.length === 0 && !rootUnfolderedView;
+    !folderTilesHidden &&
+    visibleSubfolders.length > 0 &&
+    !searchQuery.trim() &&
+    selectedTagIds.length === 0 &&
+    !rootUnfolderedView;
 
   // "No folder" sits beside the root's folder tiles, and only when there is
   // something behind it. The count rides along on the stats the header already
@@ -3553,6 +3581,22 @@ export function FileManagerPage() {
               carries the state, so "pressed" means the sidebar is on screen —
               which in the columns view it is, whatever the stored preference
               says. The title still names the action the click performs. */}
+          {/* Only where there are tiles to hide: the columns view draws its
+              folders in its own panes, and a control that does nothing there
+              is worse than no control. */}
+          {viewMode !== 'columns' && (
+            <button
+              type="button"
+              onClick={handleToggleFolderTiles}
+              aria-pressed={!folderTilesHidden}
+              aria-label={t('fileManager.folderTilesToggle.label')}
+              title={folderTilesHidden ? t('fileManager.folderTilesToggle.show') : t('fileManager.folderTilesToggle.hide')}
+              data-testid="toggle-folder-tiles"
+              className="hidden lg:flex items-center p-2 rounded-lg bg-bambu-dark text-bambu-gray hover:text-white transition-colors"
+            >
+              <LayoutGrid className={`w-4 h-4 ${folderTilesHidden ? 'opacity-50' : ''}`} />
+            </button>
+          )}
           <button
             type="button"
             onClick={handleToggleSidebar}

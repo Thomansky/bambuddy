@@ -3941,6 +3941,11 @@ export default {
     folderSortByName: '이름순',
     folderSortByActivity: '최근 활동순',
     dragToResizeTooltip: '드래그하여 크기 조정, 더블클릭하여 초기화',
+    folderTilesToggle: {
+      label: '콘텐츠 영역의 폴더',
+      hide: '파일 위의 폴더 숨기기',
+      show: '파일 위에 폴더 표시',
+    },
     sidebarToggle: {
       label: '폴더 사이드바',
       hide: '폴더 사이드바 숨기기',

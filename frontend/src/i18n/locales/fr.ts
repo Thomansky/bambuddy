@@ -4120,6 +4120,11 @@ export default {
     folderSortByName: 'Par nom',
     folderSortByActivity: 'Par activité récente',
     dragToResizeTooltip: 'Glisser pour redimensionner, double-clic reset',
+    folderTilesToggle: {
+      label: 'Dossiers dans la zone de contenu',
+      hide: 'Masquer les dossiers au-dessus des fichiers',
+      show: 'Afficher les dossiers au-dessus des fichiers',
+    },
     sidebarToggle: {
       label: 'Volet des dossiers',
       hide: 'Masquer le volet des dossiers',

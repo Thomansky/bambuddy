@@ -4134,6 +4134,11 @@ export default {
     folderSortByName: 'Nach Name',
     folderSortByActivity: 'Nach letzter Aktivität',
     dragToResizeTooltip: 'Ziehen zum Ändern der Größe, Doppelklick zum Zurücksetzen',
+    folderTilesToggle: {
+      label: 'Ordner im Inhaltsbereich',
+      hide: 'Ordner über den Dateien ausblenden',
+      show: 'Ordner über den Dateien einblenden',
+    },
     sidebarToggle: {
       label: 'Ordnerleiste',
       hide: 'Ordnerleiste ausblenden',

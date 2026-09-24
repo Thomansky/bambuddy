@@ -4119,6 +4119,11 @@ export default {
     folderSortByName: '依名稱',
     folderSortByActivity: '依最近活動',
     dragToResizeTooltip: '拖曳調整大小，雙擊重設',
+    folderTilesToggle: {
+      label: '內容區域中的資料夾',
+      hide: '隱藏檔案上方的資料夾',
+      show: '顯示檔案上方的資料夾',
+    },
     sidebarToggle: {
       label: '資料夾側欄',
       hide: '隱藏資料夾側欄',

@@ -4159,6 +4159,11 @@ export default {
     folderSortByName: "За назвою",
     folderSortByActivity: "За останніми діями",
     dragToResizeTooltip: "Перетягніть, щоб змінити розмір, двічі клацніть, щоб скинути",
+    folderTilesToggle: {
+      label: 'Теки в області вмісту',
+      hide: 'Сховати теки над файлами',
+      show: 'Показати теки над файлами',
+    },
     sidebarToggle: {
       label: "Панель папок",
       hide: "Сховати панель папок",

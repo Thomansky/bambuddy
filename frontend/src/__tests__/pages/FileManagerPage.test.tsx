@@ -1576,6 +1576,28 @@ describe('FileManagerPage', () => {
       expect(toggle()).toHaveAttribute('aria-pressed', 'false');
     });
 
+    it('hides the folder tiles on its own, without touching the tree', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      // The same folder is drawn in the tree and as a tile; the tile is the
+      // one that is not inside the sidebar.
+      const tiles = () =>
+        screen
+          .queryAllByText('Functional Parts')
+          .filter((el) => !screen.getByTestId('folder-sidebar').contains(el));
+      await waitFor(() => expect(tiles().length).toBeGreaterThan(0));
+
+      await user.click(screen.getByTestId('toggle-folder-tiles'));
+
+      await waitFor(() => expect(tiles()).toHaveLength(0));
+      expect(setItemMock).toHaveBeenCalledWith('library-folder-tiles-hidden', 'true');
+      // The tree is a separate choice and must not move with it.
+      expect(screen.getByTestId('folder-sidebar')).toBeInTheDocument();
+      expect(within(screen.getByTestId('folder-sidebar')).getByText('Functional Parts')).toBeInTheDocument();
+    });
+
     it('works in the columns view too, where the tree is most redundant', async () => {
       const user = userEvent.setup();
       getItemMock.mockImplementation(storedHidden);

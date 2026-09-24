@@ -4120,6 +4120,11 @@ export default {
     folderSortByName: 'Per nome',
     folderSortByActivity: 'Per attività recente',
     dragToResizeTooltip: 'Trascina per ridimensionare, doppio clic per reset',
+    folderTilesToggle: {
+      label: 'Cartelle nell’area contenuti',
+      hide: 'Nascondi le cartelle sopra i file',
+      show: 'Mostra le cartelle sopra i file',
+    },
     sidebarToggle: {
       label: 'Barra delle cartelle',
       hide: 'Nascondi la barra delle cartelle',

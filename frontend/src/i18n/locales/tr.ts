@@ -4126,6 +4126,11 @@ export default {
     folderSortByName: 'Ada göre',
     folderSortByActivity: 'Son etkinliğe göre',
     dragToResizeTooltip: 'Yeniden boyutlandırmak için sürükleyin, sıfırlamak için çift tıklayın',
+    folderTilesToggle: {
+      label: 'İçerik alanındaki klasörler',
+      hide: 'Dosyaların üstündeki klasörleri gizle',
+      show: 'Dosyaların üstündeki klasörleri göster',
+    },
     sidebarToggle: {
       label: 'Klasör çubuğu',
       hide: 'Klasör çubuğunu gizle',

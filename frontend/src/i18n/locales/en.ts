@@ -4165,6 +4165,11 @@ export default {
     folderSortByName: 'By name',
     folderSortByActivity: 'By recent activity',
     dragToResizeTooltip: 'Drag to resize, double-click to reset',
+    folderTilesToggle: {
+      label: 'Folders in the content area',
+      hide: 'Hide the folders above the files',
+      show: 'Show the folders above the files',
+    },
     sidebarToggle: {
       label: 'Folder sidebar',
       hide: 'Hide folder sidebar',

@@ -4133,6 +4133,11 @@ export default {
     folderSortByName: '名前順',
     folderSortByActivity: '最終更新順',
     dragToResizeTooltip: 'ドラッグしてリサイズ、ダブルクリックでリセット',
+    folderTilesToggle: {
+      label: 'コンテンツ領域のフォルダー',
+      hide: 'ファイルの上のフォルダーを隠す',
+      show: 'ファイルの上にフォルダーを表示',
+    },
     sidebarToggle: {
       label: 'フォルダサイドバー',
       hide: 'フォルダサイドバーを隠す',

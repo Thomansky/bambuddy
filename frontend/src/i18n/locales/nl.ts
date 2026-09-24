@@ -4164,6 +4164,11 @@ export default {
     folderSortByName: 'Op naam',
     folderSortByActivity: 'Op recente activiteit',
     dragToResizeTooltip: 'Sleep om grootte te wijzigen, dubbelklik om te resetten',
+    folderTilesToggle: {
+      label: 'Mappen in het inhoudsgebied',
+      hide: 'Mappen boven de bestanden verbergen',
+      show: 'Mappen boven de bestanden tonen',
+    },
     sidebarToggle: {
       label: 'Mappenbalk',
       hide: 'Mappenbalk verbergen',

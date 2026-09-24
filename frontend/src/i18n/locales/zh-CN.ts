@@ -4119,6 +4119,11 @@ export default {
     folderSortByName: '按名称',
     folderSortByActivity: '按最近活动',
     dragToResizeTooltip: '拖动调整大小，双击重置',
+    folderTilesToggle: {
+      label: '内容区域中的文件夹',
+      hide: '隐藏文件上方的文件夹',
+      show: '显示文件上方的文件夹',
+    },
     sidebarToggle: {
       label: '文件夹侧栏',
       hide: '隐藏文件夹侧栏',

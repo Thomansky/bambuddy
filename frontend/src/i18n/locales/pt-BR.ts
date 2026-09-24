@@ -4119,6 +4119,11 @@ export default {
     folderSortByName: 'Por nome',
     folderSortByActivity: 'Por atividade recente',
     dragToResizeTooltip: 'Arraste para redimensionar, clique duas vezes para redefinir',
+    folderTilesToggle: {
+      label: 'Pastas na área de conteúdo',
+      hide: 'Ocultar as pastas acima dos arquivos',
+      show: 'Mostrar as pastas acima dos arquivos',
+    },
     sidebarToggle: {
       label: 'Barra de pastas',
       hide: 'Ocultar a barra de pastas',

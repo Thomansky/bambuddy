@@ -3933,6 +3933,11 @@ export default {
     folderSortByName: "По имени",
     folderSortByActivity: "По последней активности",
     dragToResizeTooltip: "Перетащите для изменения размера, двойной щелчок — сброс",
+    folderTilesToggle: {
+      label: 'Папки в области содержимого',
+      hide: 'Скрыть папки над файлами',
+      show: 'Показать папки над файлами',
+    },
     sidebarToggle: {
       label: "Панель папок",
       hide: "Скрыть панель папок",
