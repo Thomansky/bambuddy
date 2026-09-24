@@ -330,8 +330,12 @@ async def check_rate_limit(
     username: str,
     event_type: str = EventType.TWO_FA_ATTEMPT,
     max_attempts: int = MAX_2FA_ATTEMPTS,
-) -> None:
+) -> int:
     """Raise HTTP 429 if the user has exceeded the failed attempt limit.
+
+    Returns how many failures are still inside the window, so a caller that
+    authenticates on every single request — the WebDAV Basic gate — can skip
+    the ``clear_failed_attempts`` write when there is nothing to clear.
 
     The username is normalised to lower-case so case-variant attempts
     (which all resolve to the same user) share the same rate-limit bucket.
@@ -361,6 +365,7 @@ async def check_rate_limit(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many failed attempts. Please try again later.",
         )
+    return recent_count
 
 
 async def record_failed_attempt(db: AsyncSession, username: str, event_type: str = EventType.TWO_FA_ATTEMPT) -> None:

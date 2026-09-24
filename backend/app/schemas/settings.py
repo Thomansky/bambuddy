@@ -335,7 +335,8 @@ class AppSettings(BaseModel):
             "Expose the library read-only over WebDAV at /webdav. Off by default: "
             "it is a second protocol onto the same files, and it always requires "
             "HTTP Basic credentials, including on installs where the web UI runs "
-            "without authentication"
+            "without authentication. Accounts with two-factor authentication "
+            "cannot use it — Basic has nowhere to carry the second factor"
         ),
     )
 

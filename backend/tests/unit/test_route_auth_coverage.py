@@ -42,6 +42,7 @@ _AUTH_QUALNAME_PATTERNS: tuple[str, ...] = (
     "get_current_active_user",  # JWT identity resolution
     "get_api_key",  # webhook routes use this directly
     "verify_websocket_token",  # WebSocket route inline check (GHSA-r2qv I-WS)
+    "webdav_principal",  # /webdav (#3152): HTTP Basic, because no OS WebDAV client carries a Bearer token
 )
 
 # Routes that are intentionally accessible without an auth dependency.

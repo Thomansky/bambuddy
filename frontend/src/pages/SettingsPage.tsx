@@ -2800,6 +2800,7 @@ export function SettingsPage() {
                       {t('settings.webdavAddressHint', { url: `${window.location.origin}/webdav` })}
                     </p>
                     <p className="text-xs text-bambu-gray">{t('settings.webdavCredentialsHint')}</p>
+                    <p className="text-xs text-bambu-gray">{t('settings.webdavTwoFactorHint')}</p>
                     <p className="text-xs text-bambu-gray">{t('settings.webdavHttpsHint')}</p>
                     <p className="text-xs text-bambu-gray">{t('settings.webdavWindowsHint')}</p>
                   </div>

@@ -2925,6 +2925,7 @@ export default {
     webdavDescription: 'Dosya Yöneticisi ağacını WebDAV üzerinden yayınlar; bir iş istasyonu onu sürücü olarak bağlayabilir.',
     webdavAddressHint: '{{url}} adresini bağlayın. Paylaşımda yönetilen kitaplık için “Files”, kayıtlı harici klasör varsa “External” bulunur.',
     webdavCredentialsHint: 'Web arayüzü girişsiz çalışan kurulumlarda bile her zaman bir Bambuddy kullanıcı adı ve parolası ister; her kullanıcı yalnızca okuyabildiği dosyaları görür.',
+    webdavTwoFactorHint: 'İki faktörlü kimlik doğrulaması olan bir hesap paylaşımı açamaz, çünkü Basic kimlik doğrulaması ikinci kodu soramaz; yanlış parolalar web girişiyle aynı kilitlenmeye sayılır.',
     webdavHttpsHint: 'Salt okunur: dosyalar açılabilir ve kopyalanabilir, asla yazılamaz, yeniden adlandırılamaz veya silinemez. Basic kimlik bilgileri her istekle gittiği için HTTPS üzerinden yayınlayın.',
     webdavWindowsHint: 'Windows, HKLM\\SYSTEM\\CurrentControlSet\\Services\\WebClient\\Parameters\\BasicAuthLevel değeri 2 olana kadar düz HTTP üzerinde Basic kimlik doğrulamasını reddeder. HTTPS üzerinde olduğu gibi çalışır.',
     // Güncellemeler

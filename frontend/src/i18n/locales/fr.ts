@@ -2873,6 +2873,7 @@ export default {
     webdavDescription: 'Publier l’arborescence du gestionnaire de fichiers en WebDAV pour qu’un poste puisse la monter comme un lecteur.',
     webdavAddressHint: 'Connectez {{url}}. Le partage contient « Files » pour la bibliothèque gérée et, si des dossiers externes sont enregistrés, « External ».',
     webdavCredentialsHint: 'Il demande toujours un nom d’utilisateur et un mot de passe Bambuddy — même sur les installations dont l’interface web fonctionne sans connexion — et chaque utilisateur ne voit que les fichiers qu’il a le droit de lire.',
+    webdavTwoFactorHint: 'Un compte protégé par l’authentification à deux facteurs ne peut pas ouvrir le partage, car l’authentification Basic n’a aucun moyen de demander le second code, et les mots de passe erronés comptent dans le même verrouillage que la connexion web.',
     webdavHttpsHint: 'Lecture seule : les fichiers peuvent être ouverts et copiés, jamais écrits, renommés ni supprimés. Publiez-le en HTTPS, car les identifiants Basic accompagnent chaque requête.',
     webdavWindowsHint: 'Windows refuse l’authentification Basic en HTTP simple tant que HKLM\\SYSTEM\\CurrentControlSet\\Services\\WebClient\\Parameters\\BasicAuthLevel n’est pas à 2. En HTTPS, cela fonctionne tel quel.',
     printerFirmware: 'Firmware imprimante',

@@ -2945,6 +2945,7 @@ export default {
     webdavDescription: 'De boom van de bestandsbeheerder via WebDAV aanbieden, zodat een werkstation hem als schijf kan koppelen.',
     webdavAddressHint: 'Koppel {{url}}. De share bevat “Files” voor de beheerde bibliotheek en, als er externe mappen zijn geregistreerd, “External”.',
     webdavCredentialsHint: 'Vraagt altijd om een Bambuddy-gebruikersnaam en -wachtwoord — ook op installaties waarvan de webinterface zonder login draait — en elke gebruiker ziet alleen de bestanden die hij mag lezen.',
+    webdavTwoFactorHint: 'Een account met tweefactorauthenticatie kan de share niet openen, omdat Basic-authenticatie de tweede code niet kan opvragen, en foute wachtwoorden tellen mee voor dezelfde blokkade als de weblogin.',
     webdavHttpsHint: 'Alleen-lezen: bestanden kunnen worden geopend en gekopieerd, nooit geschreven, hernoemd of verwijderd. Bied het aan via HTTPS, want de Basic-gegevens gaan bij elk verzoek mee.',
     webdavWindowsHint: 'Windows weigert Basic-authenticatie over gewoon HTTP zolang HKLM\\SYSTEM\\CurrentControlSet\\Services\\WebClient\\Parameters\\BasicAuthLevel niet op 2 staat. Over HTTPS werkt het zonder meer.',
     // Updates

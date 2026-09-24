@@ -2917,6 +2917,7 @@ export default {
     webdavDescription: '透過 WebDAV 提供檔案管理員的目錄樹，讓工作站可以將它對應成磁碟機。',
     webdavAddressHint: '對應 {{url}}。共用資料夾內有對應受管理媒體庫的「Files」，若已註冊外部資料夾，還會有「External」。',
     webdavCredentialsHint: '即使在網頁介面不需登入的安裝上，也一律要求輸入 Bambuddy 使用者名稱與密碼；每位使用者只會看到自己有權讀取的檔案。',
+    webdavTwoFactorHint: '啟用兩步驟驗證的帳號無法開啟這個共用，因為 Basic 驗證無從索取第二組驗證碼；密碼輸錯同樣計入與網頁登入相同的鎖定次數。',
     webdavHttpsHint: '唯讀：檔案可以開啟與複製，但無法寫入、重新命名或刪除。請透過 HTTPS 提供，因為 Basic 憑證會隨每個請求送出。',
     webdavWindowsHint: '在將 HKLM\\SYSTEM\\CurrentControlSet\\Services\\WebClient\\Parameters\\BasicAuthLevel 設為 2 之前，Windows 會拒絕在純 HTTP 上使用 Basic 驗證。使用 HTTPS 則可直接運作。',
     printerFirmware: '印表機韌體',

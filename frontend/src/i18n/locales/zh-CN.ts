@@ -2917,6 +2917,7 @@ export default {
     webdavDescription: '通过 WebDAV 提供文件管理器的目录树，便于工作站将其映射为驱动器。',
     webdavAddressHint: '映射 {{url}}。共享中包含对应托管库的“Files”，若已注册外部文件夹，还会有“External”。',
     webdavCredentialsHint: '即使在 Web 界面无需登录的安装中，也始终要求输入 Bambuddy 用户名和密码；每位用户只能看到自己有权读取的文件。',
+    webdavTwoFactorHint: '启用两步验证的账户无法打开该共享，因为 Basic 认证无法索取第二个验证码；密码输错同样计入与网页登录相同的锁定次数。',
     webdavHttpsHint: '只读：文件可以打开和复制，但无法写入、重命名或删除。请通过 HTTPS 提供，因为 Basic 凭据会随每个请求一起发送。',
     webdavWindowsHint: '在将 HKLM\\SYSTEM\\CurrentControlSet\\Services\\WebClient\\Parameters\\BasicAuthLevel 设为 2 之前，Windows 会拒绝在普通 HTTP 上使用 Basic 认证。使用 HTTPS 则无需改动。',
     printerFirmware: '打印机固件',

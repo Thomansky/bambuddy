@@ -1,11 +1,12 @@
 /**
  * The WebDAV switch in the File Manager settings card (#3152).
  *
- * The setting exposes a whole library over a second protocol, so the three
+ * The setting exposes a whole library over a second protocol, so the four
  * things an operator has to know before turning it on — that it is read-only,
  * that Basic credentials travel with every request so it belongs behind HTTPS,
- * and that Windows will not send those credentials over plain HTTP until a
- * registry value is changed — are part of the contract, not decoration.
+ * that Windows will not send those credentials over plain HTTP until a registry
+ * value is changed, and that a two-factor account cannot open the share at all
+ * — are part of the contract, not decoration.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -34,6 +35,7 @@ const mockSettings = {
 const TOGGLE_LABEL = 'WebDAV access (read-only)';
 const READ_ONLY_HINT = /Read-only: files can be opened and copied/;
 const WINDOWS_HINT = /BasicAuthLevel is set to 2/;
+const TWO_FACTOR_HINT = /two-factor authentication cannot open the share/;
 
 describe('SettingsPage — WebDAV', () => {
   let saved: Array<Record<string, unknown>>;
@@ -71,9 +73,10 @@ describe('SettingsPage — WebDAV', () => {
     expect(toggle).not.toBeChecked();
     expect(screen.queryByText(READ_ONLY_HINT)).not.toBeInTheDocument();
     expect(screen.queryByText(WINDOWS_HINT)).not.toBeInTheDocument();
+    expect(screen.queryByText(TWO_FACTOR_HINT)).not.toBeInTheDocument();
   });
 
-  it('spells out read-only, HTTPS and the Windows registry gate once it is on', async () => {
+  it('spells out read-only, HTTPS, the Windows registry gate and the 2FA limit once it is on', async () => {
     server.use(
       http.get('/api/v1/settings/', () =>
         HttpResponse.json({ ...mockSettings, webdav_enabled: true })
@@ -88,6 +91,9 @@ describe('SettingsPage — WebDAV', () => {
     expect(screen.getByText(/\/webdav/)).toBeInTheDocument();
     // Credentials are required even here, where auth_enabled is false.
     expect(screen.getByText(/always asks for a Bambuddy username and password/)).toBeInTheDocument();
+    // ...and an account that needs a second code cannot present one over Basic,
+    // so the share refuses it rather than serving the library on a password.
+    expect(screen.getByText(TWO_FACTOR_HINT)).toBeInTheDocument();
   });
 
   it('persists the switch — a setting missing from the save list never reaches the server', async () => {

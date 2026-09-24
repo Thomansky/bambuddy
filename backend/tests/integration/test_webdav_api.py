@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import xml.etree.ElementTree as ET
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -204,6 +205,37 @@ class TestProtocolSurface:
         allowed = {value.strip() for value in response.headers["Allow"].split(",")}
         assert allowed == {"OPTIONS", "PROPFIND", "HEAD", "GET"}
 
+    @pytest.mark.parametrize("method", ["POST", "PATCH", "REPORT", "SEARCH", "MKCALENDAR", "XYZZY"])
+    @pytest.mark.parametrize("path", [WEBDAV, f"{WEBDAV}/Files"])
+    async def test_a_method_the_router_never_named_gets_the_same_405(
+        self, async_client: AsyncClient, enable_webdav, admin_auth, method, path
+    ):
+        """Not only the eight write verbs.
+
+        Left to the framework these answer a 405 built from the first route
+        whose path matched, i.e. ``Allow: OPTIONS`` — which tells a versioning
+        client probing with REPORT that the share supports neither PROPFIND nor
+        GET.
+        """
+        response = await async_client.request(method, path, headers=admin_auth)
+
+        assert response.status_code == 405, response.text
+        allowed = {value.strip() for value in response.headers["Allow"].split(",")}
+        assert allowed == {"OPTIONS", "PROPFIND", "HEAD", "GET"}
+
+    async def test_the_schema_still_builds_and_says_nothing_about_webdav(self, async_client: AsyncClient):
+        """PROPFIND is not an OpenAPI operation, and the builder is fragile.
+
+        The route that catches an unnamed method has to keep a declared method
+        list, because FastAPI's schema builder asserts on it before it ever
+        looks at ``include_in_schema`` — clearing the list instead of
+        overriding the match takes ``/openapi.json`` down with a 500.
+        """
+        response = await async_client.get("/openapi.json")
+
+        assert response.status_code == 200, response.text
+        assert [path for path in response.json()["paths"] if path.startswith("/webdav")] == []
+
     async def test_depth_infinity_is_refused_with_the_finite_depth_precondition(
         self, async_client: AsyncClient, enable_webdav, admin_auth
     ):
@@ -343,8 +375,6 @@ class TestPropfindTree:
     async def test_trashed_files_are_absent(
         self, async_client: AsyncClient, enable_webdav, admin_auth, folder_factory, file_factory
     ):
-        from datetime import datetime
-
         folder = await folder_factory("Kunden")
         await file_factory("kept.3mf", folder_id=folder.id)
         trashed = await file_factory("gone.3mf", folder_id=folder.id, deleted_at=datetime(2026, 1, 1))
@@ -462,6 +492,71 @@ class TestBytes:
 
         assert response.status_code == 405, response.text
 
+    @pytest.mark.parametrize("filename", ["pwn.html", "pwn.js", "pwn.svg"])
+    async def test_a_renderable_upload_is_served_inert_not_as_its_extension(
+        self, async_client: AsyncClient, enable_webdav, admin_auth, file_factory, filename
+    ):
+        """The library takes any extension, so the share must not render any.
+
+        ``mimetypes`` would call these text/html, application/javascript and
+        image/svg+xml, all of which run script on Bambuddy's own origin, where
+        ``script-src 'self'`` allows them and the session token sits in web
+        storage. ``download_file`` forces an octet-stream attachment for the
+        same rows and so does this.
+        """
+        await file_factory(filename, b"<script>alert(1)</script>")
+
+        response = await async_client.get(f"{WEBDAV}/Files/{filename}", headers=admin_auth)
+
+        assert response.status_code == 200, response.text
+        assert response.headers["content-type"] == "application/octet-stream"
+        assert response.headers["content-disposition"].startswith("attachment")
+        assert filename in response.headers["content-disposition"]
+        assert response.headers["x-content-type-options"] == "nosniff"
+
+    async def test_the_guessed_type_survives_as_a_propfind_property(
+        self, async_client: AsyncClient, enable_webdav, admin_auth, file_factory
+    ):
+        """A property names the owning application; only a header executes."""
+        await file_factory("part.3mf", b"bytes")
+
+        listing = await async_client.request("PROPFIND", f"{WEBDAV}/Files", headers={**admin_auth, "Depth": "1"})
+
+        assert _text(_responses(listing.content)["/webdav/Files/part.3mf"], "getcontenttype") == "model/3mf"
+
+    async def test_propfind_describes_the_bytes_get_will_hand_over(
+        self, async_client: AsyncClient, enable_webdav, admin_auth, file_factory, db_session
+    ):
+        """A scanned external row goes stale the moment the share is rewritten.
+
+        rclone compares the PROPFIND size against the transfer and deletes a
+        copy whose sizes differ; a client resuming a download offers the
+        PROPFIND date as ``If-Range`` and silently restarts when it does not
+        validate. Both need the listing and the transfer to agree.
+        """
+        row = await file_factory("part.3mf", b"0123456789", is_external=True)
+        row.file_size = 3
+        row.fs_modified_at = datetime(2020, 1, 1)
+        db_session.add(row)
+        await db_session.commit()
+
+        listing = await async_client.request("PROPFIND", f"{WEBDAV}/External", headers={**admin_auth, "Depth": "1"})
+        entry = _responses(listing.content)["/webdav/External/part.3mf"]
+        transfer = await async_client.head(f"{WEBDAV}/External/part.3mf", headers=admin_auth)
+
+        assert _text(entry, "getcontentlength") == transfer.headers["content-length"] == "10"
+        assert _text(entry, "getlastmodified") == transfer.headers["last-modified"]
+
+    async def test_a_row_with_no_bytes_still_lists_with_the_size_it_recorded(
+        self, async_client: AsyncClient, enable_webdav, admin_auth, file_factory
+    ):
+        """Nothing to stat, so the row is all the listing has to go on."""
+        await file_factory("ghost.3mf", b"0123456789", on_disk=False)
+
+        listing = await async_client.request("PROPFIND", f"{WEBDAV}/Files", headers={**admin_auth, "Depth": "1"})
+
+        assert _text(_responses(listing.content)["/webdav/Files/ghost.3mf"], "getcontentlength") == "10"
+
 
 class TestStableNames:
     """Two files with one name must not swap places between requests."""
@@ -490,6 +585,36 @@ class TestStableNames:
         duplicate = await async_client.get(f"{WEBDAV}/Files/Kunden/part%20(2).3mf", headers=admin_auth)
         assert original.content == b"first"
         assert duplicate.content == b"second"
+
+    async def test_a_later_folder_of_the_same_name_does_not_rename_the_file(
+        self, async_client: AsyncClient, enable_webdav, admin_auth, folder_factory, file_factory, db_session
+    ):
+        """The newcomer takes the suffix, whichever kind it is.
+
+        Disambiguating folders first would hand the bare name to the new folder
+        and move the file to ``part (2).3mf`` without the file row changing at
+        all — the path a slicer had open would start answering 405.
+        """
+        parent = await folder_factory("Kunden")
+        await file_factory("part.3mf", b"the-model", folder_id=parent.id)
+
+        collider = await folder_factory("part.3mf", parent_id=parent.id)
+        collider.created_at = datetime(2099, 1, 1)
+        db_session.add(collider)
+        await db_session.commit()
+
+        response = await async_client.request(
+            "PROPFIND", f"{WEBDAV}/Files/Kunden", headers={**admin_auth, "Depth": "1"}
+        )
+
+        assert set(_responses(response.content)) == {
+            "/webdav/Files/Kunden/",
+            "/webdav/Files/Kunden/part.3mf",
+            "/webdav/Files/Kunden/part (2).3mf/",
+        }
+        bytes_response = await async_client.get(f"{WEBDAV}/Files/Kunden/part.3mf", headers=admin_auth)
+        assert bytes_response.status_code == 200, bytes_response.text
+        assert bytes_response.content == b"the-model"
 
 
 class TestAuthAndPermissions:
@@ -536,6 +661,12 @@ class TestAuthAndPermissions:
         assert bytes_response.status_code == 404, bytes_response.text
 
     async def test_with_the_setting_off_everything_is_404(self, async_client: AsyncClient, admin_auth, folder_factory):
+        """Everything, including the methods no route declares.
+
+        A method that never reached the gate would answer 405 where the rest
+        answer 404, which is how a scanner tells an install that has the
+        feature switched off from one that does not have it.
+        """
         await folder_factory("Kunden")
 
         for method, url in (
@@ -543,6 +674,10 @@ class TestAuthAndPermissions:
             ("PROPFIND", f"{WEBDAV}/"),
             ("GET", f"{WEBDAV}/Files"),
             ("PUT", f"{WEBDAV}/Files/x.3mf"),
+            ("POST", WEBDAV),
+            ("PATCH", f"{WEBDAV}/Files"),
+            ("REPORT", f"{WEBDAV}/Files"),
+            ("SEARCH", WEBDAV),
         ):
             response = await async_client.request(method, url, headers=admin_auth)
             assert response.status_code == 404, f"{method} {url} -> {response.status_code}"
@@ -551,6 +686,179 @@ class TestAuthAndPermissions:
         """404 before 401 — a 401 would announce that the endpoint is there."""
         response = await async_client.request("PROPFIND", f"{WEBDAV}/", headers={"Depth": "1"})
         assert response.status_code == 404, response.text
+
+    async def test_read_own_is_not_offered_an_external_bucket_it_cannot_look_into(
+        self, async_client: AsyncClient, enable_webdav, user_factory, file_factory
+    ):
+        """The root's test has to ask the same question the bucket's listing answers.
+
+        A looser one puts a permanently empty ``External/`` on the caller's
+        mapped drive, and its presence alone says that external content exists
+        somewhere — which is the fact the per-file gate withholds.
+        """
+        owner = await user_factory("extowner", permissions=["library:read_own"])
+        await user_factory("stranger", permissions=["library:read_own"])
+        await file_factory("scanned.3mf", is_external=True, created_by_id=owner.id)
+
+        auth = _basic("stranger", "DavPass1!")
+        root = await async_client.request("PROPFIND", f"{WEBDAV}/", headers={**auth, "Depth": "1"})
+
+        assert set(_responses(root.content)) == {"/webdav/", "/webdav/Files/"}
+        assert (await async_client.request("PROPFIND", f"{WEBDAV}/External", headers=auth)).status_code == 404
+
+        # The owner does see it, so the bucket is hidden by permission, not by a
+        # rule that lost track of loose files.
+        owner_root = await async_client.request(
+            "PROPFIND", f"{WEBDAV}/", headers={**_basic("extowner", "DavPass1!"), "Depth": "1"}
+        )
+        assert "/webdav/External/" in _responses(owner_root.content)
+
+
+class TestCredentialGate:
+    """What Basic auth here owes the login route it stands beside."""
+
+    async def _fail(self, async_client: AsyncClient, username: str, times: int) -> None:
+        for _ in range(times):
+            response = await async_client.request(
+                "PROPFIND", f"{WEBDAV}/", headers={**_basic(username, "wrong"), "Depth": "0"}
+            )
+            assert response.status_code == 401, response.text
+
+    async def test_guesses_are_counted_in_the_login_routes_own_bucket(
+        self, async_client: AsyncClient, enable_webdav, admin, db_session
+    ):
+        """The same bucket as the login route, not a second one.
+
+        An attacker locked out of ``/auth/login`` must not get another ten
+        guesses here, and the guesses spent here must lock that route in turn.
+        """
+        from backend.app.models.settings import Settings
+
+        db_session.add(Settings(key="auth_enabled", value="true"))
+        await db_session.commit()
+
+        await self._fail(async_client, "davadmin", 10)
+
+        # The eleventh is refused before the password is even looked at — this
+        # one is correct.
+        blocked = await async_client.request(
+            "PROPFIND", f"{WEBDAV}/", headers={**_basic("davadmin", "DavPass1!"), "Depth": "0"}
+        )
+        assert blocked.status_code == 429, blocked.text
+
+        shared = await async_client.post("/api/v1/auth/login", json={"username": "davadmin", "password": "DavPass1!"})
+        assert shared.status_code == 429, shared.text
+
+    async def test_a_correct_password_clears_the_failures_it_found(
+        self, async_client: AsyncClient, enable_webdav, admin, admin_auth, db_session
+    ):
+        from sqlalchemy import select
+
+        from backend.app.models.auth_ephemeral import AuthRateLimitEvent
+
+        await self._fail(async_client, "davadmin", 3)
+        opened = await async_client.request("PROPFIND", f"{WEBDAV}/", headers={**admin_auth, "Depth": "0"})
+        assert opened.status_code == 207, opened.text
+
+        remaining = (
+            (await db_session.execute(select(AuthRateLimitEvent).where(AuthRateLimitEvent.username == "davadmin")))
+            .scalars()
+            .all()
+        )
+        assert remaining == []
+
+    async def test_a_two_factor_account_is_refused_rather_than_served_on_the_password(
+        self, async_client: AsyncClient, enable_webdav, admin, admin_auth, db_session
+    ):
+        """Basic has nowhere to put a challenge.
+
+        Serving the library on the password alone would make that password
+        worth more over WebDAV than it is in the browser, where auth.py hands
+        back a pre-auth token instead of a session.
+        """
+        from backend.app.models.user_totp import UserTOTP
+
+        totp = UserTOTP(user_id=admin.id, is_enabled=True)
+        totp.secret = "JBSWY3DPEHPK3PXP"  # noqa: S105 - test fixture, not a real secret
+        db_session.add(totp)
+        await db_session.commit()
+
+        response = await async_client.request("PROPFIND", f"{WEBDAV}/", headers={**admin_auth, "Depth": "0"})
+
+        # 403, not another 401: a Basic challenge would re-prompt for a password
+        # that is already correct, forever.
+        assert response.status_code == 403, response.text
+        assert "two-factor" in response.json()["detail"]
+
+    async def test_an_email_otp_account_is_refused_too(
+        self, async_client: AsyncClient, enable_webdav, admin, admin_auth, db_session
+    ):
+        from backend.app.models.settings import Settings
+
+        admin.email = "davadmin@test.example"
+        db_session.add(admin)
+        db_session.add(Settings(key=f"user_{admin.id}_email_2fa_enabled", value="true"))
+        await db_session.commit()
+
+        response = await async_client.request("PROPFIND", f"{WEBDAV}/", headers={**admin_auth, "Depth": "0"})
+
+        assert response.status_code == 403, response.text
+
+    async def test_the_local_login_switch_closes_the_share_as_well(
+        self, async_client: AsyncClient, enable_webdav, admin, admin_auth, db_session
+    ):
+        """#1589: an SSO-only install turned local passwords off deliberately."""
+        from backend.app.models.settings import Settings
+
+        db_session.add(Settings(key="local_login_enabled", value="false"))
+        await db_session.commit()
+
+        response = await async_client.request("PROPFIND", f"{WEBDAV}/", headers={**admin_auth, "Depth": "0"})
+
+        assert response.status_code == 401, response.text
+
+    async def test_a_directory_account_authenticates_through_ldap(
+        self, async_client: AsyncClient, enable_webdav, db_session, folder_factory
+    ):
+        """``authenticate_user`` refuses every ldap/oidc row by design.
+
+        Stopping there would leave a directory-backed install with a share no
+        user can ever open, and a 401 indistinguishable from a typo.
+        """
+        from unittest.mock import patch
+
+        from backend.app.models.settings import Settings
+        from backend.app.models.user import User
+        from backend.app.services.ldap_service import LDAPUserInfo
+
+        for key, value in {
+            "ldap_enabled": "true",
+            "ldap_server_url": "ldaps://ldap.test.example:636",
+            "ldap_bind_dn": "cn=admin,dc=test,dc=com",
+            "ldap_bind_password": "x",  # pragma: allowlist secret — test fixture
+            "ldap_search_base": "dc=test,dc=com",
+            "ldap_user_filter": "(uid={username})",
+            "ldap_security": "ldaps",
+            "ldap_group_mapping": "{}",
+            "ldap_auto_provision": "false",
+        }.items():
+            db_session.add(Settings(key=key, value=value))
+        db_session.add(
+            User(username="diruser", email="diruser@test.example", password_hash=None, role="admin", auth_source="ldap")
+        )
+        await db_session.commit()
+        await folder_factory("Kunden")
+
+        directory_answer = LDAPUserInfo(
+            username="diruser", email="diruser@test.example", display_name="Dir User", groups=[]
+        )
+        with patch("backend.app.services.ldap_service.authenticate_ldap_user", return_value=directory_answer):
+            response = await async_client.request(
+                "PROPFIND", f"{WEBDAV}/", headers={**_basic("diruser", "directory-pass"), "Depth": "1"}
+            )
+
+        assert response.status_code == 207, response.text
+        assert "/webdav/Files/" in _responses(response.content)
 
 
 class TestEndToEndWalk:

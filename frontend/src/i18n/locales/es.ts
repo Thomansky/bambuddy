@@ -2927,6 +2927,7 @@ export default {
     webdavDescription: 'Publica el árbol del gestor de archivos por WebDAV para que un equipo pueda conectarlo como unidad.',
     webdavAddressHint: 'Conecta {{url}}. El recurso contiene «Files» para la biblioteca gestionada y, si hay carpetas externas registradas, «External».',
     webdavCredentialsHint: 'Siempre pide un usuario y una contraseña de Bambuddy —incluso en instalaciones cuya interfaz web funciona sin inicio de sesión— y cada usuario solo ve los archivos que puede leer.',
+    webdavTwoFactorHint: 'Una cuenta con autenticación en dos pasos no puede abrir el recurso, porque la autenticación Basic no tiene forma de pedir el segundo código, y las contraseñas incorrectas cuentan para el mismo bloqueo que el inicio de sesión web.',
     webdavHttpsHint: 'Solo lectura: los archivos se pueden abrir y copiar, nunca escribir, renombrar ni borrar. Publícalo por HTTPS, porque las credenciales Basic viajan en cada petición.',
     webdavWindowsHint: 'Windows rechaza la autenticación Basic sobre HTTP simple mientras HKLM\\SYSTEM\\CurrentControlSet\\Services\\WebClient\\Parameters\\BasicAuthLevel no valga 2. Sobre HTTPS funciona tal cual.',
     // Updates

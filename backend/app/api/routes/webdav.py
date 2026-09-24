@@ -7,7 +7,7 @@ shape the user sees, so a workstation can map a drive and open a job folder in
 Explorer instead of downloading one file at a time.
 
 Read-only, deliberately: ``OPTIONS``, ``PROPFIND`` (Depth 0 and 1), ``HEAD``
-and ``GET``. Every write method answers 405 with an ``Allow`` header. Writing
+and ``GET``. Every other method answers 405 with an ``Allow`` header. Writing
 raises questions this feature does not answer — which folder owns a new file,
 what hash, which project, what happens to the trash — and a half-answered
 write path can damage a library.
@@ -35,19 +35,33 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse
+from fastapi.routing import APIRoute
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.routing import Match
+from starlette.types import Receive, Scope, Send
 
+from backend.app.api.routes.auth import (
+    _get_client_ip,
+    authenticate_credentials,
+    resolve_second_factors,
+)
 from backend.app.api.routes.library import (
     _ensure_library_file_visible,
     _unique_zip_name,
     _zip_entry_name,
     to_absolute_path,
 )
+from backend.app.api.routes.mfa import (
+    MAX_LOGIN_ATTEMPTS,
+    check_rate_limit,
+    clear_failed_attempts,
+    record_failed_attempt,
+)
 from backend.app.api.routes.settings import get_setting, setting_is_true
-from backend.app.core.auth import authenticate_user
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
+from backend.app.models.auth_ephemeral import EventType
 from backend.app.models.library import LibraryFile, LibraryFolder
 from backend.app.models.user import User
 
@@ -63,8 +77,9 @@ WEBDAV_PREFIX = "/webdav"
 SUPPORTED_METHODS = ("OPTIONS", "PROPFIND", "HEAD", "GET")
 ALLOW_HEADER = ", ".join(SUPPORTED_METHODS)
 
-# Refused with 405 rather than left to the framework, so a client gets the
-# Allow header that tells it what this share does support.
+# The write half of RFC 4918, named here because the spec names it. Everything
+# outside SUPPORTED_METHODS is refused the same way — see _AnyMethodRoute — so
+# this list documents rather than decides.
 UNSUPPORTED_METHODS = ["PUT", "DELETE", "MKCOL", "MOVE", "COPY", "PROPPATCH", "LOCK", "UNLOCK"]
 
 DAV_NS = "DAV:"
@@ -122,18 +137,29 @@ async def webdav_principal(
 ) -> tuple[User, bool]:
     """Resolve the caller, or refuse the request.
 
-    Three gates, in this order:
+    Five gates, in this order:
 
     1. ``webdav_enabled`` off → 404 for everything, so an install that has not
        turned the feature on is indistinguishable from one that never had it.
        This has to precede authentication: a 401 would announce the endpoint.
-    2. HTTP Basic against the existing users. No OS WebDAV client carries the
-       app's session cookie or an ``Authorization: Bearer`` header, so Basic is
-       the only credential this protocol can present. Credentials are required
-       even when authentication is disabled for the web UI — the alternative is
-       serving a whole library anonymously on a second protocol, which is not a
-       trade an operator should make by leaving a checkbox at its default.
-    3. The library read permissions, the same pair the REST read routes use.
+    2. The two login rate-limit buckets, the ones ``POST /auth/login`` uses —
+       the same buckets, not a second pair, or an attacker locked out of the
+       login route would simply get another ten guesses here. Without them
+       this would be the one unthrottled credential endpoint in the app, and
+       ``verify_password`` is synchronous pbkdf2 on the event loop that also
+       carries printer MQTT traffic.
+    3. HTTP Basic through ``authenticate_credentials``, the login route's own
+       credential path: the configured directory first, then the #1589
+       ``local_login_enabled`` switch, then the local hash. Basic is the only
+       credential this protocol can present — no OS WebDAV client carries the
+       app's session cookie or a Bearer header — and credentials are required
+       even when authentication is disabled for the web UI, because the
+       alternative is serving a whole library anonymously on a second protocol.
+    4. Two-factor accounts are refused outright. Basic has nowhere to put a
+       challenge, so serving one on the password alone would make a password
+       worth more here than it is in the browser — the exact thing the second
+       factor was turned on to prevent.
+    5. The library read permissions, the same pair the REST read routes use.
        ``can_read_all`` false means the caller sees only their own files.
 
     Returns ``(user, can_read_all)``.
@@ -152,9 +178,33 @@ async def webdav_principal(
     if not sep:
         raise _unauthorized()
 
-    user = await authenticate_user(db, username, password)
+    client_ip = _get_client_ip(request)
+    recent_failures = await check_rate_limit(
+        db, username, event_type=EventType.LOGIN_ATTEMPT, max_attempts=MAX_LOGIN_ATTEMPTS
+    )
+    await check_rate_limit(db, client_ip, event_type=EventType.LOGIN_IP, max_attempts=20)
+
+    user = await authenticate_credentials(db, username, password)
     if user is None:
+        await record_failed_attempt(db, username, event_type=EventType.LOGIN_ATTEMPT)
+        await record_failed_attempt(db, client_ip, event_type=EventType.LOGIN_IP)
         raise _unauthorized()
+
+    # Only when there is something to clear: a mapped drive authenticates on
+    # every request, and an unconditional DELETE plus commit per PROPFIND is a
+    # write the share does not need.
+    if recent_failures:
+        await clear_failed_attempts(db, username, event_type=EventType.LOGIN_ATTEMPT)
+        await clear_failed_attempts(db, client_ip, event_type=EventType.LOGIN_IP)
+
+    totp_enabled, email_otp_enabled = await resolve_second_factors(db, user)
+    if totp_enabled or email_otp_enabled:
+        # 403, not another 401: a Basic challenge would make Explorer re-prompt
+        # for a password that is already correct, forever.
+        raise HTTPException(
+            status_code=403,
+            detail="This account uses two-factor authentication, which WebDAV cannot ask for",
+        )
 
     if user.has_permission(Permission.LIBRARY_READ_ALL.value):
         return user, True
@@ -190,6 +240,44 @@ def _label(raw: str, fallback: str, taken: set[str]) -> str:
     return _unique_zip_name(_zip_entry_name(raw, fallback=fallback), taken)
 
 
+def _media_type(filename: str) -> str:
+    guessed, _ = mimetypes.guess_type(filename)
+    return guessed or "application/octet-stream"
+
+
+def _bytes_on_disk(file: LibraryFile) -> tuple[Path, os.stat_result] | None:
+    """Absolute path plus stat for a file row, or None when the bytes are gone.
+
+    A row whose file has been moved out from under Bambuddy, and a legacy row
+    whose relative path escapes ``base_dir``, are both "not there" from a
+    client's point of view — neither is a server error.
+
+    One stat answers "is this a file", "how big" and "how old" at once, and is
+    handed to ``FileResponse`` so a transfer does not stat the same file twice.
+    """
+    try:
+        abs_path = to_absolute_path(file.file_path)
+    except ValueError:
+        return None
+    if abs_path is None:
+        return None
+    try:
+        info = abs_path.stat()
+    except OSError:
+        return None
+    if not S_ISREG(info.st_mode):
+        return None
+    return abs_path, info
+
+
+def _resolved_bytes(file: LibraryFile) -> tuple[Path, os.stat_result]:
+    """``_bytes_on_disk`` for a caller that wants the bytes, not a verdict."""
+    found = _bytes_on_disk(file)
+    if found is None:
+        raise _not_found()
+    return found
+
+
 def _folder_entry(folder: LibraryFolder, name: str) -> _Entry:
     return _Entry(
         name=name,
@@ -202,12 +290,33 @@ def _folder_entry(folder: LibraryFolder, name: str) -> _Entry:
 
 
 def _file_entry(file: LibraryFile, name: str) -> _Entry:
+    """A file's entry, sized and dated from the bytes where the bytes exist.
+
+    The row's ``file_size`` and ``fs_modified_at`` are only the fallback, for a
+    file that is not on disk at all. PROPFIND has to describe what GET will
+    hand over, and GET hands ``FileResponse`` a real ``stat`` — for an external
+    (#124) file the two drift the moment someone rewrites it on the share
+    between scans, and ``updated_at`` moves for a tag edit that never touched
+    the bytes. A listing that disagrees with the transfer makes rclone delete
+    the copy it just made ("sizes differ") and turns a resumed download's
+    ``If-Range`` into a silent restart from byte 0.
+    """
+    found = _bytes_on_disk(file)
+    if found is None:
+        size = file.file_size or 0
+        modified = _as_utc(file.fs_modified_at or file.updated_at)
+    else:
+        size = found[1].st_size
+        # Truncated to whole seconds, the resolution FileResponse's own
+        # Last-Modified carries: the two have to render as the same string or a
+        # client's If-Range does not validate against the response it gets.
+        modified = datetime.fromtimestamp(int(found[1].st_mtime), timezone.utc)
     return _Entry(
         name=name,
         is_collection=False,
-        size=file.file_size or 0,
+        size=size,
         created_at=_as_utc(file.created_at),
-        modified_at=_as_utc(file.fs_modified_at or file.updated_at),
+        modified_at=modified,
         file=file,
     )
 
@@ -232,25 +341,6 @@ def _root_entry() -> _Entry:
         modified_at=SYNTHETIC_TIMESTAMP,
         bucket="",
     )
-
-
-async def _has_external_content(db: AsyncSession) -> bool:
-    """Whether the ``External`` bucket is worth showing at all.
-
-    Either an external folder at the top level, or a file in no folder that
-    came from an external scan — the File Manager counts those separately
-    (``unfoldered_external_files``) and so must this, or an install whose only
-    external content is loose files would have no path to it.
-    """
-    folder = await db.execute(
-        select(LibraryFolder.id).where(LibraryFolder.parent_id.is_(None), LibraryFolder.is_external.is_(True)).limit(1)
-    )
-    if folder.scalar_one_or_none() is not None:
-        return True
-    loose = await db.execute(
-        LibraryFile.active().where(LibraryFile.folder_id.is_(None), LibraryFile.is_external.is_(True)).limit(1)
-    )
-    return loose.scalars().first() is not None
 
 
 async def _visible_files(
@@ -282,6 +372,27 @@ async def _visible_files(
     return visible
 
 
+async def _has_external_content(db: AsyncSession, user: User, can_read_all: bool) -> bool:
+    """Whether the ``External`` bucket is worth showing at all.
+
+    Either an external folder at the top level, or a file in no folder that
+    came from an external scan — the File Manager counts those separately
+    (``unfoldered_external_files``) and so must this, or an install whose only
+    external content is loose files would have no path to it.
+
+    The loose-file test runs the same visibility gate the bucket's listing
+    runs. Asking a looser question here than the listing answers would put an
+    empty ``External/`` in front of a ``read_own`` caller, and its mere
+    presence is the fact the per-file gate exists to withhold.
+    """
+    folder = await db.execute(
+        select(LibraryFolder.id).where(LibraryFolder.parent_id.is_(None), LibraryFolder.is_external.is_(True)).limit(1)
+    )
+    if folder.scalar_one_or_none() is not None:
+        return True
+    return bool(await _visible_files(db, None, user, can_read_all, external=True))
+
+
 async def _subfolders(db: AsyncSession, parent_id: int | None, *, external: bool | None = None):
     query = select(LibraryFolder).where(LibraryFolder.parent_id == parent_id).order_by(LibraryFolder.id)
     if external is not None:
@@ -292,40 +403,54 @@ async def _subfolders(db: AsyncSession, parent_id: int | None, *, external: bool
 async def _children(db: AsyncSession, entry: _Entry, user: User, can_read_all: bool) -> list[_Entry]:
     """The direct children of a collection, with their final path segments.
 
-    Ordered by id and disambiguated in that order, so a name a client saw in
-    one request is the same name in the next. Ordering by anything the database
-    chooses would let a file move under Explorer's feet.
+    Disambiguated oldest first — ``created_at``, then kind and id so the order
+    is total — rather than every folder and then every file. Both orders are
+    stable across requests, but only this one leaves an entry's name alone
+    when a sibling turns up: under folders-first, a new folder called
+    ``part.3mf`` takes the name the file of that name has had all along and
+    pushes the file to ``part (2).3mf``, which is exactly the "a file moves
+    under Explorer's feet" failure a stable rule is for. The newcomer gets the
+    suffix instead.
     """
     if not entry.is_collection:
         return []
 
-    taken: set[str] = set()
-    children: list[_Entry] = []
-
     if entry.bucket == "":
-        children.append(_bucket_entry(BUCKET_MANAGED))
-        if await _has_external_content(db):
+        children = [_bucket_entry(BUCKET_MANAGED)]
+        if await _has_external_content(db, user, can_read_all):
             children.append(_bucket_entry(BUCKET_EXTERNAL))
         return children
 
     if entry.bucket in (BUCKET_MANAGED, BUCKET_EXTERNAL):
         is_external = entry.bucket == BUCKET_EXTERNAL
-        for folder in await _subfolders(db, None, external=is_external):
-            children.append(_folder_entry(folder, _label(folder.name, f"folder-{folder.id}", taken)))
+        folders = await _subfolders(db, None, external=is_external)
         # Files belonging to no folder would otherwise have no path at all.
         # They sit directly in the bucket rather than behind the File Manager's
         # synthetic "No folder" entry, which is a UI affordance and not a
         # directory anyone would want to type.
-        for file in await _visible_files(db, None, user, can_read_all, external=is_external):
-            children.append(_file_entry(file, _label(file.filename, f"file-{file.id}", taken)))
-        return children
+        files = await _visible_files(db, None, user, can_read_all, external=is_external)
+    elif entry.folder is not None:
+        folders = await _subfolders(db, entry.folder.id)
+        files = await _visible_files(db, entry.folder.id, user, can_read_all)
+    else:  # pragma: no cover - every collection is a bucket or a folder
+        return []
 
-    if entry.folder is None:  # pragma: no cover - every collection is a bucket or a folder
-        return children
-    for folder in await _subfolders(db, entry.folder.id):
-        children.append(_folder_entry(folder, _label(folder.name, f"folder-{folder.id}", taken)))
-    for file in await _visible_files(db, entry.folder.id, user, can_read_all):
-        children.append(_file_entry(file, _label(file.filename, f"file-{file.id}", taken)))
+    # Kind is the tiebreak, not the primary key: the timestamp columns have
+    # one-second resolution, so two siblings made in the same second have to
+    # fall back to something, and it may as well be deterministic.
+    rows: list[tuple[datetime, int, int, LibraryFolder | LibraryFile]] = [
+        (_as_utc(folder.created_at), 0, folder.id, folder) for folder in folders
+    ]
+    rows += [(_as_utc(file.created_at), 1, file.id, file) for file in files]
+    rows.sort(key=lambda row: row[:3])
+
+    taken: set[str] = set()
+    children = []
+    for _created, kind, row_id, row in rows:
+        if kind == 0:
+            children.append(_folder_entry(row, _label(row.name, f"folder-{row_id}", taken)))
+        else:
+            children.append(_file_entry(row, _label(row.filename, f"file-{row_id}", taken)))
     return children
 
 
@@ -385,6 +510,10 @@ def _response_element(parent: ET.Element, href: str, entry: _Entry) -> None:
     ET.SubElement(prop, f"{{{DAV_NS}}}getlastmodified").text = format_datetime(entry.modified_at, usegmt=True)
     ET.SubElement(prop, f"{{{DAV_NS}}}creationdate").text = entry.created_at.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
     if not entry.is_collection and entry.file is not None:
+        # The guessed type belongs here and nowhere else: a property tells a
+        # client which application owns the file, while the type on a GET
+        # response tells a browser what to execute — which is why that one is
+        # octet-stream regardless of the name.
         ET.SubElement(prop, f"{{{DAV_NS}}}getcontenttype").text = _media_type(entry.file.filename)
 
     ET.SubElement(propstat, f"{{{DAV_NS}}}status").text = "HTTP/1.1 200 OK"
@@ -401,35 +530,6 @@ def _multistatus(rows: Sequence[tuple[str, _Entry]]) -> Response:
         multistatus, encoding="utf-8", xml_declaration=False
     )
     return Response(content=body, status_code=207, media_type='application/xml; charset="utf-8"')
-
-
-def _media_type(filename: str) -> str:
-    guessed, _ = mimetypes.guess_type(filename)
-    return guessed or "application/octet-stream"
-
-
-def _resolved_bytes(file: LibraryFile) -> tuple[Path, os.stat_result]:
-    """Absolute path plus stat for a file row, or 404 when the bytes are gone.
-
-    A row whose file has been moved out from under Bambuddy, and a legacy row
-    whose relative path escapes ``base_dir``, are both "not there" from a
-    client's point of view — neither is a server error.
-    """
-    try:
-        abs_path = to_absolute_path(file.file_path)
-    except ValueError:
-        raise _not_found()
-    if abs_path is None:
-        raise _not_found()
-    try:
-        info = abs_path.stat()
-    except OSError:
-        raise _not_found()
-    # One stat answers both "is this a file" and "how big", and is handed to
-    # FileResponse so the bytes are not stat-ed a second time.
-    if not S_ISREG(info.st_mode):
-        raise _not_found()
-    return abs_path, info
 
 
 @router.api_route("", methods=["OPTIONS"])
@@ -505,6 +605,16 @@ async def webdav_get(
     ``Content-Range``) that slicers and Explorer's preview both use, and
     answers a HEAD with the headers alone. A collection has no bytes, so it
     answers 405 rather than inventing a directory listing.
+
+    Served as an attachment of ``application/octet-stream``, the way
+    ``download_file`` serves the same rows, and never as the type the name
+    suggests. The library takes whatever a user uploads or a scan finds, so a
+    ``.html`` or ``.js`` in a shared folder would otherwise render as an active
+    document on Bambuddy's own origin, where ``script-src 'self'`` permits it
+    and the session token sits in web storage. A WebDAV client does not read
+    the type off the wire anyway — it names the file from the path. (The
+    ``nosniff`` that keeps a browser from second-guessing the type comes from
+    ``security_headers_middleware``, on this response like every other.)
     """
     user, can_read_all = principal
     entry = await _resolve(db, _split_path(dav_path), user, can_read_all)
@@ -514,21 +624,63 @@ async def webdav_get(
     abs_path, info = _resolved_bytes(entry.file)
     return FileResponse(
         abs_path,
-        media_type=_media_type(entry.file.filename),
+        media_type="application/octet-stream",
+        filename=entry.name,
+        content_disposition_type="attachment",
         stat_result=info,
     )
 
 
-@router.api_route("", methods=UNSUPPORTED_METHODS)
-@router.api_route("/{dav_path:path}", methods=UNSUPPORTED_METHODS)
+class _AnyMethodRoute(APIRoute):
+    """A route that matches every method, not only the ones it declares.
+
+    Starlette answers a method no route declares with a 405 of its own, built
+    from the first route whose *path* matched — here the OPTIONS registration,
+    so ``POST /webdav`` came back ``Allow: OPTIONS``, and ``webdav_principal``
+    never ran. That second part is the one that matters: with the feature
+    switched off every other method answers 404, and a single POST told a
+    scanner the difference between an install that has WebDAV turned off and
+    one that does not have it at all.
+    """
+
+    def matches(self, scope: Scope) -> tuple[Match, Scope]:
+        # PARTIAL from a Route means the path matched and the method did not.
+        match, child_scope = super().matches(scope)
+        return (Match.FULL, child_scope) if match is Match.PARTIAL else (match, child_scope)
+
+    async def handle(self, scope: Scope, receive: Receive, send: Send) -> None:
+        # Route.handle checks the declared methods a second time and raises its
+        # own 405 — the one with the wrong Allow header. Both overrides are
+        # needed; the alternative, clearing ``methods`` outright, trips the
+        # "Methods must be a list" assertion in FastAPI's OpenAPI builder and
+        # takes /openapi.json down with it.
+        await self.app(scope, receive, send)
+
+
+# Its own router only so the route class applies to these two routes and not to
+# the four supported methods, which must keep answering exactly their own.
+_fallback_router = APIRouter(prefix=WEBDAV_PREFIX, route_class=_AnyMethodRoute, include_in_schema=False)
+
+
+@_fallback_router.api_route("", methods=UNSUPPORTED_METHODS)
+@_fallback_router.api_route("/{dav_path:path}", methods=UNSUPPORTED_METHODS)
 async def webdav_unsupported(
     dav_path: str = "",
     principal: tuple[User, bool] = Depends(webdav_principal),
 ) -> Response:
-    """Refuse every write method, naming what the share does support.
+    """Refuse every method the share does not implement, naming the four it does.
 
-    Answered here rather than left to the framework so the 405 carries an
-    ``Allow`` header; a client that sees the header stops retrying and reports
-    a read-only share instead of a broken one.
+    Answered here rather than left to the framework so the 405 carries a
+    truthful ``Allow`` header; a client that sees the header stops retrying and
+    reports a read-only share instead of a broken one. The declared list is the
+    write set RFC 4918 defines — the route class widens it to everything else,
+    so a versioning client's ``REPORT`` and a scanner's ``POST`` get the same
+    answer, behind the same ``webdav_enabled`` gate.
     """
     raise _method_not_allowed()
+
+
+# Appended rather than ``include_router``-ed, which refuses a route whose path
+# is empty — and ``/webdav`` with no trailing slash is one. Last in the list, so
+# a method the four handlers above declare still wins the full match.
+router.routes.extend(_fallback_router.routes)

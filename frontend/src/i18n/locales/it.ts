@@ -2873,6 +2873,7 @@ export default {
     webdavDescription: 'Pubblica l’albero del gestore file via WebDAV, così una postazione può collegarlo come unità.',
     webdavAddressHint: 'Collega {{url}}. La condivisione contiene «Files» per la libreria gestita e, se sono registrate cartelle esterne, «External».',
     webdavCredentialsHint: 'Chiede sempre nome utente e password di Bambuddy — anche nelle installazioni la cui interfaccia web funziona senza login — e ogni utente vede solo i file che può leggere.',
+    webdavTwoFactorHint: 'Un account con autenticazione a due fattori non può aprire la condivisione, perché l’autenticazione Basic non ha modo di chiedere il secondo codice, e le password sbagliate contano per lo stesso blocco del login web.',
     webdavHttpsHint: 'Sola lettura: i file si possono aprire e copiare, mai scrivere, rinominare o eliminare. Pubblicalo via HTTPS, perché le credenziali Basic viaggiano a ogni richiesta.',
     webdavWindowsHint: 'Windows rifiuta l’autenticazione Basic su HTTP semplice finché HKLM\\SYSTEM\\CurrentControlSet\\Services\\WebClient\\Parameters\\BasicAuthLevel non vale 2. Su HTTPS funziona così com’è.',
     printerFirmware: 'Firmware stampante',
