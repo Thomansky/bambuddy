@@ -6200,7 +6200,7 @@ export function SettingsPage() {
             </Card>
           </div>
 
-          {/* Right Column (2/3) - Spool Catalog + Color Catalog + Suppliers */}
+          {/* Right Column (2/3) - Spool Catalog + Color Catalog */}
           <div className="lg:w-2/3 space-y-3">
             <SpoolCatalogSettings />
             <ColorCatalogSettings />

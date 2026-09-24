@@ -796,9 +796,6 @@ export function SpoolFormModal({
     },
   });
 
-  // Save everything the Printers tab holds: one K profile per hotend and the
-  // per-printer-model preset overrides. Returns false if either write failed,
-  // which keeps the modal open so the user does not lose what they picked.
   // Supplier assignments (#2988): replace-all save, only when the user
   // actually touched the control — an untouched create keeps the backend's
   // inherited assignments instead of wiping them with an empty list.
@@ -825,6 +822,9 @@ export function SpoolFormModal({
     }
   };
 
+  // Save everything the Printers tab holds: one K profile per hotend and the
+  // per-printer-model preset overrides. Returns false if either write failed,
+  // which keeps the modal open so the user does not lose what they picked.
   const savePrinterProfiles = async (spoolId: number): Promise<boolean> => {
     const saveKApi = spoolmanMode ? api.saveSpoolmanKProfiles : api.saveSpoolKProfiles;
     const savePresetApi = spoolmanMode ? api.saveSpoolmanFilamentPresets : api.saveSpoolFilamentPresets;

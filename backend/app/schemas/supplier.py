@@ -27,14 +27,14 @@ class SupplierBase(BaseModel):
     customer_number: str | None = Field(default=None, max_length=100)
     note: str | None = Field(default=None, max_length=500)
 
+
+class SupplierCreate(SupplierBase):
+    # Only on the write schemas: SupplierResponse inherits SupplierBase, and a
+    # row written before the rule existed must still be readable.
     @field_validator("name")
     @classmethod
     def _normalize_name(cls, value: str) -> str:
         return validate_supplier_name(value)
-
-
-class SupplierCreate(SupplierBase):
-    pass
 
 
 class SupplierUpdate(BaseModel):
