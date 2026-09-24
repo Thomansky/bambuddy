@@ -35,7 +35,9 @@ import {
 } from 'lucide-react';
 import { api, ApiError } from '../api/client';
 import { parseUTCDate, formatDateOnly, formatDateTime, formatDurationFromHours, type TimeFormat } from '../utils/date';
+import { folderLabel } from '../utils/folder';
 import type { Archive, ProjectUpdate, BOMItem, BOMItemCreate, BOMItemUpdate, LibraryFileListItem } from '../api/client';
+import { FolderNumber } from '../components/FolderNumber';
 import { Card, CardContent } from '../components/Card';
 import { Button } from '../components/Button';
 import { useToast } from '../contexts/ToastContext';
@@ -1047,7 +1049,10 @@ export function ProjectDetailPage() {
                       <div className="flex items-center gap-3 min-w-0">
                         <FolderOpen className="w-5 h-5 text-bambu-green shrink-0" />
                         <div className="min-w-0">
-                          <p className="text-sm text-white truncate">{folder.name}</p>
+                          <p className="flex items-center gap-1.5 text-sm text-white truncate" title={folderLabel(folder)}>
+                            <FolderNumber number={folder.number} t={t} />
+                            {folder.name}
+                          </p>
                           <p className="text-xs text-bambu-gray">
                             {t('projectDetail.files.fileCount', { count: folder.file_count })}
                           </p>

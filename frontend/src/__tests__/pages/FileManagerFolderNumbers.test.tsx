@@ -11,6 +11,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { QueryClient } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import { render } from '../utils';
 import { server } from '../mocks/server';
@@ -46,10 +47,26 @@ const seriesRow = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-function mockLibrary(folders: unknown[]) {
+const libraryFile = (over: Record<string, unknown> = {}) => ({
+  id: 1,
+  filename: 'plate.3mf',
+  file_path: '/library/plate.3mf',
+  file_size: 1024,
+  file_type: '3mf',
+  folder_id: null,
+  thumbnail_path: null,
+  print_name: null,
+  print_time_seconds: null,
+  print_count: 0,
+  duplicate_count: 0,
+  created_at: '2026-01-01T00:00:00Z',
+  ...over,
+});
+
+function mockLibrary(folders: unknown[], files: unknown[] = []) {
   server.use(
     http.get('/api/v1/library/folders', () => HttpResponse.json(folders)),
-    http.get('/api/v1/library/files', () => HttpResponse.json([])),
+    http.get('/api/v1/library/files', () => HttpResponse.json(files)),
     http.get('/api/v1/library/stats', () =>
       HttpResponse.json({
         total_files: 0,
@@ -309,6 +326,89 @@ describe('FileManager folder numbers', () => {
       ).toBeInTheDocument();
       // The dialog survives so the number can be corrected.
       expect(screen.getByLabelText('Folder number')).toHaveValue('A-0008');
+    });
+  });
+
+  describe('the number the dialog promises', () => {
+    /** The client App.tsx actually builds. The default test client has no
+     *  staleTime at all, so it refetches on every mount and would never see a
+     *  stale preview. */
+    const appLikeClient = () =>
+      new QueryClient({ defaultOptions: { queries: { staleTime: 1000 * 60, retry: false } } });
+
+    it('shows the next number, not the one the last folder consumed', async () => {
+      let nextValue = 7;
+      mockLibrary([]);
+      server.use(
+        http.get('/api/v1/number-series/', () =>
+          HttpResponse.json([
+            seriesRow({ next_value: nextValue, preview: `A-${String(nextValue).padStart(4, '0')}` }),
+          ]),
+        ),
+        http.post('/api/v1/library/folders', () => {
+          // The create consumes one, exactly as the backend does.
+          nextValue += 1;
+          return HttpResponse.json(folder({ name: '' }));
+        }),
+      );
+      const user = userEvent.setup();
+      render(<FileManagerPage />, { queryClient: appLikeClient() });
+
+      await waitFor(() => expect(screen.getByText('New Folder')).toBeInTheDocument());
+      await user.click(screen.getByText('New Folder'));
+      expect(await screen.findByText('Next number: A-0007')).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Create' }));
+
+      // Straight back in, well inside the 60 s staleTime: the number on the
+      // quote has to be the number this folder will actually get.
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Create' })).not.toBeInTheDocument());
+      await user.click(screen.getByText('New Folder'));
+
+      expect(await screen.findByText('Next number: A-0008')).toBeInTheDocument();
+      expect(screen.queryByText('Next number: A-0007')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('folder pickers', () => {
+    const numbered = [
+      folder({ id: 1, name: '', number: 'A-0007' }),
+      folder({ id: 2, name: '', number: 'A-0008' }),
+    ];
+
+    const openMoveDialog = async (user: ReturnType<typeof userEvent.setup>) => {
+      await waitFor(() => expect(screen.getByText('plate.3mf')).toBeInTheDocument());
+      await user.click(within(screen.getByTestId('library-filter-card')).getByText('Select All'));
+      await user.click(within(screen.getByTestId('selection-actions')).getByText('Move'));
+      return screen.getByTestId('move-folder-list');
+    };
+
+    it('names every folder in the move dialog and finds one by its number', async () => {
+      mockLibrary(numbered, [libraryFile()]);
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+
+      const list = await openMoveDialog(user);
+      // Two orders, told apart by the only thing they carry.
+      expect(within(list).getByText('A-0007')).toBeInTheDocument();
+      expect(within(list).getByText('A-0008')).toBeInTheDocument();
+
+      // …and reachable by typing the number off the quote.
+      await user.type(screen.getByLabelText('Filter folders...'), 'A-0008');
+      expect(within(list).getByText('A-0008')).toBeInTheDocument();
+      expect(within(list).queryByText('A-0007')).not.toBeInTheDocument();
+      expect(screen.queryByText('No folder matches this filter.')).not.toBeInTheDocument();
+    });
+
+    it('names every folder in the mobile selector', async () => {
+      mockLibrary(numbered);
+      render(<FileManagerPage />);
+
+      await waitFor(() => expect(badges('A-0007').tree).toHaveLength(1));
+      // The sidebar is `hidden lg:flex`, so below that breakpoint this select
+      // is the only folder navigation there is.
+      const options = screen.getAllByRole('option').map((o) => o.textContent?.trim());
+      expect(options.some((label) => label?.includes('A-0007'))).toBe(true);
+      expect(options.some((label) => label?.includes('A-0008'))).toBe(true);
     });
   });
 });

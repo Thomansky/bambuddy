@@ -38,6 +38,14 @@ async def project_number_taken(db: AsyncSession, number: str, exclude_id: int | 
     return (await db.execute(query.limit(1))).scalar_one_or_none() is not None
 
 
+async def folder_number_taken(db: AsyncSession, number: str, exclude_id: int | None = None) -> bool:
+    """Is *number* already on a library folder other than ``exclude_id``?"""
+    query = select(LibraryFolder.id).where(LibraryFolder.number == number)
+    if exclude_id is not None:
+        query = query.where(LibraryFolder.id != exclude_id)
+    return (await db.execute(query.limit(1))).scalar_one_or_none() is not None
+
+
 async def inherit_folder_number(db: AsyncSession, project: Project, folder: LibraryFolder) -> bool:
     """Give *project* the number of the *folder* it came out of.
 

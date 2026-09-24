@@ -7,12 +7,16 @@ the project ends up carrying. A project that drew a fresh one at that point
 would leave the quote and the invoice pointing at different jobs.
 """
 
+import io
+import json
+import zipfile
+
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app.models.library import LibraryFolder
+from backend.app.models.library import LibraryFile, LibraryFolder
 from backend.app.models.number_series import NumberSeries
 from backend.app.models.project import Project
 from backend.app.services.number_series import SERIES_LIBRARY_FOLDER, SERIES_PROJECT
@@ -435,3 +439,217 @@ class TestProjectInheritsTheFolderNumber:
 
         assert response.status_code == 200
         assert response.json()["number"] == "A-0007"
+
+    @pytest.mark.asyncio
+    async def test_the_fallback_says_none_when_the_project_series_has_nothing_to_give(
+        self, async_client: AsyncClient, db_session
+    ):
+        """The folder series is the one that is on for this workflow; the
+        project series is not. A disabled series hands out nothing, so the
+        fallback leaves the project unnumbered — and the field that exists to
+        say where the number came from must not claim the series issued one."""
+        await _seed_series(db_session, SERIES_PROJECT, enabled=False)
+        taken = await async_client.post("/api/v1/projects/", json={"name": "Older job", "number": "A-0007"})
+        assert taken.status_code == 200
+        folder = await _folder(db_session, name="Reindl", number="A-0007")
+
+        response = await async_client.post(
+            "/api/v1/projects/", json={"name": "Reindl bracket", "library_folder_id": folder.id}
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["number"] is None
+        assert body["number_source"] == "none"
+
+    @pytest.mark.asyncio
+    async def test_a_folder_that_already_belongs_to_a_project_is_not_taken_away(
+        self, async_client: AsyncClient, db_session
+    ):
+        """A retry, or a second order filed off the same enquiry, used to
+        re-point the folder: the first project kept the number it took from the
+        folder but lost the folder itself, and the files of that order ended up
+        under a project that is not the one carrying their number."""
+        await _seed_series(db_session, SERIES_PROJECT, prefix="P-", padding=4, next_value=31)
+        folder = await _folder(db_session, name="Reindl", number="A-0007")
+        first = await async_client.post(
+            "/api/v1/projects/", json={"name": "Reindl bracket", "library_folder_id": folder.id}
+        )
+        assert first.status_code == 200
+
+        second = await async_client.post("/api/v1/projects/", json={"name": "Again", "library_folder_id": folder.id})
+
+        assert second.status_code == 409
+        assert (await _folder_row(db_session, folder.id)).project_id == first.json()["id"]
+        # Refused before the allocator runs, so the refused create costs no number.
+        assert await _next_value(db_session, SERIES_PROJECT) == 31
+
+    @pytest.mark.asyncio
+    async def test_an_uploaded_import_onto_a_numbered_folder_carries_that_number(
+        self, async_client: AsyncClient, db_session
+    ):
+        """``POST /projects/import/file`` is the fifth way a project comes out
+        of a folder, and adopts one exactly as the JSON import does."""
+        await _folder(db_session, name="Reindl", number="A-0007")
+        payload = json.dumps({"name": "Reindl bracket", "linked_folders": [{"name": "Reindl"}]}).encode()
+
+        response = await async_client.post(
+            "/api/v1/projects/import/file",
+            files={"file": ("project.json", io.BytesIO(payload), "application/json")},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["number"] == "A-0007"
+
+
+class TestAnOrderFolderSurvivesExportAndImport:
+    """An order folder is often nothing but a number, and the export/import
+    round trip is keyed on the name of the folder. A nameless folder used to be
+    written to the archive as ``files//plate.txt`` and dropped on the way back
+    in — folder, files and all — with the import still reporting success.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_number_only_folder_and_its_files_come_back(
+        self, async_client: AsyncClient, db_session, tmp_path, monkeypatch
+    ):
+        library_dir = tmp_path / "library"
+        library_dir.mkdir()
+        monkeypatch.setattr("backend.app.api.routes.projects.get_library_dir", lambda: library_dir)
+
+        project = Project(name="Reindl bracket")
+        db_session.add(project)
+        await db_session.flush()
+        folder = LibraryFolder(
+            name="",
+            number="A-0007",
+            project_id=project.id,
+            is_external=False,
+            external_readonly=False,
+            external_show_hidden=False,
+        )
+        db_session.add(folder)
+        await db_session.flush()
+        (library_dir / "A-0007").mkdir()
+        (library_dir / "A-0007" / "plate.txt").write_text("sliced")
+        db_session.add(
+            LibraryFile(
+                folder_id=folder.id,
+                filename="plate.txt",
+                file_path="A-0007/plate.txt",
+                file_type="other",
+                file_size=6,
+                is_external=False,
+            )
+        )
+        await db_session.commit()
+
+        exported = await async_client.get(f"/api/v1/projects/{project.id}/export")
+
+        assert exported.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(exported.content)) as archive:
+            names = archive.namelist()
+            manifest = json.loads(archive.read("project.json"))
+        # The number stands in for the missing name, so the entry gets a real
+        # directory component instead of the unmatchable ``files//plate.txt``.
+        assert "files/A-0007/plate.txt" in names
+        assert manifest["linked_folders"][0]["number"] == "A-0007"
+        assert manifest["linked_folders"][0]["path"] == "A-0007"
+
+        # The second site the ZIP is carried to: same archive, nothing in the
+        # library there yet.
+        await db_session.execute(delete(LibraryFile))
+        await db_session.execute(delete(LibraryFolder))
+        await db_session.execute(delete(Project))
+        await db_session.commit()
+
+        imported = await async_client.post(
+            "/api/v1/projects/import/file",
+            files={"file": ("project.zip", io.BytesIO(exported.content), "application/zip")},
+        )
+
+        assert imported.status_code == 200
+        assert imported.json()["number"] == "A-0007"
+        db_session.expire_all()
+        folders = (await db_session.execute(select(LibraryFolder))).scalars().all()
+        assert [(f.name, f.number) for f in folders] == [("", "A-0007")]
+        files = (await db_session.execute(select(LibraryFile))).scalars().all()
+        assert [f.filename for f in files] == ["plate.txt"]
+        assert (library_dir / files[0].file_path).read_text() == "sliced"
+
+    @pytest.mark.asyncio
+    async def test_an_import_picks_the_nameless_folder_the_number_belongs_to(
+        self, async_client: AsyncClient, db_session
+    ):
+        """Two nameless order folders is the normal case here. An empty name
+        matches both, so the number — the one unique thing about such a folder
+        — is what identifies it."""
+        await _folder(db_session, name="", number="A-0007")
+        wanted = await _folder(db_session, name="", number="A-0008")
+
+        response = await async_client.post(
+            "/api/v1/projects/import",
+            json={"name": "Reindl bracket", "linked_folders": [{"name": "", "number": "A-0008"}]},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["number"] == "A-0008"
+        assert (await _folder_row(db_session, wanted.id)).project_id == response.json()["id"]
+
+    @pytest.mark.asyncio
+    async def test_an_entry_naming_nothing_is_skipped_rather_than_answering_500(
+        self, async_client: AsyncClient, db_session
+    ):
+        """An empty name used to be matched against every nameless root folder
+        at once, which is a ``MultipleResultsFound`` and a 500 as soon as there
+        are two of them."""
+        await _folder(db_session, name="", number="A-0007")
+        await _folder(db_session, name="", number="A-0008")
+
+        response = await async_client.post(
+            "/api/v1/projects/import",
+            json={"name": "Reindl bracket", "linked_folders": [{"name": ""}]},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["number"] is None
+        # Nothing was adopted, and nothing new was invented for it either.
+        db_session.expire_all()
+        linked = (await db_session.execute(select(LibraryFolder.project_id))).scalars().all()
+        assert linked == [None, None]
+
+    @pytest.mark.asyncio
+    async def test_an_import_that_creates_the_folder_keeps_its_number(self, async_client: AsyncClient, db_session):
+        """Nothing to adopt: the folder is created, and it is created with the
+        number it was filed under so the project can inherit it."""
+        response = await async_client.post(
+            "/api/v1/projects/import",
+            json={"name": "Reindl bracket", "linked_folders": [{"name": "", "number": "A-0007"}]},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["number"] == "A-0007"
+        db_session.expire_all()
+        created = (await db_session.execute(select(LibraryFolder))).scalars().all()
+        assert [(f.name, f.number) for f in created] == [("", "A-0007")]
+
+    @pytest.mark.asyncio
+    async def test_a_number_another_folder_holds_is_dropped_rather_than_failing_the_import(
+        self, async_client: AsyncClient, db_session
+    ):
+        """``library_folders.number`` is unique. The import must not die on a
+        collision — the project and its files matter more than the identifier,
+        and a folder that has a name is still identifiable without it."""
+        await _folder(db_session, name="Reindl", number="A-0007")
+
+        response = await async_client.post(
+            "/api/v1/projects/import",
+            json={"name": "Second site", "linked_folders": [{"name": "Reindl bracket", "number": "A-0007"}]},
+        )
+
+        assert response.status_code == 200
+        db_session.expire_all()
+        created = (
+            await db_session.execute(select(LibraryFolder).where(LibraryFolder.name == "Reindl bracket"))
+        ).scalar_one()
+        assert created.number is None

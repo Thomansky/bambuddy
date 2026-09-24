@@ -81,7 +81,7 @@ from backend.app.services.design_settings import (
     overrides_from_config,
 )
 from backend.app.services.filament_requirements import annotate_rack_groups
-from backend.app.services.folder_numbers import inherit_folder_number
+from backend.app.services.folder_numbers import folder_number_taken, inherit_folder_number
 from backend.app.services.number_series import (
     SERIES_LIBRARY_FOLDER,
     SERIES_QUEUE_JOB,
@@ -1171,20 +1171,13 @@ async def get_folders_by_archive(
     return folders
 
 
-async def _folder_number_taken(db: AsyncSession, number: str, exclude_id: int | None = None) -> bool:
-    query = select(LibraryFolder.id).where(LibraryFolder.number == number)
-    if exclude_id is not None:
-        query = query.where(LibraryFolder.id != exclude_id)
-    return (await db.execute(query.limit(1))).scalar_one_or_none() is not None
-
-
 async def _assert_folder_number_free(db: AsyncSession, number: str, exclude_id: int | None = None) -> None:
     """Answer 409 before writing, so the common case keeps its transaction.
 
     Racy on its own — two creates can both pass it — which is why the unique
     index and :func:`_flush_folder_number` are the actual guard.
     """
-    if await _folder_number_taken(db, number, exclude_id):
+    if await folder_number_taken(db, number, exclude_id):
         raise HTTPException(status_code=409, detail=f"Folder number '{number}' is already in use")
 
 
@@ -1210,7 +1203,7 @@ async def _allocate_folder_number(db: AsyncSession) -> str | None:
     the series there for good, so it is consumed and the next one taken.
     """
     try:
-        return await allocate_unused_number(db, SERIES_LIBRARY_FOLDER, lambda number: _folder_number_taken(db, number))
+        return await allocate_unused_number(db, SERIES_LIBRARY_FOLDER, lambda number: folder_number_taken(db, number))
     except NumbersAlreadyInUse as exc:
         raise HTTPException(
             status_code=409,

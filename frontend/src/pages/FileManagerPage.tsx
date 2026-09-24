@@ -82,6 +82,7 @@ import { SliceModal } from '../components/SliceModal';
 import { RunWithPipelineModal } from '../components/RunWithPipelineModal';
 import { BulkTagsPickerModal } from '../components/BulkTagsPickerModal';
 import { FileUploadModal } from '../components/FileUploadModal';
+import { FolderNumber } from '../components/FolderNumber';
 import { FolderReadmePanel } from '../components/FolderReadmePanel';
 import { LibraryTagsModal } from '../components/LibraryTagsModal';
 import { LibraryFileDetailsModal } from '../components/LibraryFileDetailsModal';
@@ -91,6 +92,7 @@ import { usePageFileDrop } from '../hooks/usePageFileDrop';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDuration, parseUTCDate, formatDate } from '../utils/date';
 import { formatFileSize } from '../utils/file';
+import { folderLabel, folderText } from '../utils/folder';
 import { assignableProjects } from '../utils/projectTree';
 import { openInSlicer, resolveDesktopSlicer, type SlicerType } from '../utils/slicer';
 import { isSlicedLibraryFile, isSliceableLibraryFile } from '../utils/libraryFiles';
@@ -309,30 +311,6 @@ function filterAndSortFiles(
 
 /** The key of the running-number series order folders draw from. */
 const FOLDER_SERIES_KEY = 'library_folder';
-
-/** What to call a folder in a tooltip or an aria-label. An order folder is
- *  often nothing but a number, so the number stands in for the missing name
- *  rather than leaving the control unlabelled. */
-function folderLabel(folder: { name: string; number?: string | null }): string {
-  return folder.name || folder.number || '';
-}
-
-/** The folder's running number, drawn before the name the way the project
- *  number sits next to the project name. Its own element, never part of the
- *  name: a number baked into a name would not survive a rename, and this one
- *  is what the quote and the invoice are filed under. */
-function FolderNumber({ number, t }: { number?: string | null; t: TFunction }) {
-  if (!number) return null;
-  return (
-    <span
-      data-testid="folder-number"
-      title={t('fileManager.folderNumber')}
-      className="text-xs font-mono px-1.5 py-0.5 rounded bg-bambu-dark text-bambu-gray whitespace-nowrap flex-shrink-0"
-    >
-      {number}
-    </span>
-  );
-}
 
 // New Folder Modal
 interface NewFolderModalProps {
@@ -648,10 +626,14 @@ function MoveFilesModal({ folders, selectedFiles, currentFolderId, onClose, onMo
   const [targetFolder, setTargetFolder] = useState<number | null>(null);
   const [folderFilter, setFolderFilter] = useState('');
 
-  const flattenFolders = (items: LibraryFolderTree[], depth = 0): { id: number | null; name: string; depth: number }[] => {
-    const result: { id: number | null; name: string; depth: number }[] = [];
+  type MoveTarget = { id: number | null; name: string; number?: string | null; depth: number };
+
+  const flattenFolders = (items: LibraryFolderTree[], depth = 0): MoveTarget[] => {
+    const result: MoveTarget[] = [];
     for (const item of items) {
-      result.push({ id: item.id, name: item.name, depth });
+      // The number travels with the row: an order folder is often nothing but
+      // its number, and a row drawn from the name alone would be blank.
+      result.push({ id: item.id, name: item.name, number: item.number, depth });
       if (item.children.length > 0) {
         result.push(...flattenFolders(item.children, depth + 1));
       }
@@ -666,18 +648,21 @@ function MoveFilesModal({ folders, selectedFiles, currentFolderId, onClose, onMo
   // jobs, and those job folders are the destinations, so filtering them out
   // would leave only the level above the one the user wants.
   const query = folderFilter.trim().toLowerCase();
-  const nameMatches = (item: LibraryFolderTree): boolean =>
-    item.name.toLowerCase().includes(query);
+  // The number counts as a match too: typing the number off the quote is how
+  // an order folder is found, and a folder that has no name has nothing else
+  // to type.
+  const rowMatches = (item: LibraryFolderTree): boolean =>
+    folderText(item).toLowerCase().includes(query);
   const matchesQuery = (item: LibraryFolderTree): boolean =>
-    nameMatches(item) || item.children.some(matchesQuery);
+    rowMatches(item) || item.children.some(matchesQuery);
   const filterTree = (items: LibraryFolderTree[]): LibraryFolderTree[] =>
     items
       .filter(matchesQuery)
       .map((item) =>
-        nameMatches(item) ? item : { ...item, children: filterTree(item.children) }
+        rowMatches(item) ? item : { ...item, children: filterTree(item.children) }
       );
 
-  const rootEntry = { id: null, name: t('fileManager.rootNoFolder'), depth: 0 };
+  const rootEntry: MoveTarget = { id: null, name: t('fileManager.rootNoFolder'), depth: 0 };
   const flatFolders = query
     ? [
         ...(rootEntry.name.toLowerCase().includes(query) ? [rootEntry] : []),
@@ -729,8 +714,10 @@ function MoveFilesModal({ folders, selectedFiles, currentFolderId, onClose, onMo
                     : 'hover:bg-bambu-dark text-white'
                 }`}
                 style={{ paddingLeft: `${12 + folder.depth * 16}px` }}
+                title={folderLabel(folder)}
               >
                 <FolderOpen className="w-4 h-4" />
+                <FolderNumber number={folder.number} t={t} />
                 {folder.name}
                 {folder.id === currentFolderId && <span className="text-xs text-bambu-gray ml-auto">({t('fileManager.current')})</span>}
               </button>
@@ -830,7 +817,7 @@ function LinkFolderModal({ folder, onClose, onLink, isLoading, t }: LinkFolderMo
 
         <div className="p-4 space-y-4 flex flex-col min-h-0 flex-1">
           <p className="text-sm text-bambu-gray">
-            {t('fileManager.linkFolderDescription', { name: folder.name })}
+            {t('fileManager.linkFolderDescription', { name: folderLabel(folder) })}
           </p>
 
           {/* Link type selector */}
@@ -2400,6 +2387,12 @@ export function FileManagerPage() {
     mutationFn: (data: LibraryFolderCreate) => api.createLibraryFolder(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['library-folders'] });
+      // The create just consumed a number, so the series the New Folder dialog
+      // reads its "next number" from has moved. Without this the cached row
+      // stays fresh for App.tsx's staleTime and the dialog promises a number
+      // the next folder will not get — which is the number the operator writes
+      // on the quote.
+      queryClient.invalidateQueries({ queryKey: ['number-series'] });
       setShowNewFolderModal(false);
       showToast(t('fileManager.toast.folderCreated'), 'success');
     },
@@ -3547,10 +3540,10 @@ export function FileManagerPage() {
             )}
             {sortedFolders && (() => {
               // Flatten folder tree for mobile selector
-              const flattenFolders = (items: LibraryFolderTree[], depth = 0): { id: number; name: string; fileCount: number; depth: number }[] => {
-                const result: { id: number; name: string; fileCount: number; depth: number }[] = [];
+              const flattenFolders = (items: LibraryFolderTree[], depth = 0): { id: number; name: string; number: string | null; fileCount: number; depth: number }[] => {
+                const result: { id: number; name: string; number: string | null; fileCount: number; depth: number }[] = [];
                 for (const item of items) {
-                  result.push({ id: item.id, name: item.name, fileCount: item.file_count, depth });
+                  result.push({ id: item.id, name: item.name, number: item.number, fileCount: item.file_count, depth });
                   if (item.children.length > 0) {
                     result.push(...flattenFolders(item.children, depth + 1));
                   }
@@ -3559,7 +3552,7 @@ export function FileManagerPage() {
               };
               return flattenFolders(sortedFolders).map((folder) => (
                 <option key={folder.id} value={folder.id}>
-                  {'│ '.repeat(folder.depth)}📂 {folder.name} {folder.fileCount > 0 ? `(${folder.fileCount})` : ''}
+                  {'│ '.repeat(folder.depth)}📂 {folderText(folder)} {folder.fileCount > 0 ? `(${folder.fileCount})` : ''}
                 </option>
               ));
             })()}

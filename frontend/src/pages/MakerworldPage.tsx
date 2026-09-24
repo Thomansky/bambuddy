@@ -12,6 +12,7 @@ import {
   type MakerworldResolvedModel,
 } from '../api/client';
 import { openInSlicer, resolveDesktopSlicer, type SlicerType } from '../utils/slicer';
+import { folderText } from '../utils/folder';
 import { Button } from '../components/Button';
 import { Card, CardContent, CardHeader } from '../components/Card';
 import { ConfirmModal } from '../components/ConfirmModal';
@@ -571,7 +572,7 @@ export function MakerworldPage() {
                     .flatMap((f) => flattenFolderTree(f))
                     .map(({ folder, depth }) => (
                       <option key={folder.id} value={folder.id}>
-                        {`${'— '.repeat(depth)}${folder.name}`}
+                        {`${'— '.repeat(depth)}${folderText(folder)}`}
                       </option>
                     ))}
                 </select>
