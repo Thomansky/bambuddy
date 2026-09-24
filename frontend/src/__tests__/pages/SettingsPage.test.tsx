@@ -1020,10 +1020,13 @@ describe('SettingsPage', () => {
     describe('pre-dispatch RFID re-read (queue_rfid_reread_before_start)', () => {
       const label = 'Re-read unidentified AMS spools before starting a job';
 
+      // The card moved to Filament: it is an AMS setting, and that is where
+      // the other AMS settings live.
       async function openWorkflow() {
         const user = userEvent.setup();
         render(<SettingsPage />);
-        await user.click(await screen.findByText('Workflow'));
+        await waitFor(() => expect(screen.getAllByText('Filament').length).toBeGreaterThan(0));
+        await user.click(screen.getAllByText('Filament')[0]);
         return user;
       }
 
