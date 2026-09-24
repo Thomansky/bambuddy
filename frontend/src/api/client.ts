@@ -1580,6 +1580,9 @@ export interface AppSettings {
   // top-level folders plus a "No folder" entry, or the files most recently
   // added or changed.
   library_root_view: LibraryRootView;
+  // Serve the library read-only over WebDAV at /webdav (#3152). Off by default;
+  // it always requires HTTP Basic credentials, even where the web UI does not.
+  webdav_enabled: boolean;
   // Camera view settings
   camera_view_mode: 'window' | 'embedded';
   // Preferred slicer (server-side API / sidecar)

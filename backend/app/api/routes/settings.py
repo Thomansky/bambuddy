@@ -223,6 +223,7 @@ async def _build_settings_response(db: AsyncSession, is_api_key: bool = False) -
             "preheat_enabled",
             "queue_keep_bed_warm",
             "vat_enabled",
+            "webdav_enabled",
         ]:
             settings_dict[setting.key] = setting.value.lower() == "true"
         elif setting.key in [

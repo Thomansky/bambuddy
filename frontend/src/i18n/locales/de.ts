@@ -2921,6 +2921,13 @@ export default {
     libraryRootViewRecent: 'Zuletzt hinzugefügt oder geändert',
     libraryRootViewRecentDescription: 'Die neuesten Dateien der gesamten Bibliothek, höchstens 100 - eine Startseite statt einer Liste.',
     libraryRootViewDescription: 'Suche und Tag-Filter durchsuchen immer die gesamte Bibliothek, egal welche der drei Möglichkeiten gewählt ist.',
+    webdavEnabled: 'WebDAV-Zugriff (nur lesend)',
+    webdavDescription: 'Den Dateimanager-Baum über WebDAV bereitstellen, damit ein Arbeitsplatz ihn als Laufwerk einbinden kann.',
+    webdavAddressHint: '{{url}} verbinden. Die Freigabe enthält „Files“ für die verwaltete Bibliothek und, sofern externe Ordner eingerichtet sind, „External“.',
+    webdavCredentialsHint: 'Fragt immer nach Bambuddy-Benutzername und -Passwort – auch auf Installationen, deren Weboberfläche ohne Anmeldung läuft – und jeder Benutzer sieht nur die Dateien, die er lesen darf.',
+    webdavTwoFactorHint: 'Ein Konto mit Zwei-Faktor-Authentifizierung kann die Freigabe nicht öffnen, weil die Basic-Authentifizierung den zweiten Code nicht abfragen kann; falsche Passwörter zählen auf dieselbe Sperre wie die Anmeldung an der Weboberfläche.',
+    webdavHttpsHint: 'Nur lesend: Dateien lassen sich öffnen und kopieren, niemals schreiben, umbenennen oder löschen. Über HTTPS bereitstellen, denn die Basic-Zugangsdaten gehen bei jeder Anfrage mit.',
+    webdavWindowsHint: 'Windows lehnt Basic-Authentifizierung über einfaches HTTP ab, solange HKLM\\SYSTEM\\CurrentControlSet\\Services\\WebClient\\Parameters\\BasicAuthLevel nicht auf 2 steht. Über HTTPS funktioniert es unverändert.',
     // Updates
     printerFirmware: 'Drucker-Firmware',
     checkFirmwareDescription: 'Nach Firmware-Updates von Bambu Lab suchen',

@@ -2942,6 +2942,13 @@ export default {
     libraryRootViewRecent: 'Recently added or changed',
     libraryRootViewRecentDescription: 'The newest files across the whole library, up to 100 of them - a start page rather than a listing.',
     libraryRootViewDescription: 'Search and tag filters always look at the whole library, whichever of the three is picked.',
+    webdavEnabled: 'WebDAV access (read-only)',
+    webdavDescription: 'Serve the File Manager tree over WebDAV so a workstation can map it as a drive.',
+    webdavAddressHint: 'Map {{url}}. The share holds “Files” for the managed library and, where external folders are registered, “External”.',
+    webdavCredentialsHint: 'It always asks for a Bambuddy username and password — even on installs where the web UI runs without a login — and each user sees only the files they are allowed to read.',
+    webdavTwoFactorHint: 'An account with two-factor authentication cannot open the share, because Basic authentication has no way to ask for the second code, and wrong passwords count towards the same lockout as the web login.',
+    webdavHttpsHint: 'Read-only: files can be opened and copied, never written, renamed or deleted. Serve it over HTTPS, because Basic credentials travel with every request.',
+    webdavWindowsHint: 'Windows refuses Basic authentication over plain HTTP until HKLM\\SYSTEM\\CurrentControlSet\\Services\\WebClient\\Parameters\\BasicAuthLevel is set to 2. Over HTTPS it works as it is.',
     // Updates
     printerFirmware: 'Printer Firmware',
     checkFirmwareDescription: 'Check for printer firmware updates from Bambu Lab',

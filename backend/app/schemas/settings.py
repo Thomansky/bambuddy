@@ -329,6 +329,16 @@ class AppSettings(BaseModel):
             "files most recently added or changed"
         ),
     )
+    webdav_enabled: bool = Field(
+        default=False,
+        description=(
+            "Expose the library read-only over WebDAV at /webdav. Off by default: "
+            "it is a second protocol onto the same files, and it always requires "
+            "HTTP Basic credentials, including on installs where the web UI runs "
+            "without authentication. Accounts with two-factor authentication "
+            "cannot use it — Basic has nowhere to carry the second factor"
+        ),
+    )
 
     # Camera view settings
     camera_view_mode: str = Field(
@@ -831,6 +841,7 @@ class AppSettingsUpdate(BaseModel):
     library_archive_mode: str | None = None
     library_disk_warning_gb: float | None = None
     library_root_view: Literal["all", "folders", "recent"] | None = None
+    webdav_enabled: bool | None = None
     camera_view_mode: str | None = None
     preferred_slicer: str | None = None
     open_in_slicer: str | None = None

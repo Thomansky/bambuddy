@@ -474,80 +474,7 @@ async def login(raw_request: Request, request: LoginRequest, response: Response,
     client_ip = _get_client_ip(raw_request)
     await check_rate_limit(db, client_ip, event_type=EventType.LOGIN_IP, max_attempts=20)
 
-    # Initialize `user` up front so every downstream branch can read/write
-    # it without UnboundLocalError. The LDAP success path sets it inside its
-    # own block; the local-credentials and email-credentials paths set it
-    # below. The original code relied on the local-credentials path running
-    # unconditionally to bind `user`; #1589 made that path skippable, so the
-    # init has to live here.
-    user = None
-    # Check if LDAP is enabled
-    ldap_user = None
-    ldap_settings = await _get_ldap_settings(db)
-    if ldap_settings:
-        try:
-            from backend.app.services.ldap_service import (
-                authenticate_ldap_user,
-                parse_ldap_config,
-            )
-
-            ldap_config = parse_ldap_config(ldap_settings)
-            if ldap_config:
-                ldap_user = authenticate_ldap_user(ldap_config, request.username, request.password)
-                if ldap_user:
-                    # LDAP auth succeeded — find or create local user
-                    user = await get_user_by_username(db, ldap_user.username)
-                    if user and user.auth_source != "ldap":
-                        # Username exists as local user — don't override
-                        user = None
-                        ldap_user = None
-                    elif not user:
-                        if not ldap_config.auto_provision:
-                            # User doesn't exist and auto-provision is off
-                            ldap_user = None
-                        else:
-                            # Auto-provision LDAP user
-                            user = await _provision_ldap_user(db, ldap_user, ldap_config)
-
-                    if user and ldap_user:
-                        # Update email and group mappings on each login
-                        await _sync_ldap_user(db, user, ldap_user, ldap_config)
-                        # Keep finance defaults idempotently in sync for LDAP users
-                        # (wallet + private cost center + self-membership).
-                        await ensure_user_finance_defaults(db, user)
-        except Exception as e:  # SEC-AUTH-EXC: LDAP failure sets ldap_user=None, downstream local-auth path runs with its own credential check (no implicit grant)
-            import logging
-
-            logging.getLogger(__name__).warning("LDAP authentication error, falling back to local: %s", e)
-            ldap_user = None
-
-    # #1589: local username/password gate. LDAP keeps its own switch
-    # (ldap_enabled) and is not affected — a delegated directory has its
-    # own policy and lockouts and is closer to SSO than to local creds.
-    # The env-var BAMBUDDY_LOCAL_LOGIN=true bypasses this gate so a server
-    # admin can recover an install whose SSO provider is unreachable
-    # without editing the DB.
-    from backend.app.models.settings import Settings as _Settings_for_local_login
-
-    local_login_allowed = ldap_user is not None or _local_login_env_bypass()
-    if not local_login_allowed:
-        setting_row = await db.execute(
-            select(_Settings_for_local_login).where(_Settings_for_local_login.key == "local_login_enabled")
-        )
-        row = setting_row.scalar_one_or_none()
-        # Default True when the row is absent — matches AppSettings default
-        # so fresh installs and tests behave like every release before #1589.
-        local_login_allowed = row is None or row.value.lower() == "true"
-
-    # Try username-based authentication (skip if already authenticated via LDAP)
-    if not ldap_user and local_login_allowed:
-        user = await authenticate_user(db, request.username, request.password)
-
-    # If username auth failed and advanced auth is enabled, try email-based authentication
-    if not user and not ldap_user and local_login_allowed:
-        advanced_auth = await is_advanced_auth_enabled(db)
-        if advanced_auth:
-            user = await authenticate_user_by_email(db, request.username, request.password)
+    user = await authenticate_credentials(db, request.username, request.password)
 
     if not user:
         await record_failed_attempt(db, request.username, event_type=EventType.LOGIN_ATTEMPT)
@@ -575,19 +502,7 @@ async def login(raw_request: Request, request: LoginRequest, response: Response,
 
     # --- 2FA check ---
     # Determine which 2FA methods are active for this user.
-
-    from backend.app.models.settings import Settings as _Settings
-    from backend.app.models.user_totp import UserTOTP
-
-    totp_result = await db.execute(select(UserTOTP).where(UserTOTP.user_id == user.id))
-    user_totp = totp_result.scalar_one_or_none()
-    totp_enabled = user_totp is not None and user_totp.is_enabled
-
-    email_2fa_result = await db.execute(select(_Settings).where(_Settings.key == f"user_{user.id}_email_2fa_enabled"))
-    email_2fa_setting = email_2fa_result.scalar_one_or_none()
-    email_otp_enabled = (
-        email_2fa_setting is not None and email_2fa_setting.value.lower() == "true" and user.email is not None
-    )
+    totp_enabled, email_otp_enabled = await resolve_second_factors(db, user)
 
     if totp_enabled or email_otp_enabled:
         # Import here to avoid circular imports
@@ -634,6 +549,110 @@ async def login(raw_request: Request, request: LoginRequest, response: Response,
         token_type="bearer",
         user=_user_to_response(user),
     )
+
+
+async def authenticate_credentials(db: AsyncSession, username: str, password: str) -> User | None:
+    """Turn a username/password pair into a user, or None.
+
+    Everything a credential check owes an install, in one place: the configured
+    directory first, then the ``local_login_enabled`` switch (#1589), then the
+    local hash, then the email fallback when advanced auth is on.
+    ``authenticate_user`` alone is none of that — it is the hash comparison,
+    and a caller that stops there authenticates against a local password an
+    SSO-only install has deliberately turned off, and refuses every LDAP
+    account with an indistinguishable 401. ``POST /auth/login`` and the WebDAV
+    Basic gate both come through here so neither can drift from the other.
+
+    Rate limiting and 2FA stay with the caller: they need a request (for the
+    client IP) and an answer to "what do I do with a second factor I cannot
+    ask for", and those answers differ per protocol.
+    """
+    user = None
+    ldap_user = None
+    ldap_settings = await _get_ldap_settings(db)
+    if ldap_settings:
+        try:
+            from backend.app.services.ldap_service import (
+                authenticate_ldap_user,
+                parse_ldap_config,
+            )
+
+            ldap_config = parse_ldap_config(ldap_settings)
+            if ldap_config:
+                ldap_user = authenticate_ldap_user(ldap_config, username, password)
+                if ldap_user:
+                    # LDAP auth succeeded — find or create local user
+                    user = await get_user_by_username(db, ldap_user.username)
+                    if user and user.auth_source != "ldap":
+                        # Username exists as local user — don't override
+                        user = None
+                        ldap_user = None
+                    elif not user:
+                        if not ldap_config.auto_provision:
+                            # User doesn't exist and auto-provision is off
+                            ldap_user = None
+                        else:
+                            # Auto-provision LDAP user
+                            user = await _provision_ldap_user(db, ldap_user, ldap_config)
+
+                    if user and ldap_user:
+                        # Update email and group mappings on each login
+                        await _sync_ldap_user(db, user, ldap_user, ldap_config)
+                        # Keep finance defaults idempotently in sync for LDAP users
+                        # (wallet + private cost center + self-membership).
+                        await ensure_user_finance_defaults(db, user)
+        except Exception as e:  # SEC-AUTH-EXC: LDAP failure sets ldap_user=None, downstream local-auth path runs with its own credential check (no implicit grant)
+            import logging
+
+            logging.getLogger(__name__).warning("LDAP authentication error, falling back to local: %s", e)
+            ldap_user = None
+
+    # #1589: local username/password gate. LDAP keeps its own switch
+    # (ldap_enabled) and is not affected — a delegated directory has its
+    # own policy and lockouts and is closer to SSO than to local creds.
+    # The env-var BAMBUDDY_LOCAL_LOGIN=true bypasses this gate so a server
+    # admin can recover an install whose SSO provider is unreachable
+    # without editing the DB.
+    local_login_allowed = ldap_user is not None or _local_login_env_bypass()
+    if not local_login_allowed:
+        setting_row = await db.execute(select(Settings).where(Settings.key == "local_login_enabled"))
+        row = setting_row.scalar_one_or_none()
+        # Default True when the row is absent — matches AppSettings default
+        # so fresh installs and tests behave like every release before #1589.
+        local_login_allowed = row is None or row.value.lower() == "true"
+
+    # Try username-based authentication (skip if already authenticated via LDAP)
+    if not ldap_user and local_login_allowed:
+        user = await authenticate_user(db, username, password)
+
+    # If username auth failed and advanced auth is enabled, try email-based authentication
+    if not user and not ldap_user and local_login_allowed:
+        advanced_auth = await is_advanced_auth_enabled(db)
+        if advanced_auth:
+            user = await authenticate_user_by_email(db, username, password)
+
+    return user
+
+
+async def resolve_second_factors(db: AsyncSession, user: User) -> tuple[bool, bool]:
+    """``(totp_enabled, email_otp_enabled)`` for *user*.
+
+    A protocol that cannot carry a challenge — WebDAV's Basic gate — has to ask
+    the same question the login route asks, or a password alone would be worth
+    more over that protocol than it is in the browser.
+    """
+    from backend.app.models.user_totp import UserTOTP
+
+    totp_result = await db.execute(select(UserTOTP).where(UserTOTP.user_id == user.id))
+    user_totp = totp_result.scalar_one_or_none()
+    totp_enabled = user_totp is not None and user_totp.is_enabled
+
+    email_2fa_result = await db.execute(select(Settings).where(Settings.key == f"user_{user.id}_email_2fa_enabled"))
+    email_2fa_setting = email_2fa_result.scalar_one_or_none()
+    email_otp_enabled = (
+        email_2fa_setting is not None and email_2fa_setting.value.lower() == "true" and user.email is not None
+    )
+    return totp_enabled, email_otp_enabled
 
 
 @router.post("/ws-token")
