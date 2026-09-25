@@ -6509,6 +6509,18 @@ class PrintScheduler:
             # would leave it naming a directory that no longer exists. The
             # file and thumbnail unlinks are deferred for the same reason.
             if consumed_library_file_id is not None and consumed_photos:
+                # Held as a plain int, read here while the session is still
+                # healthy, because the handler below may not touch an ORM
+                # instance at all. The commit it exists for fails inside the
+                # FLUSH, not at COMMIT: SQLite takes the write lock at the
+                # first DML statement, so a busy writer surfaces as "database
+                # is locked" on the UPDATE (#1853). SQLAlchemy rolls that back
+                # internally through safe_reraise before re-raising, which
+                # expires every loaded instance and leaves the session in
+                # pending-rollback state -- so `archive.id` inside the except
+                # would itself raise PendingRollbackError and the rollback
+                # below would never be reached.
+                archive_id = archive.id
                 try:
                     carried_photos = move_library_photos(
                         consumed_library_file_id,
@@ -6522,10 +6534,13 @@ class PrintScheduler:
                     # The archive and the delete are already committed; the
                     # print goes ahead either way. Worst case the pictures sit
                     # unnamed in the archive's own directory.
-                    archive_id = archive.id
+                    #
+                    # Ints only until the rollback has run, per the note above,
+                    # which is why this logs queue_item_id and not item.id --
+                    # the sibling handler forty lines up does the same.
                     logger.warning(
                         "Queue item %s: failed to carry library photos into archive %s: %s",
-                        item.id,
+                        queue_item_id,
                         archive_id,
                         e,
                     )

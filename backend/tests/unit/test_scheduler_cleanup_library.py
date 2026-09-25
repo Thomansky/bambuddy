@@ -1,10 +1,12 @@
+import logging
 from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import backend.app.models  # noqa: F401 - populate Base.metadata
@@ -272,8 +274,36 @@ async def _dispatch_library_item(
             await scheduler._start_print(db, item)
 
 
+def _fail_inside_the_next_flush(db, statement):
+    """Make the next flush on this session fail, once, the way SQLite does.
+
+    Raising *instead of* calling `db.commit()` does not reproduce a failed
+    commit and is not the dangerous case: the session stays ACTIVE, nothing is
+    expired, and every loaded instance still reads out of `__dict__`. What a
+    busy writer actually gives you is a statement error raised inside the
+    flush — SQLite takes the write lock at the first DML statement, not at
+    COMMIT, so "database is locked" surfaces there (#1853). SQLAlchemy rolls
+    that back internally through `safe_reraise` before re-raising, which
+    expires every loaded instance and leaves the session in pending-rollback
+    state: the next ORM attribute read raises PendingRollbackError, *before*
+    the handler's own rollback can run. That is the state a handler on this
+    path has to survive, so it is the state these tests have to produce.
+    """
+    sync_session = db.sync_session
+    fired = False
+
+    def after_flush(session, flush_context):
+        nonlocal fired
+        if fired:
+            return
+        fired = True
+        raise OperationalError(statement, {}, Exception("database is locked"))
+
+    event.listen(sync_session, "after_flush", after_flush)
+
+
 def _arm_commit_failure_on_library_delete(db):
-    """Make the one commit that removes the library row raise, once.
+    """Make the one commit that removes the library row fail, once.
 
     Stands in for the "database is locked" cascades the commit's own comment
     cites (#1853). Armed by the delete rather than by a call count so it
@@ -293,7 +323,7 @@ def _arm_commit_failure_on_library_delete(db):
         nonlocal armed
         if armed:
             armed = False
-            raise RuntimeError("database is locked")
+            _fail_inside_the_next_flush(db, "DELETE FROM library_files WHERE library_files.id = ?")
         return await original_commit()
 
     db.delete = delete
@@ -301,7 +331,7 @@ def _arm_commit_failure_on_library_delete(db):
 
 
 def _arm_commit_failure_on_photo_move(db, stack):
-    """Make the commit that records the carried photos raise, once.
+    """Make the commit that records the carried photos fail, once.
 
     The second commit of this path (#3077): the archive and the delete are
     already committed, the pictures are already on disk under the archive,
@@ -322,7 +352,7 @@ def _arm_commit_failure_on_photo_move(db, stack):
         nonlocal armed
         if armed:
             armed = False
-            raise RuntimeError("database is locked")
+            _fail_inside_the_next_flush(db, "UPDATE print_archives SET photos=? WHERE print_archives.id = ?")
         return await original_commit()
 
     stack.enter_context(patch.object(scheduler_module, "move_library_photos", move_library_photos))
@@ -435,21 +465,34 @@ async def test_cleanup_commit_failure_keeps_the_photos_with_the_library_file(que
 
 
 @pytest.mark.asyncio
-async def test_photo_commit_failure_still_dispatches_the_print(queue_factory):
+async def test_photo_commit_failure_still_dispatches_the_print(queue_factory, caplog):
     """A failed photos commit must not take the dispatch down with it (#3077).
 
     The archive and the delete are committed by then, so the print goes ahead
-    and the pictures sit unnamed under the archive. The rollback in that
-    handler expires every loaded instance, and in async SQLAlchemy the next
-    plain attribute read is lazy IO outside the greenlet (MissingGreenlet):
-    without the re-fetch this dies on the nozzle guard's
-    `archive.nozzle_diameter`, and then on the upload's `printer.name`.
+    and the pictures sit unnamed under the archive.
+
+    The commit fails inside the flush, which is where a locked SQLite fails —
+    see `_fail_inside_the_next_flush`. That expires every loaded instance
+    twice over: once by SQLAlchemy's internal rollback, before the handler
+    runs at all, and again at the handler's own `rollback()`. So the handler
+    may not read an ORM attribute on either side of that rollback. Before it,
+    a read raises PendingRollbackError; after it, MissingGreenlet — the nozzle
+    guard's `archive.nozzle_diameter` and the upload's `printer.name` are the
+    ones that used to die.
     """
     ctx = await queue_factory(cleanup=True, photos=["a1b2c3d4.jpg"])
 
-    await _dispatch_library_item(ctx, photo_commit_failure=True)
+    with caplog.at_level(logging.WARNING, logger="backend.app.services.print_scheduler"):
+        await _dispatch_library_item(ctx, photo_commit_failure=True)
 
     item, library_file, archive = await _queue_snapshot(ctx)
+    # The handler absorbed it rather than the failure being skipped: it names
+    # the queue item and the archive from ints it held before the commit.
+    assert any(
+        f"Queue item {ctx.queue_item_id}: failed to carry library photos into archive {item.archive_id}"
+        in record.message
+        for record in caplog.records
+    )
     assert item.status == "printing"
     assert item.archive_id == archive.id
     assert library_file is None
