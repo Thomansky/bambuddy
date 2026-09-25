@@ -165,6 +165,100 @@ async function openFileMenu(user: ReturnType<typeof userEvent.setup>, filename: 
   return screen.findByText('Copy path');
 }
 
+describe('FileManagerPage — the library in a directory tree', () => {
+  let user: ReturnType<typeof userEvent.setup>;
+
+  const treeFolders = [
+    folder({
+      id: 30,
+      name: '001 EBZ',
+      is_external: true,
+      external_path: '/library/001 EBZ',
+      children: [
+        folder({
+          id: 31,
+          name: '4016',
+          parent_id: 30,
+          is_external: true,
+          external_path: '/library/001 EBZ/4016',
+          file_count: 2,
+        }),
+      ],
+    }),
+    folder({ id: 32, name: '002 RAFI', is_external: true, external_path: '/library/002 RAFI', file_count: 1 }),
+  ];
+
+  beforeEach(() => {
+    localStorage.clear();
+    fileRequests = [];
+    user = userEvent.setup();
+    // The columns view is where the bucket actually scopes what is listed.
+    // localStorage is a mock in this suite, so the preference has to be
+    // answered rather than written.
+    vi.mocked(localStorage.getItem).mockImplementation((key: string) =>
+      key === 'library-view-mode' ? 'columns' : null,
+    );
+  });
+
+  afterEach(() => {
+    vi.mocked(localStorage.getItem).mockReset();
+  });
+
+  function renderTree(folders: ReturnType<typeof folder>[], directory = true) {
+    useHandlers(
+      directory
+        ? { library_storage_mode: 'directory', library_storage_path: '/library' }
+        : { library_storage_mode: 'managed', library_storage_path: '' },
+    );
+    server.use(http.get('/api/v1/library/folders', () => HttpResponse.json(folders)));
+    render(<FileManagerPage />);
+  }
+
+  it('lists the tree where the user lands, and offers no bucket to switch to', async () => {
+    // Every folder of a library that lives in a directory is is_external in the
+    // model's terms. Splitting the buckets on that flag put the whole library
+    // behind a switch and left the bucket the page opens on empty.
+    renderTree(treeFolders);
+
+    const columns = await screen.findByTestId('columns-view');
+    expect(await within(columns).findByText('001 EBZ')).toBeInTheDocument();
+    expect(within(columns).getByText('002 RAFI')).toBeInTheDocument();
+    // Nothing is outside the library, so there is nothing to switch to.
+    expect(sidebar().queryByText('External')).not.toBeInTheDocument();
+  });
+
+  it('keeps a folder from somewhere else on the other side of the switch', async () => {
+    renderTree([
+      ...treeFolders,
+      folder({
+        id: 40,
+        name: 'Altes NAS',
+        is_external: true,
+        external_path: '/mnt/anderes-nas/prints',
+        file_count: 3,
+      }),
+    ]);
+
+    const columns = await screen.findByTestId('columns-view');
+    expect(await within(columns).findByText('001 EBZ')).toBeInTheDocument();
+    expect(within(columns).queryByText('Altes NAS')).not.toBeInTheDocument();
+
+    // ...and the switch has a reason to exist again.
+    await user.click(sidebar().getByText('External'));
+    expect(await within(columns).findByText('Altes NAS')).toBeInTheDocument();
+    expect(within(columns).queryByText('001 EBZ')).not.toBeInTheDocument();
+  });
+
+  it('is unchanged in managed mode', async () => {
+    // Same rows, no storage path: an external folder is external, as before.
+    renderTree(treeFolders, false);
+
+    const columns = await screen.findByTestId('columns-view');
+    expect(await sidebar().findByText('External')).toBeInTheDocument();
+    expect(within(columns).queryByText('001 EBZ')).not.toBeInTheDocument();
+  });
+});
+
 describe('FileManagerPage — Copy path', () => {
   let writeText: ReturnType<typeof vi.fn>;
   let user: ReturnType<typeof userEvent.setup>;
