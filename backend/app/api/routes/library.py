@@ -74,6 +74,7 @@ from backend.app.schemas.library import (
     ZipExtractResult,
 )
 from backend.app.schemas.slicer import SliceRequest, SliceResponse
+from backend.app.services import library_storage
 from backend.app.services.archive import ThreeMFParser
 from backend.app.services.design_settings import (
     DesignOverride,
@@ -308,9 +309,20 @@ def validate_print_file_upload(filename: str, content: bytes) -> None:
 
 
 def _resolve_upload_destination(
-    target_folder: LibraryFolder | None, filename: str, *, allow_existing: bool = False
+    target_folder: LibraryFolder | None,
+    filename: str,
+    *,
+    allow_existing: bool = False,
+    storage_root: Path | None = None,
 ) -> tuple[Path, bool]:
     """Resolve the on-disk destination for an uploaded file.
+
+    ``storage_root`` is the library's directory-mode root (#3160) or ``None`` in
+    managed mode; callers get it from
+    ``library_storage.storage_root_for_write``. With a root and no folder the
+    destination is the root itself, so a file uploaded to the library's root
+    lands in the tree rather than in the flat store. A folder is answered by the
+    external branch below, which is what a directory-mode folder already is.
 
     Non-external target: returns ``(<library_files_dir>/<uuid><ext>, False)``.
     Writable external target: writes to ``<external_path>/<filename>``
@@ -355,6 +367,17 @@ def _resolve_upload_destination(
                 detail=f"A file named {filename!r} already exists in the external folder",
             )
         return dest, True
+    if target_folder is None and storage_root is not None:
+        try:
+            dest = safe_join_under(storage_root, filename, http=False)
+        except PathTraversalError:
+            raise HTTPException(status_code=400, detail="Invalid filename") from None
+        if dest.exists() and not allow_existing:
+            raise HTTPException(
+                status_code=409,
+                detail=f"A file named {filename!r} already exists in the library folder",
+            )
+        return dest, True
     ext = os.path.splitext(filename)[1].lower()
     return get_library_files_dir() / f"{uuid.uuid4().hex}{ext}", False
 
@@ -390,7 +413,9 @@ def _unique_external_name(ext_dir: Path, filename: str) -> str:
     return candidate
 
 
-def _resolve_slice_destination(target_folder: LibraryFolder | None, out_filename: str) -> tuple[Path, bool, str | None]:
+def _resolve_slice_destination(
+    target_folder: LibraryFolder | None, out_filename: str, *, storage_root: Path | None = None
+) -> tuple[Path, bool, str | None]:
     """Resolve where a slice result should be written.
 
     Returns ``(path, is_external, fallback_reason)``. ``fallback_reason`` is
@@ -411,6 +436,14 @@ def _resolve_slice_destination(target_folder: LibraryFolder | None, out_filename
     real time to produce, so an unwritable target falls back to managed storage
     with a reason attached rather than discarding the slice.
     """
+    if target_folder is None and storage_root is not None:
+        # The library's own root in directory mode: the slice belongs in the
+        # tree, under its real name, like every other file there (#3160).
+        try:
+            dest = safe_join_under(storage_root, _unique_external_name(storage_root, out_filename), http=False)
+        except PathTraversalError:
+            return get_library_files_dir() / f"{uuid.uuid4().hex}.gcode.3mf", False, "external_invalid_name"
+        return dest, True, None
     if target_folder is None or not target_folder.is_external:
         return get_library_files_dir() / f"{uuid.uuid4().hex}.gcode.3mf", False, None
 
@@ -673,7 +706,9 @@ async def save_3mf_bytes_to_library(
         folder_q = await db.execute(select(LibraryFolder).where(LibraryFolder.id == folder_id))
         target_folder = folder_q.scalar_one_or_none()
 
-    file_path, is_external = _resolve_upload_destination(target_folder, filename)
+    file_path, is_external = _resolve_upload_destination(
+        target_folder, filename, storage_root=await library_storage.storage_root_for_write(db)
+    )
     ext = file_path.suffix.lower() or ".3mf"
     with open(file_path, "wb") as fh:
         fh.write(file_bytes)
@@ -1328,10 +1363,13 @@ async def create_folder(
     _: User | None = Depends(require_permission_if_auth_enabled(Permission.LIBRARY_UPLOAD)),
 ):
     """Create a new folder."""
-    # Verify parent exists if specified
+    # Verify parent exists if specified. Kept rather than discarded: in
+    # directory mode the parent's real directory is where this one is made.
+    parent_folder: LibraryFolder | None = None
     if data.parent_id is not None:
         parent_result = await db.execute(select(LibraryFolder).where(LibraryFolder.id == data.parent_id))
-        if not parent_result.scalar_one_or_none():
+        parent_folder = parent_result.scalar_one_or_none()
+        if not parent_folder:
             raise HTTPException(status_code=404, detail="Parent folder not found")
 
     # Verify project exists if specified
@@ -1368,12 +1406,21 @@ async def create_folder(
     if not data.name and not number:
         raise HTTPException(status_code=400, detail="Folder name is required unless the folder is given a number")
 
+    # The share first, the row second (#3160): with the library living in a
+    # directory tree the folder IS a directory, and a row naming a directory
+    # that was never made is worse than no row at all. A directory that is
+    # already there is adopted -- somebody making the folder in Explorer and
+    # then in Bambuddy is the normal way this mode gets used.
+    tree_directory = await library_storage.prepare_folder_directory(db, parent_folder, name=data.name, number=number)
+
     folder = LibraryFolder(
         name=data.name,
         number=number,
         parent_id=data.parent_id,
         project_id=data.project_id,
         archive_id=data.archive_id,
+        is_external=tree_directory is not None,
+        external_path=str(tree_directory) if tree_directory is not None else None,
     )
     db.add(folder)
     await _flush_folder_number(db, number)
@@ -1613,7 +1660,21 @@ async def update_folder(
         await inherit_folder_number(db, linked_project, folder)
 
     await _flush_folder_number(db, folder.number)
-    await db.commit()
+    # The rename on the share happens before the commit and after every
+    # validation above, so a refused move never touches the share and a refused
+    # save never leaves the tree renamed (#3160).
+    moved_to = await library_storage.relocate_folder_directory(db, folder)
+    try:
+        await db.commit()
+    except Exception:
+        if moved_to is not None:
+            logger.error(
+                "Folder %s was moved to %s on the share but the database write failed. "
+                "The rows still point at the old path -- run Scan on the library to reconcile.",
+                folder_id,
+                moved_to,
+            )
+        raise
     await db.refresh(folder)
 
     # Get file count + latest file activity (#1770) and names
@@ -1718,6 +1779,10 @@ async def delete_folder(
     # External folders: only remove DB records, never delete files from external path
     is_ext = folder.is_external
 
+    # Read while the row is still there: after the cascade there is nothing left
+    # to ask where the folder lived (#3160).
+    tree_directory = await library_storage.folder_directory_for_delete(db, folder)
+
     # Get all files in this folder and subfolders to delete from disk
     async def get_all_file_ids(fid: int) -> list[int]:
         """Recursively get all file IDs in a folder tree."""
@@ -1765,7 +1830,75 @@ async def delete_folder(
     await db.delete(folder)
     await db.commit()
 
+    # The directory goes only when nothing is left in it. A directory still
+    # holding files stays, and the answer says so: the bytes are on somebody's
+    # share, the next scan will find them again, and a folder delete in
+    # Bambuddy quietly emptying a customer directory is not a trade worth
+    # making. os.walk on a mount is network IO, hence the thread.
+    directory_kept = False
+    if tree_directory is not None:
+        storage_root = await library_storage.configured_storage_root(db)
+        if storage_root is not None:
+            removed = await asyncio.to_thread(library_storage.prune_empty_directory, storage_root, tree_directory)
+            directory_kept = not removed
+
+    if directory_kept:
+        return {
+            "status": "success",
+            "message": f"Folder deleted. The directory {tree_directory} still holds files and was left on the share.",
+            "directory_kept": str(tree_directory),
+        }
     return {"status": "success", "message": "Folder deleted"}
+
+
+# ============ Library storage mode (#3160) ============
+
+
+async def _storage_migration_root(db: AsyncSession) -> Path:
+    """The tree the migration would move into, refusing if there is none.
+
+    Deliberately the *configured* root rather than the mode: somebody who wants
+    the files on the share before flipping the switch is doing the sensible
+    thing, so the path being set and usable is the only requirement.
+    """
+    from backend.app.api.routes.settings import get_setting
+
+    raw = await get_setting(db, library_storage.SETTING_PATH)
+    problem = library_storage.storage_path_problem(raw)
+    if problem:
+        raise HTTPException(status_code=400, detail=f"The library storage path {problem}")
+    return Path((raw or "").strip()).resolve()
+
+
+@router.get("/storage/migration-plan")
+async def get_library_storage_migration_plan(
+    db: AsyncSession = Depends(get_db),
+    _: User | None = Depends(require_permission_if_auth_enabled(Permission.SETTINGS_UPDATE)),
+):
+    """What moving the managed library into the configured tree would do.
+
+    Reported in full before anything moves, because the answer to a collision
+    is a decision — rename which file? — and not one this endpoint can make.
+    """
+    root = await _storage_migration_root(db)
+    plan = await library_storage.plan_migration(db, root)
+    return {"storage_path": str(root), **plan.as_dict()}
+
+
+@router.post("/storage/migrate")
+async def migrate_library_storage(
+    db: AsyncSession = Depends(get_db),
+    _: User | None = Depends(require_permission_if_auth_enabled(Permission.SETTINGS_UPDATE)),
+):
+    """Move the managed library into the configured directory tree.
+
+    Explicit, separate from the mode switch, and safe to run twice: each run
+    rebuilds the plan from the database, so a second one moves only what is
+    still in the managed store.
+    """
+    root = await _storage_migration_root(db)
+    summary = await library_storage.run_migration(db, root)
+    return {"status": "success", "storage_path": str(root), **summary}
 
 
 # ============ External Folder Endpoints ============
@@ -2571,7 +2704,9 @@ async def upload_file(
         # (403 read-only, 400 missing path, 409 collision) still surface
         # before any "bad file format" 400 — preserves existing error
         # ordering / tests.
-        file_path, is_external_upload = _resolve_upload_destination(target_folder, filename)
+        file_path, is_external_upload = _resolve_upload_destination(
+            target_folder, filename, storage_root=await library_storage.storage_root_for_write(db)
+        )
 
         # Read upload now so the validation can sniff magic bytes; the file
         # is written to disk only after the checks. #1401.
@@ -2660,12 +2795,14 @@ async def extract_zip_file(
             raise HTTPException(status_code=404, detail="Target folder not found")
         if target_folder.is_external and target_folder.external_readonly:
             raise HTTPException(status_code=403, detail="Cannot extract ZIP to a read-only external folder")
-        if target_folder.is_external:
-            # Writable external folders aren't supported by extract-zip because the
-            # nested-subfolder creation path would need to mkdir on the mount and
-            # create matching is_external=True LibraryFolder rows — a separate
-            # design. Direct the user at Scan, which already handles that shape
-            # (#1112).
+        if target_folder.is_external and not library_storage.is_inside_tree(
+            await library_storage.configured_storage_root(db), target_folder.external_path
+        ):
+            # A folder on one of #124's own mounts still cannot take a ZIP: the
+            # nested-subfolder creation it needs has no rows to match against
+            # there. Inside the library's own directory tree (#3160) it does --
+            # mkdir plus an is_external row is exactly what a folder is in that
+            # mode -- so the tree is extracted into like any other folder.
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -2687,6 +2824,37 @@ async def extract_zip_file(
     errors: list[ZipExtractError] = []
     folders_created = 0
     folder_cache: dict[str, int] = {}  # path -> folder_id
+    # With the library in a directory tree every folder this extraction creates
+    # is a real directory and every file keeps its real name (#3160); in managed
+    # mode the root is None and everything below behaves exactly as before.
+    storage_root = await library_storage.storage_root_for_write(db)
+    row_cache: dict[int, LibraryFolder | None] = {}
+
+    async def folder_row(fid: int | None) -> LibraryFolder | None:
+        """The folder row for *fid*, fetched once per extraction."""
+        if fid is None:
+            return None
+        if fid not in row_cache:
+            row_cache[fid] = (
+                await db.execute(select(LibraryFolder).where(LibraryFolder.id == fid))
+            ).scalar_one_or_none()
+        return row_cache[fid]
+
+    async def make_folder(name: str, parent_id: int | None) -> LibraryFolder:
+        """Create a folder row, with its directory when the library is a tree."""
+        tree_dir = await library_storage.prepare_folder_directory(
+            db, await folder_row(parent_id), name=name, number=None
+        )
+        created = LibraryFolder(
+            name=name,
+            parent_id=parent_id,
+            is_external=tree_dir is not None,
+            external_path=str(tree_dir) if tree_dir is not None else None,
+        )
+        db.add(created)
+        await db.flush()
+        row_cache[created.id] = created
+        return created
 
     # If create_folder_from_zip is True, create a folder named after the ZIP file
     zip_folder_id = folder_id
@@ -2708,10 +2876,7 @@ async def extract_zip_file(
             zip_folder_id = existing_folder.id
             logger.info("Reusing existing folder '%s' with id=%s", zip_folder_name, zip_folder_id)
         else:
-            # Create folder
-            new_folder = LibraryFolder(name=zip_folder_name, parent_id=folder_id)
-            db.add(new_folder)
-            await db.flush()
+            new_folder = await make_folder(zip_folder_name, folder_id)
             await db.commit()  # Commit folder creation immediately
             zip_folder_id = new_folder.id
             folders_created += 1
@@ -2764,10 +2929,7 @@ async def extract_zip_file(
                                     if existing_folder:
                                         current_parent = existing_folder.id
                                     else:
-                                        # Create folder
-                                        new_folder = LibraryFolder(name=part, parent_id=current_parent)
-                                        db.add(new_folder)
-                                        await db.flush()
+                                        new_folder = await make_folder(part, current_parent)
                                         current_parent = new_folder.id
                                         folders_created += 1
 
@@ -2779,11 +2941,16 @@ async def extract_zip_file(
                     filename = os.path.basename(zip_path)
                     ext = os.path.splitext(filename)[1].lower()
 
-                    # Generate unique filename for storage
-                    unique_filename = f"{uuid.uuid4().hex}{ext}"
-                    file_path = (
-                        get_library_files_dir() / unique_filename
-                    )  # SEC-PATH-OK: unique_filename = uuid.uuid4().hex + ext
+                    # Where the bytes go is the mode's decision, and it is the
+                    # same helper every other writer uses: a UUID under the
+                    # managed store, or the real name in the real directory
+                    # when the library lives in a tree (#3160).
+                    file_path, is_external_file = _resolve_upload_destination(
+                        await folder_row(target_folder_id),
+                        filename,
+                        allow_existing=True,
+                        storage_root=storage_root,
+                    )
 
                     # Extract and save file
                     file_content = zf.read(zip_path)
@@ -2870,7 +3037,8 @@ async def extract_zip_file(
                     library_file = LibraryFile(
                         folder_id=target_folder_id,
                         filename=filename,
-                        file_path=to_relative_path(file_path),
+                        is_external=is_external_file,
+                        file_path=_stored_file_path(file_path, is_external_file),
                         file_type=file_type,
                         file_size=len(file_content),
                         file_hash=file_hash,
@@ -4802,7 +4970,9 @@ async def slice_and_persist(
     if folder_id is not None:
         folder_result = await db.execute(select(LibraryFolder).where(LibraryFolder.id == folder_id))
         target_folder = folder_result.scalar_one_or_none()
-    out_path, out_is_external, external_fallback = _resolve_slice_destination(target_folder, out_filename)
+    out_path, out_is_external, external_fallback = _resolve_slice_destination(
+        target_folder, out_filename, storage_root=await library_storage.storage_root_if_usable(db)
+    )
     if out_is_external:
         # _unique_external_name may have suffixed it; the library row has to
         # show the name the file actually has on the share, or the two drift.
