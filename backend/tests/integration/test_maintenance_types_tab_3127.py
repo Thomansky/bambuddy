@@ -60,6 +60,26 @@ class TestCoverage:
         # ... and the X1C never gets a card for it at all.
         assert VISION_TYPE not in await _items(async_client, x1c.id)
 
+    async def test_renaming_the_vision_type_does_not_widen_its_coverage(self, async_client, printer_factory):
+        """The gate reads the action column, which a rename cannot touch (#3127).
+
+        update_maintenance_type has no is_system guard and answers with the
+        coverage it computes on the spot, so a name-keyed gate reports the
+        renamed type as eligible on the whole fleet and seeds an item there.
+        """
+        h2s = await printer_factory(name="H2S", model="H2S")
+        x1c = await printer_factory(name="X1C", model="X1C")
+        await _items(async_client, h2s.id)
+        await _items(async_client, x1c.id)
+
+        vision = (await _types(async_client))[VISION_TYPE]
+        response = await async_client.patch(f"/api/v1/maintenance/types/{vision['id']}", json={"name": "Encoder check"})
+        assert response.status_code == 200, response.text
+        renamed = response.json()
+        assert renamed["name"] == "Encoder check"
+        assert renamed["eligible_count"] == 1
+        assert renamed["eligible_printer_ids"] == [h2s.id]
+
     async def test_the_overview_says_which_actions_the_printer_can_run(self, async_client, printer_factory):
         h2s = await printer_factory(name="H2S", model="H2S")
         x1c = await printer_factory(name="X1C", model="X1C")

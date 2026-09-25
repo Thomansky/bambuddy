@@ -136,12 +136,22 @@ _ROD_TYPE_REQUIREMENTS: dict[str, str] = {
 }
 
 
-# System types that need hardware only some models have (#3127).
+# System types that need hardware only some models have (#3127). Only used as
+# a fallback for a row whose `action` has not been backfilled yet.
 _VISION_ENCODER_TYPES = frozenset({"Vision Encoder Calibration"})
 
 
-def _should_apply_to_printer(type_name: str, printer_model: str | None) -> bool:
-    """Check if a system maintenance type should apply to a given printer model."""
+def _should_apply_to_printer(type_name: str, printer_model: str | None, action: str | None = None) -> bool:
+    """Check if a system maintenance type should apply to a given printer model.
+
+    The action is the better key and wins where there is one: it is the column
+    the dispatcher itself reads, and it survives a rename, which
+    update_maintenance_type allows on a system type (#3127). A reminder type
+    has no action, so the rod gate below still has to key on the name.
+    """
+    if action is not None:
+        return maintenance_actions.action_applies_to_printer(action, printer_model)
+
     if type_name in _VISION_ENCODER_TYPES:
         return has_vision_encoder(printer_model)
 
@@ -165,7 +175,7 @@ def _type_applies_to_printer(maint_type: MaintenanceType, printer_model: str | N
     reminder type and for the levelling calibration.
     """
     if maint_type.is_system:
-        return _should_apply_to_printer(maint_type.name, printer_model)
+        return _should_apply_to_printer(maint_type.name, printer_model, maint_type.action)
     return maintenance_actions.action_applies_to_printer(maint_type.action, printer_model)
 
 
@@ -574,7 +584,7 @@ async def _get_printer_maintenance_internal(
     for maint_type in all_types:
         # Skip system types that don't apply to this printer model
         # (e.g., "Clean Carbon Rods" for H2D which has steel rods)
-        if maint_type.is_system and not _should_apply_to_printer(maint_type.name, printer.model):
+        if maint_type.is_system and not _should_apply_to_printer(maint_type.name, printer.model, maint_type.action):
             continue
 
         item = existing_items.get(maint_type.id)
