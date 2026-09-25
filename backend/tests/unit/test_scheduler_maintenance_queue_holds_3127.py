@@ -47,7 +47,7 @@ from backend.app.models.printer import Printer
 from backend.app.models.settings import Settings
 from backend.app.models.smart_plug import SmartPlug
 from backend.app.services import maintenance_actions
-from backend.app.services.print_scheduler import PrintScheduler
+from backend.app.services.print_scheduler import DISPATCH_MAX_ATTEMPTS, PrintScheduler
 
 pytestmark = pytest.mark.unit
 
@@ -798,6 +798,12 @@ class TestTheExemptionIsSpentAtDispatch:
     busy-printer path revert to pending, and the failure gate parks items as
     skipped for a later resume -- so an exemption that is never cleared keeps
     overriding every maintenance hold the item ever meets again.
+
+    Spent by a dispatch that actually put a print on the printer, though, not
+    by the attempt. The two paths that hand the row back to the queue hand
+    the ▶ back with it, because it was never honoured: without that, the
+    retry they just arranged meets the very maintenance hold the ▶ overrode,
+    and the print the person asked for never starts.
     """
 
     @pytest.fixture
@@ -831,9 +837,29 @@ class TestTheExemptionIsSpentAtDispatch:
             item_id = item.id
         return SimpleNamespace(base_dir=base_dir, item_id=item_id)
 
-    async def _dispatch(self, ctx, dispatch, *, start_print: bool):
+    async def _dispatch(self, ctx, dispatch, *, start_print: bool, post_state_name: str = "IDLE"):
+        """One ``_start_print`` call.
+
+        *post_state_name* is the state the printer reports **after** the start
+        command goes out. The printer reads IDLE until then, which is what the
+        pre-dispatch guard at the top of ``_start_print`` requires -- a printer
+        that is already busy is deferred there, before the upload, and never
+        reaches the CAS this class is about. Flipping it at the start_print
+        call is the #2598 case: the printer became busy during the FTP upload.
+        """
         import backend.app.services.print_scheduler as scheduler_module
         from backend.tests._fixtures.background_tasks import discarding_spawn_patch
+
+        idle = _status()
+        after_start = _status(state_name=post_state_name)
+        sent = {"start_print": False}
+
+        def _get_status(*_args, **_kwargs):
+            return after_start if sent["start_print"] else idle
+
+        def _send_start_print(*_args, **_kwargs):
+            sent["start_print"] = True
+            return start_print
 
         scheduler = PrintScheduler()
         async with ctx.session_maker() as db:
@@ -847,11 +873,11 @@ class TestTheExemptionIsSpentAtDispatch:
                 ),
                 patch(
                     "backend.app.services.print_scheduler.printer_manager.get_status",
-                    MagicMock(return_value=_status()),
+                    MagicMock(side_effect=_get_status),
                 ),
                 patch(
                     "backend.app.services.print_scheduler.printer_manager.start_print",
-                    MagicMock(return_value=start_print),
+                    MagicMock(side_effect=_send_start_print),
                 ),
                 patch(
                     "backend.app.services.print_scheduler.get_ftp_retry_settings",
@@ -880,10 +906,141 @@ class TestTheExemptionIsSpentAtDispatch:
         assert row.user_started is False
 
     @pytest.mark.asyncio
-    async def test_an_item_reverted_after_dispatch_is_held_like_any_other(self, ctx, dispatch):
-        """start_print() refused, so the row goes back to the queue. It has
-        had its turn; the next pass weighs it against the schedule again."""
-        row = await self._dispatch(ctx, dispatch, start_print=False)
+    async def test_the_busy_printer_deferral_hands_the_exemption_back(self, ctx, dispatch):
+        """The printer flipped to RUNNING during the FTP upload, so
+        start_print() refused and the row goes back to the queue (#2598).
+        That is a deferral, not a turn taken: the ▶ never produced a print,
+        so it is still owed one -- and without it the next pass re-applies
+        the maintenance hold and the item waits there indefinitely.
 
-        assert row.status in ("pending", "failed")
+        The state matters. ``_start_print`` only takes the deferral branch
+        when the post-dispatch state is in ``_ACTIVE_PRINT_STATES``; on the
+        default IDLE it falls through to the terminal failure below instead,
+        which is a different path with a different answer.
+        """
+        row = await self._dispatch(ctx, dispatch, start_print=False, post_state_name="RUNNING")
+
+        assert row.status == "pending"
+        assert row.started_at is None
+        assert row.user_started is True
+
+    @pytest.mark.asyncio
+    async def test_a_genuine_start_failure_leaves_it_spent(self, ctx, dispatch):
+        """start_print() refused on a printer that is sitting at IDLE -- a
+        real command failure, not a deferral. The row is terminal, so it
+        keeps nothing to carry into a later pass."""
+        row = await self._dispatch(ctx, dispatch, start_print=False, post_state_name="IDLE")
+
+        assert row.status == "failed"
+        assert row.user_started is False
+
+    @pytest.mark.asyncio
+    async def test_the_deferral_grants_nothing_to_an_item_nobody_started(self, ctx, dispatch):
+        """The flag goes back as it was, which for an ordinary queued item is
+        False. A deferral must not hand out an exemption the row never had."""
+        async with ctx.session_maker() as db:
+            row = await db.get(PrintQueueItem, dispatch.item_id)
+            row.user_started = False
+            await db.commit()
+
+        row = await self._dispatch(ctx, dispatch, start_print=False, post_state_name="RUNNING")
+
+        assert row.status == "pending"
+        assert row.user_started is False
+
+    @pytest.mark.asyncio
+    async def test_the_deferred_item_still_goes_out_past_a_maintenance_hold(self, ctx, dispatch):
+        """The whole point of the two above, end to end: the ▶ item is
+        deferred by a busy printer, a calibration run is then waiting for the
+        bed to cool, and the next pass dispatches the item anyway rather than
+        parking it behind the run the ▶ was meant to override."""
+        deferred = await self._dispatch(ctx, dispatch, start_print=False, post_state_name="RUNNING")
+        assert deferred.status == "pending"
+        await _add_maintenance(ctx, action_options={"bed_temp_below": 30}, run={})
+
+        launched = await _pass(ctx, PrintScheduler(), bed=45.0)
+
+        assert _launched_ids(launched) == [dispatch.item_id]
+        assert (await _item(ctx, dispatch.item_id)).waiting_reason is None
+
+
+class TestTheWatchdogRetryKeepsTheExemption:
+    """The other revert-to-pending path (#3127 on top of #1370).
+
+    The printer took the file and never left IDLE, so the watchdog puts the
+    row back to 'pending' for another attempt. That retry needs the ▶ the
+    dispatch spent: without it the next pass holds the item for the very
+    maintenance run the ▶ overrode, and since the item then never dispatches
+    again, ``dispatch_attempts`` never advances either -- it neither prints
+    nor fails, it just sits there reading "Maintenance run pending".
+    """
+
+    @pytest.fixture
+    async def printing_item(self, ctx):
+        async with ctx.session_maker() as db:
+            item = PrintQueueItem(
+                status="printing",
+                position=1,
+                printer_id=1,
+                print_time_seconds=3600,
+                started_at=datetime.now(timezone.utc),
+                user_started=False,
+            )
+            db.add(item)
+            await db.commit()
+            return item.id
+
+    async def _watchdog(self, ctx, item_id, *, user_started, attempts=0):
+        """One watchdog window on a printer that never leaves IDLE."""
+        async with ctx.session_maker() as db:
+            item = await db.get(PrintQueueItem, item_id)
+            item.dispatch_attempts = attempts
+            await db.commit()
+
+        never_starts = MagicMock(return_value=SimpleNamespace(state="IDLE", subtask_id="OLD", gcode_file=None))
+        patches = [
+            patch("backend.app.services.print_scheduler.printer_manager.get_status", never_starts),
+            patch(
+                "backend.app.services.print_scheduler.printer_manager.get_client",
+                MagicMock(return_value=MagicMock()),
+            ),
+            patch("backend.app.services.print_scheduler.async_session", ctx.session_maker),
+            patch("backend.app.core.database.async_session", ctx.session_maker),
+        ]
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            await PrintScheduler._watchdog_print_start(
+                queue_item_id=item_id,
+                printer_id=1,
+                pre_state="IDLE",
+                pre_subtask_id="OLD",
+                timeout=0.2,
+                poll_interval=0.05,
+                user_started=user_started,
+            )
+        return await _item(ctx, item_id)
+
+    @pytest.mark.asyncio
+    async def test_the_retry_carries_the_exemption_the_dispatch_spent(self, ctx, printing_item):
+        row = await self._watchdog(ctx, printing_item, user_started=True)
+
+        assert row.status == "pending"
+        assert row.dispatch_attempts == 1
+        assert row.user_started is True
+
+    @pytest.mark.asyncio
+    async def test_the_retry_of_an_ordinary_item_gains_nothing(self, ctx, printing_item):
+        row = await self._watchdog(ctx, printing_item, user_started=False)
+
+        assert row.status == "pending"
+        assert row.user_started is False
+
+    @pytest.mark.asyncio
+    async def test_giving_up_leaves_the_exemption_spent(self, ctx, printing_item):
+        """The retry budget is gone, so the row fails rather than going round
+        again. Nothing will dispatch it, so it keeps no exemption."""
+        row = await self._watchdog(ctx, printing_item, user_started=True, attempts=DISPATCH_MAX_ATTEMPTS - 1)
+
+        assert row.status == "failed"
         assert row.user_started is False
