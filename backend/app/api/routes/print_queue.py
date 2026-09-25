@@ -2242,6 +2242,10 @@ async def resume_queue_after_failure(
         skipped_item.error_message = None
         skipped_item.completed_at = None
         skipped_item.rfid_precheck_at = None
+        # A row coming back to pending starts over as a scheduler decision:
+        # it may have been skipped before its ▶ was ever dispatched, and that
+        # exemption must not outlive the failure it was parked by (#3127).
+        skipped_item.user_started = False
 
     await db.commit()
 

@@ -29,6 +29,7 @@ manager and the upload launcher mocked.
 
 from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -38,6 +39,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import backend.app.models  # noqa: F401 - populate Base.metadata
 from backend.app.core.database import Base
+from backend.app.models.archive import PrintArchive
 from backend.app.models.library import LibraryFile
 from backend.app.models.maintenance import MaintenanceRun, MaintenanceType, PrinterMaintenance
 from backend.app.models.print_queue import PrintQueueItem
@@ -787,3 +789,101 @@ class TestKeepClearOfTheSlot:
         await _pass(ctx, PrintScheduler(), waiting=waiting)
 
         waiting.assert_not_called()
+
+
+class TestTheExemptionIsSpentAtDispatch:
+    """``user_started`` is a one-shot, not a latch (#3127).
+
+    ▶ asks for *this* dispatch. The row outlives it -- the watchdog and the
+    busy-printer path revert to pending, and the failure gate parks items as
+    skipped for a later resume -- so an exemption that is never cleared keeps
+    overriding every maintenance hold the item ever meets again.
+    """
+
+    @pytest.fixture
+    async def dispatch(self, ctx, tmp_path):
+        base_dir = tmp_path / "case"
+        archive_rel = Path("archives") / "job.3mf"
+        archive_abs = base_dir / archive_rel
+        archive_abs.parent.mkdir(parents=True, exist_ok=True)
+        archive_abs.write_bytes(b"archive payload")
+
+        async with ctx.session_maker() as db:
+            archive = PrintArchive(
+                printer_id=1,
+                filename="job.3mf",
+                file_path=str(archive_rel),
+                file_size=archive_abs.stat().st_size,
+                status="completed",
+            )
+            db.add(archive)
+            await db.flush()
+            item = PrintQueueItem(
+                status="pending",
+                position=1,
+                printer_id=1,
+                archive_id=archive.id,
+                print_time_seconds=3600,
+                user_started=True,
+            )
+            db.add(item)
+            await db.commit()
+            item_id = item.id
+        return SimpleNamespace(base_dir=base_dir, item_id=item_id)
+
+    async def _dispatch(self, ctx, dispatch, *, start_print: bool):
+        import backend.app.services.print_scheduler as scheduler_module
+        from backend.tests._fixtures.background_tasks import discarding_spawn_patch
+
+        scheduler = PrintScheduler()
+        async with ctx.session_maker() as db:
+            item = await db.get(PrintQueueItem, dispatch.item_id)
+            patches = [
+                patch.object(scheduler_module.settings, "base_dir", dispatch.base_dir),
+                patch("backend.app.services.print_scheduler.async_session", ctx.session_maker),
+                patch(
+                    "backend.app.services.print_scheduler.printer_manager.is_connected",
+                    MagicMock(return_value=True),
+                ),
+                patch(
+                    "backend.app.services.print_scheduler.printer_manager.get_status",
+                    MagicMock(return_value=_status()),
+                ),
+                patch(
+                    "backend.app.services.print_scheduler.printer_manager.start_print",
+                    MagicMock(return_value=start_print),
+                ),
+                patch(
+                    "backend.app.services.print_scheduler.get_ftp_retry_settings",
+                    AsyncMock(return_value=(False, 0, 0, 1.0)),
+                ),
+                patch("backend.app.services.print_scheduler.upload_file_async", AsyncMock(return_value=True)),
+                patch("backend.app.services.print_scheduler.delete_file_async", AsyncMock(return_value=True)),
+                discarding_spawn_patch(),
+                patch.object(scheduler, "_propagate_owner_to_printer_manager", AsyncMock()),
+                patch.object(scheduler, "_power_off_if_needed", AsyncMock()),
+                patch.object(scheduler, "_preheat_and_soak", AsyncMock()),
+            ]
+            with ExitStack() as stack:
+                for p in patches:
+                    stack.enter_context(p)
+                await scheduler._start_print(db, item)
+
+        async with ctx.session_maker() as db:
+            return await db.get(PrintQueueItem, dispatch.item_id)
+
+    @pytest.mark.asyncio
+    async def test_a_dispatched_item_no_longer_carries_the_exemption(self, ctx, dispatch):
+        row = await self._dispatch(ctx, dispatch, start_print=True)
+
+        assert row.status == "printing"
+        assert row.user_started is False
+
+    @pytest.mark.asyncio
+    async def test_an_item_reverted_after_dispatch_is_held_like_any_other(self, ctx, dispatch):
+        """start_print() refused, so the row goes back to the queue. It has
+        had its turn; the next pass weighs it against the schedule again."""
+        row = await self._dispatch(ctx, dispatch, start_print=False)
+
+        assert row.status in ("pending", "failed")
+        assert row.user_started is False
