@@ -1487,6 +1487,16 @@ export type WebdavMode = 'off' | 'read' | 'readwrite';
  *  directory tree (typically a mounted share) that it only indexes. */
 export type LibraryStorageMode = 'managed' | 'directory';
 
+/** One reason the migration will not run, in parts so the UI can say it in the
+ *  user's language and put the filename before the path. */
+export interface LibraryStorageMigrationBlocker {
+  kind: 'collision' | 'exists' | string;
+  target: string;
+  names: string[];
+  /** The server's English sentence — for logs and for anything not rendering the parts. */
+  message: string;
+}
+
 /** What moving the managed library into the tree would do, or did. */
 export interface LibraryStorageMigrationPlan {
   storage_path: string;
@@ -1494,7 +1504,7 @@ export interface LibraryStorageMigrationPlan {
   folder_count: number;
   total_bytes: number;
   /** Collisions. Any entry here means the run is refused whole. */
-  blockers: string[];
+  blockers: LibraryStorageMigrationBlocker[];
   /** Files the plan cannot move — bytes missing, folder gone. */
   missing: string[];
   moves: { file_id: number; filename: string; source: string; target: string; size: number }[];
@@ -8606,6 +8616,16 @@ export interface StorageUsageOtherItem {
 
 export interface StorageUsageResponse {
   roots: string[];
+  /** The library's directory tree, when it has one (#3160) — its files are
+   *  counted in the breakdown even though they are outside every Bambuddy
+   *  directory, and the disk figures are the share's, not the server's. */
+  library_tree: string | null;
+  library_tree_disk: {
+    total_bytes: number;
+    free_bytes: number;
+    total_formatted: string;
+    free_formatted: string;
+  } | null;
   total_bytes: number;
   total_formatted: string;
   categories: StorageUsageCategory[];

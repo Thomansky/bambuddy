@@ -523,6 +523,25 @@ class MigrationMove:
 
 
 @dataclass(slots=True)
+class MigrationBlocker:
+    """One reason the migration will not run, in parts rather than as prose.
+
+    The message is kept for logs and for anything reading the API directly, but
+    the parts are what the File Manager renders: a collision is a decision about
+    which file gets renamed, and the person making it needs the names in their
+    own language, not an English sentence with two paths in it.
+    """
+
+    kind: str
+    target: str
+    names: list[str]
+    message: str
+
+    def as_dict(self) -> dict:
+        return {"kind": self.kind, "target": self.target, "names": self.names, "message": self.message}
+
+
+@dataclass(slots=True)
 class MigrationPlan:
     """What a migration would do, worked out before anything is touched.
 
@@ -536,7 +555,7 @@ class MigrationPlan:
 
     moves: list[MigrationMove] = field(default_factory=list)
     folders: list[tuple[int, Path]] = field(default_factory=list)
-    blockers: list[str] = field(default_factory=list)
+    blockers: list[MigrationBlocker] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)
 
     @property
@@ -548,7 +567,7 @@ class MigrationPlan:
             "file_count": len(self.moves),
             "folder_count": len(self.folders),
             "total_bytes": self.total_bytes,
-            "blockers": self.blockers,
+            "blockers": [blocker.as_dict() for blocker in self.blockers],
             "missing": self.missing,
             "moves": [
                 {
@@ -566,10 +585,11 @@ class MigrationPlan:
 async def plan_migration(db: AsyncSession, root: Path) -> MigrationPlan:
     """Work out every directory to make and every file to move, touching nothing.
 
-    Trashed files are included: their bytes are in the managed store too, and a
-    migration that leaves them behind never empties it — and restoring one
-    afterwards would hand back a row pointing into a store the library no longer
-    writes to.
+    Trashed files are left where they are. They would otherwise claim a name in
+    the tree that the live file of the same name needs — which is the common
+    case, because a file usually lands in the trash after being replaced — and
+    "throw the old one away" would then not be an answer to a collision. Their
+    bytes stay in the managed store until the trash is emptied.
 
     Thumbnails are deliberately left where they are. They are Bambuddy's own
     derived data, regenerable from the file, and nobody wants a share full of
@@ -607,7 +627,7 @@ async def plan_migration(db: AsyncSession, root: Path) -> MigrationPlan:
     claimed: dict[Path, str] = {}
     files = (await db.execute(select(LibraryFile))).scalars().all()
     for file in files:
-        if file.is_external:
+        if file.is_external or file.deleted_at is not None:
             continue
         source = _managed_source(file)
         if source is None or not source.is_file():
@@ -623,12 +643,26 @@ async def plan_migration(db: AsyncSession, root: Path) -> MigrationPlan:
         target = safe_join_under(root, *parts, file.filename, http=False)
         if target in claimed:
             plan.blockers.append(
-                f"{target} would receive both {claimed[target]} and {file.filename} (file id {file.id}). "
-                f"Rename one of them and run the migration again"
+                MigrationBlocker(
+                    kind="collision",
+                    target=str(target),
+                    names=[claimed[target], f"{file.filename} (file id {file.id})"],
+                    message=(
+                        f"{target} would receive both {claimed[target]} and {file.filename} (file id {file.id}). "
+                        f"Rename one of them and run the migration again"
+                    ),
+                )
             )
             continue
         if target.exists():
-            plan.blockers.append(f"{target} already exists on the share. Move or rename it and run again")
+            plan.blockers.append(
+                MigrationBlocker(
+                    kind="exists",
+                    target=str(target),
+                    names=[f"{file.filename} (file id {file.id})"],
+                    message=f"{target} already exists on the share. Move or rename it and run again",
+                )
+            )
             continue
         claimed[target] = f"{file.filename} (file id {file.id})"
         plan.moves.append(
@@ -688,7 +722,7 @@ async def run_migration(db: AsyncSession, root: Path) -> dict:
             status_code=409,
             detail={
                 "message": "The migration was not started because it would overwrite files",
-                "blockers": plan.blockers,
+                "blockers": [blocker.as_dict() for blocker in plan.blockers],
             },
         )
 

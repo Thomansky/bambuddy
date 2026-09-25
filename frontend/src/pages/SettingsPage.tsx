@@ -258,6 +258,24 @@ export function SettingsPage() {
   const [storagePlan, setStoragePlan] = useState<LibraryStorageMigrationPlan | null>(null);
   const [storageBusy, setStorageBusy] = useState(false);
 
+  const handleStorageModeSave = async () => {
+    setStorageBusy(true);
+    try {
+      await api.updateSettings({
+        library_storage_mode: localSettings?.library_storage_mode,
+        library_storage_path: (localSettings?.library_storage_path ?? '').trim(),
+      });
+      await queryClient.invalidateQueries({ queryKey: ['settings'] });
+      await queryClient.invalidateQueries({ queryKey: ['storage-usage'] });
+      setStoragePlan(null);
+      showToast(t('settings.toast.settingsSaved'), 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t('settings.libraryStorageMigrationFailed'), 'error');
+    } finally {
+      setStorageBusy(false);
+    }
+  };
+
   const handleStoragePlan = async () => {
     setStorageBusy(true);
     try {
@@ -451,6 +469,15 @@ export function SettingsPage() {
     queryKey: ['settings'],
     queryFn: api.getSettings,
   });
+
+  // The library's storage pair, compared against what the server last sent:
+  // this card saves on demand rather than on every keystroke (#3160).
+  const storageModeDirty =
+    (settings?.library_storage_mode ?? 'managed') !== (localSettings?.library_storage_mode ?? 'managed') ||
+    (settings?.library_storage_path ?? '') !== (localSettings?.library_storage_path ?? '');
+  const storageModeIncomplete =
+    (localSettings?.library_storage_mode ?? 'managed') === 'directory' &&
+    !(localSettings?.library_storage_path ?? '').trim();
 
   const {
     data: storageUsage,
@@ -1278,8 +1305,6 @@ export function SettingsPage() {
       Number(baseline.library_disk_warning_gb ?? 5) !== Number(localSettings.library_disk_warning_gb ?? 5) ||
       (baseline.library_root_view ?? 'all') !== (localSettings.library_root_view ?? 'all') ||
       (baseline.webdav_mode ?? 'off') !== (localSettings.webdav_mode ?? 'off') ||
-      (baseline.library_storage_mode ?? 'managed') !== (localSettings.library_storage_mode ?? 'managed') ||
-      (baseline.library_storage_path ?? '') !== (localSettings.library_storage_path ?? '') ||
       (baseline.preferred_slicer ?? 'bambu_studio') !== (localSettings.preferred_slicer ?? 'bambu_studio') ||
       resolveEngine(baseline.slice_engine) !== resolveEngine(localSettings.slice_engine) ||
       (baseline.open_in_slicer ?? null) !== (localSettings.open_in_slicer ?? null) ||
@@ -1405,8 +1430,6 @@ export function SettingsPage() {
         library_disk_warning_gb: localSettings.library_disk_warning_gb,
         library_root_view: localSettings.library_root_view,
         webdav_mode: localSettings.webdav_mode,
-        library_storage_mode: localSettings.library_storage_mode,
-        library_storage_path: localSettings.library_storage_path,
         preferred_slicer: localSettings.preferred_slicer,
         slice_engine: localSettings.slice_engine,
         open_in_slicer: localSettings.open_in_slicer,
@@ -2930,6 +2953,28 @@ export function SettingsPage() {
                     <p className="text-xs text-bambu-gray">{t('settings.libraryStorageDriftHint')}</p>
                     <p className="text-xs text-bambu-gray">{t('settings.libraryStorageHashHint')}</p>
 
+                    {/* Saved on demand, not while typing. The mode and the path
+                        are one setting in two fields: sending the mode the
+                        moment the radio is clicked means sending it with an
+                        empty path, which the server refuses -- correctly, and
+                        the card used to report that as a failure. */}
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleStorageModeSave}
+                        disabled={storageBusy || !storageModeDirty || storageModeIncomplete}
+                        className="px-3 py-1.5 text-sm rounded bg-bambu-green text-white hover:bg-bambu-green/80 disabled:bg-bambu-dark-tertiary disabled:text-bambu-gray disabled:cursor-not-allowed"
+                      >
+                        {t('common.save')}
+                      </button>
+                      {storageModeIncomplete && (
+                        <span className="text-xs text-bambu-gray">{t('settings.libraryStoragePathRequired')}</span>
+                      )}
+                      {!storageModeIncomplete && storageModeDirty && (
+                        <span className="text-xs text-amber-500">{t('settings.libraryStorageUnsaved')}</span>
+                      )}
+                    </div>
+
                     {/* The migration is its own action, and its plan is shown
                         before anything moves: a collision is a decision about
                         which file gets renamed, and nobody can make that from
@@ -2950,7 +2995,17 @@ export function SettingsPage() {
                           type="button"
                           onClick={handleStorageMigrate}
                           disabled={storageBusy || !storagePlan || storagePlan.blockers.length > 0}
-                          className="px-3 py-1.5 text-sm rounded bg-bambu-green text-white hover:bg-bambu-green/80 disabled:opacity-50"
+                          // Greyed rather than dimmed-green, and with the reason
+                          // on the title: a green button that does nothing when
+                          // pressed is worse than one that looks unavailable.
+                          title={
+                            !storagePlan
+                              ? t('settings.libraryStoragePlanFirst')
+                              : storagePlan.blockers.length > 0
+                                ? t('settings.libraryStorageBlocked', { blockers: storagePlan.blockers.length })
+                                : undefined
+                          }
+                          className="px-3 py-1.5 text-sm rounded bg-bambu-green text-white hover:bg-bambu-green/80 disabled:bg-bambu-dark-tertiary disabled:text-bambu-gray disabled:cursor-not-allowed"
                         >
                           {t('settings.libraryStorageMigrateButton')}
                         </button>
@@ -2964,10 +3019,26 @@ export function SettingsPage() {
                               size: formatFileSize(storagePlan.total_bytes),
                             })}
                           </p>
-                          {storagePlan.blockers.map((blocker) => (
-                            <p key={blocker} className="text-red-400 break-all">
-                              {blocker}
+                          {storagePlan.blockers.length > 0 && (
+                            <p className="text-red-400 font-medium">
+                              {t('settings.libraryStorageBlocked', { blockers: storagePlan.blockers.length })}
                             </p>
+                          )}
+                          {storagePlan.blockers.map((blocker) => (
+                            <div key={blocker.target} className="text-red-400">
+                              {/* The names first, the path second: what the user
+                                  has to do is rename one of these two, and the
+                                  directory they are in is context for that. */}
+                              <p>
+                                {blocker.kind === 'exists'
+                                  ? t('settings.libraryStorageBlockerExists', { name: blocker.names[0] })
+                                  : t('settings.libraryStorageBlockerCollision', {
+                                      first: blocker.names[0],
+                                      second: blocker.names[1],
+                                    })}
+                              </p>
+                              <p className="text-bambu-gray break-all">{blocker.target}</p>
+                            </div>
                           ))}
                           {storagePlan.missing.map((entry) => (
                             <p key={entry} className="text-yellow-400 break-all">
@@ -3134,6 +3205,22 @@ export function SettingsPage() {
                             </div>
                           ))}
                       </div>
+                      {storageUsage.library_tree && (
+                        // Otherwise the breakdown reads as if the library had
+                        // shrunk to nothing: its files are on the share now, and
+                        // the free space that matters for them is the share's.
+                        <div className="mt-2 text-xs text-bambu-gray">
+                          {t('settings.storageUsageLibraryTree', { path: storageUsage.library_tree })}
+                          {storageUsage.library_tree_disk && (
+                            <span className="ml-1 text-white">
+                              {t('settings.storageUsageLibraryTreeFree', {
+                                free: storageUsage.library_tree_disk.free_formatted,
+                                total: storageUsage.library_tree_disk.total_formatted,
+                              })}
+                            </span>
+                          )}
+                        </div>
+                      )}
                       <div className="mt-2 text-xs text-bambu-gray">
                         {t('settings.storageUsageTotal', 'Total')}: <span className="text-white">{storageUsage.total_formatted}</span>
                         {storageUsage.scan_errors > 0 && (

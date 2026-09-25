@@ -3,6 +3,7 @@
 import asyncio
 import os
 import platform
+import shutil
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -132,16 +133,22 @@ def _is_system_path(path: Path) -> bool:
     return all(not _is_under(path, data_dir) for data_dir in _get_data_dirs())
 
 
-def _get_storage_rules() -> list[tuple[str, str, Callable]]:
+def _get_storage_rules(library_tree: Path | None = None) -> list[tuple[str, str, Callable]]:
     base_dir = settings.base_dir
     archive_dir = settings.archive_dir
     library_dir = archive_dir / "library"
+    # With the library living in a directory tree (#3160) its files are outside
+    # every Bambuddy directory, so the breakdown would show the library as
+    # having shrunk to nothing. Counted here as what they are.
+    tree_rules: list[tuple[str, str, Callable]] = (
+        [("library_files", "Library Files", lambda path: _is_under(path, library_tree))] if library_tree else []
+    )
     virtual_printer_dir = base_dir / "virtual_printer"
     upload_dir = virtual_printer_dir / "uploads"
 
     db_paths = set(_get_database_paths())
 
-    return [
+    return tree_rules + [
         (
             "database",
             "Database",
@@ -263,11 +270,34 @@ def _walk_files(roots: list[Path]) -> list[Path]:
     return files
 
 
-def _scan_storage_usage() -> dict:
+def _disk_usage(path: Path | None) -> dict | None:
+    """Free and total bytes of the filesystem *path* is on, or ``None``.
+
+    For the library tree this is the share's own figure, not the Pi's: a
+    breakdown that shows 77 GB free while the library lives on a NAS is
+    answering a question nobody asked.
+    """
+    if path is None:
+        return None
+    try:
+        usage = shutil.disk_usage(path)
+    except OSError:
+        return None
+    return {
+        "total_bytes": usage.total,
+        "free_bytes": usage.free,
+        "total_formatted": format_bytes(usage.total),
+        "free_formatted": format_bytes(usage.free),
+    }
+
+
+def _scan_storage_usage(library_tree: Path | None = None) -> dict:
     base_dir = settings.base_dir
-    rules = _get_storage_rules()
+    rules = _get_storage_rules(library_tree)
 
     roots = _get_data_dirs()
+    if library_tree is not None and library_tree.is_dir():
+        roots = [*roots, library_tree]
 
     seen_roots = set()
     unique_roots = []
@@ -344,6 +374,8 @@ def _scan_storage_usage() -> dict:
 
     return {
         "roots": [str(root) for root in unique_roots],
+        "library_tree": str(library_tree) if library_tree is not None else None,
+        "library_tree_disk": _disk_usage(library_tree),
         "total_bytes": total_bytes,
         "total_formatted": format_bytes(total_bytes),
         "categories": categories,
@@ -352,9 +384,16 @@ def _scan_storage_usage() -> dict:
     }
 
 
-async def _get_storage_usage_cached(refresh: bool, max_age_seconds: int) -> dict:
+async def _get_storage_usage_cached(refresh: bool, max_age_seconds: int, library_tree: Path | None = None) -> dict:
     global _storage_usage_cache
     global _storage_usage_cache_ts
+
+    # A cached answer from before the mode was switched describes a library that
+    # has since moved, so the tree is part of what the cache is keyed on.
+    if _storage_usage_cache and _storage_usage_cache.get("library_tree") != (
+        str(library_tree) if library_tree is not None else None
+    ):
+        refresh = True
 
     now = time.time()
     if not refresh and _storage_usage_cache and _storage_usage_cache_ts is not None:
@@ -383,7 +422,7 @@ async def _get_storage_usage_cached(refresh: bool, max_age_seconds: int) -> dict
                     },
                 }
 
-        snapshot = await asyncio.to_thread(_scan_storage_usage)
+        snapshot = await asyncio.to_thread(_scan_storage_usage, library_tree)
         _storage_usage_cache = {
             **snapshot,
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -585,11 +624,23 @@ async def get_system_info(
 async def get_storage_usage(
     refresh: bool = False,
     max_age_seconds: int = STORAGE_USAGE_CACHE_SECONDS,
+    db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.SYSTEM_READ),
 ):
-    """Get storage usage breakdown for Bambuddy data directories."""
+    """Get storage usage breakdown for Bambuddy data directories.
+
+    Includes the library's directory tree when it has one (#3160) — walking a
+    mounted share costs a full listing, which is why this answer is cached like
+    the rest of the breakdown rather than computed per request.
+    """
+    from backend.app.services.library_storage import configured_storage_root
+
     max_age_seconds = max(0, min(max_age_seconds, 3600))
-    return await _get_storage_usage_cached(refresh=refresh, max_age_seconds=max_age_seconds)
+    return await _get_storage_usage_cached(
+        refresh=refresh,
+        max_age_seconds=max_age_seconds,
+        library_tree=await configured_storage_root(db),
+    )
 
 
 @router.get("/health", response_model=ScanResult)

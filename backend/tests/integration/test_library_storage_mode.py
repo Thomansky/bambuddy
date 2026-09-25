@@ -328,6 +328,54 @@ class TestTheMigration:
         assert (tree / "Leer").is_dir()
 
     @pytest.mark.asyncio
+    async def test_a_trashed_file_stays_in_the_managed_store(self, async_client: AsyncClient, db_session, tree):
+        """Or throwing the old copy away would not answer a name collision.
+
+        A file usually lands in the trash *because* it was replaced, so letting
+        it claim the name in the tree would block the live file behind it.
+        """
+        folder = (await async_client.post("/api/v1/library/folders", json={"name": "Kunden"})).json()
+        doomed = await self._managed_file(async_client, "old.stl", folder["id"])
+        assert (await async_client.delete(f"/api/v1/library/files/{doomed['id']}")).status_code == 200
+        await self._managed_file(async_client, "part.stl", folder["id"])
+        await _set(db_session, "library_storage_path", str(tree))
+
+        plan = (await async_client.get("/api/v1/library/storage/migration-plan")).json()
+        assert [move["filename"] for move in plan["moves"]] == ["part.stl"]
+
+        assert (await async_client.post("/api/v1/library/storage/migrate")).status_code == 200
+        assert (tree / "Kunden" / "part.stl").is_file()
+        assert not (tree / "Kunden" / "old.stl").exists()
+
+    @pytest.mark.asyncio
+    async def test_a_collision_names_its_parts_for_the_ui(self, async_client: AsyncClient, db_session, tree):
+        """The UI renders the names in the user's language, not this sentence."""
+        folder = (await async_client.post("/api/v1/library/folders", json={"name": "Kunden"})).json()
+        await self._managed_file(async_client, "part.stl", folder["id"])
+        await _set(db_session, "library_storage_path", str(tree))
+        (tree / "Kunden").mkdir()
+        (tree / "Kunden" / "part.stl").write_bytes(b"already here")
+
+        blocker = (await async_client.get("/api/v1/library/storage/migration-plan")).json()["blockers"][0]
+        assert blocker["kind"] == "exists"
+        assert blocker["target"] == str(tree / "Kunden" / "part.stl")
+        assert blocker["names"][0].startswith("part.stl")
+        assert "already exists" in blocker["message"]
+
+    @pytest.mark.asyncio
+    async def test_the_storage_breakdown_counts_the_tree(self, async_client: AsyncClient, db_session, tree):
+        """Files on the share are still library files, wherever they are."""
+        await _directory_mode(db_session, tree)
+        (tree / "Kunden").mkdir()
+        (tree / "Kunden" / "part.stl").write_bytes(b"x" * 4096)
+
+        usage = (await async_client.get("/api/v1/system/storage-usage?refresh=true")).json()
+        assert usage["library_tree"] == str(tree)
+        by_key = {category["key"]: category["bytes"] for category in usage["categories"]}
+        assert by_key.get("library_files", 0) >= 4096
+        assert usage["library_tree_disk"]["total_bytes"] > 0
+
+    @pytest.mark.asyncio
     async def test_without_a_path_there_is_nothing_to_migrate_into(self, async_client: AsyncClient):
         response = await async_client.post("/api/v1/library/storage/migrate")
         assert response.status_code == 400
