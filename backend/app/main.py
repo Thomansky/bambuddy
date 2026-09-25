@@ -9841,6 +9841,10 @@ async def security_headers_middleware(request, call_next):
     # script passes the policy without us needing 'unsafe-inline'. See
     # https://developers.cloudflare.com/cloudflare-challenges/challenge-types/javascript-detections/#if-you-have-a-content-security-policy-csp
     csp_nonce = secrets.token_urlsafe(16)
+    # Routes that render their own HTML need it too, or their inline script is
+    # blocked by the policy below. The outcome-confirmation page (#1898) is the
+    # one that does: it submits its own form so a verdict still costs one tap.
+    request.state.csp_nonce = csp_nonce
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     # X-Frame-Options is the legacy cross-origin embedding control. Modern

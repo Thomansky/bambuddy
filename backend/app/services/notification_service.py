@@ -839,8 +839,13 @@ class NotificationService:
 
         # Build payload based on format
         if payload_format == "slack":
-            # Slack/Mattermost format - just text field
-            data = {"text": f"*{title}*\n{message}"}
+            # Slack/Mattermost format - just text field.
+            # Slack and Mattermost fetch every URL in the text to build preview
+            # cards. Bambuddy's messages are status text that gains nothing
+            # from one, and the outcome prompt (#1898) used to carry single-use
+            # verdict links, so the unfurl was a machine answering the operator's
+            # question. Off for the same reason Telegram's is.
+            data = {"text": f"*{title}*\n{message}", "unfurl_links": False, "unfurl_media": False}
         else:
             # Generic format with custom field names
             custom_field_title = config.get("field_title", "title").strip() or "title"
@@ -1012,14 +1017,17 @@ class NotificationService:
                 return await self._send_callmebot(config, f"{title}\n{message}")
             elif provider.provider_type == "ntfy":
                 # Outcome confirmation (#1898): render the verdict capability
-                # links as one-tap buttons on the notification itself. http +
-                # GET so no browser needs to open; clear=true dismisses the
-                # notification once a button was tapped.
+                # links as one-tap buttons on the notification itself. http so
+                # no browser needs to open; POST because that is the method
+                # that records — a GET only opens the confirmation page, which
+                # is what keeps unfurlers from answering the prompt.
+                # clear=true dismisses the notification once a button was tapped.
                 ntfy_actions = None
                 good_url = (variables or {}).get("good_url")
                 reject_url = (variables or {}).get("reject_url")
                 # Buttons need absolute URLs; without a configured external_url
-                # the links are relative and the plain body text has to do.
+                # the links are relative, and the body's deep link into the
+                # archive has to do.
                 if (
                     event_type == "print_confirm_request"
                     and good_url
@@ -1028,8 +1036,8 @@ class NotificationService:
                     and reject_url.startswith("http")
                 ):
                     ntfy_actions = (
-                        f"http, Good, {good_url}, method=GET, clear=true; "
-                        f"http, Reject, {reject_url}, method=GET, clear=true"
+                        f"http, Good, {good_url}, method=POST, clear=true; "
+                        f"http, Reject, {reject_url}, method=POST, clear=true"
                     )
                 return await self._send_ntfy(
                     config, title, message, image_data=image_data, event_type=event_type, actions=ntfy_actions

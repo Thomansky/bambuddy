@@ -18,13 +18,14 @@ logger = logging.getLogger(__name__)
 VERDICT_SOURCES = ("dialog", "link", "plate_clear", "printer_card", "api", "reaction")
 
 # Link-preview unfurlers and mail-security scanners fetch every URL they find in
-# a message, unattended, within seconds of it being sent. The one-tap verdict
-# links are single-use capabilities that travel in the notification body text,
-# so such a fetch would answer the outcome prompt with a verdict nobody chose --
-# and the token is spent, so the operator's real tap then lands on "already
-# answered". Matched as case-insensitive substrings of the User-Agent; the
-# generic "bot" token covers TelegramBot, Discordbot, Slackbot-LinkExpanding,
-# Twitterbot and LinkedInBot in one go.
+# a message, unattended, within seconds of it being sent. Nothing they can do
+# with a GET records a verdict any more -- that is the POST route's job -- so
+# this list is the second layer: it decides whether the confirmation page
+# submits its own form, which is what keeps a human at one tap. A scanner that
+# runs JavaScript would otherwise press the button on the operator's behalf.
+# Matched as case-insensitive substrings of the User-Agent; the generic "bot"
+# token covers TelegramBot, Discordbot, Slackbot-LinkExpanding, Twitterbot and
+# LinkedInBot in one go.
 UNATTENDED_FETCH_AGENTS = (
     "bot",
     "crawler",
@@ -53,17 +54,14 @@ UNATTENDED_FETCH_HEADERS = {
 def is_unattended_fetch(method: str, headers: Mapping[str, str]) -> bool:
     """Whether a request for a one-tap verdict link came from a machine.
 
-    Gates the capability route: an unattended request is shown the choice
-    instead of having it recorded, so an unfurler cannot spend a token the
-    operator has not tapped yet. False positives are deliberately cheap -- a
-    browser mistaken for a bot gets a page with a single link that records the
-    verdict -- so the lists above err towards catching more.
+    Decides whether the confirmation page submits itself. False positives are
+    deliberately cheap -- a browser mistaken for a bot gets the same page with
+    a button to press -- so the lists above err towards catching more.
     """
     if method.upper() != "GET":
-        # Defence in depth. FastAPI's APIRoute does not widen GET to HEAD the
-        # way a plain Starlette Route does, so a scanner's HEAD is 405 today --
-        # but the day anyone lists HEAD on the route, a probe must not be able
-        # to spend the token by arriving.
+        # Anything that is not the page load is not a page load: only the GET
+        # route renders, and only a GET can be widened to HEAD by a future
+        # router change.
         return True
     for header, markers in UNATTENDED_FETCH_HEADERS.items():
         value = (headers.get(header) or "").lower()

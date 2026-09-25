@@ -1,21 +1,28 @@
 """A machine must not be able to spend a one-tap verdict token (#1898).
 
-Both verdict URLs go out as plain text in the notification body for every
-channel -- that is what ``DEFAULT_TEMPLATES['print_confirm_request']`` ships.
-Telegram fetches the first URL in a message to build a preview card, mail
-gateways detonate links before delivery, and browsers prefetch. Any one of
-those GETs would record a verdict nobody chose and retire the token, so the
-operator's real tap lands on "already answered" and a scrap part is counted as
-good for the rest of time.
+Telegram and Slack fetch the URLs in a message to build a preview card, mail
+gateways detonate links before delivery, and browsers prefetch. While the
+verdict URLs went out as plain text in the notification body -- which is what
+``DEFAULT_TEMPLATES['print_confirm_request']`` used to ship -- any one of those
+GETs recorded a verdict nobody chose and retired the token, so the operator's
+real tap landed on "already answered" and a scrap part counted as good for the
+rest of time.
 
-Two defences, tested here: the prompt goes out without a preview at all, and
-the route recognises an unattended request and offers the choice instead of
-taking it.
+Three defences, in the order they matter. The capability URLs no longer travel
+in body text at all. Recording is a POST, so a GET from anything that walks a
+URL changes nothing (the route side of that is in the integration tests). And
+the channels that build previews are asked not to. The unattended-fetch
+heuristic tested here is the fourth: it decides whether the confirmation page
+submits itself, so a scanner that runs JavaScript does not tap the button for
+the operator.
 """
+
+import json
 
 import httpx
 import pytest
 
+from backend.app.models.notification import NotificationProvider
 from backend.app.models.notification_template import DEFAULT_TEMPLATES
 from backend.app.services.notification_service import NotificationService
 from backend.app.services.print_confirmation import is_unattended_fetch
@@ -57,7 +64,7 @@ class _Client:
         self.is_closed = False
         self.calls: list[dict] = []
 
-    async def post(self, url, data=None, files=None, json=None):
+    async def post(self, url, data=None, files=None, json=None, headers=None):
         self.calls.append(json if json is not None else (data or {}))
         return httpx.Response(200, json={"ok": True, "result": {}})
 
@@ -81,9 +88,9 @@ class TestUnattendedFetchDetection:
         assert is_unattended_fetch("GET", {"user-agent": browser, "sec-purpose": "prefetch;prerender"}) is True
 
     def test_head_is_never_a_tap(self):
-        """The route only lists GET, so FastAPI 405s a HEAD today (pinned in
-        the integration tests). This keeps that true if HEAD is ever added:
-        a scanner probing the link must not answer the prompt by arriving."""
+        """Only the GET route renders the page, so only a GET can be widened
+        to HEAD by a future router change. A probe must not come back looking
+        like a page load."""
         assert is_unattended_fetch("HEAD", {"user-agent": BROWSER_AGENTS[0]}) is True
 
     def test_a_missing_user_agent_is_not_held_against_the_caller(self):
@@ -92,13 +99,71 @@ class TestUnattendedFetchDetection:
         assert is_unattended_fetch("GET", {}) is False
 
 
-class TestPromptCarriesTheLinksInBodyText:
-    def test_the_default_template_still_puts_both_urls_in_the_body(self):
-        """The premise of this whole file. If this ever stops being true the
-        guard is still correct, but the urgency changes — so pin it."""
+class TestPromptKeepsTheCapabilityOutOfBodyText:
+    """This file used to pin the opposite: that both verdict URLs were in the
+    body. They were, and that was the defect — the body is the one part of a
+    notification that every unfurler, gateway and proxy reads. The capability
+    links now travel only in affordances nothing prefetches."""
+
+    def test_the_default_template_carries_only_the_deep_link(self):
         template = next(t for t in DEFAULT_TEMPLATES if t["event_type"] == "print_confirm_request")
-        assert "{good_url}" in template["body_template"]
-        assert "{reject_url}" in template["body_template"]
+        assert "{good_url}" not in template["body_template"]
+        assert "{reject_url}" not in template["body_template"]
+        assert "{confirm_url}" in template["body_template"]
+
+
+class TestNtfyButtonsRecordOverPost:
+    @pytest.mark.asyncio
+    async def test_the_action_buttons_use_post(self):
+        """The ntfy app issues the action itself, so it can use the method that
+        records. A GET would only open the confirmation page — which is the
+        point of the split, and is what every crawler gets."""
+        service = NotificationService()
+        captured: dict = {}
+
+        async def _fake_ntfy(config, title, message, image_data=None, event_type=None, actions=None):
+            captured["actions"] = actions
+            return True, "ok"
+
+        service._send_ntfy = _fake_ntfy
+        provider = NotificationProvider(
+            name="farm", provider_type="ntfy", config=json.dumps({"server": "https://ntfy.sh", "topic": "farm"})
+        )
+
+        ok, _ = await service._send_to_provider(
+            provider,
+            "How did your print come out?",
+            "X1C: bracket.3mf",
+            event_type="print_confirm_request",
+            variables={
+                "good_url": "https://farm.example.com/api/v1/archives/confirm/tok/good",
+                "reject_url": "https://farm.example.com/api/v1/archives/confirm/tok/reject",
+            },
+        )
+
+        assert ok
+        assert "method=POST" in captured["actions"]
+        assert "method=GET" not in captured["actions"]
+
+
+class TestSlackDoesNotUnfurl:
+    @pytest.mark.asyncio
+    async def test_the_slack_payload_turns_previews_off(self):
+        """Slack and Mattermost unfurl the URLs in `text` the same way
+        Telegram builds a preview card."""
+        service = NotificationService()
+        client = _Client()
+        service._http_client = client
+
+        ok, _ = await service._send_webhook(
+            {"webhook_url": "https://hooks.slack.example.com/services/T/B/x", "payload_format": "slack"},
+            "How did your print come out?",
+            "X1C: bracket.3mf",
+        )
+
+        assert ok
+        assert client.calls[0]["unfurl_links"] is False
+        assert client.calls[0]["unfurl_media"] is False
 
 
 class TestTelegramDoesNotAskForAPreview:

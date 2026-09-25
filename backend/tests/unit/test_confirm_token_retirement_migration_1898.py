@@ -1,4 +1,4 @@
-"""Migration coverage for the one-tap token columns and index (#1898).
+"""Migration coverage for the one-tap token columns, index and prompt body (#1898).
 
 ``confirm_token_used_at`` is what turns a spent link into "already answered"
 instead of a 404, and ``user_verdict_source`` is what the hint next to the
@@ -120,5 +120,77 @@ async def test_the_confirm_token_index_reaches_an_upgraded_install(tmp_path):
             await conn.execute(PrintArchive.__table__.insert(), rows)
             stored = (await conn.execute(text("SELECT confirm_token FROM print_archives"))).scalars().all()
             assert stored == [None, None]
+    finally:
+        await engine.dispose()
+
+
+OLD_CONFIRM_BODY = "{printer}: {filename}\nGood: {good_url}\nReject: {reject_url}"
+
+
+async def _confirm_body(conn) -> str | None:
+    return (
+        await conn.execute(
+            text("SELECT body_template FROM notification_templates WHERE event_type = 'print_confirm_request'")
+        )
+    ).scalar_one_or_none()
+
+
+@pytest.mark.asyncio
+async def test_the_capability_urls_leave_the_prompt_body_on_an_upgraded_install(tmp_path):
+    """Seeding only inserts templates that are missing, so an install already
+    running this feature would keep the shape the review found: both single-use
+    verdict URLs as plain text in every channel's message body, where the
+    unfurler that answers the prompt reads them."""
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'confirm-body.db'}")
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            await conn.execute(
+                text(
+                    "INSERT INTO notification_templates (event_type, name, title_template, body_template, is_default) "
+                    "VALUES ('print_confirm_request', 'Print Outcome Confirmation', "
+                    "'How did your print come out?', :body, 1)"
+                ),
+                {"body": OLD_CONFIRM_BODY},
+            )
+
+            await run_migrations(conn)
+
+            body = await _confirm_body(conn)
+            assert body is not None
+            assert "{good_url}" not in body
+            assert "{reject_url}" not in body
+            assert "{confirm_url}" in body
+
+            # Idempotent, and it agrees with what a fresh install seeds.
+            await run_migrations(conn)
+            from backend.app.models.notification_template import DEFAULT_TEMPLATES
+
+            seeded = next(t for t in DEFAULT_TEMPLATES if t["event_type"] == "print_confirm_request")
+            assert await _confirm_body(conn) == seeded["body_template"]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_template_the_admin_edited_is_left_alone(tmp_path):
+    """Same guard as the two template renames: match the old default verbatim
+    or do not touch the row."""
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'confirm-body-custom.db'}")
+    custom = "Plate off {printer}? {good_url}"
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            await conn.execute(
+                text(
+                    "INSERT INTO notification_templates (event_type, name, title_template, body_template, is_default) "
+                    "VALUES ('print_confirm_request', 'Mine', 'Well?', :body, 0)"
+                ),
+                {"body": custom},
+            )
+
+            await run_migrations(conn)
+
+            assert await _confirm_body(conn) == custom
     finally:
         await engine.dispose()
