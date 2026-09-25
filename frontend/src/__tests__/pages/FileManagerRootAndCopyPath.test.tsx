@@ -276,7 +276,9 @@ describe('FileManagerPage — the library in a directory tree', () => {
     expect(sidebar().queryByText('External')).not.toBeInTheDocument();
   });
 
-  it('keeps a folder from somewhere else on the other side of the switch', async () => {
+  it('shows a folder from somewhere else in the same tree, marked as its own', async () => {
+    // One library, one tree: a mount keeps its own icon rather than being
+    // filed behind a switch nobody knew to press.
     renderTree([
       ...treeFolders,
       folder({
@@ -290,12 +292,8 @@ describe('FileManagerPage — the library in a directory tree', () => {
 
     const columns = await screen.findByTestId('columns-view');
     expect(await within(columns).findByText('001 EBZ')).toBeInTheDocument();
-    expect(within(columns).queryByText('Altes NAS')).not.toBeInTheDocument();
-
-    // ...and the switch has a reason to exist again.
-    await user.click(sidebar().getByText('External'));
-    expect(await within(columns).findByText('Altes NAS')).toBeInTheDocument();
-    expect(within(columns).queryByText('001 EBZ')).not.toBeInTheDocument();
+    expect(within(columns).getByText('Altes NAS')).toBeInTheDocument();
+    expect(sidebar().queryByText('External')).not.toBeInTheDocument();
   });
 
   it('is unchanged in managed mode', async () => {

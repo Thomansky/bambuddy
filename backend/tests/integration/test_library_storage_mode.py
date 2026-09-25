@@ -425,6 +425,98 @@ class TestWhatTheShareBringsWithIt:
         assert [f["filename"] for f in listed] == ["teil.3mf"]
 
 
+class TestKeepingUpWithTheShare:
+    """The auto-scan: the same reconciliation, without six buttons (#3160)."""
+
+    async def _managed_file(self, async_client: AsyncClient, filename: str, folder_id: int | None = None):
+        params = {"folder_id": folder_id} if folder_id is not None else None
+        response = await async_client.post(
+            "/api/v1/library/files",
+            files={"file": (filename, f"solid {filename}\nfacet\n".encode(), "application/octet-stream")},
+            params=params,
+        )
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    @pytest.mark.asyncio
+    async def test_a_file_dropped_in_by_hand_is_found(self, async_client: AsyncClient, db_session, tree):
+        from backend.app.services.library_autoscan import autoscan_once
+
+        await _directory_mode(db_session, tree)
+        folder = (await async_client.post("/api/v1/library/folders", json={"name": "Kunden"})).json()
+        (tree / "Kunden" / "von-hand.3mf").write_bytes(b"dropped in via Explorer")
+
+        result = await autoscan_once(db_session)
+        assert result["skipped"] is None
+        assert result["added"] == 1
+
+        listed = (await async_client.get(f"/api/v1/library/files?folder_id={folder['id']}")).json()
+        assert [f["filename"] for f in listed] == ["von-hand.3mf"]
+
+    @pytest.mark.asyncio
+    async def test_managed_mode_has_nothing_to_reconcile(self, async_client: AsyncClient, db_session):
+        from backend.app.services.library_autoscan import autoscan_once
+
+        result = await autoscan_once(db_session)
+        assert result["scanned"] == 0
+        assert result["skipped"] == "not a directory library"
+
+    @pytest.mark.asyncio
+    async def test_an_unreachable_share_is_skipped_not_an_error(self, async_client: AsyncClient, db_session, tmp_path):
+        """A NAS rebooting must not fill the log with tracebacks every minute."""
+        from backend.app.services.library_autoscan import autoscan_once
+
+        gone = tmp_path / "unterwegs"
+        gone.mkdir()
+        await _directory_mode(db_session, gone)
+        gone.rmdir()
+
+        result = await autoscan_once(db_session)
+        assert result["scanned"] == 0
+        assert "does not exist" in result["skipped"]
+
+    @pytest.mark.asyncio
+    async def test_an_empty_tree_is_never_reconciled(self, async_client: AsyncClient, db_session, tree):
+        """A share that dropped off looks exactly like "everything was deleted".
+
+        The bind-mount target stays behind as an empty directory, and a scan of
+        that would remove every row — with the tags, the project links and the
+        print history — while the files sit on a NAS nobody can reach.
+        """
+        from backend.app.services.library_autoscan import autoscan_once
+
+        await _directory_mode(db_session, tree)
+        folder = (await async_client.post("/api/v1/library/folders", json={"name": "Kunden"})).json()
+        await self._managed_file(async_client, "teil.stl", folder["id"])
+        # The share goes away: the mount point is left, empty.
+        for child in sorted(tree.rglob("*"), key=lambda p: -len(p.parts)):
+            child.rmdir() if child.is_dir() else child.unlink()
+
+        result = await autoscan_once(db_session)
+        assert result["skipped"] == "the library directory is empty"
+        assert result["removed"] == 0
+        listed = (await async_client.get(f"/api/v1/library/files?folder_id={folder['id']}")).json()
+        assert [f["filename"] for f in listed] == ["teil.stl"]
+
+    @pytest.mark.asyncio
+    async def test_the_endpoint_scans_the_whole_tree(self, async_client: AsyncClient, db_session, tree):
+        await _directory_mode(db_session, tree)
+        await async_client.post("/api/v1/library/folders", json={"name": "Kunden"})
+        await async_client.post("/api/v1/library/folders", json={"name": "Intern"})
+        (tree / "Kunden" / "eins.3mf").write_bytes(b"one")
+        (tree / "Intern" / "zwei.3mf").write_bytes(b"two")
+
+        response = await async_client.post("/api/v1/library/storage/scan")
+        assert response.status_code == 200, response.text
+        assert response.json()["added"] == 2
+
+    @pytest.mark.asyncio
+    async def test_the_interval_is_off_by_default(self, async_client: AsyncClient):
+        """A walk of a mounted share is real network IO; nobody pays for it unasked."""
+        settings = (await async_client.get("/api/v1/settings/")).json()
+        assert settings["library_autoscan_minutes"] == 0
+
+
 class TestThePathGuard:
     def test_a_stored_path_outside_the_root_is_not_trusted(self, tmp_path):
         """The column is a string. A restored backup can name anything."""

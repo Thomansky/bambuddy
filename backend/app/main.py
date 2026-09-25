@@ -9683,6 +9683,10 @@ async def lifespan(app: FastAPI):
     # Start camera stream orphan cleanup
     start_camera_cleanup()
 
+    from backend.app.services.library_autoscan import start_library_autoscan
+
+    start_library_autoscan()
+
     # Start the backstop for MQTT sessions paho has stopped recovering (#2732)
     start_connection_watchdog()
 
@@ -9745,6 +9749,10 @@ async def lifespan(app: FastAPI):
     stop_runtime_tracking()
     stop_spoolbuddy_watchdog()
     stop_camera_cleanup()
+
+    from backend.app.services.library_autoscan import stop_library_autoscan
+
+    stop_library_autoscan()
     stop_connection_watchdog()
     from backend.app.services.loop_watchdog import stop_loop_watchdog
 

@@ -276,6 +276,26 @@ export function SettingsPage() {
     }
   };
 
+  const handleStorageScan = async () => {
+    setStorageBusy(true);
+    try {
+      const result = await api.scanLibraryStorage();
+      showToast(
+        result.skipped
+          ? result.skipped
+          : t('settings.libraryStorageScanDone', { added: result.added, removed: result.removed }),
+        result.skipped ? 'error' : 'success',
+      );
+      queryClient.invalidateQueries({ queryKey: ['library-folders'] });
+      queryClient.invalidateQueries({ queryKey: ['library-files'] });
+      queryClient.invalidateQueries({ queryKey: ['library-stats'] });
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t('settings.libraryStorageMigrationFailed'), 'error');
+    } finally {
+      setStorageBusy(false);
+    }
+  };
+
   const handleStoragePlan = async () => {
     setStorageBusy(true);
     try {
@@ -1305,6 +1325,7 @@ export function SettingsPage() {
       Number(baseline.library_disk_warning_gb ?? 5) !== Number(localSettings.library_disk_warning_gb ?? 5) ||
       (baseline.library_root_view ?? 'all') !== (localSettings.library_root_view ?? 'all') ||
       (baseline.webdav_mode ?? 'off') !== (localSettings.webdav_mode ?? 'off') ||
+      Number(baseline.library_autoscan_minutes ?? 0) !== Number(localSettings.library_autoscan_minutes ?? 0) ||
       (baseline.preferred_slicer ?? 'bambu_studio') !== (localSettings.preferred_slicer ?? 'bambu_studio') ||
       resolveEngine(baseline.slice_engine) !== resolveEngine(localSettings.slice_engine) ||
       (baseline.open_in_slicer ?? null) !== (localSettings.open_in_slicer ?? null) ||
@@ -1430,6 +1451,7 @@ export function SettingsPage() {
         library_disk_warning_gb: localSettings.library_disk_warning_gb,
         library_root_view: localSettings.library_root_view,
         webdav_mode: localSettings.webdav_mode,
+        library_autoscan_minutes: localSettings.library_autoscan_minutes,
         preferred_slicer: localSettings.preferred_slicer,
         slice_engine: localSettings.slice_engine,
         open_in_slicer: localSettings.open_in_slicer,
@@ -2952,6 +2974,33 @@ export function SettingsPage() {
                     <p className="text-xs text-bambu-gray">{t('settings.libraryStoragePathHint')}</p>
                     <p className="text-xs text-bambu-gray">{t('settings.libraryStorageDriftHint')}</p>
                     <p className="text-xs text-bambu-gray">{t('settings.libraryStorageHashHint')}</p>
+
+                    {/* What keeps the two in step once somebody works in the
+                        share directly. Off by default: a walk of a mounted
+                        share is real network IO. */}
+                    <div className="border-t border-bambu-dark-tertiary pt-2 mt-2 space-y-2">
+                      <p className="text-white text-sm">{t('settings.libraryAutoscan')}</p>
+                      <p className="text-xs text-bambu-gray">{t('settings.libraryAutoscanHint')}</p>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <input
+                          type="number"
+                          min={0}
+                          max={1440}
+                          value={localSettings.library_autoscan_minutes ?? 0}
+                          onChange={(e) => updateSetting('library_autoscan_minutes', Number(e.target.value))}
+                          className="w-24 px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-sm"
+                        />
+                        <span className="text-xs text-bambu-gray">{t('settings.libraryAutoscanUnit')}</span>
+                        <button
+                          type="button"
+                          onClick={handleStorageScan}
+                          disabled={storageBusy}
+                          className="px-3 py-1.5 text-sm rounded bg-bambu-dark-tertiary text-white hover:bg-bambu-dark-quaternary disabled:opacity-50"
+                        >
+                          {t('settings.libraryStorageScanButton')}
+                        </button>
+                      </div>
+                    </div>
 
                     {/* Saved on demand, not while typing. The mode and the path
                         are one setting in two fields: sending the mode the

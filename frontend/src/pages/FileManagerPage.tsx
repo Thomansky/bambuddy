@@ -3101,6 +3101,10 @@ export function FileManagerPage() {
   // is_external stopped being able to tell those apart.
   const libraryTreeRoot =
     settings?.library_storage_mode === 'directory' ? (settings.library_storage_path ?? '').trim() : '';
+  // Managed installs keep the internal/external split. A library that lives in
+  // a directory does not: everything is in one tree, and a mount from elsewhere
+  // is marked by its own icon rather than filed behind a switch.
+  const bucketsApply = !libraryTreeRoot;
   const isLibraryFolder = useCallback(
     (folder: { is_external?: boolean | null; external_path?: string | null }) => {
       if (!folder.is_external) return true;
@@ -3152,7 +3156,7 @@ export function FileManagerPage() {
         selectedFolderId,
         rootUnfolderedView,
         undefined,
-        selectedFolderId === null ? topLevelView : undefined,
+        selectedFolderId === null && bucketsApply ? topLevelView : undefined,
         searchExpandsSubfolders,
         tagFilterKey,
         rootRecentView,
@@ -3707,7 +3711,7 @@ export function FileManagerPage() {
   const visibleSubfolders = useMemo(() => {
     if (!sortedFolders) return [];
     if (selectedFolderId === null) {
-      return sortedFolders.filter((f) => isLibraryFolder(f) === (topLevelView === 'internal'));
+      return sortedFolders.filter((f) => !bucketsApply || isLibraryFolder(f) === (topLevelView === 'internal'));
     }
     const findFolder = (items: LibraryFolderTree[]): LibraryFolderTree | null => {
       for (const item of items) {
@@ -3718,7 +3722,7 @@ export function FileManagerPage() {
       return null;
     };
     return findFolder(sortedFolders)?.children ?? [];
-  }, [sortedFolders, selectedFolderId, topLevelView, isLibraryFolder]);
+  }, [sortedFolders, selectedFolderId, topLevelView, isLibraryFolder, bucketsApply]);
 
   // The tiles disappear while a search or tag filter is active: those views
   // list matches from every descendant folder, so per-folder navigation
@@ -3770,13 +3774,14 @@ export function FileManagerPage() {
   // bucket when there is one, otherwise the sidebar's top-level choice. Drives
   // both the path bar's root crumb and the columns view's first column.
   const currentBucketIsExternal =
-    folderPath.length > 0 ? !isLibraryFolder(folderPath[0]) : topLevelView === 'external';
+    bucketsApply && (folderPath.length > 0 ? !isLibraryFolder(folderPath[0]) : topLevelView === 'external');
 
   // The current bucket's top-level folders. A typed path in the path bar
   // resolves against these, and its root separator lists them.
   const bucketRootFolders = useMemo(
-    () => (sortedFolders ?? []).filter((f) => !isLibraryFolder(f) === currentBucketIsExternal),
-    [sortedFolders, currentBucketIsExternal, isLibraryFolder],
+    () =>
+      (sortedFolders ?? []).filter((f) => !bucketsApply || !isLibraryFolder(f) === currentBucketIsExternal),
+    [sortedFolders, currentBucketIsExternal, isLibraryFolder, bucketsApply],
   );
 
   // The folders one level below where the user is standing — the bucket's
@@ -3793,7 +3798,9 @@ export function FileManagerPage() {
   // Leaf folders contribute no column — the files pane to the right is their
   // content.
   const folderColumns = useMemo(() => {
-    const rootItems = (sortedFolders ?? []).filter((f) => !isLibraryFolder(f) === currentBucketIsExternal);
+    const rootItems = (sortedFolders ?? []).filter(
+      (f) => !bucketsApply || !isLibraryFolder(f) === currentBucketIsExternal,
+    );
     const cols: { key: string; folderId: number | null; items: LibraryFolderTree[]; activeId: number | null }[] = [
       { key: 'root', folderId: null, items: rootItems, activeId: folderPath[0]?.id ?? null },
     ];
@@ -4478,7 +4485,7 @@ export function FileManagerPage() {
             className="w-full bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg px-3 py-2.5 text-white focus:outline-none focus:border-bambu-green"
           >
             <option value="__top:internal">📁 {t('fileManager.allFiles')}</option>
-            {folders?.some((f) => !isLibraryFolder(f)) && (
+            {bucketsApply && folders?.some((f) => !isLibraryFolder(f)) && (
               <option value="__top:external">🔗 {t('fileManager.allExternal')}</option>
             )}
             {sortedFolders && (() => {
@@ -4559,7 +4566,7 @@ export function FileManagerPage() {
             {/* External (combined) — only shown when at least one external
                 folder is linked. Single folder users don't need a combined
                 view; clicking the individual folder is just as fast. */}
-            {folders?.some((f) => !isLibraryFolder(f)) && (
+            {bucketsApply && folders?.some((f) => !isLibraryFolder(f)) && (
               <div
                 className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer transition-colors ${
                   selectedFolderId === null && topLevelView === 'external'
@@ -4993,7 +5000,7 @@ export function FileManagerPage() {
             <ContentFolderNav
               folders={currentFolderChildren}
               variant={viewMode === 'list' ? 'list' : 'grid'}
-              showBuckets={Boolean(folders?.some((f) => !isLibraryFolder(f)))}
+              showBuckets={Boolean(bucketsApply && folders?.some((f) => !isLibraryFolder(f)))}
               bucketIsExternal={currentBucketIsExternal}
               atRoot={selectedFolderId === null}
               onSelectFolder={selectFolderFromChrome}

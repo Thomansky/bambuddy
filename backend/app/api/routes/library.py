@@ -1885,6 +1885,22 @@ async def get_library_storage_migration_plan(
     return {"storage_path": str(root), **plan.as_dict()}
 
 
+@router.post("/storage/scan")
+async def scan_library_storage(
+    db: AsyncSession = Depends(get_db),
+    _: User | None = Depends(require_permission_if_auth_enabled(Permission.LIBRARY_UPLOAD)),
+):
+    """Reconcile the whole library tree against what is on disk, now.
+
+    The same walk the per-folder Scan does, over every top-level folder of the
+    tree at once — which is what somebody who just worked in Explorer wants,
+    rather than six buttons in six folders.
+    """
+    from backend.app.services.library_autoscan import autoscan_once
+
+    return {"status": "success", **await autoscan_once(db)}
+
+
 @router.post("/storage/migrate")
 async def migrate_library_storage(
     db: AsyncSession = Depends(get_db),

@@ -380,6 +380,16 @@ class AppSettings(BaseModel):
             "separate, explicit action"
         ),
     )
+    library_autoscan_minutes: int = Field(
+        default=0,
+        ge=0,
+        le=1440,
+        description=(
+            "How often the library's directory tree is reconciled against what "
+            "is actually on disk, in minutes. 0 turns it off. Only applies when "
+            "library_storage_mode is 'directory'"
+        ),
+    )
     library_storage_path: str = Field(
         default="",
         description=(
@@ -906,6 +916,7 @@ class AppSettingsUpdate(BaseModel):
     library_root_view: Literal["all", "folders", "recent"] | None = None
     library_storage_mode: Literal["managed", "directory"] | None = None
     library_storage_path: str | None = None
+    library_autoscan_minutes: int | None = None
     webdav_mode: Literal["off", "read", "readwrite"] | None = None
     camera_view_mode: str | None = None
     preferred_slicer: str | None = None

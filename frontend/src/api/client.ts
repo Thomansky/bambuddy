@@ -1633,6 +1633,8 @@ export interface AppSettings {
   // migration is a separate, explicit action.
   library_storage_mode: LibraryStorageMode;
   library_storage_path: string;
+  /** Minutes between automatic reconciliations of the tree; 0 is off. */
+  library_autoscan_minutes: number;
   // Camera view settings
   camera_view_mode: 'window' | 'embedded';
   // Preferred slicer (server-side API / sidecar)
@@ -7837,6 +7839,11 @@ export const api = {
     request<{ status: string; added: number; removed: number }>(`/library/folders/${folderId}/scan`, {
       method: 'POST',
     }),
+  scanLibraryStorage: () =>
+    request<{ status: string; scanned: number; added: number; removed: number; skipped: string | null }>(
+      '/library/storage/scan',
+      { method: 'POST' },
+    ),
   getLibraryStorageMigrationPlan: () =>
     request<LibraryStorageMigrationPlan>('/library/storage/migration-plan'),
   migrateLibraryStorage: () =>
