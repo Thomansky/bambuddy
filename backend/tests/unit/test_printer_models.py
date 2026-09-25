@@ -305,3 +305,49 @@ class TestHasRemoteStorageToggle:
         assert has_remote_storage_toggle("BrandNewModel2027") is True
         assert has_remote_storage_toggle(None) is True
         assert has_remote_storage_toggle("") is True
+
+
+class TestHasEthernetInternalCodes:
+    """ETHERNET_MODELS keyed on internal codes, which is what a printer row
+    can actually hold (#3127 follow-up).
+
+    The internal-code block carried the same inverted comments the rod list
+    did -- ``"C11",  # X1C`` -- and unlike the rod list the membership went
+    wrong with them: C11 is a P1P (no port) and C12 is a P1S (port), and the
+    X1 series' own codes were missing altogether. The only consumer is the
+    wired-network badge (``state.wired_network``), so the visible fault was a
+    P1S on a cable reporting itself as a Wi-Fi printer with a -90 dBm signal.
+    """
+
+    @pytest.mark.parametrize(
+        ("code", "display"),
+        [
+            ("C12", "P1S"),
+            ("BL-P001", "X1C"),
+            ("BL-P003", "X1E"),
+            ("C13", "X1E"),
+            ("N6", "X2D"),
+            ("N7", "P2S"),
+            ("O1D", "H2D"),
+            ("O1E", "H2D Pro"),
+            ("O1C", "H2C"),
+            ("O1S", "H2S"),
+        ],
+    )
+    def test_the_code_answers_like_its_display_name(self, code: str, display: str):
+        assert has_ethernet(code) is True
+        assert has_ethernet(display) is True
+
+    @pytest.mark.parametrize(
+        ("code", "display"),
+        [
+            ("C11", "P1P"),
+            ("BL-P002", "X1"),
+            ("N9", "A2L"),
+            ("N1", "A1 Mini"),
+            ("N2S", "A1"),
+        ],
+    )
+    def test_the_models_without_a_port_answer_false_both_ways(self, code: str, display: str):
+        assert has_ethernet(code) is False
+        assert has_ethernet(display) is False

@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { getPrinterImage, isGcodeCompatible, filterCompatibleQueueItems } from '../../utils/printer';
+import { getPrinterImage, isGcodeCompatible, filterCompatibleQueueItems, mapModelCode } from '../../utils/printer';
 import type { PrintQueueItem } from '../../api/client';
 
 describe('getPrinterImage', () => {
@@ -193,5 +193,74 @@ describe('filterCompatibleQueueItems — printer-targeted jobs (#3133)', () => {
   it('still filters the same job while it targets any printer of a model', () => {
     const item = { id: 1, printer_id: null, target_model: 'P2S', filament_overrides: boneWhite } as unknown as PrintQueueItem;
     expect(filterCompatibleQueueItems([item], loadedTypes, loadedBrown)).toHaveLength(0);
+  });
+});
+
+describe('mapModelCode', () => {
+  // LAN discovery hands this value to the add-printer form, so what it
+  // returns is what ends up in printers.model — and every model gate in the
+  // backend reads that. Three entries were wrong: C11/C12 were swapped
+  // against every backend registry, and C13 (the X1E) came out as a P2S.
+  describe('the P-series codes are not swapped', () => {
+    it('maps C11 to P1P', () => {
+      expect(mapModelCode('C11')).toBe('P1P');
+    });
+
+    it('maps C12 to P1S', () => {
+      expect(mapModelCode('C12')).toBe('P1S');
+    });
+
+    it('maps N7 to P2S', () => {
+      expect(mapModelCode('N7')).toBe('P2S');
+    });
+  });
+
+  describe('C13 is the X1E', () => {
+    it('maps C13 to X1E rather than P2S', () => {
+      expect(mapModelCode('C13')).toBe('X1E');
+    });
+
+    it('keeps the X1E on the X1 side of every model gate', () => {
+      // The three the mis-mapping cost it: Micro Lidar (X1 only), carbon
+      // rods rather than steel, and X1-sliced G-code.
+      const mapped = mapModelCode('C13');
+      expect(getPrinterImage(mapped)).toBe('/img/printers/x1e.png');
+      expect(isGcodeCompatible('X1C', mapped)).toBe(true);
+      expect(isGcodeCompatible('X1C', 'P2S')).toBe(false);
+    });
+  });
+
+  describe('the rest of the table', () => {
+    it.each([
+      ['BL-P001', 'X1C'],
+      ['BL-P002', 'X1'],
+      ['BL-P003', 'X1E'],
+      ['N6', 'X2D'],
+      ['N9', 'A2L'],
+      ['N1', 'A1 Mini'],
+      ['N2S', 'A1'],
+      ['O1D', 'H2D'],
+      ['O1E', 'H2D Pro'],
+      ['O2D', 'H2D Pro'],
+      ['O1C', 'H2C'],
+      ['O1C2', 'H2C'],
+      ['O1S', 'H2S'],
+    ])('maps %s to %s', (code, display) => {
+      expect(mapModelCode(code)).toBe(display);
+    });
+
+    it('passes a display name straight through', () => {
+      expect(mapModelCode('P1S')).toBe('P1S');
+      expect(mapModelCode('H2D Pro')).toBe('H2D Pro');
+    });
+
+    it('passes an unknown code through unchanged', () => {
+      expect(mapModelCode('Z99')).toBe('Z99');
+    });
+
+    it('returns an empty string for nothing', () => {
+      expect(mapModelCode(null)).toBe('');
+      expect(mapModelCode('')).toBe('');
+    });
   });
 });

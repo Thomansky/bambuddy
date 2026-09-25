@@ -7296,6 +7296,15 @@ class PrintScheduler:
         # -- the watchdog and the busy-printer path below both revert to
         # pending -- so a ▶ pressed on Wednesday would still be overriding
         # Saturday's schedule.
+        #
+        # Spent, though, only by a dispatch that actually put a print on the
+        # printer. The two paths below that hand the row back to the queue --
+        # the #2598 busy-printer deferral and the #1370 watchdog -- give the
+        # exemption back with it, because the ▶ was never honoured: without
+        # that, the retry those paths just arranged meets the very maintenance
+        # hold the ▶ overrode, and the print the person asked for never starts.
+        # Captured before the CAS because the CAS is what clears it.
+        hand_started = bool(item.user_started)
         cas = await db.execute(
             update(PrintQueueItem)
             .where(PrintQueueItem.id == item.id)
@@ -7636,6 +7645,7 @@ class PrintScheduler:
                         pre_subtask_id,
                         pre_gcode_file,
                         created_by_id=toast_uid,
+                        user_started=hand_started,
                     ),
                     name=f"watchdog-print-start-{item.id}",
                 )
@@ -7713,6 +7723,12 @@ class PrintScheduler:
                 )
                 item.status = "pending"
                 item.started_at = None
+                # The dispatch the ▶ paid for never happened, so it is not
+                # spent (#3127). Without this the next pass reads
+                # user_started False and re-applies the maintenance hold the
+                # ▶ was meant to override, and the item sits in the queue
+                # showing "Maintenance run pending: ..." forever.
+                item.user_started = hand_started
                 await db.commit()
                 return
 
@@ -7759,6 +7775,7 @@ class PrintScheduler:
         phase_b_timeout: float = 180.0,
         poll_interval: float = 3.0,
         created_by_id: int | None = None,
+        user_started: bool = False,
     ) -> None:
         """Revert a queue item if the printer never acknowledges the start command.
 
@@ -7786,6 +7803,12 @@ class PrintScheduler:
 
         Phase A timeout raised from 45 s → 90 s as belt-and-braces for slow
         transitions that also don't emit an early subtask_id tick.
+
+        ``user_started`` is the row's ▶ flag as it read *before* the dispatch
+        CAS spent it (#3127). A revert to 'pending' here is an explicit retry,
+        so the exemption goes back on the row with it — otherwise the retry is
+        held by the maintenance hold the ▶ overrode and never dispatches, and
+        dispatch_attempts never advances either, so the item never fails out.
 
         Both phases also watch for ``HMS_MQTT_VERIFY_FAILED``. A printer that
         refuses to verify our commands will never start this job or any other,
@@ -7978,6 +8001,12 @@ class PrintScheduler:
                 await db.commit()
                 return "gave_up"
             item.status = "pending"
+            # Hand the ▶ back with the row (#3127): this retry exists because
+            # the print never started, so the exemption it was dispatched with
+            # has not been spent. The two failure branches above deliberately
+            # leave it clear — those rows are terminal.
+            if user_started:
+                item.user_started = True
             await db.commit()
             return "reverted"
 

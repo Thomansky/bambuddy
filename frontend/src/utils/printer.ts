@@ -48,6 +48,68 @@ export function isGcodeCompatible(
   return GCODE_COMPAT_FAMILIES.some((family) => family.has(a) && family.has(b));
 }
 
+// SSDP / MQTT model code -> the display name Bambuddy stores in printers.model.
+//
+// This is what LAN discovery feeds the add-printer form, so the value it
+// returns is the one most printers are saved under — and every backend gate
+// that keys on the model (Micro Lidar, rod type, ethernet, G-code
+// interchange) reads that saved value. Two entries were previously inverted
+// and one was plain wrong: C11 is a P1P and C12 a P1S, and C13 is the X1E,
+// not a P2S. firmware_check, the virtual printer's manager and mqtt_server,
+// the vp_model_fixes migration, MODEL_SERIAL_PREFIXES and camera.py all
+// agree on all three. A C13 saved as "P2S" lost the Micro Lidar box, was
+// offered steel-rod maintenance instead of carbon, and had X1-sliced files
+// refused.
+//
+// Keep in sync with backend PRINTER_MODEL_ID_MAP in
+// backend/app/utils/printer_models.py.
+const SSDP_MODEL_CODES: Readonly<Record<string, string>> = {
+  // H2 Series
+  'O1D': 'H2D',
+  'O1E': 'H2D Pro',
+  'O2D': 'H2D Pro',
+  'O1C': 'H2C',
+  'O1C2': 'H2C',
+  'O1S': 'H2S',
+  // X1 Series
+  'BL-P001': 'X1C',
+  'BL-P002': 'X1',
+  'BL-P003': 'X1E',
+  'C13': 'X1E',
+  // X2 Series
+  'N6': 'X2D',
+  // A2 Series
+  'N9': 'A2L',
+  // P Series
+  'C11': 'P1P',
+  'C12': 'P1S',
+  'N7': 'P2S',
+  // A1 Series
+  'N2S': 'A1',
+  'N1': 'A1 Mini',
+  // Direct matches — a printer that already reports its display name
+  'X1C': 'X1C',
+  'X1': 'X1',
+  'X1E': 'X1E',
+  'X2D': 'X2D',
+  'P1S': 'P1S',
+  'P1P': 'P1P',
+  'P2S': 'P2S',
+  'A1': 'A1',
+  'A1 Mini': 'A1 Mini',
+  'A2L': 'A2L',
+  'H2D': 'H2D',
+  'H2D Pro': 'H2D Pro',
+  'H2C': 'H2C',
+  'H2S': 'H2S',
+};
+
+/** Display name for an SSDP/MQTT model code; unknown codes pass through. */
+export function mapModelCode(ssdpModel: string | null | undefined): string {
+  if (!ssdpModel) return '';
+  return SSDP_MODEL_CODES[ssdpModel] || ssdpModel;
+}
+
 export function getWifiStrength(rssi: number): { labelKey: string; color: string; bars: number } {
   if (rssi >= -50) return { labelKey: 'printers.wifiSignal.excellent', color: 'text-bambu-green', bars: 4 };
   if (rssi >= -60) return { labelKey: 'printers.wifiSignal.good', color: 'text-bambu-green', bars: 3 };

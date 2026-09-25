@@ -182,6 +182,12 @@ NO_REMOTE_STORAGE_TOGGLE_MODELS = frozenset(
 
 # Models with an ethernet port.
 # X1, P1P, A1, A1 Mini do NOT have ethernet.
+#
+# The internal codes below had inherited the same wrong C11/C12 comments as
+# CARBON_ROD_MODELS, and here the membership was wrong with them: C11 is a P1P,
+# which has no ethernet port, and C12 is a P1S, which has one. The X1 series'
+# own codes were missing entirely. C11 and BL-P002 (X1) are therefore absent by
+# intent, not by omission -- neither model has the port.
 ETHERNET_MODELS = frozenset(
     [
         # Display names (uppercase, no spaces)
@@ -194,11 +200,13 @@ ETHERNET_MODELS = frozenset(
         "H2DPRO",
         "H2C",
         "H2S",
-        # Internal codes
-        "C11",  # X1C
+        # Internal codes (hyphens stripped to match normalization)
+        "BLP001",  # X1C
+        "BLP003",  # X1E
         "C13",  # X1E
+        "C12",  # P1S
         "N6",  # X2D
-        "P1S",  # P1S
+        "N7",  # P2S
         "O1D",  # H2D
         "O1E",  # H2D Pro
         "O2D",  # H2D Pro (alternate)
