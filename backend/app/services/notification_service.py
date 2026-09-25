@@ -144,28 +144,6 @@ def _opaque_http_failure(response: httpx.Response, *, label: str) -> str:
     return f"HTTP {response.status_code} from the configured {label} (see server logs at debug level for details)"
 
 
-def _ntfy_event_priority(event_priorities: object, event_type: str | None) -> int | None:
-    """Resolve the ntfy priority (1-5) the user mapped for ``event_type``.
-
-    The UI stores the map under the provider toggle names (``on_print_failed``)
-    while the send path passes the bare event names (``print_failed``), so the
-    bare key is tried first and the ``on_``-prefixed key second (#990). The
-    first key present wins; values outside 1-5 or non-numeric are dropped,
-    not clamped.
-    """
-    if not event_type or not isinstance(event_priorities, dict):
-        return None
-    for key in (event_type, f"on_{event_type}"):
-        if key not in event_priorities:
-            continue
-        try:
-            priority = int(event_priorities[key])
-        except (TypeError, ValueError):
-            return None
-        return priority if 1 <= priority <= 5 else None
-    return None
-
-
 class NotificationService:
     """Service for sending notifications through various providers."""
 
@@ -461,9 +439,24 @@ class NotificationService:
         # Per-event Priority header (#990). Only set when the user has
         # explicitly mapped this event to a 1-5 value; otherwise fall through
         # to the ntfy server's default so existing setups stay unchanged.
-        priority = _ntfy_event_priority(config.get("event_priorities"), event_type)
-        if priority is not None:
-            headers["Priority"] = str(priority)
+        #
+        # The map is keyed by the provider's toggle column ("on_print_failed"),
+        # because that is what the dialog builds its rows from -- but every
+        # sender is called with the bare event name ("print_failed"), so the
+        # lookup used to miss for every real notification and hit only in tests
+        # that called this method with the prefixed name (issue #3139). Both
+        # spellings are accepted, which also leaves stored configs untouched.
+        event_priorities = config.get("event_priorities") or {}
+        if event_type and isinstance(event_priorities, dict):
+            raw = event_priorities.get(event_type)
+            if raw is None and not event_type.startswith("on_"):
+                raw = event_priorities.get(f"on_{event_type}")
+            try:
+                priority = int(raw) if raw is not None else None
+            except (TypeError, ValueError):
+                priority = None
+            if priority is not None and 1 <= priority <= 5:
+                headers["Priority"] = str(priority)
 
         if auth_token:
             headers["Authorization"] = f"Bearer {auth_token}"
