@@ -6522,13 +6522,32 @@ class PrintScheduler:
                     # The archive and the delete are already committed; the
                     # print goes ahead either way. Worst case the pictures sit
                     # unnamed in the archive's own directory.
+                    archive_id = archive.id
                     logger.warning(
                         "Queue item %s: failed to carry library photos into archive %s: %s",
                         item.id,
-                        archive.id,
+                        archive_id,
                         e,
                     )
                     await db.rollback()
+                    # rollback() expires every loaded instance, and in async
+                    # SQLAlchemy the next plain attribute read is lazy IO
+                    # outside the greenlet -- MissingGreenlet, which would turn
+                    # this cosmetic failure into a dispatch crash in exactly the
+                    # "database is locked" case the block exists for (#1853).
+                    # The nozzle guard, the upload and the start all keep
+                    # reading item, archive and printer, so all three go back
+                    # into the session before falling through.
+                    item = await db.get(PrintQueueItem, queue_item_id)
+                    archive = await db.get(PrintArchive, archive_id)
+                    printer = await db.get(Printer, item.printer_id) if item else None
+                    if not item or not archive or not printer:
+                        logger.error(
+                            "Queue item %s: item, archive %s or printer gone after the photo rollback",
+                            queue_item_id,
+                            archive_id,
+                        )
+                        return
 
         else:
             # Neither archive nor library file specified

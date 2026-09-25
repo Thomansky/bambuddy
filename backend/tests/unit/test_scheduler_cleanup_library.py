@@ -187,7 +187,14 @@ async def queue_factory(tmp_path):
         await engine.dispose()
 
 
-async def _dispatch_library_item(ctx, *, archive_failure=False, unlink_side_effect=None, cleanup_commit_failure=False):
+async def _dispatch_library_item(
+    ctx,
+    *,
+    archive_failure=False,
+    unlink_side_effect=None,
+    cleanup_commit_failure=False,
+    photo_commit_failure=False,
+):
     scheduler = PrintScheduler()
 
     async def archive_print(
@@ -259,6 +266,8 @@ async def _dispatch_library_item(ctx, *, archive_failure=False, unlink_side_effe
         async with ctx.session_maker() as db:
             if cleanup_commit_failure:
                 _arm_commit_failure_on_library_delete(db)
+            if photo_commit_failure:
+                _arm_commit_failure_on_photo_move(db, stack)
             item = await db.get(PrintQueueItem, ctx.queue_item_id)
             await scheduler._start_print(db, item)
 
@@ -288,6 +297,35 @@ def _arm_commit_failure_on_library_delete(db):
         return await original_commit()
 
     db.delete = delete
+    db.commit = commit
+
+
+def _arm_commit_failure_on_photo_move(db, stack):
+    """Make the commit that records the carried photos raise, once.
+
+    The second commit of this path (#3077): the archive and the delete are
+    already committed, the pictures are already on disk under the archive,
+    and only `archive.photos` is pending. Armed by the move itself so it
+    cannot drift onto the delete's commit.
+    """
+    original_commit = db.commit
+    original_move = scheduler_module.move_library_photos
+    armed = False
+
+    def move_library_photos(file_id, photos, destination):
+        nonlocal armed
+        carried = original_move(file_id, photos, destination)
+        armed = bool(carried)
+        return carried
+
+    async def commit():
+        nonlocal armed
+        if armed:
+            armed = False
+            raise RuntimeError("database is locked")
+        return await original_commit()
+
+    stack.enter_context(patch.object(scheduler_module, "move_library_photos", move_library_photos))
     db.commit = commit
 
 
@@ -394,6 +432,33 @@ async def test_cleanup_commit_failure_keeps_the_photos_with_the_library_file(que
     assert library_file.photos == ["a1b2c3d4.jpg"]
     assert (ctx.photos_dir / "a1b2c3d4.jpg").read_bytes() == b"photo a1b2c3d4.jpg"
     assert not (ctx.base_dir / "archives" / "photos").exists()
+
+
+@pytest.mark.asyncio
+async def test_photo_commit_failure_still_dispatches_the_print(queue_factory):
+    """A failed photos commit must not take the dispatch down with it (#3077).
+
+    The archive and the delete are committed by then, so the print goes ahead
+    and the pictures sit unnamed under the archive. The rollback in that
+    handler expires every loaded instance, and in async SQLAlchemy the next
+    plain attribute read is lazy IO outside the greenlet (MissingGreenlet):
+    without the re-fetch this dies on the nozzle guard's
+    `archive.nozzle_diameter`, and then on the upload's `printer.name`.
+    """
+    ctx = await queue_factory(cleanup=True, photos=["a1b2c3d4.jpg"])
+
+    await _dispatch_library_item(ctx, photo_commit_failure=True)
+
+    item, library_file, archive = await _queue_snapshot(ctx)
+    assert item.status == "printing"
+    assert item.archive_id == archive.id
+    assert library_file is None
+    assert not archive.photos
+    ctx.upload.assert_awaited()
+    ctx.start_print.assert_called()
+    with patch.object(scheduler_module.settings, "base_dir", ctx.base_dir):
+        destination = archive_photos_dir(archive)
+    assert (destination / "a1b2c3d4.jpg").read_bytes() == b"photo a1b2c3d4.jpg"
 
 
 @pytest.mark.asyncio
