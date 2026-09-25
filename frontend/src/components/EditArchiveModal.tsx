@@ -278,8 +278,13 @@ export function EditArchiveModal({ archive, onClose, existingTags = [] }: EditAr
       updateData.failure_reason = failureReason || undefined;
     } else if (status === 'completed' && userVerdict === 'reject') {
       updateData.failure_reason = failureReason || undefined;
-    } else if (archive.status === 'failed' || archive.status === 'aborted' || archive.failure_reason) {
-      // Clear failure_reason when neither a failure nor a reject carries one
+    } else if (archive.status === 'failed' || archive.status === 'aborted' || archive.user_verdict === 'reject') {
+      // Clear failure_reason when neither a failure nor a reject carries one.
+      // Gated on the archive having held a reject verdict rather than on the
+      // field merely being populated: a 'cancelled' or 'stopped' archive is
+      // neither failed nor aborted, its reason is written by the machine
+      // ("Stopped by user (printer was offline)"), and the status dropdown has
+      // no option that would let the user put it back.
       updateData.failure_reason = null;
     }
 
