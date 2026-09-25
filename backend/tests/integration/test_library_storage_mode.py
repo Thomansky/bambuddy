@@ -356,7 +356,11 @@ class TestTheMigration:
         (tree / "Kunden").mkdir()
         (tree / "Kunden" / "part.stl").write_bytes(b"already here")
 
-        blocker = (await async_client.get("/api/v1/library/storage/migration-plan")).json()["blockers"][0]
+        plan = (await async_client.get("/api/v1/library/storage/migration-plan")).json()
+        # The sentence stays a string, so a browser still on the previous build
+        # renders it instead of crashing on an object it cannot print.
+        assert isinstance(plan["blockers"][0], str)
+        blocker = plan["blocker_details"][0]
         assert blocker["kind"] == "exists"
         assert blocker["target"] == str(tree / "Kunden" / "part.stl")
         assert blocker["names"][0].startswith("part.stl")

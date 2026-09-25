@@ -2901,6 +2901,7 @@ export default {
     libraryStorageMigrationFailed: 'Não foi possível iniciar a migração.',
     libraryStoragePathRequired: 'Informe o caminho primeiro.',
     libraryStorageUnsaved: 'Ainda não salvo',
+    libraryStorageSaved: 'Salvo',
     libraryStoragePlanFirst: 'Mostre primeiro o que seria movido.',
     libraryStorageBlocked: 'A mudança está bloqueada por {{blockers}} colisão(ões) de nomes:',
     libraryStorageBlockerCollision: '{{first}} e {{second}} virariam o mesmo arquivo. Renomeie um deles.',

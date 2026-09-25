@@ -2815,6 +2815,7 @@ export default {
     libraryStorageMigrationFailed: '마이그레이션을 시작할 수 없습니다.',
     libraryStoragePathRequired: '먼저 경로를 입력하세요.',
     libraryStorageUnsaved: '아직 저장되지 않음',
+    libraryStorageSaved: '저장됨',
     libraryStoragePlanFirst: '먼저 옮길 내용을 확인하세요.',
     libraryStorageBlocked: '이름이 겹치는 항목이 {{blockers}}개라 옮길 수 없습니다:',
     libraryStorageBlockerCollision: '{{first}} 과(와) {{second}} 이(가) 같은 파일이 됩니다. 하나의 이름을 바꾸세요.',

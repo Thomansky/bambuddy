@@ -2974,6 +2974,7 @@ export default {
     libraryStorageMigrationFailed: 'De migratie kon niet worden gestart.',
     libraryStoragePathRequired: 'Vul eerst het pad in.',
     libraryStorageUnsaved: 'Nog niet opgeslagen',
+    libraryStorageSaved: 'Opgeslagen',
     libraryStoragePlanFirst: 'Laat eerst zien wat er verhuist.',
     libraryStorageBlocked: 'De verhuizing is geblokkeerd door {{blockers}} naamconflict(en):',
     libraryStorageBlockerCollision: '{{first}} en {{second}} zouden hetzelfde bestand worden. Hernoem er één.',

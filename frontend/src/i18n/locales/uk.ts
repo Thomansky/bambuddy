@@ -2969,6 +2969,7 @@ export default {
     libraryStorageMigrationFailed: 'Не вдалося розпочати перенесення.',
     libraryStoragePathRequired: 'Спершу вкажіть шлях.',
     libraryStorageUnsaved: 'Ще не збережено',
+    libraryStorageSaved: 'Збережено',
     libraryStoragePlanFirst: 'Спершу подивіться, що буде перенесено.',
     libraryStorageBlocked: 'Перенесення заблоковано: збігів імен — {{blockers}}:',
     libraryStorageBlockerCollision: '{{first}} і {{second}} стали б одним файлом. Перейменуйте один із них.',

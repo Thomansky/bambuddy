@@ -2954,6 +2954,7 @@ export default {
     libraryStorageMigrationFailed: 'Taşıma başlatılamadı.',
     libraryStoragePathRequired: 'Önce yolu gir.',
     libraryStorageUnsaved: 'Henüz kaydedilmedi',
+    libraryStorageSaved: 'Kaydedildi',
     libraryStoragePlanFirst: 'Önce nelerin taşınacağını göster.',
     libraryStorageBlocked: 'Taşıma {{blockers}} ad çakışması yüzünden kapalı:',
     libraryStorageBlockerCollision: '{{first}} ve {{second}} aynı dosya olurdu. Birini yeniden adlandır.',

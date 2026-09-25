@@ -2954,6 +2954,7 @@ export default {
     libraryStorageMigrationFailed: 'Der Umzug konnte nicht gestartet werden.',
     libraryStoragePathRequired: 'Erst den Pfad eintragen.',
     libraryStorageUnsaved: 'Noch nicht gespeichert',
+    libraryStorageSaved: 'Gespeichert',
     libraryStoragePlanFirst: 'Erst anzeigen lassen, was umzieht.',
     libraryStorageBlocked: 'Der Umzug ist durch {{blockers}} Namenskollision(en) gesperrt:',
     libraryStorageBlockerCollision: '{{first}} und {{second}} würden zur selben Datei. Benenne eine davon um.',

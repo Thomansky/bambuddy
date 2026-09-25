@@ -193,7 +193,8 @@ describe('SettingsPage — library storage', () => {
       http.get('/api/v1/library/storage/migration-plan', () =>
         HttpResponse.json({
           ...emptyPlan,
-          blockers: [
+          blockers: ['/mnt/nas/bambuddy/Kunden/part.3mf already exists on the share'],
+          blocker_details: [
             {
               kind: 'exists',
               target: '/mnt/nas/bambuddy/Kunden/part.3mf',
@@ -216,6 +217,27 @@ describe('SettingsPage — library storage', () => {
     expect(screen.getByText(/blocked by 1 name collision/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Move now' })).toBeDisabled();
     expect(migrations).toBe(0);
+  });
+
+  it('renders a server that only sends the sentences', async () => {
+    // The shape this endpoint had before the parts were added. An answer the
+    // UI cannot render is worse than an untranslated one.
+    const user = userEvent.setup();
+    server.use(
+      http.get('/api/v1/settings/', () =>
+        HttpResponse.json({ ...mockSettings, library_storage_mode: 'directory' })
+      ),
+      http.get('/api/v1/library/storage/migration-plan', () =>
+        HttpResponse.json({ ...emptyPlan, blockers: ['part.3mf already exists on the share'] })
+      )
+    );
+    render(<SettingsPage />);
+
+    await findOption('Directory');
+    await user.click(screen.getByRole('button', { name: 'Show what would move' }));
+
+    expect(await screen.findByText('part.3mf already exists on the share')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Move now' })).toBeDisabled();
   });
 
   it('persists the mode and the path together, on the save', async () => {

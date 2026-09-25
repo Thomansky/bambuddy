@@ -2946,6 +2946,7 @@ export default {
     libraryStorageMigrationFailed: '无法开始迁移。',
     libraryStoragePathRequired: '请先填写路径。',
     libraryStorageUnsaved: '尚未保存',
+    libraryStorageSaved: '已保存',
     libraryStoragePlanFirst: '请先查看将要移动的内容。',
     libraryStorageBlocked: '有 {{blockers}} 处文件名冲突，移动已被阻止：',
     libraryStorageBlockerCollision: '{{first}} 与 {{second}} 会变成同一个文件，请重命名其中一个。',

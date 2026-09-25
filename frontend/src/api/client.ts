@@ -1503,8 +1503,11 @@ export interface LibraryStorageMigrationPlan {
   file_count: number;
   folder_count: number;
   total_bytes: number;
-  /** Collisions. Any entry here means the run is refused whole. */
-  blockers: LibraryStorageMigrationBlocker[];
+  /** Collisions, as sentences. Any entry here means the run is refused whole.
+   *  Kept as strings so a browser tab still on an older build keeps working. */
+  blockers: string[];
+  /** The same collisions in parts, for rendering them in the user's language. */
+  blocker_details?: LibraryStorageMigrationBlocker[];
   /** Files the plan cannot move — bytes missing, folder gone. */
   missing: string[];
   moves: { file_id: number; filename: string; source: string; target: string; size: number }[];
