@@ -55,10 +55,21 @@ class TestOptions:
     def test_micro_lidar_only_on_the_x1_series(self):
         # The lidar sits under the X1's toolhead and nowhere else; offering the
         # box on a P1S asks for a calibration that machine cannot run.
-        for model in ("X1C", "X1", "X1E", "C11"):
+        for model in ("X1C", "X1", "X1E"):
             assert "micro_lidar" in available_calibration_options(model)
-        for model in ("P1S", "A1", "H2D", "H2S", None):
+        for model in ("P1S", "P1P", "A1", "H2D", "H2S", None):
             assert "micro_lidar" not in available_calibration_options(model)
+
+    def test_micro_lidar_gate_reads_the_x1_internal_codes(self):
+        # A printer can report its internal code instead of a display name --
+        # a virtual printer stores exactly these in its model column. The X1
+        # codes are BL-P001 / BL-P002 / BL-P003 and C13; C11 and C12 are P1P
+        # and P1S, which is what firmware_check, the virtual printer's manager
+        # and mqtt_server, vp_model_fixes and STG_CUR_IDLE_BUG_MODELS all say.
+        for code in ("BL-P001", "BL-P002", "BL-P003", "C13"):
+            assert "micro_lidar" in available_calibration_options(code)
+        for code in ("C11", "C12"):
+            assert "micro_lidar" not in available_calibration_options(code)
 
     def test_the_other_flags_are_offered_everywhere(self):
         offered = available_calibration_options("P1S")

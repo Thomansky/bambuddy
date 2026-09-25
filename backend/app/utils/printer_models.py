@@ -72,8 +72,8 @@ CARBON_ROD_MODELS = frozenset(
         "P1P",
         "P1S",
         # Internal codes
-        "C11",  # X1C
-        "C12",  # X1
+        "C11",  # P1P
+        "C12",  # P1S
         "C13",  # X1E
     ]
 )
@@ -293,15 +293,22 @@ def has_vision_encoder(model: str | None) -> bool:
 # has the hardware. Bambu Studio offers the calibration exclusively there, and
 # BambuMQTTClient.start_calibration has said "(X1 series)" about bit 0 since it
 # was written -- the gate was simply never applied to the options the UI offers.
+# The X1 series' internal codes are BL-P001 / BL-P002 / BL-P003 and C13. C11 and
+# C12 are P1P and P1S, not X1C and X1: firmware_check, the virtual printer's
+# manager and mqtt_server, the vp_model_fixes migration and
+# STG_CUR_IDLE_BUG_MODELS all agree, and a virtual printer stores exactly these
+# codes in its model column. Entries are hyphen-stripped because that is what
+# has_micro_lidar normalizes an incoming model to.
 MICRO_LIDAR_MODELS = frozenset(
     [
         # Display names (uppercase, no spaces)
         "X1",
         "X1C",
         "X1E",
-        # Internal codes
-        "C11",  # X1C
-        "C12",  # X1
+        # Internal codes (hyphens stripped to match normalization)
+        "BLP001",  # X1C
+        "BLP002",  # X1
+        "BLP003",  # X1E
         "C13",  # X1E
     ]
 )
