@@ -386,6 +386,45 @@ class TestTheMigration:
         assert "is not set" in response.json()["detail"]
 
 
+class TestWhatTheShareBringsWithIt:
+    @pytest.mark.asyncio
+    async def test_a_scan_ignores_the_nas_system_directories(self, async_client: AsyncClient, tree):
+        """@Recycle is where the NAS keeps what somebody deleted.
+
+        It is not hidden by name, so the "show hidden" setting does not cover
+        it, and indexing it would hand every deleted print back as a folder.
+        """
+        (tree / "@Recycle").mkdir()
+        (tree / "@Recycle" / "geloescht.3mf").write_bytes(b"deleted once")
+        (tree / "@Recently-Snapshot").mkdir()
+        (tree / "Auftrag").mkdir()
+        (tree / "Auftrag" / "teil.3mf").write_bytes(b"a real file")
+
+        created = await async_client.post(
+            "/api/v1/library/folders/external",
+            json={"name": "Freigabe", "external_path": str(tree), "readonly": False, "show_hidden": True},
+        )
+        assert created.status_code == 200, created.text
+
+        scan = await async_client.post(f"/api/v1/library/folders/{created.json()['id']}/scan")
+        assert scan.status_code == 200, scan.text
+
+        folders = (await async_client.get("/api/v1/library/folders")).json()
+
+        def walk(nodes):
+            for node in nodes:
+                yield node
+                yield from walk(node.get("children") or [])
+
+        by_name = {node["name"]: node for node in walk(folders)}
+        assert "Auftrag" in by_name
+        assert not {"@Recycle", "@Recently-Snapshot"} & set(by_name)
+
+        # The real file is indexed; the deleted one inside @Recycle is not.
+        listed = (await async_client.get(f"/api/v1/library/files?folder_id={by_name['Auftrag']['id']}")).json()
+        assert [f["filename"] for f in listed] == ["teil.3mf"]
+
+
 class TestThePathGuard:
     def test_a_stored_path_outside_the_root_is_not_trusted(self, tmp_path):
         """The column is a string. A restored backup can name anything."""

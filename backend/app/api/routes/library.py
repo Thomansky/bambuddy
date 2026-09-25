@@ -1918,6 +1918,28 @@ async def migrate_library_storage(
 # Bambuddy-owned data directories. Hardcode-rejected even if the operator
 # tries to add them to ``BAMBUDDY_EXTERNAL_ROOTS`` — mounting these would
 # allow reading other users' archives, log files, or the static assets path.
+# Directories a NAS or an operating system puts in every share by itself. None
+# of them is ever a library folder, and several of them hold what the user just
+# deleted -- scanning one would hand the deleted files back as a folder.
+SHARE_SYSTEM_DIRS = frozenset(
+    {
+        "@Recycle",  # QNAP
+        "@Recently-Snapshot",
+        ".@__thumb",
+        "#recycle",  # Synology
+        "#snapshot",
+        "@eaDir",
+        "$RECYCLE.BIN",  # Windows
+        "System Volume Information",
+        ".Trashes",  # macOS
+        ".TemporaryItems",
+        ".fseventsd",
+        ".Spotlight-V100",
+        "lost+found",  # Linux
+    }
+)
+
+
 def _bambuddy_reserved_roots() -> tuple[Path, ...]:
     """Resolved Bambuddy-owned directories that may NEVER be mounted as an
     external folder regardless of the operator's allowlist.
@@ -2217,6 +2239,11 @@ async def scan_external_folder(
         # Filter hidden directories unless configured
         if not folder.external_show_hidden:
             dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        # ...and the ones the NAS puts in every share whatever the setting says.
+        # "Show hidden" is about the user's own dotfiles; a QNAP's @Recycle is
+        # not hidden by name, and indexing it would file every deleted print
+        # back into the library as a folder called @Recycle (#3160).
+        dirnames[:] = [d for d in dirnames if d not in SHARE_SYSTEM_DIRS]
 
         rel_dir = str(Path(dirpath).relative_to(ext_path))
         if rel_dir == ".":
