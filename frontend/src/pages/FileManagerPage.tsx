@@ -3815,7 +3815,7 @@ export function FileManagerPage() {
       }
     });
     return cols;
-  }, [sortedFolders, folderPath, currentBucketIsExternal]);
+  }, [sortedFolders, folderPath, currentBucketIsExternal, bucketsApply, isLibraryFolder]);
 
   // While a search or tag filter is active the file list spans every matching
   // descendant folder, so per-level folder columns would lie about scope —

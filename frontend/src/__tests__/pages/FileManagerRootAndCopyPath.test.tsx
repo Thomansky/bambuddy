@@ -296,6 +296,31 @@ describe('FileManagerPage — the library in a directory tree', () => {
     expect(sidebar().queryByText('External')).not.toBeInTheDocument();
   });
 
+  it('still lists the tree when the settings arrive after the folders', async () => {
+    // The folder query is the faster of the two in practice. The columns were
+    // computed once, while the page still believed there was no storage path —
+    // so every folder read as external, the bucket read as internal, and the
+    // first column came out empty and stayed that way.
+    useHandlers({ library_storage_mode: 'directory', library_storage_path: '/library' });
+    server.use(
+      http.get('/api/v1/library/folders', () => HttpResponse.json(treeFolders)),
+      http.get('/api/v1/settings/', async () => {
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        return HttpResponse.json({
+          check_updates: false,
+          check_printer_firmware: false,
+          library_disk_warning_gb: 5,
+          library_storage_mode: 'directory',
+          library_storage_path: '/library',
+        });
+      }),
+    );
+    render(<FileManagerPage />);
+
+    const columns = await screen.findByTestId('columns-view');
+    expect(await within(columns).findByText('001 EBZ')).toBeInTheDocument();
+  });
+
   it('is unchanged in managed mode', async () => {
     // Same rows, no storage path: an external folder is external, as before.
     renderTree(treeFolders, false);
