@@ -3414,6 +3414,41 @@ class TestResumeQueueAfterFailure:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    async def test_resume_clears_user_started_on_the_restored_items(
+        self, async_client: AsyncClient, printer_factory, archive_factory, db_session
+    ):
+        """A restored row starts over as a scheduler decision (#3127).
+
+        user_started exempts an item from both maintenance holds. An item
+        skipped by the failure gate before its dispatch ever happened would
+        otherwise carry that exemption for as long as the row lives, so a
+        press on Wednesday still overrides Saturday's scheduled run."""
+        from sqlalchemy import select
+
+        from backend.app.models.print_queue import PrintQueueItem
+
+        printer = await printer_factory()
+        await self._add_item(db_session, printer, archive_factory, status="failed")
+        skipped = await self._add_item(
+            db_session,
+            printer,
+            archive_factory,
+            status="skipped",
+            error_message="Previous print failed or was aborted",
+            user_started=True,
+        )
+        skipped_id = skipped.id
+
+        resp = await async_client.post(f"/api/v1/queue/printer/{printer.id}/resume")
+        assert resp.status_code == 200
+
+        db_session.expire_all()
+        row = (await db_session.execute(select(PrintQueueItem).where(PrintQueueItem.id == skipped_id))).scalar_one()
+        assert row.status == "pending"
+        assert row.user_started is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_resume_preserves_skipped_items_with_other_reasons(
         self, async_client: AsyncClient, printer_factory, archive_factory, db_session
     ):

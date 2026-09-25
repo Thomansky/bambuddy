@@ -7290,11 +7290,17 @@ class PrintScheduler:
         # the file we just uploaded, do NOT send start_print.
         now_utc = datetime.now(timezone.utc)
         billing_run_id = str(uuid.uuid4())
+        # user_started is spent here (#3127): the ▶ the person pressed asked
+        # for this dispatch, and it has now happened. Leaving it set would
+        # carry the maintenance exemption into every later pass over the row
+        # -- the watchdog and the busy-printer path below both revert to
+        # pending -- so a ▶ pressed on Wednesday would still be overriding
+        # Saturday's schedule.
         cas = await db.execute(
             update(PrintQueueItem)
             .where(PrintQueueItem.id == item.id)
             .where(PrintQueueItem.status == "pending")
-            .values(status="printing", started_at=now_utc, billing_run_id=billing_run_id)
+            .values(status="printing", started_at=now_utc, billing_run_id=billing_run_id, user_started=False)
         )
         await db.commit()
         if cas.rowcount == 0:
@@ -7331,6 +7337,7 @@ class PrintScheduler:
         # item.started_at sees the values we just persisted.
         item.status = "printing"
         item.started_at = now_utc
+        item.user_started = False
         item.billing_run_id = billing_run_id
         if archive is not None:
             archive.billing_run_id = billing_run_id
