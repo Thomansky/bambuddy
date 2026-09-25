@@ -71,6 +71,35 @@ def is_unattended_fetch(method: str, headers: Mapping[str, str]) -> bool:
     return any(marker in agent for marker in UNATTENDED_FETCH_AGENTS)
 
 
+# The one-tap marker. The confirmation page submits its own form only when the
+# URL it was opened from carries this, and the marker is put on exactly one
+# thing: the Telegram inline keyboard's buttons -- an affordance no unfurler,
+# gateway or proxy reads, for the same reason the capability URLs themselves no
+# longer travel in message text.
+#
+# It is what closes the gap the User-Agent list above cannot: a mail-security
+# sandbox that renders HTML and runs JavaScript sends an ordinary Chrome string
+# (so does literal HeadlessChrome), and a verdict URL that reached it did so out
+# of the message BODY -- where the marker never appears. That fetch now gets the
+# page with a button on it and records nothing. The operator's tap on the
+# notification button still costs exactly one tap.
+ONE_TAP_PARAM = "tap"
+
+
+def one_tap_url(url: str) -> str:
+    """Mark a verdict URL as one a human is about to press.
+
+    Only for the affordances a person taps directly. A URL that goes into text
+    anybody's machine might follow is left unmarked on purpose.
+    """
+    return f"{url}{'&' if '?' in url else '?'}{ONE_TAP_PARAM}=1"
+
+
+def is_one_tap_request(query_params: Mapping[str, str]) -> bool:
+    """Whether this page load came from a button rather than from message text."""
+    return (query_params.get(ONE_TAP_PARAM) or "") == "1"
+
+
 def stamp_verdict(archive: PrintArchive, source: str) -> None:
     """Record a verdict's provenance and the moment it landed (#1898).
 

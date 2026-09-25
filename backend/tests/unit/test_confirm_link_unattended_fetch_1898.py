@@ -8,13 +8,18 @@ GETs recorded a verdict nobody chose and retired the token, so the operator's
 real tap landed on "already answered" and a scrap part counted as good for the
 rest of time.
 
-Three defences, in the order they matter. The capability URLs no longer travel
+Four defences, in the order they matter. The capability URLs no longer travel
 in body text at all. Recording is a POST, so a GET from anything that walks a
-URL changes nothing (the route side of that is in the integration tests). And
-the channels that build previews are asked not to. The unattended-fetch
-heuristic tested here is the fourth: it decides whether the confirmation page
-submits itself, so a scanner that runs JavaScript does not tap the button for
-the operator.
+URL changes nothing (the route side of that is in the integration tests). The
+confirmation page submits its own form only for a URL carrying the one-tap
+marker, which rides on the Telegram inline keyboard and on nothing a machine
+can read — so the scanners that render HTML and run JavaScript, which send an
+ordinary Chrome string and which no User-Agent list can name, get a page with a
+button on it. And the channels that build previews are asked not to, on the one
+message whose links are capabilities.
+
+The unattended-fetch heuristic is the fifth and the weakest, which is why it is
+no longer the only thing in front of the write.
 """
 
 import json
@@ -25,7 +30,7 @@ import pytest
 from backend.app.models.notification import NotificationProvider
 from backend.app.models.notification_template import DEFAULT_TEMPLATES
 from backend.app.services.notification_service import NotificationService
-from backend.app.services.print_confirmation import is_unattended_fetch
+from backend.app.services.print_confirmation import is_one_tap_request, is_unattended_fetch, one_tap_url
 
 CONFIG = {"bot_token": "123456:AAbbCC", "chat_id": "-1002520100736"}
 
@@ -146,6 +151,99 @@ class TestNtfyButtonsRecordOverPost:
         assert "method=GET" not in captured["actions"]
 
 
+class TestTheOneTapMarkerRidesOnlyOnButtons:
+    """The marker is what decides whether the confirmation page submits itself,
+    and it is on the Telegram inline keyboard and nowhere else.
+
+    The User-Agent list above catches the fetchers that say what they are, and
+    none of those run JavaScript. The ones that do — a mail-security sandbox
+    detonating the link, a browser-isolation proxy — send an ordinary Chrome
+    string, so no list can name them. What they cannot have is a URL that never
+    appeared in any text they can read.
+    """
+
+    def test_a_marked_url_is_the_only_thing_that_opens_the_script(self):
+        assert is_one_tap_request({"tap": "1"}) is True
+        assert is_one_tap_request({}) is False, "a link out of a message body must not qualify"
+        assert is_one_tap_request({"tap": "0"}) is False
+        assert is_one_tap_request({"tap": "yes"}) is False
+
+    def test_marking_a_url_that_already_carries_a_query(self):
+        assert one_tap_url("https://host/api/v1/archives/confirm/tok/good") == (
+            "https://host/api/v1/archives/confirm/tok/good?tap=1"
+        )
+        assert one_tap_url("https://host/confirm/tok/good?from=ntfy") == "https://host/confirm/tok/good?from=ntfy&tap=1"
+
+    @pytest.mark.asyncio
+    async def test_the_telegram_buttons_are_marked_and_the_body_link_is_not(self):
+        """Telegram cannot POST, so its buttons are the one affordance that
+        opens a browser — and the one that needs the page to submit itself.
+        Telegram never fetches an inline-keyboard URL, so the marker does not
+        leak into anything a machine reads."""
+        service = NotificationService()
+        captured: dict = {}
+
+        async def _fake_telegram(config, message, image_data=None, buttons=None):
+            captured["buttons"] = buttons
+            captured["message"] = message
+            return True, "ok"
+
+        service._send_telegram = _fake_telegram
+        provider = NotificationProvider(name="farm", provider_type="telegram", config=json.dumps(CONFIG))
+
+        ok, _ = await service._send_to_provider(
+            provider,
+            "How did your print come out?",
+            "X1C: bracket.3mf\nGood: https://farm.example.com/api/v1/archives/confirm/tok/good",
+            event_type="print_confirm_request",
+            variables={
+                "good_url": "https://farm.example.com/api/v1/archives/confirm/tok/good",
+                "reject_url": "https://farm.example.com/api/v1/archives/confirm/tok/reject",
+            },
+        )
+
+        assert ok
+        assert [b["url"] for b in captured["buttons"]] == [
+            "https://farm.example.com/api/v1/archives/confirm/tok/good?tap=1",
+            "https://farm.example.com/api/v1/archives/confirm/tok/reject?tap=1",
+        ]
+        # An install that kept {good_url} in its edited body still sends the
+        # plain URL in the text — and that is exactly the one that must not
+        # press its own button when a scanner opens it.
+        assert "?tap=1" not in captured["message"]
+
+    @pytest.mark.asyncio
+    async def test_the_ntfy_actions_stay_unmarked(self):
+        """They POST, so no page is rendered and there is nothing to submit.
+        Marking them would put the marker in an Authorization-free HTTP header
+        for no gain."""
+        service = NotificationService()
+        captured: dict = {}
+
+        async def _fake_ntfy(config, title, message, image_data=None, event_type=None, actions=None):
+            captured["actions"] = actions
+            return True, "ok"
+
+        service._send_ntfy = _fake_ntfy
+        provider = NotificationProvider(
+            name="farm", provider_type="ntfy", config=json.dumps({"server": "https://ntfy.sh", "topic": "farm"})
+        )
+
+        ok, _ = await service._send_to_provider(
+            provider,
+            "How did your print come out?",
+            "X1C: bracket.3mf",
+            event_type="print_confirm_request",
+            variables={
+                "good_url": "https://farm.example.com/api/v1/archives/confirm/tok/good",
+                "reject_url": "https://farm.example.com/api/v1/archives/confirm/tok/reject",
+            },
+        )
+
+        assert ok
+        assert "tap=1" not in captured["actions"]
+
+
 class TestSlackDoesNotUnfurl:
     @pytest.mark.asyncio
     async def test_the_slack_payload_turns_previews_off(self):
@@ -159,11 +257,34 @@ class TestSlackDoesNotUnfurl:
             {"webhook_url": "https://hooks.slack.example.com/services/T/B/x", "payload_format": "slack"},
             "How did your print come out?",
             "X1C: bracket.3mf",
+            event_type="print_confirm_request",
         )
 
         assert ok
         assert client.calls[0]["unfurl_links"] is False
         assert client.calls[0]["unfurl_media"] is False
+
+    @pytest.mark.asyncio
+    async def test_every_other_event_keeps_its_previews(self):
+        """Only the outcome prompt's links are capabilities. The slack payload
+        never attaches image bytes — the base64 attach is generic-format only —
+        so the unfurl is the only way a {finish_photo_url} in a print_complete
+        body ever becomes a photo in the channel, and there is no setting that
+        turns it back on."""
+        service = NotificationService()
+        client = _Client()
+        service._http_client = client
+
+        ok, _ = await service._send_webhook(
+            {"webhook_url": "https://hooks.slack.example.com/services/T/B/x", "payload_format": "slack"},
+            "Print complete",
+            "X1C: bracket.3mf\nhttps://farm.example.com/api/v1/archives/7/photos/finish_a.jpg",
+            event_type="print_complete",
+        )
+
+        assert ok
+        assert "unfurl_links" not in client.calls[0]
+        assert "unfurl_media" not in client.calls[0]
 
 
 class TestTelegramDoesNotAskForAPreview:

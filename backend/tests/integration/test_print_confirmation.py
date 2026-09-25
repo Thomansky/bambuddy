@@ -220,15 +220,22 @@ class TestConfirmTokenEndpoint:
     async def test_a_phone_browser_still_records_in_one_tap(
         self, async_client: AsyncClient, archive_factory, printer_factory, db_session
     ):
-        """The split must not cost the feature its point. The page a real
-        browser gets submits itself, so the tap on the notification is still
-        the only tap — and the script carries the CSP nonce, without which the
-        policy in main.py would block it and cost the operator a second tap."""
+        """The split must not cost the feature its point. The page opened from
+        a notification button submits itself, so the tap on the notification is
+        still the only tap — and the script carries the CSP nonce, without
+        which the policy in main.py would block it and cost the operator a
+        second tap.
+
+        The ``?tap=1`` is what the Telegram inline keyboard carries. This test
+        used to load the URL without it and still expect the script, which was
+        the remaining hole rather than the feature: that unmarked URL is the
+        one a scanner gets out of a message body.
+        """
         printer = await printer_factory()
         archive = await archive_factory(printer.id, confirm_requested=True, confirm_token="phone-token")
 
         response = await async_client.get(
-            "/api/v1/archives/confirm/phone-token/good",
+            "/api/v1/archives/confirm/phone-token/good?tap=1",
             headers={
                 "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) "
                 "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
@@ -241,10 +248,12 @@ class TestConfirmTokenEndpoint:
         assert nonce, "the inline script needs the per-request nonce or the CSP blocks it"
         assert f"'nonce-{nonce.group(1)}'" in response.headers["content-security-policy"]
 
-        # And the submit that script performs is the thing that records.
+        # And the submit that script performs is the thing that records. The
+        # form has no action attribute, so a browser POSTs back to the URL it
+        # loaded — query string and all, which the route must not mind.
         await db_session.refresh(archive)
         assert archive.user_verdict is None
-        assert (await async_client.post("/api/v1/archives/confirm/phone-token/good")).status_code == 200
+        assert (await async_client.post("/api/v1/archives/confirm/phone-token/good?tap=1")).status_code == 200
         await db_session.refresh(archive)
         assert archive.user_verdict == "good"
         assert archive.confirm_token_used_at is not None
@@ -272,10 +281,63 @@ class TestConfirmTokenEndpoint:
         archive = await archive_factory(printer.id, confirm_requested=True, confirm_token="no-script-token")
         assert archive.confirm_token == "no-script-token"
 
-        response = await async_client.get("/api/v1/archives/confirm/no-script-token/good", headers=headers)
+        response = await async_client.get("/api/v1/archives/confirm/no-script-token/good?tap=1", headers=headers)
         assert response.status_code == 200
         assert "<form method='post'" in response.text
         assert "<script" not in response.text
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    @pytest.mark.parametrize(
+        "agent",
+        [
+            # A mail-security sandbox detonating the link: renders HTML, runs
+            # JavaScript, and says it is Chrome — because as far as it is
+            # concerned it is.
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/126.0.0.0 Safari/537.36",
+            # Not even hiding, and the User-Agent list still has no word for it.
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+            "HeadlessChrome/126.0.0.0 Safari/537.36",
+        ],
+    )
+    async def test_a_link_out_of_the_message_body_never_submits_itself(
+        self, async_client: AsyncClient, archive_factory, printer_factory, db_session, agent
+    ):
+        """The residual after taking the write off GET, now closed.
+
+        The User-Agent list catches the fetchers that announce themselves, and
+        none of those run JavaScript anyway. The ones that do run it — Safe
+        Links detonation, click-time sandboxing, a browser-isolation proxy —
+        send an ordinary Chrome string, so the list cannot name them and the
+        page used to press its own button for them.
+
+        What it can never have is the ``?tap=1`` off a notification button: a
+        verdict URL only reaches a scanner by travelling in message text, where
+        the marker is not. An install that kept ``{good_url}`` in its prompt
+        body (the migration leaves an edited body alone, on purpose) is covered
+        by this, which is the case the plain URL below stands for.
+        """
+        printer = await printer_factory()
+        archive = await archive_factory(printer.id, confirm_requested=True, confirm_token="detonated-token")
+
+        response = await async_client.get(
+            "/api/v1/archives/confirm/detonated-token/good", headers={"user-agent": agent}
+        )
+        assert response.status_code == 200
+        assert "Confirm this outcome" in response.text
+        assert "<form method='post'" in response.text
+        assert "submit()" not in response.text, "a body link must never press its own button"
+
+        await db_session.refresh(archive)
+        assert archive.user_verdict is None
+        assert archive.confirm_token_used_at is None, "the operator's tap must still be worth something"
+
+        # And the same browser, arriving from the button, is still one tap.
+        marked = await async_client.get(
+            "/api/v1/archives/confirm/detonated-token/good?tap=1", headers={"user-agent": agent}
+        )
+        assert "getElementById('confirm-form').submit()" in marked.text
 
     @pytest.mark.asyncio
     @pytest.mark.integration

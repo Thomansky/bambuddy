@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.notification import NotificationDigestQueue, NotificationLog, NotificationProvider
 from backend.app.models.notification_template import NotificationTemplate
+from backend.app.services.print_confirmation import one_tap_url
 
 logger = logging.getLogger(__name__)
 
@@ -839,13 +840,23 @@ class NotificationService:
 
         # Build payload based on format
         if payload_format == "slack":
-            # Slack/Mattermost format - just text field.
-            # Slack and Mattermost fetch every URL in the text to build preview
-            # cards. Bambuddy's messages are status text that gains nothing
-            # from one, and the outcome prompt (#1898) used to carry single-use
-            # verdict links, so the unfurl was a machine answering the operator's
-            # question. Off for the same reason Telegram's is.
-            data = {"text": f"*{title}*\n{message}", "unfurl_links": False, "unfurl_media": False}
+            # Slack/Mattermost format - just text field
+            data = {"text": f"*{title}*\n{message}"}
+            if event_type == "print_confirm_request":
+                # Slack and Mattermost fetch every URL in the text to build
+                # preview cards, and the outcome prompt (#1898) is the one
+                # message whose links are single-use capabilities — that fetch
+                # would be a machine answering the operator's question. Off
+                # here for the same reason Telegram's preview is.
+                #
+                # Only here: the slack payload never attaches image bytes (the
+                # base64 attach below is generic-format only), so unfurling is
+                # the only way a {finish_photo_url} in a print_complete body
+                # can render as a photo in the channel. Switching it off for
+                # every event would quietly take that away with no setting to
+                # get it back.
+                data["unfurl_links"] = False
+                data["unfurl_media"] = False
         else:
             # Generic format with custom field names
             custom_field_title = config.get("field_title", "title").strip() or "title"
@@ -1059,6 +1070,13 @@ class NotificationService:
                 # Outcome confirmation (#1898): inline URL buttons under the
                 # message — one tap records the verdict via the capability
                 # link. Same absolute-URL requirement as the ntfy actions.
+                # Telegram has no way to POST, so this is the one affordance
+                # that opens a browser, and it is the one that gets the one-tap
+                # marker: the page submits itself only for a URL that came off
+                # a button. Telegram does not fetch inline-keyboard URLs and
+                # nothing else can read them, so the marker never reaches a
+                # scanner — which is the difference between this and trusting
+                # the User-Agent.
                 tg_buttons = None
                 _tg_good = (variables or {}).get("good_url")
                 _tg_reject = (variables or {}).get("reject_url")
@@ -1070,8 +1088,8 @@ class NotificationService:
                     and _tg_reject.startswith("http")
                 ):
                     tg_buttons = [
-                        {"text": "\U0001f44d Good", "url": _tg_good},
-                        {"text": "\U0001f44e Reject", "url": _tg_reject},
+                        {"text": "\U0001f44d Good", "url": one_tap_url(_tg_good)},
+                        {"text": "\U0001f44e Reject", "url": one_tap_url(_tg_reject)},
                     ]
                 return await self._send_telegram(
                     config, f"*{title}*\n{message}", image_data=image_data, buttons=tg_buttons

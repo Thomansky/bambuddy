@@ -41,6 +41,7 @@ from backend.app.services.bambu_ftp import ftps_handshake_blocked, list_files_re
 from backend.app.services.design_settings import overrides_from_config
 from backend.app.services.filament_requirements import annotate_rack_groups
 from backend.app.services.print_confirmation import (
+    is_one_tap_request,
     is_unattended_fetch,
     retire_confirm_token,
     stamp_verdict,
@@ -3499,11 +3500,20 @@ def _render_confirm_prompt_page(request: Request, archive: PrintArchive, verdict
     GET is where link unfurlers, mail-security scanners and browser prefetchers
     arrive, uninvited and within seconds of the message being sent, so GET
     writes nothing at all -- the verdict is recorded by the form below, over
-    POST, which none of them issue. A phone browser submits that form as soon
-    as the page loads, so the operator still spends exactly one tap; a request
-    that already looks unattended is served without the submitting script,
-    because the scanners that do run JavaScript would otherwise follow it.
-    Without JavaScript the button is the tap.
+    POST, which none of them issue.
+
+    The form submits itself only for a page opened from a notification button,
+    which is what keeps the operator at one tap. The marker for that
+    (``?tap=1``) is put on the Telegram inline keyboard's URLs and nowhere else
+    -- never on a URL that travels in message text -- so a mail-security
+    sandbox that renders HTML and runs JavaScript cannot press the button for
+    the operator: it only ever sees the unmarked URL out of the body. The
+    User-Agent heuristic still runs on top of that, but it is no longer the
+    only thing between a scanner and the write; it cannot be, because such a
+    sandbox sends an ordinary Chrome string.
+
+    Every other arrival -- an unmarked link somebody typed or mailed, a browser
+    with JavaScript off -- gets the same page and presses the button.
     """
     name = html_escape(archive.print_name or archive.filename or "")
     label = _VERDICT_LABELS.get(verdict, verdict)
@@ -3518,10 +3528,11 @@ def _render_confirm_prompt_page(request: Request, archive: PrintArchive, verdict
     )
     # The SPA's CSP allows inline scripts only with the per-request nonce the
     # security-headers middleware mints (main.py). Without one -- no middleware,
-    # or an unattended-looking caller -- the page simply waits for the button.
+    # an unmarked URL, or an unattended-looking caller -- the page simply waits
+    # for the button.
     nonce = getattr(request.state, "csp_nonce", None)
     script = ""
-    if nonce and not is_unattended_fetch(request.method, request.headers):
+    if nonce and is_one_tap_request(request.query_params) and not is_unattended_fetch(request.method, request.headers):
         script = (
             f"<script nonce='{html_escape(nonce, quote=True)}'>"
             "document.getElementById('confirm-form').submit();</script>"
@@ -3580,8 +3591,11 @@ async def confirm_outcome_page(
 
     So GET now hands back the prompt page and nothing else. The page's form
     POSTs to this same URL, and :func:`confirm_outcome_by_token` records it.
-    The human cost is zero: the page submits itself on load, so the tap on the
-    notification is still the only tap.
+    The human cost is zero for the path the feature is built around: a URL
+    opened from a notification button carries ``?tap=1`` and the page submits
+    itself, so that tap is still the only tap. Nothing else gets that script,
+    including a scanner that runs JavaScript -- the marker is on the buttons,
+    not in the message text a scanner reads.
     """
     archive = await _load_confirmable_archive(db, token, verdict)
 
