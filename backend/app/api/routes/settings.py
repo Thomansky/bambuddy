@@ -303,6 +303,53 @@ async def get_settings(
     return await _build_settings_response(db, is_api_key=_is_api_key)
 
 
+async def _assert_library_storage_switch_is_possible(db: AsyncSession, update_data: dict) -> None:
+    """Refuse a switch to directory mode that would leave the library homeless.
+
+    The refusal names which condition failed — unset, not absolute, missing, not
+    a directory, not writable, inside Bambuddy's own data — because "invalid
+    path" tells the owner of a share nothing about what to fix.
+
+    Also refuses a path change that would strand a library already living in a
+    tree: the rows hold absolute paths under the old root, and pointing the
+    setting somewhere else would make every one of them unreachable while the
+    files sit untouched where they are. Switching back to ``managed`` is always
+    allowed — it leaves the tree alone and only changes where new files land.
+    """
+    from backend.app.services.library_storage import (
+        MODE_DIRECTORY,
+        SETTING_MODE,
+        SETTING_PATH,
+        storage_mode,
+        storage_path_problem,
+    )
+
+    touches_mode = SETTING_MODE in update_data
+    touches_path = SETTING_PATH in update_data
+    if not touches_mode and not touches_path:
+        return
+
+    current_mode = await storage_mode(db)
+    new_mode = (update_data.get(SETTING_MODE) or current_mode) if touches_mode else current_mode
+    if new_mode != MODE_DIRECTORY:
+        return
+
+    current_path = (await get_setting(db, SETTING_PATH) or "").strip()
+    new_path = (update_data.get(SETTING_PATH) if touches_path else current_path) or ""
+    problem = storage_path_problem(new_path)
+    if problem:
+        raise HTTPException(status_code=400, detail=f"The library storage path {problem}")
+
+    if current_mode == MODE_DIRECTORY and current_path and Path(new_path) != Path(current_path):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"The library already lives at {current_path}, and its rows hold paths under it. "
+                f"Switch back to the managed library before pointing the setting somewhere else"
+            ),
+        )
+
+
 @router.put("/", response_model=AppSettings)
 async def update_settings(
     settings_update: AppSettingsUpdate,
@@ -339,6 +386,13 @@ async def update_settings(
                     status_code=400,
                     detail="Cannot disable local login: your account has no OIDC link, so you would lock yourself out.",
                 )
+
+    # Switching the library into directory mode is refused unless the path can
+    # actually receive the library (#3160). The check belongs here rather than
+    # in a validator because it depends on the *other* half of the same
+    # payload: the Settings page sends the mode and the path together, and a
+    # validator would judge the mode against whatever path was stored before.
+    await _assert_library_storage_switch_is_possible(db, update_data)
 
     # Check if any MQTT settings are being updated
     mqtt_keys = {

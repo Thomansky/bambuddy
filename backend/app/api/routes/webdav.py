@@ -86,6 +86,7 @@ from backend.app.models.auth_ephemeral import EventType
 from backend.app.models.library import LibraryFile, LibraryFolder
 from backend.app.models.user import User
 from backend.app.schemas.settings import WEBDAV_MODES
+from backend.app.services import library_storage
 from backend.app.utils.filename import InvalidFilenameError, validate_print_filename
 from backend.app.utils.safe_path import safe_join_under
 
@@ -1327,7 +1328,10 @@ async def webdav_put(
         # The upload route's own resolver: it picks the managed blob or the
         # real path on the mount, and refuses a read-only or unreachable one.
         destination, is_external = _resolve_upload_destination(
-            folder, target.name, allow_existing=await _is_unclaimed_name(db, folder, target.name)
+            folder,
+            target.name,
+            allow_existing=await _is_unclaimed_name(db, folder, target.name),
+            storage_root=await library_storage.storage_root_for_write(db),
         )
     else:
         folder = target.parent.folder
@@ -1479,7 +1483,17 @@ async def webdav_mkcol(
     _refuse_readonly(parent)
 
     folder = LibraryFolder(name=target.name, parent_id=parent.id if parent is not None else None)
-    if parent is not None and parent.is_external:
+    # With the library living in a directory tree the share IS the library, so a
+    # MKCOL at its root makes a real directory too — and an existing directory
+    # with no row is adopted, which is how a folder made in Explorer first gets
+    # its row (#3160).
+    tree_directory = await library_storage.prepare_folder_directory(db, parent, name=target.name, number=None)
+    if tree_directory is not None:
+        folder.is_external = True
+        folder.external_path = str(tree_directory)
+        folder.external_readonly = parent.external_readonly if parent is not None else False
+        folder.external_show_hidden = parent.external_show_hidden if parent is not None else False
+    elif parent is not None and parent.is_external:
         # The row follows the directory here, the same shape a scan produces,
         # so the next scan recognises it instead of creating a second row.
         directory = safe_join_under(_external_directory(parent), target.name)
@@ -1763,7 +1777,9 @@ async def webdav_copy(
         new_path = _replacement_destination(replaced)
         is_external = replaced.is_external
     else:
-        new_path, is_external = _resolve_upload_destination(target_folder, destination.name)
+        new_path, is_external = _resolve_upload_destination(
+            target_folder, destination.name, storage_root=await library_storage.storage_root_for_write(db)
+        )
 
     _copy_into_place(source_path, new_path)
 

@@ -48,6 +48,26 @@ WebdavMode = Annotated[
     BeforeValidator(_coerce_webdav_mode),
 ]
 
+LIBRARY_STORAGE_MODES = ("managed", "directory")
+
+
+def _coerce_library_storage_mode(value: object) -> object:
+    """Read any stored ``library_storage_mode`` as one of the two modes.
+
+    Same reasoning as the two above, and ``managed`` is the fail-safe: it is
+    what every install already does, so an unreadable value can only ever mean
+    "keep behaving as before" rather than "start writing to a mount".
+    """
+    if isinstance(value, str) and value.strip().lower() in LIBRARY_STORAGE_MODES:
+        return value.strip().lower()
+    return "managed"
+
+
+LibraryStorageMode = Annotated[
+    Literal["managed", "directory"],
+    BeforeValidator(_coerce_library_storage_mode),
+]
+
 # Outbound service URLs validated on save, so a bad value is rejected at
 # configuration time with a clear message rather than failing opaquely at
 # request time. Every one of these services is commonly self-hosted on the same
@@ -347,6 +367,25 @@ class AppSettings(BaseModel):
             "file in the library, 'folders' only its top-level folders plus an "
             "entry for the files that belong to no folder, and 'recent' the "
             "files most recently added or changed"
+        ),
+    )
+    library_storage_mode: LibraryStorageMode = Field(
+        default="managed",
+        description=(
+            "Where the library keeps its bytes: 'managed' stores them flat and "
+            "hashed under the Bambuddy data directory, 'directory' makes a "
+            "configured path (typically a mounted share) the library itself, "
+            "with real directories for folders and real filenames for files. "
+            "Switching the mode moves nothing on its own — the migration is a "
+            "separate, explicit action"
+        ),
+    )
+    library_storage_path: str = Field(
+        default="",
+        description=(
+            "Absolute path of the directory tree the library lives in when "
+            "library_storage_mode is 'directory'. Must exist, be a directory, "
+            "be writable, and be outside Bambuddy's own data directories"
         ),
     )
     webdav_mode: WebdavMode = Field(
@@ -865,6 +904,8 @@ class AppSettingsUpdate(BaseModel):
     library_archive_mode: str | None = None
     library_disk_warning_gb: float | None = None
     library_root_view: Literal["all", "folders", "recent"] | None = None
+    library_storage_mode: Literal["managed", "directory"] | None = None
+    library_storage_path: str | None = None
     webdav_mode: Literal["off", "read", "readwrite"] | None = None
     camera_view_mode: str | None = None
     preferred_slicer: str | None = None
