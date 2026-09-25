@@ -986,6 +986,9 @@ function FolderActionsMenu({ folder, onDownloadFolder, onDelete, onLink, onRenam
     : hasPermission('library:delete_own') && !isExternal && !isLinked
       ? t('fileManager.onlyEmptyFoldersDeletable')
       : t('fileManager.noPermissionDeleteFolder');
+  // Empty for the download's purposes means nothing anywhere below it: the
+  // route walks the subtree, so a folder with children has something to give.
+  const isFolderEmpty = folder.file_count === 0 && !hasChildren;
   const canRename = hasPermission('library:update_all');
 
   const items: ContextMenuItem[] = [
@@ -1005,12 +1008,15 @@ function FolderActionsMenu({ folder, onDownloadFolder, onDelete, onLink, onRenam
     },
     {
       // Subfolders ride along: a job folder is the drawing, the STEP and the
-      // quote, and they are rarely all on one level.
+      // quote, and they are rarely all on one level. Which is also why the
+      // guard cannot be file_count alone — that counts a folder's OWN files,
+      // so a customer folder holding nothing but job folders reads 0 and had
+      // its download greyed out, which is exactly the folder you want whole.
       label: t('fileManager.downloadFolder'),
       icon: <Download className="w-3.5 h-3.5" />,
       onClick: () => onDownloadFolder(folder),
-      disabled: !hasPermission('library:read') || folder.file_count === 0,
-      title: folder.file_count === 0 ? t('fileManager.folderHasNoFiles') : undefined,
+      disabled: !hasPermission('library:read') || isFolderEmpty,
+      title: isFolderEmpty ? t('fileManager.folderHasNoFiles') : undefined,
     },
     {
       // An external folder copies its real on-disk path — that is the string

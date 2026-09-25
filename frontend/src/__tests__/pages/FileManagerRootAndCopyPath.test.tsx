@@ -165,6 +165,55 @@ async function openFileMenu(user: ReturnType<typeof userEvent.setup>, filename: 
   return screen.findByText('Copy path');
 }
 
+describe('FileManagerPage — Download folder', () => {
+  let user: ReturnType<typeof userEvent.setup>;
+
+  beforeEach(() => {
+    localStorage.clear();
+    fileRequests = [];
+    user = userEvent.setup();
+    useHandlers();
+    // An empty folder on top of the shared tree: the later handler wins, so the
+    // other blocks keep the folder list they assert on.
+    server.use(
+      http.get('/api/v1/library/folders', () =>
+        HttpResponse.json([...mockFolders, folder({ id: 20, name: 'Leer' })]),
+      ),
+    );
+  });
+
+  /** The "Download folder" entry from a tree row's kebab. */
+  async function openDownloadEntry(name: string) {
+    await waitFor(() => expect(screen.getByTestId('folder-sidebar')).toBeInTheDocument());
+    const row = await waitFor(() => sidebar().getByText(name).closest('.group') as HTMLElement);
+    await user.click(within(row).getByTitle('Actions'));
+    return screen.getByText('Download folder').closest('button')!;
+  }
+
+  it('offers the download on a folder whose files are all in its subfolders', async () => {
+    // "Kunden" holds no files of its own, only job folders — which is exactly
+    // the folder somebody wants whole. file_count counts a folder's OWN files,
+    // so guarding on it alone greyed the entry out on every customer folder.
+    render(<FileManagerPage />);
+
+    expect(await openDownloadEntry('Kunden')).not.toBeDisabled();
+  });
+
+  it('offers it on a folder with files of its own', async () => {
+    render(<FileManagerPage />);
+
+    expect(await openDownloadEntry('NAS Prints')).not.toBeDisabled();
+  });
+
+  it('still refuses a folder with nothing anywhere below it', async () => {
+    render(<FileManagerPage />);
+
+    const entry = await openDownloadEntry('Leer');
+    expect(entry).toBeDisabled();
+    expect(entry).toHaveAttribute('title', 'This folder holds no files');
+  });
+});
+
 describe('FileManagerPage — Copy path', () => {
   let writeText: ReturnType<typeof vi.fn>;
   let user: ReturnType<typeof userEvent.setup>;
