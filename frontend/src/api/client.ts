@@ -1483,6 +1483,33 @@ export type LibraryRootView = 'all' | 'folders' | 'recent';
  *  mapped drive can write to. */
 export type WebdavMode = 'off' | 'read' | 'readwrite';
 
+/** Where the library keeps its bytes: Bambuddy's own flat store, or a real
+ *  directory tree (typically a mounted share) that it only indexes. */
+export type LibraryStorageMode = 'managed' | 'directory';
+
+/** What moving the managed library into the tree would do, or did. */
+export interface LibraryStorageMigrationPlan {
+  storage_path: string;
+  file_count: number;
+  folder_count: number;
+  total_bytes: number;
+  /** Collisions. Any entry here means the run is refused whole. */
+  blockers: string[];
+  /** Files the plan cannot move — bytes missing, folder gone. */
+  missing: string[];
+  moves: { file_id: number; filename: string; source: string; target: string; size: number }[];
+}
+
+export interface LibraryStorageMigrationResult {
+  status: string;
+  storage_path: string;
+  moved: number;
+  moved_bytes: number;
+  directories_created: number;
+  skipped: string[];
+  failures: string[];
+}
+
 // Settings types
 export interface AppSettings {
   auto_archive: boolean;
@@ -1588,6 +1615,11 @@ export interface AppSettings {
   // writable. Off by default; it always requires HTTP Basic credentials, even
   // where the web UI does not.
   webdav_mode: WebdavMode;
+  // Where the library's bytes live (#3160): Bambuddy's own store, or a
+  // directory tree it only indexes. Switching moves nothing by itself — the
+  // migration is a separate, explicit action.
+  library_storage_mode: LibraryStorageMode;
+  library_storage_path: string;
   // Camera view settings
   camera_view_mode: 'window' | 'embedded';
   // Preferred slicer (server-side API / sidecar)
@@ -7792,6 +7824,10 @@ export const api = {
     request<{ status: string; added: number; removed: number }>(`/library/folders/${folderId}/scan`, {
       method: 'POST',
     }),
+  getLibraryStorageMigrationPlan: () =>
+    request<LibraryStorageMigrationPlan>('/library/storage/migration-plan'),
+  migrateLibraryStorage: () =>
+    request<LibraryStorageMigrationResult>('/library/storage/migrate', { method: 'POST' }),
   getLibraryFoldersByProject: (projectId: number) =>
     request<LibraryFolder[]>(`/library/folders/by-project/${projectId}`),
   getLibraryFoldersByArchive: (archiveId: number) =>

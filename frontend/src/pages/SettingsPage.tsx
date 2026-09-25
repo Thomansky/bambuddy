@@ -5,6 +5,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDateOnly } from '../utils/date';
+import { formatFileSize } from '../utils/file';
 import { getCurrencySymbol, SUPPORTED_CURRENCIES } from '../utils/currency';
 import { vatSuffix } from '../utils/vat';
 import { VatBadge } from '../components/VatBadge';
@@ -20,7 +21,7 @@ import {
 } from '../utils/locationSensorDefaults';
 import { describeHASensorReading, iconForHASensor } from '../utils/haSensorDisplay';
 import { PreheatFilamentTargetsEditor } from '../components/PreheatFilamentTargetsEditor';
-import type { APIKey, AppSettings, AppSettingsUpdate, PrinterHASensor, LocationHASensor, LocationHASensorReading, SmartPlug, SmartPlugStatus, NotificationProvider, NotificationTemplate, UpdateStatus, GitHubBackupStatus, CloudAuthStatus, UserCreate, UserUpdate, UserResponse, StorageUsageResponse, CalibrationMode, LibraryRootView, WebdavMode } from '../api/client';
+import type { APIKey, AppSettings, AppSettingsUpdate, PrinterHASensor, LocationHASensor, LocationHASensorReading, SmartPlug, SmartPlugStatus, NotificationProvider, NotificationTemplate, UpdateStatus, GitHubBackupStatus, CloudAuthStatus, UserCreate, UserUpdate, UserResponse, StorageUsageResponse, CalibrationMode, LibraryRootView, WebdavMode, LibraryStorageMode, LibraryStorageMigrationPlan } from '../api/client';
 import { Card, CardContent, CardDensityProvider, CardHeader } from '../components/Card';
 import { SlicerPipelinesPanel } from '../components/SlicerPipelinesPanel';
 import { NumberSeriesSettings } from '../components/NumberSeriesSettings';
@@ -178,6 +179,22 @@ const WEBDAV_MODE_OPTIONS: { value: WebdavMode; labelKey: string; descriptionKey
   },
 ];
 
+// Two modes, and the trade is in the description rather than in a help page:
+// the tree is worth having for the Explorer access, and it costs the guarantee
+// that the database and the disk agree.
+const LIBRARY_STORAGE_MODE_OPTIONS: { value: LibraryStorageMode; labelKey: string; descriptionKey: string }[] = [
+  {
+    value: 'managed',
+    labelKey: 'settings.libraryStorageModeManaged',
+    descriptionKey: 'settings.libraryStorageModeManagedDescription',
+  },
+  {
+    value: 'directory',
+    labelKey: 'settings.libraryStorageModeDirectory',
+    descriptionKey: 'settings.libraryStorageModeDirectoryDescription',
+  },
+];
+
 const STORAGE_CATEGORY_COLORS: Record<string, string> = {
   database: 'bg-blue-600',
   library_files: 'bg-green-500',
@@ -234,6 +251,48 @@ export function SettingsPage() {
   const { t, i18n } = useTranslation();
   const { showToast } = useToast();
   const { authEnabled, user, isAdmin, refreshAuth, hasPermission } = useAuth();
+  // The migration's plan is kept in component state rather than a query: it is
+  // a snapshot the user is deciding on, and re-fetching it under them while
+  // they read a collision would change what the button they are about to press
+  // is going to do (#3160).
+  const [storagePlan, setStoragePlan] = useState<LibraryStorageMigrationPlan | null>(null);
+  const [storageBusy, setStorageBusy] = useState(false);
+
+  const handleStoragePlan = async () => {
+    setStorageBusy(true);
+    try {
+      setStoragePlan(await api.getLibraryStorageMigrationPlan());
+    } catch (error) {
+      setStoragePlan(null);
+      showToast(error instanceof Error ? error.message : t('settings.libraryStorageMigrationFailed'), 'error');
+    } finally {
+      setStorageBusy(false);
+    }
+  };
+
+  const handleStorageMigrate = async () => {
+    setStorageBusy(true);
+    try {
+      const result = await api.migrateLibraryStorage();
+      showToast(
+        t('settings.libraryStorageMigrationDone', {
+          files: result.moved,
+          folders: result.directories_created,
+        }),
+        result.failures.length > 0 ? 'error' : 'success',
+      );
+      result.failures.forEach((failure) => showToast(failure, 'error'));
+      // Re-planned rather than cleared: a second run is a no-op and the fresh
+      // plan is the proof of that, with anything it could not move still named.
+      setStoragePlan(await api.getLibraryStorageMigrationPlan());
+      queryClient.invalidateQueries({ queryKey: ['library-folders'] });
+      queryClient.invalidateQueries({ queryKey: ['library-files'] });
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t('settings.libraryStorageMigrationFailed'), 'error');
+    } finally {
+      setStorageBusy(false);
+    }
+  };
   const {
     mode, resolvedMode,
     darkStyle, darkBackground, darkAccent,
@@ -1219,6 +1278,8 @@ export function SettingsPage() {
       Number(baseline.library_disk_warning_gb ?? 5) !== Number(localSettings.library_disk_warning_gb ?? 5) ||
       (baseline.library_root_view ?? 'all') !== (localSettings.library_root_view ?? 'all') ||
       (baseline.webdav_mode ?? 'off') !== (localSettings.webdav_mode ?? 'off') ||
+      (baseline.library_storage_mode ?? 'managed') !== (localSettings.library_storage_mode ?? 'managed') ||
+      (baseline.library_storage_path ?? '') !== (localSettings.library_storage_path ?? '') ||
       (baseline.preferred_slicer ?? 'bambu_studio') !== (localSettings.preferred_slicer ?? 'bambu_studio') ||
       resolveEngine(baseline.slice_engine) !== resolveEngine(localSettings.slice_engine) ||
       (baseline.open_in_slicer ?? null) !== (localSettings.open_in_slicer ?? null) ||
@@ -1344,6 +1405,8 @@ export function SettingsPage() {
         library_disk_warning_gb: localSettings.library_disk_warning_gb,
         library_root_view: localSettings.library_root_view,
         webdav_mode: localSettings.webdav_mode,
+        library_storage_mode: localSettings.library_storage_mode,
+        library_storage_path: localSettings.library_storage_path,
         preferred_slicer: localSettings.preferred_slicer,
         slice_engine: localSettings.slice_engine,
         open_in_slicer: localSettings.open_in_slicer,
@@ -2821,6 +2884,99 @@ export function SettingsPage() {
                     {localSettings.webdav_mode === 'readwrite' && (
                       <p className="text-xs text-bambu-gray">{t('settings.webdavWriteHint')}</p>
                     )}
+                  </div>
+                )}
+              </div>
+
+              {/* Where the library's bytes live (#3160). The hints appear only
+                  for the tree: in managed mode they describe a drift that
+                  cannot happen, and the migration is not an action that has
+                  any meaning yet. */}
+              <div className="border-t border-bambu-dark-tertiary pt-3 mt-3">
+                <p className="text-white">{t('settings.libraryStorageMode')}</p>
+                <p className="text-sm text-bambu-gray">{t('settings.libraryStorageDescription')}</p>
+                <div role="radiogroup" aria-label={t('settings.libraryStorageMode')} className="space-y-2 mt-2">
+                  {LIBRARY_STORAGE_MODE_OPTIONS.map(({ value, labelKey, descriptionKey }) => (
+                    <label key={value} className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="library-storage-mode"
+                        value={value}
+                        checked={(localSettings.library_storage_mode ?? 'managed') === value}
+                        onChange={() => updateSetting('library_storage_mode', value)}
+                        className="accent-bambu-green mt-1 flex-shrink-0"
+                      />
+                      <span className="min-w-0">
+                        <span className="block text-white">{t(labelKey)}</span>
+                        <span className="block text-xs text-bambu-gray">{t(descriptionKey)}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                {(localSettings.library_storage_mode ?? 'managed') === 'directory' && (
+                  <div className="mt-3 space-y-2">
+                    <label className="block text-sm text-bambu-gray" htmlFor="library-storage-path">
+                      {t('settings.libraryStoragePath')}
+                    </label>
+                    <input
+                      id="library-storage-path"
+                      type="text"
+                      value={localSettings.library_storage_path ?? ''}
+                      onChange={(e) => updateSetting('library_storage_path', e.target.value)}
+                      placeholder="/mnt/nas/bambuddy"
+                      className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-sm"
+                    />
+                    <p className="text-xs text-bambu-gray">{t('settings.libraryStoragePathHint')}</p>
+                    <p className="text-xs text-bambu-gray">{t('settings.libraryStorageDriftHint')}</p>
+                    <p className="text-xs text-bambu-gray">{t('settings.libraryStorageHashHint')}</p>
+
+                    {/* The migration is its own action, and its plan is shown
+                        before anything moves: a collision is a decision about
+                        which file gets renamed, and nobody can make that from
+                        a progress bar. */}
+                    <div className="border-t border-bambu-dark-tertiary pt-2 mt-2 space-y-2">
+                      <p className="text-white text-sm">{t('settings.libraryStorageMigration')}</p>
+                      <p className="text-xs text-bambu-gray">{t('settings.libraryStorageMigrationHint')}</p>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={handleStoragePlan}
+                          disabled={storageBusy}
+                          className="px-3 py-1.5 text-sm rounded bg-bambu-dark-tertiary text-white hover:bg-bambu-dark-quaternary disabled:opacity-50"
+                        >
+                          {t('settings.libraryStoragePlanButton')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleStorageMigrate}
+                          disabled={storageBusy || !storagePlan || storagePlan.blockers.length > 0}
+                          className="px-3 py-1.5 text-sm rounded bg-bambu-green text-white hover:bg-bambu-green/80 disabled:opacity-50"
+                        >
+                          {t('settings.libraryStorageMigrateButton')}
+                        </button>
+                      </div>
+                      {storagePlan && (
+                        <div className="text-xs space-y-1" data-testid="library-storage-plan">
+                          <p className="text-bambu-gray">
+                            {t('settings.libraryStoragePlanSummary', {
+                              files: storagePlan.file_count,
+                              folders: storagePlan.folder_count,
+                              size: formatFileSize(storagePlan.total_bytes),
+                            })}
+                          </p>
+                          {storagePlan.blockers.map((blocker) => (
+                            <p key={blocker} className="text-red-400 break-all">
+                              {blocker}
+                            </p>
+                          ))}
+                          {storagePlan.missing.map((entry) => (
+                            <p key={entry} className="text-yellow-400 break-all">
+                              {entry}
+                            </p>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
