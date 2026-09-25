@@ -10,7 +10,12 @@
  *
  * The migration is a separate action from the switch, and its plan is shown
  * before anything moves: a collision is a decision about which file gets
- * renamed, and "Move now" stays out of reach until there is none.
+ * renamed, and "Move now" stays out of reach — and says so — until there is
+ * none.
+ *
+ * The card saves on demand rather than on every keystroke. Picking "Directory"
+ * used to send the mode with an empty path the same second, which the server
+ * refuses, so the card reported a failure at somebody who was still typing.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -163,6 +168,22 @@ describe('SettingsPage — library storage', () => {
     await waitFor(() => expect(migrations).toBe(1));
   });
 
+  it('does not save while the pair is incomplete', async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    expect(await findOption("Bambuddy's own library")).toBeChecked();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await user.click(await findOption('Directory'));
+
+    // The path is still empty, so there is nothing worth sending — and the
+    // server would refuse it, which is what used to surface as a red toast.
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(screen.getByText('Enter the path first.')).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(saved.some((body) => 'library_storage_mode' in body)).toBe(false);
+  });
+
   it('refuses to run while a collision is on the plan', async () => {
     const user = userEvent.setup();
     server.use(
@@ -172,7 +193,14 @@ describe('SettingsPage — library storage', () => {
       http.get('/api/v1/library/storage/migration-plan', () =>
         HttpResponse.json({
           ...emptyPlan,
-          blockers: ['/mnt/nas/bambuddy/Kunden/part.3mf already exists on the share'],
+          blockers: [
+            {
+              kind: 'exists',
+              target: '/mnt/nas/bambuddy/Kunden/part.3mf',
+              names: ['part.3mf (file id 3)'],
+              message: '/mnt/nas/bambuddy/Kunden/part.3mf already exists on the share',
+            },
+          ],
         })
       )
     );
@@ -181,23 +209,25 @@ describe('SettingsPage — library storage', () => {
     await findOption('Directory');
     await user.click(screen.getByRole('button', { name: 'Show what would move' }));
 
-    // Named, so the user knows which file to rename, and the run stays shut.
-    expect(await screen.findByText(/Kunden\/part\.3mf already exists on the share/)).toBeInTheDocument();
+    // The name first and in the user's language, the path underneath, and a
+    // line saying why the button below is shut.
+    expect(await screen.findByText(/part\.3mf \(file id 3\) already exists there/)).toBeInTheDocument();
+    expect(screen.getByText('/mnt/nas/bambuddy/Kunden/part.3mf')).toBeInTheDocument();
+    expect(screen.getByText(/blocked by 1 name collision/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Move now' })).toBeDisabled();
     expect(migrations).toBe(0);
   });
 
-  it('persists the mode and the path together', async () => {
+  it('persists the mode and the path together, on the save', async () => {
     const user = userEvent.setup();
     render(<SettingsPage />);
 
-    // SettingsPage ignores edits for the first 100ms after its settings arrive,
-    // so a click inside that window never reaches the debounced save.
     expect(await findOption("Bambuddy's own library")).toBeChecked();
     await new Promise((resolve) => setTimeout(resolve, 200));
 
     await user.click(await findOption('Directory'));
     await user.type(screen.getByLabelText('Path to the directory'), '/mnt/nas/bambuddy');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(
       () => {
