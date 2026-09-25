@@ -2816,6 +2816,7 @@ export default {
     libraryStorageMigrationFailed: 'Не удалось запустить перенос.',
     libraryStoragePathRequired: 'Сначала укажите путь.',
     libraryStorageUnsaved: 'Ещё не сохранено',
+    libraryStorageSaved: 'Сохранено',
     libraryStoragePlanFirst: 'Сначала посмотрите, что будет перенесено.',
     libraryStorageBlocked: 'Перенос заблокирован: совпадений имён — {{blockers}}:',
     libraryStorageBlockerCollision: '{{first}} и {{second}} стали бы одним файлом. Переименуйте один из них.',

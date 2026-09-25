@@ -2952,6 +2952,7 @@ export default {
     libraryStorageMigrationFailed: '移行を開始できませんでした。',
     libraryStoragePathRequired: '先にパスを入力してください。',
     libraryStorageUnsaved: '未保存',
+    libraryStorageSaved: '保存済み',
     libraryStoragePlanFirst: '先に移動する内容を表示してください。',
     libraryStorageBlocked: '名前の重複が {{blockers}} 件あるため移動できません:',
     libraryStorageBlockerCollision: '{{first}} と {{second}} が同じファイルになってしまいます。どちらかの名前を変えてください。',

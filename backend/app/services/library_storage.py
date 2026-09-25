@@ -530,6 +530,12 @@ class MigrationBlocker:
     the parts are what the File Manager renders: a collision is a decision about
     which file gets renamed, and the person making it needs the names in their
     own language, not an English sentence with two paths in it.
+
+    Which is why ``blockers`` stays a list of those messages and the parts ride
+    alongside in ``blocker_details``. Changing the field's type instead broke
+    every browser tab that was still on the previous build — the old code
+    rendered a string and was handed an object — and an upgrade should not
+    depend on everybody having reloaded first.
     """
 
     kind: str
@@ -567,7 +573,8 @@ class MigrationPlan:
             "file_count": len(self.moves),
             "folder_count": len(self.folders),
             "total_bytes": self.total_bytes,
-            "blockers": [blocker.as_dict() for blocker in self.blockers],
+            "blockers": [blocker.message for blocker in self.blockers],
+            "blocker_details": [blocker.as_dict() for blocker in self.blockers],
             "missing": self.missing,
             "moves": [
                 {
@@ -722,7 +729,8 @@ async def run_migration(db: AsyncSession, root: Path) -> dict:
             status_code=409,
             detail={
                 "message": "The migration was not started because it would overwrite files",
-                "blockers": [blocker.as_dict() for blocker in plan.blockers],
+                "blockers": [blocker.message for blocker in plan.blockers],
+                "blocker_details": [blocker.as_dict() for blocker in plan.blockers],
             },
         )
 

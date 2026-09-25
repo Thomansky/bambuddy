@@ -2962,7 +2962,7 @@ export function SettingsPage() {
                       <button
                         type="button"
                         onClick={handleStorageModeSave}
-                        disabled={storageBusy || !storageModeDirty || storageModeIncomplete}
+                        disabled={storageBusy || storageModeIncomplete}
                         className="px-3 py-1.5 text-sm rounded bg-bambu-green text-white hover:bg-bambu-green/80 disabled:bg-bambu-dark-tertiary disabled:text-bambu-gray disabled:cursor-not-allowed"
                       >
                         {t('common.save')}
@@ -2972,6 +2972,9 @@ export function SettingsPage() {
                       )}
                       {!storageModeIncomplete && storageModeDirty && (
                         <span className="text-xs text-amber-500">{t('settings.libraryStorageUnsaved')}</span>
+                      )}
+                      {!storageModeIncomplete && !storageModeDirty && (
+                        <span className="text-xs text-bambu-gray">{t('settings.libraryStorageSaved')}</span>
                       )}
                     </div>
 
@@ -3024,18 +3027,31 @@ export function SettingsPage() {
                               {t('settings.libraryStorageBlocked', { blockers: storagePlan.blockers.length })}
                             </p>
                           )}
-                          {storagePlan.blockers.map((blocker) => (
-                            <div key={blocker.target} className="text-red-400">
+                          {(
+                            storagePlan.blocker_details ??
+                            // A server that only sends the sentences: render those
+                            // rather than nothing. The reverse case is what broke
+                            // an open tab once, and it is not worth a second one.
+                            storagePlan.blockers.map((message) => ({
+                              kind: 'message',
+                              target: '',
+                              names: [message],
+                              message,
+                            }))
+                          ).map((blocker) => (
+                            <div key={blocker.message} className="text-red-400">
                               {/* The names first, the path second: what the user
                                   has to do is rename one of these two, and the
                                   directory they are in is context for that. */}
                               <p>
-                                {blocker.kind === 'exists'
-                                  ? t('settings.libraryStorageBlockerExists', { name: blocker.names[0] })
-                                  : t('settings.libraryStorageBlockerCollision', {
-                                      first: blocker.names[0],
-                                      second: blocker.names[1],
-                                    })}
+                                {blocker.kind === 'message'
+                                  ? blocker.message
+                                  : blocker.kind === 'exists'
+                                    ? t('settings.libraryStorageBlockerExists', { name: blocker.names[0] })
+                                    : t('settings.libraryStorageBlockerCollision', {
+                                        first: blocker.names[0],
+                                        second: blocker.names[1],
+                                      })}
                               </p>
                               <p className="text-bambu-gray break-all">{blocker.target}</p>
                             </div>
