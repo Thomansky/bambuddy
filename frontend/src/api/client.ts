@@ -3765,6 +3765,15 @@ export interface SlotSpoolIdentity {
   subtype: string | null;
   color_name: string | null;
   rgba: string | null;
+  /** Comma-separated hex stops for a multi-colour spool, and the effect
+   *  overlay — the two things a tray record cannot carry, so a slot swatch
+   *  can be drawn the way the inventory row draws it (#3159).
+   *
+   *  Optional rather than required: the backend sends both keys on every
+   *  binding, but a frontend running against an older one gets neither, and
+   *  every reader here already falls back to a solid swatch. */
+  extra_colors?: string | null;
+  effect_type?: string | null;
 }
 
 export interface InventoryRemainResponse {
@@ -7510,8 +7519,54 @@ export const api = {
     window.URL.revokeObjectURL(url);
   },
   getLibraryFileThumbnailUrl: (id: number) => withMediaToken(`${API_BASE}/library/files/${id}/thumbnail`),
+  // Client-rendered preview thumbnail upload (#2976). STEP/PDF/spreadsheet
+  // previews render in the browser; the first render is posted back so the
+  // grid gets a thumbnail without a server-side renderer for those formats.
+  uploadLibraryPreviewThumbnail: async (fileId: number, thumbnail: Blob): Promise<{ updated: boolean }> => {
+    const formData = new FormData();
+    formData.append('thumbnail', thumbnail, 'preview.png');
+    const headers: Record<string, string> = {};
+    if (authToken) {
+      headers['Authorization'] = `Bearer ${authToken}`;
+    }
+    const response = await fetch(`${API_BASE}/library/files/${fileId}/preview-thumbnail`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || `HTTP ${response.status}`);
+    }
+    return response.json();
+  },
   getLibraryFilePlateThumbnail: (id: number, plateIndex: number) =>
     withMediaToken(`${API_BASE}/library/files/${id}/plate-thumbnail/${plateIndex}`),
+  // Photos of the printed result (#3077) — same shape as the archive photo API.
+  getLibraryFilePhotoUrl: (fileId: number, filename: string) =>
+    withMediaToken(`${API_BASE}/library/files/${fileId}/photos/${encodeURIComponent(filename)}`),
+  uploadLibraryFilePhoto: async (fileId: number, file: File): Promise<{ status: string; filename: string; photos: string[] }> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const headers: Record<string, string> = {};
+    if (authToken) {
+      headers['Authorization'] = `Bearer ${authToken}`;
+    }
+    const response = await fetch(`${API_BASE}/library/files/${fileId}/photos`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || `HTTP ${response.status}`);
+    }
+    return response.json();
+  },
+  deleteLibraryFilePhoto: (fileId: number, filename: string) =>
+    request<{ status: string; photos: string[] }>(`/library/files/${fileId}/photos/${encodeURIComponent(filename)}`, {
+      method: 'DELETE',
+    }),
   getLibraryFileGcodeUrl: (id: number) => `${API_BASE}/library/files/${id}/gcode`,
   moveLibraryFiles: (fileIds: number[], folderId: number | null) =>
     request<{ status: string; moved: number }>('/library/files/move', {
@@ -8077,6 +8132,11 @@ export interface LibraryFile {
   print_count: number;
   last_printed_at: string | null;
   notes: string | null;
+  // User link + photos of the printed result (#3077); source_url is the
+  // read-only import provenance (MakerWorld).
+  external_url: string | null;
+  photos: string[];
+  source_url: string | null;
   duplicates: LibraryFileDuplicate[] | null;
   duplicate_count: number;
   // User tracking (Issue #206)
@@ -8127,6 +8187,11 @@ export interface LibraryFileListItem {
   // matching rows on screen. 0 when the file is not grouped.
   variant_group_id?: number | null;
   variant_count?: number;
+  // Metadata indicators (#3077). Optional for the same reason as `tags`: older
+  // mocks construct list items without them. Read sites default to falsy.
+  external_url?: string | null;
+  has_notes?: boolean;
+  photo_count?: number;
 }
 
 // Variant groups (#671 / #2570): the same job sliced for different printers.
@@ -8164,6 +8229,7 @@ export interface LibraryFileUpdate {
   folder_id?: number | null;
   project_id?: number | null;
   notes?: string | null;
+  external_url?: string | null;
 }
 
 // Library trash (#1008)
