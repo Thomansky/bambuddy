@@ -3885,7 +3885,7 @@ export default {
     linkToProjectOrArchive: 'プロジェクトまたはアーカイブにリンク',
     generateThumbnail: 'サムネイルを生成',
     generateThumbnails: 'サムネイルを生成',
-    generateThumbnailsForMissing: 'サムネイルのないSTLファイルのサムネイルを生成',
+    generateThumbnailsForMissing: 'サムネイルのないSTL・PDFファイルのサムネイルを生成',
     gridView: 'グリッド表示',
     listView: 'リスト表示',
     lowDiskSpaceWarning: 'ディスク容量不足の警告',
@@ -4075,7 +4075,7 @@ export default {
       folderRenamed: 'フォルダ名を変更しました',
       thumbnailsGenerated: '{{count}}件のサムネイルを生成しました',
       thumbnailsGeneratedPartial: '{{succeeded}}件生成、{{failed}}件失敗',
-      noStlMissingThumbnails: 'サムネイルのないSTLファイルはありません',
+      noStlMissingThumbnails: 'サムネイルのないSTL・PDFファイルはありません',
       failedToGenerateThumbnails: 'サムネイルの生成に失敗: {{error}}',
       thumbnailGenerated: 'サムネイルを生成しました',
       failedToGenerateThumbnail: 'サムネイルの生成に失敗: {{error}}',
@@ -5777,6 +5777,8 @@ export default {
 
   // Model Viewer
   modelViewer: {
+    stepConverting: 'STEPモデルを変換中… {{seconds}}秒',
+    stepSlowHint: 'サイズの大きいSTEPファイルは1分以上かかることがあります。',
     openInSlicer: 'スライサーで開く',
     openInSlicerWith: '{{slicer}}で開く',
     moreSlicerOptions: 'その他のスライサーオプション',

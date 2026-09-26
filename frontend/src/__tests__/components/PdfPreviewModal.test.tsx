@@ -24,12 +24,12 @@ const pdfjsMocks = vi.hoisted(() => {
   return { render, getPage, getDocument };
 });
 
-vi.mock('pdfjs-dist', () => ({
+vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
   GlobalWorkerOptions: { workerSrc: '' },
   getDocument: pdfjsMocks.getDocument,
 }));
 
-vi.mock('pdfjs-dist/build/pdf.worker.min.mjs?url', () => ({ default: 'pdf.worker.min.mjs' }));
+vi.mock('pdfjs-dist/legacy/build/pdf.worker.min.mjs?worker&url', () => ({ default: 'pdf.worker.min.mjs' }));
 
 vi.mock('../../api/client', () => ({
   api: {

@@ -3885,7 +3885,7 @@ export default {
     linkToProjectOrArchive: 'Mit Projekt oder Archiv verknüpfen',
     generateThumbnail: 'Vorschaubild generieren',
     generateThumbnails: 'Vorschaubilder generieren',
-    generateThumbnailsForMissing: 'Vorschaubilder für STL-Dateien ohne Vorschau generieren',
+    generateThumbnailsForMissing: 'Vorschaubilder für STL- und PDF-Dateien ohne Vorschau generieren',
     gridView: 'Rasteransicht',
     listView: 'Listenansicht',
     lowDiskSpaceWarning: 'Warnung: Wenig Speicherplatz',
@@ -4075,7 +4075,7 @@ export default {
       folderRenamed: 'Ordner umbenannt',
       thumbnailsGenerated: '{{count}} Vorschaubild(er) generiert',
       thumbnailsGeneratedPartial: '{{succeeded}} Vorschaubild(er) generiert, {{failed}} fehlgeschlagen',
-      noStlMissingThumbnails: 'Keine STL-Dateien ohne Vorschaubild',
+      noStlMissingThumbnails: 'Keine STL- oder PDF-Dateien ohne Vorschaubild',
       failedToGenerateThumbnails: 'Fehler beim Generieren der Vorschaubilder: {{error}}',
       thumbnailGenerated: 'Vorschaubild generiert',
       failedToGenerateThumbnail: 'Fehler beim Generieren des Vorschaubildes: {{error}}',
@@ -5776,6 +5776,8 @@ export default {
 
   // Model Viewer
   modelViewer: {
+    stepConverting: 'STEP-Modell wird konvertiert … {{seconds}} s',
+    stepSlowHint: 'Große STEP-Dateien können eine Minute oder länger dauern.',
     openInSlicer: 'Im Slicer öffnen',
     openInSlicerWith: 'In {{slicer}} öffnen',
     moreSlicerOptions: 'Weitere Slicer-Optionen',

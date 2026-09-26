@@ -3880,7 +3880,7 @@ export default {
     linkToProjectOrArchive: 'Projeye veya arşive bağla',
     generateThumbnail: 'Küçük Resim Oluştur',
     generateThumbnails: 'Küçük Resimler Oluştur',
-    generateThumbnailsForMissing: 'Eksik olan STL dosyaları için küçük resimler oluştur',
+    generateThumbnailsForMissing: 'Eksik olan STL ve PDF dosyaları için küçük resimler oluştur',
     gridView: 'Izgara görünümü',
     listView: 'Liste görünümü',
     lowDiskSpaceWarning: 'Düşük disk alanı uyarısı',
@@ -4070,7 +4070,7 @@ export default {
       folderRenamed: 'Klasör yeniden adlandırıldı',
       thumbnailsGenerated: '{{count}} küçük resim oluşturuldu',
       thumbnailsGeneratedPartial: '{{succeeded}} küçük resim oluşturuldu, {{failed}} başarısız',
-      noStlMissingThumbnails: 'Küçük resmi eksik STL dosyası yok',
+      noStlMissingThumbnails: 'Küçük resmi eksik STL veya PDF dosyası yok',
       failedToGenerateThumbnails: 'Küçük resimler oluşturulamadı: {{error}}',
       thumbnailGenerated: 'Küçük resim oluşturuldu',
       failedToGenerateThumbnail: 'Küçük resim oluşturulamadı: {{error}}',
@@ -5740,6 +5740,8 @@ export default {
 
   // Model Görüntüleyici
   modelViewer: {
+    stepConverting: 'STEP modeli dönüştürülüyor… {{seconds}} sn',
+    stepSlowHint: 'Büyük STEP dosyaları bir dakika veya daha uzun sürebilir.',
     openInSlicer: 'Dilimleyicide Aç',
     openInSlicerWith: '{{slicer}} ile aç',
     moreSlicerOptions: 'Diğer dilimleyici seçenekleri',

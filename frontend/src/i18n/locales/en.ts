@@ -3915,7 +3915,7 @@ export default {
     linkToProjectOrArchive: 'Link to project or archive',
     generateThumbnail: 'Generate Thumbnail',
     generateThumbnails: 'Generate Thumbnails',
-    generateThumbnailsForMissing: 'Generate thumbnails for STL files missing them',
+    generateThumbnailsForMissing: 'Generate thumbnails for STL and PDF files missing them',
     gridView: 'Grid view',
     listView: 'List view',
     lowDiskSpaceWarning: 'Low disk space warning',
@@ -4105,7 +4105,7 @@ export default {
       folderRenamed: 'Folder renamed',
       thumbnailsGenerated: 'Generated {{count}} thumbnail(s)',
       thumbnailsGeneratedPartial: 'Generated {{succeeded}} thumbnail(s), {{failed}} failed',
-      noStlMissingThumbnails: 'No STL files missing thumbnails',
+      noStlMissingThumbnails: 'No STL or PDF files missing thumbnails',
       failedToGenerateThumbnails: 'Failed to generate thumbnails: {{error}}',
       thumbnailGenerated: 'Thumbnail generated',
       failedToGenerateThumbnail: 'Failed to generate thumbnail: {{error}}',
@@ -5827,6 +5827,8 @@ export default {
 
   // Model Viewer
   modelViewer: {
+    stepConverting: 'Converting STEP model… {{seconds}} s',
+    stepSlowHint: 'Large STEP files can take a minute or more.',
     openInSlicer: 'Open in Slicer',
     openInSlicerWith: 'Open in {{slicer}}',
     moreSlicerOptions: 'More slicer options',

@@ -3915,7 +3915,7 @@ export default {
     linkToProjectOrArchive: 'Koppelen aan project of archief',
     generateThumbnail: 'Miniatuur genereren',
     generateThumbnails: 'Miniaturen genereren',
-    generateThumbnailsForMissing: 'Miniaturen genereren voor STL-bestanden die ze missen',
+    generateThumbnailsForMissing: 'Miniaturen genereren voor STL- en PDF-bestanden die ze missen',
     gridView: 'Rasterweergave',
     listView: 'Lijstweergave',
     lowDiskSpaceWarning: 'Waarschuwing weinig schijfruimte',
@@ -4105,7 +4105,7 @@ export default {
       folderRenamed: 'Map hernoemd',
       thumbnailsGenerated: '{{count}} miniatuur/miniaturen gegenereerd',
       thumbnailsGeneratedPartial: '{{succeeded}} miniatuur/miniaturen gegenereerd, {{failed}} mislukt',
-      noStlMissingThumbnails: 'Geen STL-bestanden zonder miniaturen',
+      noStlMissingThumbnails: 'Geen STL- of PDF-bestanden zonder miniaturen',
       failedToGenerateThumbnails: 'Miniaturen genereren mislukt: {{error}}',
       thumbnailGenerated: 'Miniatuur gegenereerd',
       failedToGenerateThumbnail: 'Miniatuur genereren mislukt: {{error}}',
@@ -5827,6 +5827,8 @@ export default {
 
   // Model Viewer
   modelViewer: {
+    stepConverting: 'STEP-model wordt geconverteerd… {{seconds}} s',
+    stepSlowHint: 'Grote STEP-bestanden kunnen een minuut of langer duren.',
     openInSlicer: 'Openen in slicer',
     openInSlicerWith: 'Openen in {{slicer}}',
     moreSlicerOptions: 'Meer sliceropties',

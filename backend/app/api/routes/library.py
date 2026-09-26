@@ -76,6 +76,7 @@ from backend.app.services.design_settings import (
     overrides_from_config,
 )
 from backend.app.services.filament_requirements import annotate_rack_groups
+from backend.app.services.pdf_thumbnail import generate_pdf_thumbnail
 from backend.app.services.plate_thumbnail import inject_plate_thumbnails_if_missing
 from backend.app.services.process_overrides import apply_process_overrides
 from backend.app.services.slice_output_check import (
@@ -2008,6 +2009,14 @@ async def scan_external_folder(
                 if thumbnail_path_str:
                     thumbnail_path = to_relative_path(Path(thumbnail_path_str))
 
+            # Render page one of a PDF so it has a thumbnail before anyone opens it
+            if file_type == "pdf" and thumbnail_path is None:
+                thumbnail_path_str = await asyncio.to_thread(
+                    generate_pdf_thumbnail, filepath, get_library_thumbnails_dir()
+                )
+                if thumbnail_path_str:
+                    thumbnail_path = to_relative_path(Path(thumbnail_path_str))
+
             db_file = LibraryFile(
                 folder_id=target_folder_id,
                 is_external=True,
@@ -2402,6 +2411,11 @@ async def upload_file(
             # For image files, create a thumbnail from the image itself
             thumbnail_path = create_image_thumbnail(file_path, thumbnails_dir)
 
+        elif ext.lower() == ".pdf":
+            # Page one, rendered server-side; the browser preview's own
+            # render (POST /preview-thumbnail) remains the fallback.
+            thumbnail_path = await asyncio.to_thread(generate_pdf_thumbnail, file_path, thumbnails_dir)
+
         elif ext == ".stl":
             # Generate STL thumbnail if enabled. Same MIN_USABLE_STL_BYTES
             # pre-skip as extract_zip_file — stubs / placeholders below this
@@ -2674,6 +2688,9 @@ async def extract_zip_file(
                     elif ext.lower() in IMAGE_EXTENSIONS:
                         thumbnail_path = create_image_thumbnail(file_path, thumbnails_dir)
 
+                    elif ext.lower() == ".pdf":
+                        thumbnail_path = await asyncio.to_thread(generate_pdf_thumbnail, file_path, thumbnails_dir)
+
                     elif ext == ".stl":
                         # Generate STL thumbnail if enabled. Pre-skip files
                         # below MIN_USABLE_STL_BYTES — they can't contain
@@ -2746,27 +2763,31 @@ async def batch_generate_stl_thumbnails(
     db: AsyncSession = Depends(get_db),
     _: User | None = Depends(require_permission_if_auth_enabled(Permission.LIBRARY_UPDATE_ALL)),
 ):
-    """Generate thumbnails for STL files in batch.
+    """Generate thumbnails for STL and PDF files in batch.
 
     Note: Requires library:update_all permission since this is a batch operation
     that may affect files owned by different users.
 
+    PDFs are included so the ones added before server-side PDF thumbnails
+    existed can be backfilled without opening each preview. The route keeps
+    its name for API compatibility.
+
     Can generate thumbnails for:
     - Specific file IDs (file_ids)
-    - All STL files in a folder (folder_id)
-    - All STL files missing thumbnails (all_missing=True)
+    - All STL/PDF files in a folder (folder_id)
+    - All STL/PDF files missing thumbnails (all_missing=True)
     """
     thumbnails_dir = get_library_thumbnails_dir()
     results: list[BatchThumbnailResult] = []
 
     # Build query based on request
-    query = LibraryFile.active().where(LibraryFile.file_type == "stl")
+    query = LibraryFile.active().where(LibraryFile.file_type.in_(("stl", "pdf")))
 
     if request.file_ids:
         # Specific files
         query = query.where(LibraryFile.id.in_(request.file_ids))
     elif request.folder_id is not None:
-        # All STL files in a specific folder
+        # All STL/PDF files in a specific folder
         query = query.where(LibraryFile.folder_id == request.folder_id)
         if not request.all_missing:
             # If not specifically asking for missing thumbnails, get all
@@ -2774,7 +2795,7 @@ async def batch_generate_stl_thumbnails(
         else:
             query = query.where(LibraryFile.thumbnail_path.is_(None))
     elif request.all_missing:
-        # All STL files without thumbnails
+        # All STL/PDF files without thumbnails
         query = query.where(LibraryFile.thumbnail_path.is_(None))
     else:
         # No criteria specified - return empty
@@ -2786,19 +2807,19 @@ async def batch_generate_stl_thumbnails(
         )
 
     result = await db.execute(query)
-    stl_files = result.scalars().all()
+    target_files = result.scalars().all()
 
     succeeded = 0
     failed = 0
 
-    for stl_file in stl_files:
-        file_path = to_absolute_path(stl_file.file_path)
+    for target_file in target_files:
+        file_path = to_absolute_path(target_file.file_path)
 
         if not file_path or not file_path.exists():
             results.append(
                 BatchThumbnailResult(
-                    file_id=stl_file.id,
-                    filename=stl_file.filename,
+                    file_id=target_file.id,
+                    filename=target_file.filename,
                     success=False,
                     error="File not found on disk",
                 )
@@ -2807,16 +2828,19 @@ async def batch_generate_stl_thumbnails(
             continue
 
         try:
-            thumbnail_path = generate_stl_thumbnail(file_path, thumbnails_dir)
+            if target_file.file_type == "pdf":
+                thumbnail_path = await asyncio.to_thread(generate_pdf_thumbnail, file_path, thumbnails_dir)
+            else:
+                thumbnail_path = generate_stl_thumbnail(file_path, thumbnails_dir)
 
             if thumbnail_path:
                 # Update database with relative path
-                stl_file.thumbnail_path = to_relative_path(thumbnail_path)
+                target_file.thumbnail_path = to_relative_path(thumbnail_path)
                 await db.flush()
                 results.append(
                     BatchThumbnailResult(
-                        file_id=stl_file.id,
-                        filename=stl_file.filename,
+                        file_id=target_file.id,
+                        filename=target_file.filename,
                         success=True,
                     )
                 )
@@ -2824,19 +2848,19 @@ async def batch_generate_stl_thumbnails(
             else:
                 results.append(
                     BatchThumbnailResult(
-                        file_id=stl_file.id,
-                        filename=stl_file.filename,
+                        file_id=target_file.id,
+                        filename=target_file.filename,
                         success=False,
                         error="Thumbnail generation failed",
                     )
                 )
                 failed += 1
         except Exception as e:
-            logger.error("Failed to generate thumbnail for %s: %s", stl_file.filename, e)
+            logger.error("Failed to generate thumbnail for %s: %s", target_file.filename, e)
             results.append(
                 BatchThumbnailResult(
-                    file_id=stl_file.id,
-                    filename=stl_file.filename,
+                    file_id=target_file.id,
+                    filename=target_file.filename,
                     success=False,
                     error=str(e),
                 )
@@ -2846,7 +2870,7 @@ async def batch_generate_stl_thumbnails(
     await db.commit()
 
     return BatchThumbnailResponse(
-        processed=len(stl_files),
+        processed=len(target_files),
         succeeded=succeeded,
         failed=failed,
         results=results,

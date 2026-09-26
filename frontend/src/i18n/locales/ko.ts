@@ -3695,7 +3695,7 @@ export default {
     linkToProjectOrArchive: '프로젝트 또는 아카이브에 연결',
     generateThumbnail: '썸네일 생성',
     generateThumbnails: '썸네일 생성',
-    generateThumbnailsForMissing: '썸네일이 없는 STL 파일의 썸네일 생성',
+    generateThumbnailsForMissing: '썸네일이 없는 STL 및 PDF 파일의 썸네일 생성',
     gridView: '격자 보기',
     listView: '목록 보기',
     lowDiskSpaceWarning: '디스크 공간 부족 경고',
@@ -3884,7 +3884,7 @@ export default {
       folderRenamed: '폴더 이름 변경됨',
       thumbnailsGenerated: '{{count}}개 썸네일 생성됨',
       thumbnailsGeneratedPartial: '{{succeeded}}개 썸네일 생성됨, {{failed}}개 실패',
-      noStlMissingThumbnails: '썸네일이 없는 STL 파일 없음',
+      noStlMissingThumbnails: '썸네일이 없는 STL 또는 PDF 파일 없음',
       failedToGenerateThumbnails: '썸네일 생성 실패: {{error}}',
       thumbnailGenerated: '썸네일 생성됨',
       failedToGenerateThumbnail: '썸네일 생성 실패: {{error}}'
@@ -5510,6 +5510,8 @@ export default {
     }
   },
   modelViewer: {
+    stepConverting: 'STEP 모델 변환 중… {{seconds}}초',
+    stepSlowHint: '큰 STEP 파일은 1분 이상 걸릴 수 있습니다.',
     openInSlicer: '슬라이서에서 열기',
     openInSlicerWith: '{{slicer}}에서 열기',
     moreSlicerOptions: '슬라이서 옵션 더 보기',

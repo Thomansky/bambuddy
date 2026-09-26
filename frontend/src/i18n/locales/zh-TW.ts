@@ -3873,7 +3873,7 @@ export default {
     linkToProjectOrArchive: '連結到專案或歸檔',
     generateThumbnail: '產生縮圖',
     generateThumbnails: '產生縮圖',
-    generateThumbnailsForMissing: '為缺少縮圖的 STL 檔案產生縮圖',
+    generateThumbnailsForMissing: '為缺少縮圖的 STL 和 PDF 檔案產生縮圖',
     gridView: '網格檢視',
     listView: '列表檢視',
     lowDiskSpaceWarning: '磁碟空間不足警告',
@@ -4063,7 +4063,7 @@ export default {
       folderRenamed: '資料夾已重新命名',
       thumbnailsGenerated: '已產生 {{count}} 個縮圖',
       thumbnailsGeneratedPartial: '已產生 {{succeeded}} 個縮圖，{{failed}} 個失敗',
-      noStlMissingThumbnails: '沒有缺少縮圖的 STL 檔案',
+      noStlMissingThumbnails: '沒有缺少縮圖的 STL 或 PDF 檔案',
       failedToGenerateThumbnails: '產生縮圖失敗：{{error}}',
       thumbnailGenerated: '縮圖已產生',
       failedToGenerateThumbnail: '產生縮圖失敗：{{error}}',
@@ -5765,6 +5765,8 @@ export default {
 
   // Model Viewer
   modelViewer: {
+    stepConverting: '正在轉換 STEP 模型… {{seconds}} 秒',
+    stepSlowHint: '較大的 STEP 檔案可能需要一分鐘或更長時間。',
     openInSlicer: '在切片軟體中開啟',
     openInSlicerWith: '用{{slicer}}開啟',
     moreSlicerOptions: '更多切片軟體選項',

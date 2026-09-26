@@ -3915,7 +3915,7 @@ errors: {
     linkToProjectOrArchive: 'Länka till projekt eller arkiv',
     generateThumbnail: 'Generera minibild',
     generateThumbnails: 'Generera minibilder',
-    generateThumbnailsForMissing: 'Generera minibilder för STL-filer som saknar dem',
+    generateThumbnailsForMissing: 'Generera minibilder för STL- och PDF-filer som saknar dem',
     gridView: 'Rutnätsvy',
     listView: 'Listvy',
     lowDiskSpaceWarning: 'Varning för lågt diskutrymme',
@@ -4105,7 +4105,7 @@ errors: {
       folderRenamed: 'Mapp omdöpt',
       thumbnailsGenerated: 'Genererade {{count}} minibild(er)',
       thumbnailsGeneratedPartial: 'Genererade {{succeeded}} minibild(er), {{failed}} misslyckades',
-      noStlMissingThumbnails: 'Inga STL-filer saknar minibilder',
+      noStlMissingThumbnails: 'Inga STL- eller PDF-filer saknar minibilder',
       failedToGenerateThumbnails: 'Kunde inte generera minibilder: {{error}}',
       thumbnailGenerated: 'Minibild genererad',
       failedToGenerateThumbnail: 'Kunde inte generera minibild: {{error}}',
@@ -5827,6 +5827,8 @@ errors: {
 
   // Model Viewer
   modelViewer: {
+    stepConverting: 'Konverterar STEP-modellen… {{seconds}} s',
+    stepSlowHint: 'Stora STEP-filer kan ta en minut eller mer.',
     openInSlicer: 'Öppna i slicer',
     openInSlicerWith: 'Öppna i {{slicer}}',
     moreSlicerOptions: 'Fler slicer-alternativ',

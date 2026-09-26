@@ -3874,7 +3874,7 @@ export default {
     linkToProjectOrArchive: 'Lier à projet ou archive',
     generateThumbnail: 'Générer vignette',
     generateThumbnails: 'Générer vignettes',
-    generateThumbnailsForMissing: 'Vignettes STL manquantes',
+    generateThumbnailsForMissing: 'Vignettes STL et PDF manquantes',
     gridView: 'Grille',
     listView: 'Liste',
     lowDiskSpaceWarning: 'Espace disque faible',
@@ -4064,7 +4064,7 @@ export default {
       folderRenamed: 'Dossier renommé',
       thumbnailsGenerated: '{{count}} vignette(s) générée(s)',
       thumbnailsGeneratedPartial: '{{succeeded}} succès, {{failed}} échecs',
-      noStlMissingThumbnails: 'Aucun STL sans vignette',
+      noStlMissingThumbnails: 'Aucun STL ni PDF sans vignette',
       failedToGenerateThumbnails: 'Échec vignettes : {{error}}',
       thumbnailGenerated: 'Vignette générée',
       failedToGenerateThumbnail: 'Échec vignette : {{error}}',
@@ -5766,6 +5766,8 @@ export default {
 
   // Model Viewer
   modelViewer: {
+    stepConverting: 'Conversion du modèle STEP… {{seconds}} s',
+    stepSlowHint: 'Les gros fichiers STEP peuvent prendre une minute ou plus.',
     openInSlicer: 'Ouvrir dans le Slicer',
     openInSlicerWith: 'Ouvrir dans {{slicer}}',
     moreSlicerOptions: "Plus d'options de slicer",

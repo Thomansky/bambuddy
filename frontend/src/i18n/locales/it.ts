@@ -3873,7 +3873,7 @@ export default {
     linkToProjectOrArchive: 'Collega a progetto o archivio',
     generateThumbnail: 'Genera miniatura',
     generateThumbnails: 'Genera miniature',
-    generateThumbnailsForMissing: 'Genera miniature per STL senza miniatura',
+    generateThumbnailsForMissing: 'Genera miniature per STL e PDF senza miniatura',
     gridView: 'Vista griglia',
     listView: 'Vista elenco',
     lowDiskSpaceWarning: 'Avviso spazio disco basso',
@@ -4063,7 +4063,7 @@ export default {
       folderRenamed: 'Cartella rinominata',
       thumbnailsGenerated: 'Generate {{count}} miniature',
       thumbnailsGeneratedPartial: 'Generate {{succeeded}} miniature, {{failed}} fallite',
-      noStlMissingThumbnails: 'Nessun file STL senza miniature',
+      noStlMissingThumbnails: 'Nessun file STL o PDF senza miniature',
       failedToGenerateThumbnails: 'Generazione miniature fallita: {{error}}',
       thumbnailGenerated: 'Miniatura generata',
       failedToGenerateThumbnail: 'Generazione miniatura fallita: {{error}}',
@@ -5765,6 +5765,8 @@ export default {
 
   // Model Viewer
   modelViewer: {
+    stepConverting: 'Conversione del modello STEP… {{seconds}} s',
+    stepSlowHint: 'I file STEP di grandi dimensioni possono richiedere un minuto o più.',
     openInSlicer: 'Apri nello slicer',
     openInSlicerWith: 'Apri in {{slicer}}',
     moreSlicerOptions: 'Altre opzioni dello slicer',

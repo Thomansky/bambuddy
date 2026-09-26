@@ -3873,7 +3873,7 @@ export default {
     linkToProjectOrArchive: 'Vincular a projeto ou arquivo',
     generateThumbnail: 'Gerar miniatura',
     generateThumbnails: 'Gerar miniaturas',
-    generateThumbnailsForMissing: 'Gerar miniaturas para arquivos STL que não possuem',
+    generateThumbnailsForMissing: 'Gerar miniaturas para arquivos STL e PDF que não possuem',
     gridView: 'Visualização em grade',
     listView: 'Visualização em lista',
     lowDiskSpaceWarning: 'Aviso de pouco espaço em disco',
@@ -4063,7 +4063,7 @@ export default {
       folderRenamed: 'Pasta renomeada',
       thumbnailsGenerated: 'Geradas {{count}} miniatura(s)',
       thumbnailsGeneratedPartial: 'Geradas {{succeeded}} miniatura(s), {{failed}} falharam',
-      noStlMissingThumbnails: 'Nenhum arquivo STL sem miniatura',
+      noStlMissingThumbnails: 'Nenhum arquivo STL ou PDF sem miniatura',
       failedToGenerateThumbnails: 'Falha ao gerar miniaturas: {{error}}',
       thumbnailGenerated: 'Miniatura gerada',
       failedToGenerateThumbnail: 'Falha ao gerar miniatura: {{error}}',
@@ -5765,6 +5765,8 @@ export default {
 
   // Model Viewer
   modelViewer: {
+    stepConverting: 'Convertendo o modelo STEP… {{seconds}} s',
+    stepSlowHint: 'Arquivos STEP grandes podem levar um minuto ou mais.',
     openInSlicer: 'Abrir no Slicer',
     openInSlicerWith: 'Abrir em {{slicer}}',
     moreSlicerOptions: 'Mais opções de fatiador',

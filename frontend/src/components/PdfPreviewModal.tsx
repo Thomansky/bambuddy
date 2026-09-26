@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronLeft, ChevronRight, FileText, Loader2, X, ZoomIn, ZoomOut } from 'lucide-react';
-import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from 'pdfjs-dist';
+import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { api, getAuthToken } from '../api/client';
 import { formatFileSize } from '../utils/file';
 
@@ -84,9 +84,19 @@ export function PdfPreviewModal({ libraryFileId, filename, fileSize, onClose, on
       const res = await fetch(api.getLibraryFileDownloadUrl(libraryFileId), { headers });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const buffer = await res.arrayBuffer();
-      const pdfjs = await import('pdfjs-dist');
+      // The legacy build, not the standard one: pdf.js 6 calls
+      // Map.prototype.getOrInsertComputed (Chrome 145, Firefox 144) and
+      // other recent APIs directly, so on any older browser every PDF failed
+      // with "cannot be previewed". The legacy build bundles polyfills for
+      // them in both the page and the worker. The worker goes through Vite
+      // (`?worker&url`) rather than being copied as-is (`?url`), so
+      // `build.target` lowers its class static block for Safari 16.0-16.3
+      // like the rest of the app, and the baseline check can see it.
+      const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
       if (!pdfjs.GlobalWorkerOptions.workerSrc) {
-        pdfjs.GlobalWorkerOptions.workerSrc = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default;
+        pdfjs.GlobalWorkerOptions.workerSrc = (
+          await import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?worker&url')
+        ).default;
       }
       loadingTask = pdfjs.getDocument({ data: new Uint8Array(buffer) });
       const loaded = await loadingTask.promise;

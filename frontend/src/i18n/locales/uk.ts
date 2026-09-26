@@ -3913,7 +3913,7 @@ export default {
     linkToProjectOrArchive: "Посилання на проєкт або архів",
     generateThumbnail: "Створити мініатюру",
     generateThumbnails: "Створити мініатюри",
-    generateThumbnailsForMissing: "Створити відсутні мініатюри файлів STL",
+    generateThumbnailsForMissing: "Створити відсутні мініатюри файлів STL і PDF",
     gridView: "Вигляд сітки",
     listView: "Перегляд списку",
     lowDiskSpaceWarning: "Попередження про брак місця на диску",
@@ -4103,7 +4103,7 @@ export default {
       folderRenamed: "Папку перейменовано",
       thumbnailsGenerated: "Створено мініатюри {{count}}",
       thumbnailsGeneratedPartial: "Створено мініатюри {{succeeded}}, {{failed}} не вдалося",
-      noStlMissingThumbnails: "Немає файлів STL без мініатюр",
+      noStlMissingThumbnails: "Немає файлів STL або PDF без мініатюр",
       failedToGenerateThumbnails: "Не вдалося створити мініатюри: {{error}}",
       thumbnailGenerated: "Створено мініатюру",
       failedToGenerateThumbnail: "Не вдалося створити мініатюру: {{error}}",
@@ -5819,6 +5819,8 @@ export default {
 
   // Model Viewer
   modelViewer: {
+    stepConverting: "Перетворення STEP-моделі… {{seconds}} с",
+    stepSlowHint: "Великі файли STEP можуть оброблятися хвилину й довше.",
     openInSlicer: "Відкрити у слайсері",
     openInSlicerWith: "Відкрити у {{slicer}}",
     moreSlicerOptions: "Більше варіантів слайсера",
