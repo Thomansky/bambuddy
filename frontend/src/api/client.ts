@@ -4091,6 +4091,15 @@ export interface SlotSpoolIdentity {
   subtype: string | null;
   color_name: string | null;
   rgba: string | null;
+  /** Comma-separated hex stops for a multi-colour spool, and the effect
+   *  overlay — the two things a tray record cannot carry, so a slot swatch
+   *  can be drawn the way the inventory row draws it (#3159).
+   *
+   *  Optional rather than required: the backend sends both keys on every
+   *  binding, but a frontend running against an older one gets neither, and
+   *  every reader here already falls back to a solid swatch. */
+  extra_colors?: string | null;
+  effect_type?: string | null;
 }
 
 export interface InventoryRemainResponse {

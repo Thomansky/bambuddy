@@ -15,6 +15,7 @@ from PIL import Image
 
 from backend.app.core.config import settings as app_settings
 from backend.app.models.library import LibraryFile
+from backend.app.models.user import User
 from backend.app.utils.library_paths import library_photos_dir
 
 
@@ -283,4 +284,153 @@ class TestPhotos:
         response = await async_client.delete(f"/api/v1/library/files/{library_file.id}")
         assert response.status_code == 200
         assert response.json()["trashed"] is False
+        assert not photos_dir.exists()
+
+
+class TestPhotoDirectoryCleanup:
+    """Every path that hard-deletes a library row takes its photos with it.
+
+    The upload/delete round-trip, the trash purge and the external single-file
+    delete are covered above; these are the remaining ones — folder delete,
+    bulk delete of files and of whole folders, the external-folder scan that
+    drops rows for files that vanished from the share, and the admin user
+    delete that takes the user's items with them.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_folder_delete_removes_photo_dir(self, async_client: AsyncClient, file_factory, isolated_storage):
+        folder = await async_client.post("/api/v1/library/folders", json={"name": "Brackets"})
+        assert folder.status_code == 200
+        folder_id = folder.json()["id"]
+        library_file = await file_factory(folder_id=folder_id)
+        assert (await _upload(async_client, library_file.id)).status_code == 200
+        photos_dir = library_photos_dir(library_file.id)
+        assert photos_dir.is_dir()
+
+        response = await async_client.delete(f"/api/v1/library/folders/{folder_id}")
+        assert response.status_code == 200
+        assert not photos_dir.exists()
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_bulk_delete_removes_photo_dir_of_hard_deleted_file(
+        self, async_client: AsyncClient, file_factory, isolated_storage
+    ):
+        # External files bypass the trash, so bulk delete hard-deletes them;
+        # a managed file is only soft-deleted and keeps its photos until the
+        # sweeper runs.
+        external = await file_factory(is_external=True, file_path="/mnt/nas/ext.stl", file_type="stl")
+        managed = await file_factory()
+        for library_file in (external, managed):
+            assert (await _upload(async_client, library_file.id)).status_code == 200
+
+        response = await async_client.post(
+            "/api/v1/library/bulk-delete",
+            json={"file_ids": [external.id, managed.id], "folder_ids": []},
+        )
+        assert response.status_code == 200
+        assert response.json()["deleted_files"] == 2
+        assert not library_photos_dir(external.id).exists()
+        assert library_photos_dir(managed.id).is_dir()
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_bulk_delete_removes_photo_dirs_under_a_deleted_folder(
+        self, async_client: AsyncClient, file_factory, isolated_storage
+    ):
+        # The folder branch of bulk-delete lets the cascade hard-delete every
+        # row in the subtree, so it owes the same photo cleanup the file
+        # branch above it does — including files nested a level down.
+        parent = await async_client.post("/api/v1/library/folders", json={"name": "Jigs"})
+        assert parent.status_code == 200
+        parent_id = parent.json()["id"]
+        child = await async_client.post("/api/v1/library/folders", json={"name": "V2", "parent_id": parent_id})
+        assert child.status_code == 200
+
+        top_file = await file_factory(folder_id=parent_id)
+        nested_file = await file_factory(folder_id=child.json()["id"])
+        for library_file in (top_file, nested_file):
+            assert (await _upload(async_client, library_file.id)).status_code == 200
+            assert library_photos_dir(library_file.id).is_dir()
+
+        response = await async_client.post(
+            "/api/v1/library/bulk-delete",
+            json={"file_ids": [], "folder_ids": [parent_id]},
+        )
+        assert response.status_code == 200
+        assert response.json()["deleted_folders"] == 1
+        assert (await async_client.get(f"/api/v1/library/files/{top_file.id}")).status_code == 404
+        assert not library_photos_dir(top_file.id).exists()
+        assert not library_photos_dir(nested_file.id).exists()
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_deleting_a_user_with_their_items_removes_photo_dirs(
+        self, async_client: AsyncClient, db_session, file_factory, isolated_storage
+    ):
+        # DELETE /users/{id}?delete_items=true bulk-deletes the rows, which is
+        # a hard delete like any other and owes the photos with it.
+        owner = User(username="photo-owner", password_hash="x", role="user")
+        db_session.add(owner)
+        await db_session.commit()
+        await db_session.refresh(owner)
+
+        owned = await file_factory(created_by_id=owner.id)
+        someone_elses = await file_factory()
+        for library_file in (owned, someone_elses):
+            assert (await _upload(async_client, library_file.id)).status_code == 200
+            assert library_photos_dir(library_file.id).is_dir()
+
+        response = await async_client.delete(f"/api/v1/users/{owner.id}?delete_items=true")
+        assert response.status_code == 204
+        assert (await async_client.get(f"/api/v1/library/files/{owned.id}")).status_code == 404
+        assert not library_photos_dir(owned.id).exists()
+        assert library_photos_dir(someone_elses.id).is_dir()
+
+    @pytest.fixture
+    def external_share(self, monkeypatch, tmp_path):
+        """Bambuddy's data dir and an opted-in external share, as siblings.
+
+        The share cannot live under ``base_dir`` — ``_validate_external_path``
+        refuses to mount a Bambuddy-managed directory, and the module's
+        ``isolated_storage`` points ``base_dir`` at ``tmp_path`` itself.
+        """
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        monkeypatch.setattr(app_settings, "base_dir", data_dir)
+        monkeypatch.setattr(app_settings, "archive_dir", data_dir / "archive")
+        share = tmp_path / "share"
+        share.mkdir()
+        monkeypatch.setenv("BAMBUDDY_EXTERNAL_ROOTS", str(share))
+        return share
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_external_scan_removes_photo_dir_of_vanished_file(self, async_client: AsyncClient, external_share):
+        share = external_share
+        (share / "bracket.stl").write_bytes(b"fakestl")
+
+        folder = await async_client.post(
+            "/api/v1/library/folders/external",
+            json={"name": "Share", "external_path": str(share), "readonly": True, "show_hidden": False},
+        )
+        assert folder.status_code == 200
+        folder_id = folder.json()["id"]
+
+        scan = await async_client.post(f"/api/v1/library/folders/{folder_id}/scan")
+        assert scan.status_code == 200
+        assert scan.json()["added"] == 1
+
+        listing = await async_client.get(f"/api/v1/library/files?folder_id={folder_id}")
+        file_id = listing.json()[0]["id"]
+        assert (await _upload(async_client, file_id)).status_code == 200
+        photos_dir = library_photos_dir(file_id)
+        assert photos_dir.is_dir()
+
+        (share / "bracket.stl").unlink()
+
+        rescan = await async_client.post(f"/api/v1/library/folders/{folder_id}/scan")
+        assert rescan.status_code == 200
+        assert rescan.json()["removed"] == 1
         assert not photos_dir.exists()

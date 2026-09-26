@@ -184,4 +184,141 @@ describe('LibraryFileDetailsModal', () => {
     expect(screen.getByDisplayValue('Draft not saved yet')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /save/i })).toBeEnabled();
   });
+
+  describe('lightbox', () => {
+    beforeEach(() => {
+      server.use(
+        http.get('/api/v1/library/files/7', () =>
+          HttpResponse.json({ ...details, photos: ['one.jpg', 'two.jpg', 'three.jpg'] })
+        )
+      );
+    });
+
+    it('opens on the photo that was clicked, not the first one', async () => {
+      const user = userEvent.setup();
+      render(<LibraryFileDetailsModal file={listItem} canEdit onClose={onClose} />);
+
+      const thumbnails = await screen.findAllByAltText('Photos');
+      expect(thumbnails).toHaveLength(3);
+      await user.click(thumbnails[2]);
+
+      expect(await screen.findByText('Photo 3 of 3')).toBeInTheDocument();
+      const shown = screen.getByAltText('Photo 3') as HTMLImageElement;
+      expect(shown.src).toContain('/library/files/7/photos/three.jpg');
+    });
+
+    it('keeps the details modal open when the delete confirmation is dismissed', async () => {
+      // The confirmation renders inside the details overlay, whose root closes
+      // on a backdrop click — dismissing the confirmation used to discard the
+      // unsaved notes and link along with it.
+      const user = userEvent.setup();
+      const { container } = render(<LibraryFileDetailsModal file={listItem} canEdit onClose={onClose} />);
+
+      const notes = await screen.findByDisplayValue('Print with brim');
+      await user.clear(notes);
+      await user.type(notes, 'Draft not saved yet');
+
+      await user.click(screen.getAllByAltText('Photos')[0]);
+      await screen.findByText('Photo 1 of 3');
+      await user.click(container.querySelector('.text-red-400') as HTMLElement);
+
+      const confirmation = await screen.findByText('Delete Photo');
+      await user.click(confirmation.closest('div.fixed') as HTMLElement);
+
+      await waitFor(() => expect(screen.queryByText('Delete Photo')).not.toBeInTheDocument());
+      expect(screen.getByText('Photo 1 of 3')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('Draft not saved yet')).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it('closes the details modal on Escape, and only the lightbox while that is open', async () => {
+      const user = userEvent.setup();
+      render(<LibraryFileDetailsModal file={listItem} canEdit onClose={onClose} />);
+
+      await screen.findByDisplayValue('Print with brim');
+      await user.click(screen.getAllByAltText('Photos')[1]);
+      await screen.findByText('Photo 2 of 3');
+
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(screen.queryByText('Photo 2 of 3')).not.toBeInTheDocument());
+      expect(onClose).not.toHaveBeenCalled();
+
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(onClose).toHaveBeenCalled());
+    });
+
+    it('keeps the lightbox open when the delete confirmation is dismissed with Escape', async () => {
+      // The confirmation has its own Escape handler. With the gallery's still
+      // listening, one press cancelled the prompt and closed the gallery under
+      // it, losing the user's place in the photo list.
+      const user = userEvent.setup();
+      const { container } = render(<LibraryFileDetailsModal file={listItem} canEdit onClose={onClose} />);
+
+      await screen.findByDisplayValue('Print with brim');
+      await user.click(screen.getAllByAltText('Photos')[1]);
+      await screen.findByText('Photo 2 of 3');
+      await user.click(container.querySelector('.text-red-400') as HTMLElement);
+      await screen.findByText('Delete Photo');
+
+      await user.keyboard('{Escape}');
+
+      await waitFor(() => expect(screen.queryByText('Delete Photo')).not.toBeInTheDocument());
+      expect(screen.getByText('Photo 2 of 3')).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    describe('after the last photo is deleted from inside the lightbox', () => {
+      beforeEach(() => {
+        server.use(
+          http.get('/api/v1/library/files/7', () => HttpResponse.json({ ...details, photos: ['only.jpg'] }))
+        );
+      });
+
+      const deleteTheOnlyPhotoFromTheLightbox = async (
+        user: ReturnType<typeof userEvent.setup>,
+        container: HTMLElement
+      ) => {
+        await screen.findByDisplayValue('Print with brim');
+        await user.click(screen.getByAltText('Photos'));
+        await screen.findByText('Photo 1 of 1');
+        await user.click(container.querySelector('.text-red-400') as HTMLElement);
+        await user.click(await screen.findByRole('button', { name: /^delete$/i }));
+        await waitFor(() => expect(screen.queryByText('Photo 1 of 1')).not.toBeInTheDocument());
+      };
+
+      it('leaves Escape closing the details modal', async () => {
+        // Emptying the list unmounts the gallery before its own "nothing left
+        // to show" branch can call onClose, so the details modal never learned
+        // the lightbox had gone and kept its Escape handler stood down.
+        const user = userEvent.setup();
+        const { container } = render(<LibraryFileDetailsModal file={listItem} canEdit onClose={onClose} />);
+
+        await deleteTheOnlyPhotoFromTheLightbox(user, container);
+
+        await user.keyboard('{Escape}');
+        await waitFor(() => expect(onClose).toHaveBeenCalled());
+      });
+
+      it('does not re-open the lightbox when the next photo is uploaded', async () => {
+        server.use(
+          http.post('/api/v1/library/files/7/photos', () =>
+            HttpResponse.json({ status: 'uploaded', photos: ['replacement.jpg'] })
+          )
+        );
+        const user = userEvent.setup();
+        const { container } = render(<LibraryFileDetailsModal file={listItem} canEdit onClose={onClose} />);
+
+        await deleteTheOnlyPhotoFromTheLightbox(user, container);
+
+        await user.upload(
+          screen.getByLabelText('Add photo'),
+          new File(['jpeg'], 'replacement.jpg', { type: 'image/jpeg' })
+        );
+
+        const photo = (await screen.findByAltText('Photos')) as HTMLImageElement;
+        expect(photo.src).toContain('/library/files/7/photos/replacement.jpg');
+        expect(screen.queryByText('Photo 1 of 1')).not.toBeInTheDocument();
+      });
+    });
+  });
 });

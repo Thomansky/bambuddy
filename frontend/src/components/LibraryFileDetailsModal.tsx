@@ -35,7 +35,8 @@ export function LibraryFileDetailsModal({ file, canEdit, onClose }: LibraryFileD
   const [externalUrl, setExternalUrl] = useState('');
   const [photos, setPhotos] = useState<string[]>([]);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
-  const [galleryOpen, setGalleryOpen] = useState(false);
+  // The photo the lightbox opens on, or null while it is closed.
+  const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
 
   // Seed the form once per file. Later refetches (photo changes below, window
@@ -48,6 +49,18 @@ export function LibraryFileDetailsModal({ file, canEdit, onClose }: LibraryFileD
     setExternalUrl(details.external_url ?? '');
     setPhotos(details.photos ?? []);
   }, [details]);
+
+  // Escape closes the modal, as it does in the rest of the app. Not while the
+  // lightbox is open on top of it — that handles Escape itself, and a second
+  // listener here would close both at once.
+  useEffect(() => {
+    if (galleryIndex !== null) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [galleryIndex, onClose]);
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['library-files'] });
@@ -90,7 +103,14 @@ export function LibraryFileDetailsModal({ file, canEdit, onClose }: LibraryFileD
   const handlePhotoDelete = async (filename: string) => {
     try {
       const result = await api.deleteLibraryFilePhoto(file.id, filename);
-      setPhotos(result.photos ?? []);
+      const remaining = result.photos ?? [];
+      setPhotos(remaining);
+      // Deleting the last photo unmounts the lightbox through the render
+      // guard below before its own "nothing left to show" branch can call
+      // onClose, so the index has to be cleared here. Left set, it keeps
+      // Escape disabled for good and re-opens the lightbox unasked as soon
+      // as another photo is uploaded.
+      if (remaining.length === 0) setGalleryIndex(null);
       invalidate();
     } catch {
       showToast(t('fileManager.details.deleteFailed'), 'error');
@@ -234,11 +254,11 @@ export function LibraryFileDetailsModal({ file, canEdit, onClose }: LibraryFileD
               {t('fileManager.details.photos')}
             </label>
             <div className="flex flex-wrap gap-2">
-              {photos.map((filename) => (
+              {photos.map((filename, index) => (
                 <div key={filename} className="relative group">
                   <button
                     type="button"
-                    onClick={() => setGalleryOpen(true)}
+                    onClick={() => setGalleryIndex(index)}
                     className="block w-20 h-20 rounded-lg overflow-hidden border border-bambu-dark-tertiary hover:border-bambu-green transition-colors"
                   >
                     <img
@@ -311,12 +331,13 @@ export function LibraryFileDetailsModal({ file, canEdit, onClose }: LibraryFileD
         </form>
       </div>
 
-      {galleryOpen && photos.length > 0 && (
+      {galleryIndex !== null && photos.length > 0 && (
         <PhotoGalleryModal
           archiveName={file.filename}
           photos={photos}
+          initialIndex={galleryIndex}
           getPhotoUrl={(filename) => api.getLibraryFilePhotoUrl(file.id, filename)}
-          onClose={() => setGalleryOpen(false)}
+          onClose={() => setGalleryIndex(null)}
           onDelete={canEdit ? handlePhotoDelete : undefined}
         />
       )}

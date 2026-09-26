@@ -5444,6 +5444,9 @@ export default {
     manuallySelected: 'Selezionato manualmente',
     autoMatched: 'Abbinato automaticamente',
     selectSlot: 'Scegli slot',
+    exactColorMatch: 'Corrispondenza esatta del colore',
+    slotForFilament: 'Slot stampante per {{name}}',
+    overrideForFilament: 'Sostituzione filamento per {{name}}',
     sameTypeDifferentColorDetail: 'Stesso tipo, colore diverso: richiede {{required}}, lo slot ha {{loaded}}',
     requiredTypeNotInPrinter: 'Tipo di filamento richiesto non trovato nella stampante.',
     whenToPrint: 'Quando stampare',
@@ -6242,6 +6245,8 @@ export default {
 
   // Model Viewer
   modelViewer: {
+    stepConverting: 'Conversione del modello STEP… {{seconds}} s',
+    stepSlowHint: 'I file STEP di grandi dimensioni possono richiedere un minuto o più.',
     openInSlicer: 'Apri nello slicer',
     openInSlicerWith: 'Apri in {{slicer}}',
     moreSlicerOptions: 'Altre opzioni dello slicer',

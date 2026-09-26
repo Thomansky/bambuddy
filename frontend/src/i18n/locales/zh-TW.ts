@@ -5442,6 +5442,9 @@ export default {
     manuallySelected: '手動選擇',
     autoMatched: '自動比對',
     selectSlot: '選擇插槽',
+    exactColorMatch: '顏色完全相符',
+    slotForFilament: '{{name}} 的印表機插槽',
+    overrideForFilament: '{{name}} 的耗材覆蓋',
     sameTypeDifferentColorDetail: '相同類型，不同顏色：需要 {{required}}，插槽為 {{loaded}}',
     requiredTypeNotInPrinter: '印表機中找不到所需的耗材類型。',
     whenToPrint: '何時列印',
@@ -6240,6 +6243,8 @@ export default {
 
   // Model Viewer
   modelViewer: {
+    stepConverting: '正在轉換 STEP 模型… {{seconds}} 秒',
+    stepSlowHint: '較大的 STEP 檔案可能需要一分鐘或更長時間。',
     openInSlicer: '在切片軟體中開啟',
     openInSlicerWith: '用{{slicer}}開啟',
     moreSlicerOptions: '更多切片軟體選項',

@@ -5504,6 +5504,9 @@ export default {
     manuallySelected: 'Handmatig geselecteerd',
     autoMatched: 'Automatisch gekoppeld',
     selectSlot: 'Sleuf selecteren',
+    exactColorMatch: 'Exacte kleurovereenkomst',
+    slotForFilament: 'Printersleuf voor {{name}}',
+    overrideForFilament: 'Filament overschrijven voor {{name}}',
     sameTypeDifferentColorDetail: 'Zelfde type, andere kleur: vereist {{required}}, sleuf bevat {{loaded}}',
     requiredTypeNotInPrinter: 'Vereist filamenttype niet gevonden in printer.',
     whenToPrint: 'Wanneer afdrukken',
@@ -6307,6 +6310,8 @@ export default {
 
   // Model Viewer
   modelViewer: {
+    stepConverting: 'STEP-model wordt geconverteerd… {{seconds}} s',
+    stepSlowHint: 'Grote STEP-bestanden kunnen een minuut of langer duren.',
     openInSlicer: 'Openen in slicer',
     openInSlicerWith: 'Openen in {{slicer}}',
     moreSlicerOptions: 'Meer sliceropties',

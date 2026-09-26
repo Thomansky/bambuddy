@@ -5431,6 +5431,9 @@ export default {
     manuallySelected: 'Elle seçildi',
     autoMatched: 'Otomatik eşleşti',
     selectSlot: 'Yuva seç',
+    exactColorMatch: 'Tam renk eşleşmesi',
+    slotForFilament: '{{name}} için yazıcı yuvası',
+    overrideForFilament: '{{name}} için filament geçersiz kılma',
     sameTypeDifferentColorDetail: 'Aynı tür, farklı renk: {{required}} gerekiyor, yuvada {{loaded}} var',
     requiredTypeNotInPrinter: 'Gereken filament türü yazıcıda bulunamadı.',
     whenToPrint: 'Ne zaman yazdırılsın',
@@ -6215,6 +6218,8 @@ export default {
 
   // Model Görüntüleyici
   modelViewer: {
+    stepConverting: 'STEP modeli dönüştürülüyor… {{seconds}} sn',
+    stepSlowHint: 'Büyük STEP dosyaları bir dakika veya daha uzun sürebilir.',
     openInSlicer: 'Dilimleyicide Aç',
     openInSlicerWith: '{{slicer}} ile aç',
     moreSlicerOptions: 'Diğer dilimleyici seçenekleri',

@@ -5466,6 +5466,9 @@ export default {
     manuallySelected: 'Seleccionado manualmente',
     autoMatched: 'Emparejado automáticamente',
     selectSlot: 'Elegir ranura',
+    exactColorMatch: 'Coincidencia exacta de color',
+    slotForFilament: 'Ranura de impresora para {{name}}',
+    overrideForFilament: 'Anulación de filamento para {{name}}',
     sameTypeDifferentColorDetail: 'Mismo tipo, color distinto: necesita {{required}}, la ranura tiene {{loaded}}',
     requiredTypeNotInPrinter: 'El tipo de filamento requerido no se encuentra en la impresora.',
     whenToPrint: 'Cuándo imprimir',
@@ -6264,6 +6267,8 @@ export default {
 
   // Model Viewer
   modelViewer: {
+    stepConverting: 'Convirtiendo el modelo STEP… {{seconds}} s',
+    stepSlowHint: 'Los archivos STEP grandes pueden tardar un minuto o más.',
     openInSlicer: 'Abrir en el laminador',
     openInSlicerWith: 'Abrir en {{slicer}}',
     moreSlicerOptions: 'Más opciones de laminador',

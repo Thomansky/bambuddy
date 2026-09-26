@@ -1310,7 +1310,9 @@ function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, o
     menuItems.push({
       label: t('fileManager.details.openLink'),
       icon: <Globe className="w-4 h-4" />,
-      onClick: () => window.open(file.external_url!, '_blank'),
+      // The URL is stored by whoever owns the file, so the opened page must
+      // not get a handle on this window (#3077).
+      onClick: () => window.open(file.external_url!, '_blank', 'noopener,noreferrer'),
     });
   }
   if (onGenerateThumbnail && hasServerThumbnail(file.file_type)) {

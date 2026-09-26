@@ -1,74 +1,72 @@
-"""PDF thumbnail generation service (#2976).
+"""PDF Thumbnail Generation Service.
 
-Renders the first page of a PDF to a PNG with pypdfium2 so a PDF card in the
-File Manager gets its thumbnail on upload, like STL, instead of waiting for
-someone to open the preview. Same output shape as the client-rendered
-thumbnails the preview posts back (longest edge 256 px, opaque PNG), so
-nothing downstream tells the two apart.
+Renders the first page of a PDF with PDFium (pypdfium2) so a library PDF gets
+its grid thumbnail at upload/scan time. Before this, PDF thumbnails only
+existed once somebody had opened the in-browser preview, which posted its
+first render back (#2976); that route stays as the fallback for a PDF this
+renderer cannot read.
 """
 
 import logging
+import threading
 import uuid
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# PDFium is not thread-safe, and callers run this through asyncio.to_thread,
+# so two uploads landing together would otherwise enter it concurrently.
+_PDFIUM_LOCK = threading.Lock()
 
-def generate_pdf_thumbnail(
-    pdf_path: Path | str,
-    thumbnails_dir: Path | str,
-    size: int = 256,
-) -> str | None:
-    """Render page 1 of ``pdf_path`` into ``thumbnails_dir`` as a PNG.
+# Rendered at twice the output size and downsampled, so small print on the
+# page stays legible instead of breaking up into aliased specks.
+_SUPERSAMPLE = 2
 
-    Mirrors ``generate_stl_thumbnail``'s contract so the upload, ZIP-extract,
-    batch and external-scan call sites treat the two alike: the file is named
-    ``<uuid>.png`` inside ``thumbnails_dir`` and the absolute path comes back
-    as a string, or ``None`` when nothing was written.
 
-    Never raises. A missing pypdfium2 (no wheel for the platform, or an install
-    that predates the dependency), an encrypted or corrupt file and an empty
-    document all return ``None`` and log at INFO — the browser still posts its
-    own render the first time the preview opens, so this is not an error path.
+def generate_pdf_thumbnail(pdf_path: Path, thumbnails_dir: Path, size: int = 256) -> str | None:
+    """Render page one of a PDF into a square, white-backed PNG thumbnail.
+
+    Same shape as the thumbnail the browser preview posts back (a ``size``
+    square with the page centred on white), so a grid mixing both kinds
+    looks uniform. Returns the thumbnail path, or None if the file cannot be
+    rendered - an encrypted, empty or damaged PDF simply gets no thumbnail.
     """
-    pdf_path = Path(pdf_path)
-    thumbnails_dir = Path(thumbnails_dir)
-
     try:
         import pypdfium2 as pdfium
-    except ImportError as exc:
-        logger.info("PDF thumbnail skipped for %s (pypdfium2 unavailable: %s)", pdf_path.name, exc)
+        from PIL import Image
+    except ImportError:
+        logger.warning("pypdfium2 not installed, skipping PDF thumbnail for %s", pdf_path.name)
         return None
 
     try:
-        doc = pdfium.PdfDocument(str(pdf_path))
-    except Exception as exc:  # pdfium raises its own error type for anything it cannot open
-        logger.info("PDF thumbnail skipped for %s (cannot open: %s)", pdf_path.name, exc)
-        return None
+        with _PDFIUM_LOCK:
+            pdf = pdfium.PdfDocument(str(pdf_path))
+            try:
+                if len(pdf) == 0:
+                    return None
+                page = pdf[0]
+                try:
+                    width, height = page.get_size()
+                    if width <= 0 or height <= 0:
+                        return None
+                    # Scale from the page's own size, so the bitmap is bounded
+                    # by the output size whatever MediaBox the file declares.
+                    scale = (size * _SUPERSAMPLE) / max(width, height)
+                    rendered = page.render(scale=scale).to_pil()
+                finally:
+                    page.close()
+            finally:
+                pdf.close()
 
-    try:
-        if len(doc) == 0:
-            logger.info("PDF thumbnail skipped for %s (no pages)", pdf_path.name)
-            return None
-        page = doc[0]
-        try:
-            width, height = page.get_size()
-            longest = max(width, height)
-            if longest <= 0:
-                logger.info("PDF thumbnail skipped for %s (degenerate page size)", pdf_path.name)
-                return None
-            bitmap = page.render(scale=size / longest)
-            image = bitmap.to_pil().convert("RGB")
-        finally:
-            page.close()
+        rendered = rendered.convert("RGB")
+        rendered.thumbnail((size, size), Image.Resampling.LANCZOS)
+        thumbnail = Image.new("RGB", (size, size), (255, 255, 255))
+        thumbnail.paste(rendered, ((size - rendered.width) // 2, (size - rendered.height) // 2))
 
         thumb_filename = f"{uuid.uuid4().hex}.png"
         thumb_path = thumbnails_dir / thumb_filename  # SEC-PATH-OK: thumb_filename = uuid.uuid4().hex + ".png"
-        image.save(thumb_path, "PNG", optimize=True)
-        logger.info("Generated PDF thumbnail: %s", thumb_path)
+        thumbnail.save(thumb_path, "PNG", optimize=True)
         return str(thumb_path)
-    except Exception as exc:
-        logger.info("PDF thumbnail skipped for %s (render failed: %s)", pdf_path.name, exc)
+    except Exception as e:
+        logger.warning("Failed to create PDF thumbnail for %s: %s", pdf_path.name, e)
         return None
-    finally:
-        doc.close()

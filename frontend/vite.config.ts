@@ -138,6 +138,24 @@ export default defineConfig({
     // regex features are NOT lowered, which is why the baseline check script
     // still exists alongside this setting.
     target: 'safari16',
+    rolldownOptions: {
+      // occt-import-js (STEP previews, #2976) is an Emscripten build that
+      // requires `path` and `crypto`, but only inside its ENVIRONMENT_IS_NODE
+      // branches; in the browser it takes the fetch/getRandomValues paths.
+      // Vite externalizes both and warns on every build. Drop just those two
+      // warnings for that one package so a new externalization still shows.
+      onLog(level, log, defaultHandler) {
+        if (
+          level === 'warn' &&
+          /Module "(path|crypto)" has been externalized for browser compatibility, imported by "[^"]*\/node_modules\/occt-import-js\//.test(
+            log.message,
+          )
+        ) {
+          return
+        }
+        defaultHandler(level, log)
+      },
+    },
   },
   server: {
     host: '0.0.0.0',

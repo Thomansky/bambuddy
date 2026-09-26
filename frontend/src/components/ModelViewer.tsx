@@ -811,6 +811,22 @@ export function ModelViewer({
   const [parsedData, setParsedData] = useState<Parsed3MFData | null>(null);
   const [stlGeometry, setStlGeometry] = useState<THREE.BufferGeometry | null>(null);
   const [stepMeshes, setStepMeshes] = useState<StepMeshData[] | null>(null);
+  // Seconds spent converting a STEP file. A large export can take over a
+  // minute in the OpenCascade worker, and a bare spinner for that long reads
+  // as "nothing is happening" - so STEP loads say what they are doing and
+  // show that time is passing.
+  const [stepLoadSeconds, setStepLoadSeconds] = useState(0);
+  const loadingType = (fileType || url.split('?')[0].split('.').pop() || '').toLowerCase();
+  const isStepFile = loadingType === 'step' || loadingType === 'stp';
+  useEffect(() => {
+    if (!loading || !isStepFile) return;
+    setStepLoadSeconds(0);
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => {
+      setStepLoadSeconds(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [loading, isStepFile]);
   // Snapshot is a one-shot per loaded url; the callback lives in a ref so its
   // identity never retriggers the (expensive) scene effects.
   const snapshotSentRef = useRef(false);
@@ -1224,8 +1240,16 @@ export function ModelViewer({
       <div ref={containerRef} className="w-full h-full min-h-[400px]" />
 
       {loading && (
-        <div className="absolute inset-0 flex items-center justify-center bg-bambu-dark/80">
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-bambu-dark/80 px-6 text-center">
           <Loader2 className="w-8 h-8 text-bambu-green animate-spin" />
+          {isStepFile && (
+            <div role="status" className="space-y-1">
+              <p className="text-sm text-white tabular-nums">
+                {t('modelViewer.stepConverting', { seconds: stepLoadSeconds })}
+              </p>
+              <p className="text-xs text-bambu-gray">{t('modelViewer.stepSlowHint')}</p>
+            </div>
+          )}
         </div>
       )}
 

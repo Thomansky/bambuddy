@@ -2461,6 +2461,10 @@ async def scan_external_folder(
                         abs_thumb.unlink()
                 except OSError:
                     pass
+            # The row is gone for good -- external files skip the trash -- so
+            # its photos go with it rather than being orphaned under an id
+            # nothing points at any more (#3077).
+            remove_library_photos_dir(db_file.id)
             await db.delete(db_file)
             removed += 1
 
@@ -6701,6 +6705,10 @@ async def bulk_delete(
             tree_file_ids = await _folder_tree_file_ids(db, folder_id)
             await delete_dependent_variants(db, tree_file_ids)
             await release_queue_references(db, tree_file_ids)
+            # The cascade hard-deletes every row in the subtree, so their
+            # photos go with them -- same as DELETE /folders/{id} (#3077).
+            for doomed_id in tree_file_ids:
+                remove_library_photos_dir(doomed_id)
             await db.delete(folder)
             deleted_folders += 1
 

@@ -5442,6 +5442,9 @@ export default {
     manuallySelected: '手动选择',
     autoMatched: '自动匹配',
     selectSlot: '选择槽位',
+    exactColorMatch: '颜色完全匹配',
+    slotForFilament: '{{name}} 的打印机槽位',
+    overrideForFilament: '{{name}} 的耗材覆盖',
     sameTypeDifferentColorDetail: '相同类型，不同颜色：需要 {{required}}，槽位为 {{loaded}}',
     requiredTypeNotInPrinter: '打印机中未找到所需的耗材类型。',
     whenToPrint: '何时打印',
@@ -6240,6 +6243,8 @@ export default {
 
   // Model Viewer
   modelViewer: {
+    stepConverting: '正在转换 STEP 模型… {{seconds}} 秒',
+    stepSlowHint: '较大的 STEP 文件可能需要一分钟或更长时间。',
     openInSlicer: '在切片软件中打开',
     openInSlicerWith: '用{{slicer}}打开',
     moreSlicerOptions: '更多切片软件选项',

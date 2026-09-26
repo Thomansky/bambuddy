@@ -5213,6 +5213,9 @@ export default {
     manuallySelected: "Выбрано вручную",
     autoMatched: "Подобрано автоматически",
     selectSlot: "Выбрать слот",
+    exactColorMatch: "Точное совпадение цвета",
+    slotForFilament: "Слот принтера для {{name}}",
+    overrideForFilament: "Переопределение филамента для {{name}}",
     sameTypeDifferentColorDetail: "Тот же тип, другой цвет: нужен {{required}}, в слоте {{loaded}}",
     requiredTypeNotInPrinter: "Требуемый тип филамента не найден в принтере.",
     whenToPrint: "Когда печатать",
@@ -5972,6 +5975,8 @@ export default {
     },
   },
   modelViewer: {
+    stepConverting: "Преобразование STEP-модели… {{seconds}} с",
+    stepSlowHint: "Большие STEP-файлы могут обрабатываться минуту и дольше.",
     openInSlicer: "Открыть в слайсере",
     openInSlicerWith: "Открыть в {{slicer}}",
     moreSlicerOptions: "Другие варианты слайсера",

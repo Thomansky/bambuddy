@@ -5224,6 +5224,9 @@ export default {
     manuallySelected: '수동으로 선택됨',
     autoMatched: '자동으로 일치됨',
     selectSlot: '슬롯 선택',
+    exactColorMatch: '색상 정확히 일치',
+    slotForFilament: '{{name}}의 프린터 슬롯',
+    overrideForFilament: '{{name}}의 필라멘트 재정의',
     sameTypeDifferentColorDetail: '같은 유형, 다른 색상: {{required}} 필요, 슬롯에는 {{loaded}}',
     requiredTypeNotInPrinter: '필요한 필라멘트 유형을 프린터에서 찾을 수 없습니다.',
     whenToPrint: '인쇄 시점',
@@ -5984,6 +5987,8 @@ export default {
     }
   },
   modelViewer: {
+    stepConverting: 'STEP 모델 변환 중… {{seconds}}초',
+    stepSlowHint: '큰 STEP 파일은 1분 이상 걸릴 수 있습니다.',
     openInSlicer: '슬라이서에서 열기',
     openInSlicerWith: '{{slicer}}에서 열기',
     moreSlicerOptions: '슬라이서 옵션 더 보기',

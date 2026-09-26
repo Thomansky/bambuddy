@@ -126,6 +126,23 @@ describe('FileManagerPage — file details (#3077)', () => {
       expect(within(bare).getByText('File details')).toBeInTheDocument();
       expect(within(bare).queryByText('Open link')).not.toBeInTheDocument();
     });
+
+    it('opens the stored link without handing the new tab a window.opener', async () => {
+      // The URL comes from whoever owns the file, so the page it opens must
+      // not get a handle back on Bambuddy's window.
+      const open = vi.spyOn(window, 'open').mockReturnValue(null);
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+
+      await waitFor(() => expect(screen.getByText('documented.stl')).toBeInTheDocument());
+
+      const documented = cardFor('documented.stl');
+      await user.click(documented.querySelector('.lucide-ellipsis-vertical')?.closest('button') as HTMLButtonElement);
+      await user.click(within(documented).getByText('Open link'));
+
+      expect(open).toHaveBeenCalledWith('https://www.printables.com/model/1', '_blank', 'noopener,noreferrer');
+      open.mockRestore();
+    });
   });
 
   describe('list view', () => {
