@@ -5022,6 +5022,45 @@ async def run_migrations(conn):
         conn, "ALTER TABLE notification_providers ADD COLUMN on_location_ha_sensor_alert BOOLEAN DEFAULT FALSE"
     )
 
+    # Migration: post-print outcome confirmation (#1898). VARCHAR and the
+    # BOOLEAN DEFAULT FALSE/TRUE spellings are identical on SQLite and
+    # Postgres (see the on_ha_sensor_alert note above for why not DEFAULT 0).
+    await _safe_execute(conn, "ALTER TABLE print_archives ADD COLUMN user_verdict VARCHAR(10)")
+    await _safe_execute(conn, "ALTER TABLE print_archives ADD COLUMN confirm_requested BOOLEAN DEFAULT FALSE")
+    await _safe_execute(conn, "ALTER TABLE print_archives ADD COLUMN confirm_token VARCHAR(64)")
+    await _safe_execute(conn, "ALTER TABLE print_archives ADD COLUMN user_verdict_source VARCHAR(16)")
+    # ``DATETIME`` is a SQLite-only alias; PostgreSQL rejects it and
+    # _safe_execute would swallow the error, leaving the column missing.
+    if is_sqlite():
+        await _safe_execute(conn, "ALTER TABLE print_archives ADD COLUMN confirm_token_used_at DATETIME")
+    else:
+        await _safe_execute(conn, "ALTER TABLE print_archives ADD COLUMN confirm_token_used_at TIMESTAMP")
+    # When the verdict on file was recorded (#1898): the "already answered"
+    # page dates the verdict by this, not by the moment the one-tap token was
+    # spent, so a verdict changed later in the app reads correctly.
+    if is_sqlite():
+        await _safe_execute(conn, "ALTER TABLE print_archives ADD COLUMN user_verdict_at DATETIME")
+    else:
+        await _safe_execute(conn, "ALTER TABLE print_archives ADD COLUMN user_verdict_at TIMESTAMP")
+    await _safe_execute(conn, "ALTER TABLE print_log_entries ADD COLUMN user_verdict VARCHAR(10)")
+    await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN confirm_outcome BOOLEAN DEFAULT FALSE")
+    await _safe_execute(
+        conn, "ALTER TABLE notification_providers ADD COLUMN on_print_confirm_request BOOLEAN DEFAULT TRUE"
+    )
+    # The one-tap verdict route looks archives up by this token and runs with no
+    # authentication, so an upgraded install needs the index too — without it
+    # every tap, and every unauthenticated request carrying a bogus token, is a
+    # sequential scan of print_archives.
+    await _safe_execute(
+        conn,
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_print_archives_confirm_token ON print_archives (confirm_token)",
+    )
+    # Migration: take the capability URLs out of the outcome prompt's body
+    # (#1898). Seeding only ever inserts a template that is missing, so an
+    # install that already ran an earlier build of this feature would keep
+    # sending the verdict links as body text for every channel.
+    await _migrate_confirm_prompt_body_template(conn)
+
     # Migration: rename the ha_sensor_alert template (#2824). "Home Assistant
     # Sensor Alert" was fine as a name while it was the only such template;
     # next to the new "Storage Location Sensor Alert" it no longer says which
@@ -5054,6 +5093,32 @@ async def run_migrations(conn):
     await _safe_execute(
         conn,
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_print_batches_external ON print_batches (external_source, external_ref)",
+    )
+
+
+async def _migrate_confirm_prompt_body_template(conn) -> None:
+    """Replace the one-tap verdict URLs in the outcome prompt's body (#1898).
+
+    The first shape of this template put ``{good_url}`` and ``{reject_url}``
+    into the message body, where a link unfurler, a mail gateway or a proxy
+    reaches them and spends the single-use token before the operator has read
+    the question. The body now carries ``{confirm_url}``, which only opens the
+    archive in Bambuddy; the capability links travel in the ntfy action buttons
+    and the Telegram inline keyboard instead.
+
+    Rewrites only a body that is still the old default verbatim — an admin who
+    edited the template keeps their own text. Same shape as the two template
+    renames below.
+    """
+    from sqlalchemy import text
+
+    await conn.execute(
+        text("UPDATE notification_templates SET body_template = :new WHERE event_type = :et AND body_template = :old"),
+        {
+            "new": "{printer}: {filename}\nConfirm: {confirm_url}",
+            "et": "print_confirm_request",
+            "old": "{printer}: {filename}\nGood: {good_url}\nReject: {reject_url}",
+        },
     )
 
 

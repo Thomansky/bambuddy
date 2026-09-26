@@ -3537,6 +3537,21 @@ async def clear_plate(
 
     printer_manager.set_awaiting_plate_clear(printer_id, False)
 
+    # #1898: releasing the plate without answering the outcome prompt can
+    # count as "good" (opt-in setting) — this is the moment the operator
+    # moves on, so an unanswered prompt would otherwise linger unconfirmed.
+    from backend.app.api.routes.settings import get_setting, setting_is_true
+
+    # setting_is_true rather than a comparison of our own: one reader deciding
+    # for itself what "on" spells is how two parts of the app end up
+    # disagreeing about the same row.
+    if setting_is_true(await get_setting(db, "confirm_default_good_on_plate_clear")):
+        from backend.app.services.print_confirmation import resolve_pending_confirmation_as_good
+
+        resolved = await resolve_pending_confirmation_as_good(db, printer_id)
+        if resolved is not None:
+            await db.commit()
+
     return {"success": True, "message": "Plate cleared, next print will start shortly"}
 
 

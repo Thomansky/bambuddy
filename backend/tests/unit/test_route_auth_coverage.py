@@ -91,6 +91,12 @@ _PUBLIC_ROUTES: frozenset[tuple[str, str]] = frozenset(
         # Attached archive media target — validates a token bound to the
         # archive ID before returning the local timelapse.
         ("GET", "/api/v1/archives/{archive_id}/media/dl/{token}/{filename}"),
+        # Outcome-confirmation link (#1898) — the single-use capability token in
+        # the path is the credential; it is retired on the first verdict and
+        # only ever sets one verdict on one archive. The GET renders the
+        # confirmation page and writes nothing; the POST behind it records.
+        ("GET", "/api/v1/archives/confirm/{token}/{verdict}"),
+        ("POST", "/api/v1/archives/confirm/{token}/{verdict}"),
         # Obico cached frame — one-time nonce embedded in <img> tags.
         ("GET", "/api/v1/obico/cached-frame/{nonce}"),
         # MakerWorld thumbnail proxy — fetches external URL; no Bambuddy data exposed.
