@@ -49,6 +49,7 @@ from backend.app.schemas.library import (
     BatchThumbnailResult,
     BulkDeleteRequest,
     BulkDeleteResponse,
+    ClientThumbnailResponse,
     ExternalFolderCreate,
     FileDuplicate,
     FileListResponse,
@@ -90,6 +91,7 @@ from backend.app.utils.filename import (
     safe_path_component,
     validate_print_filename,
 )
+from backend.app.utils.library_paths import library_photos_dir, remove_library_photos_dir
 from backend.app.utils.printer_models import is_gcode_compatible
 from backend.app.utils.safe_path import PathTraversalError, assert_under, safe_join_under
 from backend.app.utils.threemf_tools import (
@@ -808,6 +810,29 @@ def create_image_thumbnail(file_path: Path, thumbnails_dir: Path, max_size: int 
 # Supported image extensions for thumbnails
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"}
 
+# File types whose thumbnails are rendered client-side and uploaded back
+# (#2976). The server has no renderer for these formats — STEP would need
+# OpenCascade, PDF a rasteriser — so the browser posts its first preview
+# render to POST /files/{id}/preview-thumbnail instead. Kept to exactly
+# these types so the endpoint can never overwrite a server-generated
+# STL/3MF/G-code/image thumbnail.
+CLIENT_THUMBNAIL_TYPES = {"step", "stp", "pdf", "csv", "xlsx", "ods"}
+
+# Photos of the printed result (#3077): same allowlist and naming as the
+# archive photo routes. 10 MB is ample for a phone camera JPEG.
+PHOTO_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
+PHOTO_MEDIA_TYPES = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
+MAX_PHOTO_BYTES = 10 * 1024 * 1024
+
+# Upper bound for an uploaded client-rendered thumbnail. The FE sends a
+# 256px PNG (a few tens of KB); anything near this limit is not a thumbnail.
+MAX_CLIENT_THUMBNAIL_BYTES = 2 * 1024 * 1024
+
 
 async def _backfill_external_stl_thumbnails(folder_ids: list[int]) -> None:
     """Generate STL thumbnails for an external folder tree in the background.
@@ -1494,6 +1519,8 @@ async def delete_folder(
 
     await delete_dependent_variants(db, doomed_file_ids)
     await release_queue_references(db, doomed_file_ids)
+    for doomed_id in doomed_file_ids:
+        remove_library_photos_dir(doomed_id)
 
     # Delete folder (cascade will handle files and subfolders)
     await db.delete(folder)
@@ -1588,6 +1615,12 @@ _SCANNABLE_EXTENSIONS = {
     ".webp",
     ".svg",
     ".md",
+    # Documents that ship alongside a job folder and now have in-app
+    # previews (#2976): drawings/datasheets and part lists.
+    ".pdf",
+    ".csv",
+    ".xlsx",
+    ".ods",
 }
 
 
@@ -2009,6 +2042,10 @@ async def scan_external_folder(
                         abs_thumb.unlink()
                 except OSError:
                     pass
+            # The row is gone for good — external files skip the trash — so
+            # its photos go with it rather than being orphaned under an id
+            # nothing points at any more (#3077).
+            remove_library_photos_dir(db_file.id)
             await db.delete(db_file)
             removed += 1
 
@@ -2229,6 +2266,9 @@ async def list_files(
                 tags=[TagSummary(id=t.id, name=t.name) for t in f.tags],
                 variant_group_id=f.variant_group_id,
                 variant_count=variant_counts.get(f.variant_group_id, 0) if f.variant_group_id else 0,
+                external_url=f.external_url,
+                has_notes=bool(f.notes),
+                photo_count=len(f.photos or []),
             )
         )
 
@@ -5058,6 +5098,9 @@ async def get_file(
         print_count=file.print_count,
         last_printed_at=file.last_printed_at,
         notes=file.notes,
+        external_url=file.external_url,
+        photos=list(file.photos or []),
+        source_url=file.source_url,
         duplicates=duplicates if duplicates else None,
         duplicate_count=duplicate_count,
         created_by_id=file.created_by_id,
@@ -5132,6 +5175,9 @@ async def update_file(
     if data.notes is not None:
         file.notes = data.notes if data.notes else None
 
+    if data.external_url is not None:
+        file.external_url = data.external_url.strip() or None
+
     await db.commit()
     await db.refresh(file)
 
@@ -5186,6 +5232,7 @@ async def delete_file(
 
         await delete_dependent_variants(db, [file.id])
         await release_queue_references(db, [file.id])
+        remove_library_photos_dir(file.id)
         await db.delete(file)
         await db.commit()
         return {"status": "success", "message": "File deleted", "trashed": False}
@@ -5326,6 +5373,218 @@ async def get_thumbnail(
     media_type = media_types.get(thumb_ext, "image/png")
 
     return FastAPIFileResponse(str(abs_thumb_path), media_type=media_type)
+
+
+@router.post("/files/{file_id}/preview-thumbnail", response_model=ClientThumbnailResponse)
+async def upload_preview_thumbnail(
+    file_id: int,
+    thumbnail: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    auth_result: tuple[User | None, bool] = Depends(
+        require_ownership_permission(
+            Permission.LIBRARY_UPDATE_ALL,
+            Permission.LIBRARY_UPDATE_OWN,
+        )
+    ),
+):
+    """Store a client-rendered preview thumbnail for a file (#2976).
+
+    STEP, PDF and spreadsheet previews are rendered in the browser; the FE
+    posts its first render here so the grid gets a thumbnail without the
+    server needing OpenCascade or a PDF rasteriser. Only file types in
+    ``CLIENT_THUMBNAIL_TYPES`` are accepted, and only while the file has no
+    thumbnail yet — a stored thumbnail is never replaced by this route.
+    """
+    user, can_modify_all = auth_result
+
+    result = await db.execute(LibraryFile.active().where(LibraryFile.id == file_id))
+    file = result.scalar_one_or_none()
+
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    # Ownership check (same shape as update_file)
+    if not can_modify_all:
+        if file.created_by_id != user.id:
+            raise HTTPException(status_code=403, detail="You can only update your own files")
+
+    if file.file_type not in CLIENT_THUMBNAIL_TYPES:
+        raise HTTPException(status_code=400, detail="File type does not accept client-rendered thumbnails")
+
+    if file.thumbnail_path:
+        return ClientThumbnailResponse(updated=False)
+
+    content = await thumbnail.read(MAX_CLIENT_THUMBNAIL_BYTES + 1)
+    if len(content) > MAX_CLIENT_THUMBNAIL_BYTES:
+        raise HTTPException(status_code=413, detail="Thumbnail too large")
+
+    # Decode and re-encode through PIL: validates the bytes are a real PNG
+    # and strips anything that isn't pixel data before it lands on disk.
+    import io
+
+    from PIL import Image, UnidentifiedImageError
+
+    try:
+        with Image.open(io.BytesIO(content)) as img:
+            img.load()
+            if img.format != "PNG":
+                raise HTTPException(status_code=400, detail="Thumbnail must be a PNG image")
+            if img.mode not in ("RGB", "RGBA"):
+                img = img.convert("RGBA")
+            # The grid renders at ~256px; cap outliers instead of storing them.
+            if img.width > 512 or img.height > 512:
+                img.thumbnail((512, 512), Image.Resampling.LANCZOS)
+            thumbnails_dir = get_library_thumbnails_dir()
+            thumb_filename = f"{uuid.uuid4().hex}.png"
+            thumb_path = thumbnails_dir / thumb_filename  # SEC-PATH-OK: thumb_filename = uuid.uuid4().hex + ".png"
+            img.save(thumb_path, "PNG", optimize=True)
+    except HTTPException:
+        raise
+    except (UnidentifiedImageError, OSError, ValueError) as e:
+        raise HTTPException(status_code=400, detail="Invalid thumbnail image") from e
+
+    file.thumbnail_path = to_relative_path(thumb_path)
+    await db.commit()
+
+    return ClientThumbnailResponse(updated=True)
+
+
+# ============ Photo Endpoints (#3077) ============
+
+
+@router.post("/files/{file_id}/photos")
+async def upload_file_photo(
+    file_id: int,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    auth_result: tuple[User | None, bool] = Depends(
+        require_ownership_permission(
+            Permission.LIBRARY_UPDATE_ALL,
+            Permission.LIBRARY_UPDATE_OWN,
+        )
+    ),
+):
+    """Attach a photo of the printed result to a library file.
+
+    Photos are Bambuddy-side metadata, so external files take them too. Same
+    shape as the archive photo upload: extension allowlist, uuid-named on
+    disk, and the ``photos`` list re-assigned so SQLAlchemy sees the change.
+    """
+    user, can_modify_all = auth_result
+
+    result = await db.execute(LibraryFile.active().where(LibraryFile.id == file_id))
+    library_file = result.scalar_one_or_none()
+
+    if not library_file:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    # Ownership check (same shape as update_file)
+    if not can_modify_all:
+        if library_file.created_by_id != user.id:
+            raise HTTPException(status_code=403, detail="You can only update your own files")
+
+    if not file.filename or not file.filename.lower().endswith(PHOTO_EXTENSIONS):
+        raise HTTPException(status_code=400, detail="File must be an image (.jpg, .jpeg, .png, .webp)")
+
+    content = await file.read(MAX_PHOTO_BYTES + 1)
+    if len(content) > MAX_PHOTO_BYTES:
+        raise HTTPException(status_code=413, detail="Photo too large (max 10 MB)")
+
+    photos_dir = library_photos_dir(library_file.id)
+    photos_dir.mkdir(parents=True, exist_ok=True)
+
+    ext = Path(file.filename).suffix.lower()
+    photo_filename = f"{uuid.uuid4().hex[:8]}{ext}"
+    photo_path = photos_dir / photo_filename  # SEC-PATH-OK: photo_filename = uuid.uuid4().hex[:8] + ext
+    photo_path.write_bytes(content)
+
+    photos = list(library_file.photos or [])
+    photos.append(photo_filename)
+    library_file.photos = photos
+
+    await db.commit()
+    await db.refresh(library_file)
+
+    return {"status": "uploaded", "filename": photo_filename, "photos": library_file.photos}
+
+
+@router.get("/files/{file_id}/photos/{filename}")
+async def get_file_photo(
+    file_id: int,
+    filename: str,
+    db: AsyncSession = Depends(get_db),
+    auth_result: tuple[User | None, bool] = Depends(
+        require_media_token_ownership(
+            Permission.LIBRARY_READ_ALL,
+            Permission.LIBRARY_READ_OWN,
+        )
+    ),
+):
+    """Serve one photo. Media-token auth like the thumbnail route (#3025)."""
+    user, can_read_all = auth_result
+    result = await db.execute(LibraryFile.active().where(LibraryFile.id == file_id))
+    library_file = _ensure_library_file_visible(result.scalar_one_or_none(), user, can_read_all)
+
+    # Membership check first: names are uuid-generated on upload, so anything
+    # not in the stored list is not a photo, whatever is on disk.
+    if not library_file.photos or filename not in library_file.photos:
+        raise HTTPException(status_code=404, detail="Photo not found")
+
+    try:
+        photo_path = safe_join_under(library_photos_dir(library_file.id), filename, http=False)
+    except PathTraversalError:
+        raise HTTPException(status_code=404, detail="Photo not found") from None
+    if not photo_path.is_file():
+        raise HTTPException(status_code=404, detail="Photo not found")
+
+    media_type = PHOTO_MEDIA_TYPES.get(Path(filename).suffix.lower(), "image/jpeg")
+    return FastAPIFileResponse(str(photo_path), media_type=media_type)
+
+
+@router.delete("/files/{file_id}/photos/{filename}")
+async def delete_file_photo(
+    file_id: int,
+    filename: str,
+    db: AsyncSession = Depends(get_db),
+    auth_result: tuple[User | None, bool] = Depends(
+        require_ownership_permission(
+            Permission.LIBRARY_UPDATE_ALL,
+            Permission.LIBRARY_UPDATE_OWN,
+        )
+    ),
+):
+    """Remove a photo from a library file."""
+    user, can_modify_all = auth_result
+
+    result = await db.execute(LibraryFile.active().where(LibraryFile.id == file_id))
+    library_file = result.scalar_one_or_none()
+
+    if not library_file:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    if not can_modify_all:
+        if library_file.created_by_id != user.id:
+            raise HTTPException(status_code=403, detail="You can only update your own files")
+
+    if not library_file.photos or filename not in library_file.photos:
+        raise HTTPException(status_code=404, detail="Photo not found")
+
+    try:
+        photo_path = safe_join_under(library_photos_dir(library_file.id), filename, http=False)
+    except PathTraversalError:
+        raise HTTPException(status_code=404, detail="Photo not found") from None
+    if photo_path.is_file():
+        try:
+            photo_path.unlink()
+        except OSError as e:
+            logger.warning("Failed to delete photo from disk: %s", e)
+
+    photos = [p for p in library_file.photos if p != filename]
+    library_file.photos = photos if photos else None
+
+    await db.commit()
+
+    return {"status": "deleted", "photos": library_file.photos or []}
 
 
 @router.get("/files/{file_id}/gcode")
@@ -5558,6 +5817,7 @@ async def bulk_delete(
         await delete_dependent_variants(db, hard_deleted_ids)
         await release_queue_references(db, hard_deleted_ids)
         for file in hard_deleted:
+            remove_library_photos_dir(file.id)
             await db.delete(file)
 
     # Delete folders (cascade will handle contents). Folders have no ownership
@@ -5580,6 +5840,10 @@ async def bulk_delete(
             tree_file_ids = await _folder_tree_file_ids(db, folder_id)
             await delete_dependent_variants(db, tree_file_ids)
             await release_queue_references(db, tree_file_ids)
+            # The cascade hard-deletes every row in the subtree, so their
+            # photos go with them — same as DELETE /folders/{id} (#3077).
+            for doomed_id in tree_file_ids:
+                remove_library_photos_dir(doomed_id)
             await db.delete(folder)
             deleted_folders += 1
 
