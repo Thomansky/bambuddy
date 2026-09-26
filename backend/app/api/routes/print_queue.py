@@ -9,6 +9,7 @@ from pathlib import Path
 import defusedxml.ElementTree as ET
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, func, inspect, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -1426,6 +1427,12 @@ async def _load_batch_for_write(
     return batch
 
 
+# Deliberately without the existing batch's id: the caller may not be allowed
+# to read it. They can look it up by the pair, which applies the usual
+# ownership rules.
+_EXTERNAL_REF_TAKEN = "A batch for this external_source and external_ref already exists"
+
+
 @router.post("/batches", response_model=PrintBatchResponse)
 async def create_batch(
     data: PrintBatchCreate,
@@ -1451,6 +1458,15 @@ async def create_batch(
 
     plate_targets = _validate_plate_targets(data.plates)
     await _validate_batch_project(db, data.project_id, current_user)
+    if data.external_source is not None:
+        existing = await db.execute(
+            select(PrintBatch.id).where(
+                PrintBatch.external_source == data.external_source,
+                PrintBatch.external_ref == data.external_ref,
+            )
+        )
+        if existing.scalar_one_or_none() is not None:
+            raise HTTPException(409, _EXTERNAL_REF_TAKEN)
 
     batch = PrintBatch(
         name=data.name.strip()[:255],
@@ -1462,9 +1478,17 @@ async def create_batch(
         project_id=data.project_id,
         due_date=data.due_date,
         notes=data.notes,
+        external_source=data.external_source,
+        external_ref=data.external_ref,
     )
     db.add(batch)
-    await db.flush()  # Need batch.id before assigning to items
+    try:
+        await db.flush()  # Need batch.id before assigning to items
+    except IntegrityError:
+        # Lost a race with a concurrent create for the same external record:
+        # the unique index caught what the lookup above could not.
+        await db.rollback()
+        raise HTTPException(409, _EXTERNAL_REF_TAKEN) from None
 
     if plate_targets is not None:
         for target in plate_targets:
@@ -1665,6 +1689,8 @@ async def ungroup_batch(
 @router.get("/batches", response_model=list[PrintBatchResponse])
 async def list_batches(
     status: str | None = Query(None, description="Filter by status (active, completed, cancelled)"),
+    external_source: str | None = Query(None, description="Filter by the integration that created the batch"),
+    external_ref: str | None = Query(None, description="Filter by the external record the batch fulfils"),
     db: AsyncSession = Depends(get_db),
     auth_result: tuple[User | None, bool] = Depends(
         require_ownership_permission(
@@ -1692,6 +1718,10 @@ async def list_batches(
     )
     if status:
         query = query.where(PrintBatch.status == status)
+    if external_source is not None:
+        query = query.where(PrintBatch.external_source == external_source)
+    if external_ref is not None:
+        query = query.where(PrintBatch.external_ref == external_ref)
     if current_user is not None and not can_read_all:
         query = query.where(PrintBatch.created_by_id == current_user.id)
     result = await db.execute(query)
@@ -1810,6 +1840,8 @@ async def _build_batch_response(
         project_id=batch.project_id,
         due_date=batch.due_date,
         notes=batch.notes,
+        external_source=batch.external_source,
+        external_ref=batch.external_ref,
         pending_count=progress.pending,
         printing_count=progress.printing,
         completed_count=progress.completed,

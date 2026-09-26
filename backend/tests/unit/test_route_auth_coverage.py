@@ -70,6 +70,10 @@ _PUBLIC_ROUTES: frozenset[tuple[str, str]] = frozenset(
         ("GET", "/api/v1/auth/oidc/authorize/{provider_id}"),
         ("GET", "/api/v1/auth/oidc/callback"),
         ("POST", "/api/v1/auth/oidc/exchange"),
+        # Connected-app token exchange — called by the app's server, not a browser. The client
+        # secret (bcrypt-verified) plus a single-use, 60 s, PKCE-bound code in the body are the auth;
+        # rate-limited per client and per IP. Refuses outright while Bambuddy auth is disabled.
+        ("POST", "/api/v1/connect/token"),
         # 2FA send + verify — issued after password check; pre-auth token in cookie is the auth.
         ("POST", "/api/v1/auth/2fa/email/send"),
         ("POST", "/api/v1/auth/2fa/verify"),
