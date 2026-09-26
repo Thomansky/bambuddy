@@ -12,13 +12,14 @@
  * reach a success message that calls it good.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { render } from '../utils';
 import { server } from '../mocks/server';
 import { PrintersPage } from '../../pages/PrintersPage';
+import { setAuthToken } from '../../api/client';
 
 const printer = {
   id: 1,
@@ -69,6 +70,7 @@ const finishedPrint = {
   user_verdict: null,
   user_verdict_source: null,
   photos: null,
+  created_by_id: 7,
 };
 
 describe('PrintersPage — verdict on the card', () => {
@@ -111,5 +113,76 @@ describe('PrintersPage — verdict on the card', () => {
     expect(await screen.findByTestId('confirm-outcome-dialog')).toBeInTheDocument();
     expect(patched).toHaveLength(0);
     expect(screen.queryByText('Marked as good part')).toBeNull();
+  });
+
+  // The PATCH checks archives:update against the archive's owner, so the pair
+  // is only offered to whoever it can succeed for. Mark cleared, which has its
+  // own permission, stays either way.
+  describe('with auth enabled', () => {
+    // Before /auth/me has answered, every permission check says yes, so an
+    // absence is only worth asserting once both it and the archive are in.
+    let meServed: boolean;
+    let archiveServed: boolean;
+    const settled = async () => {
+      await waitFor(() => expect(meServed && archiveServed).toBe(true));
+      expect(await screen.findByRole('button', { name: 'Mark plate as cleared' })).toBeInTheDocument();
+    };
+
+    const signInWith = (permissions: string[], archive = finishedPrint) => {
+      meServed = false;
+      archiveServed = false;
+      setAuthToken('card-verdict-token', 'session');
+      server.use(
+        http.get('*/api/v1/auth/status', () => HttpResponse.json({ auth_enabled: true, requires_setup: false })),
+        http.get('/api/v1/auth/me', () => {
+          meServed = true;
+          return HttpResponse.json({
+            id: 7,
+            username: 'operator',
+            is_active: true,
+            is_admin: false,
+            groups: [],
+            permissions,
+            created_at: '2026-08-18T00:00:00Z',
+          });
+        }),
+        http.get('/api/v1/archives/', () => {
+          archiveServed = true;
+          return HttpResponse.json([archive]);
+        }),
+      );
+    };
+
+    afterEach(() => {
+      setAuthToken(null);
+    });
+
+    it('offers no verdict to a user who may not update archives', async () => {
+      signInWith(['printers:read', 'printers:clear_plate', 'archives:read_all']);
+      render(<PrintersPage />);
+
+      await settled();
+      await waitFor(() => expect(screen.queryByTitle('Good')).toBeNull());
+      expect(screen.queryByTitle('Reject')).toBeNull();
+    });
+
+    it('offers no verdict on somebody else\'s print to a user who may update only their own', async () => {
+      signInWith(
+        ['printers:read', 'printers:clear_plate', 'archives:read_all', 'archives:update_own'],
+        { ...finishedPrint, created_by_id: 8 },
+      );
+      render(<PrintersPage />);
+
+      await settled();
+      await waitFor(() => expect(screen.queryByTitle('Good')).toBeNull());
+    });
+
+    it('offers it to the owner', async () => {
+      signInWith(['printers:read', 'printers:clear_plate', 'archives:read_all', 'archives:update_own']);
+      render(<PrintersPage />);
+
+      expect(await screen.findByTitle('Good')).toBeInTheDocument();
+      expect(screen.getByTitle('Reject')).toBeInTheDocument();
+    });
   });
 });

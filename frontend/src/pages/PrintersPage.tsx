@@ -2167,7 +2167,7 @@ function PrinterCard({
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { showToast } = useToast();
-  const { hasPermission } = useAuth();
+  const { hasPermission, canModify } = useAuth();
   const [showMenu, setShowMenu] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteArchives, setDeleteArchives] = useState(true);
@@ -2663,8 +2663,14 @@ function PrinterCard({
   // Good/Reject right where the operator releases the plate. Releasing the
   // plate without answering stays possible — the two are orthogonal (though
   // the confirm_default_good_on_plate_clear setting can couple them).
+  // Only offered to whoever may record it: the PATCH checks archives:update
+  // against the archive's owner, so for anyone else the pair could only fail.
   const pendingConfirmArchive =
-    lastPrint && lastPrint.status === 'completed' && lastPrint.confirm_requested && lastPrint.user_verdict == null
+    lastPrint &&
+    lastPrint.status === 'completed' &&
+    lastPrint.confirm_requested &&
+    lastPrint.user_verdict == null &&
+    canModify('archives', 'update', lastPrint.created_by_id)
       ? lastPrint
       : null;
   // Not gated on `connected`: the plate-clear gate is Bambuddy-side state, and with

@@ -1008,7 +1008,8 @@ function ArchiveCard({
           </div>
         )}
         {/* Outcome-confirmation badges (#1898): a completed print either
-            waiting for its verdict (click to answer) or marked as reject.
+            waiting for its verdict (click to answer, for whoever may update
+            the archive; a status only for anyone else) or marked as reject.
             Same spot as the failed badge — the three are mutually exclusive. */}
         {archive.status === 'completed' && archive.confirm_requested && archive.user_verdict == null && (
           <button
@@ -1016,8 +1017,9 @@ function ArchiveCard({
               e.stopPropagation();
               setShowConfirmOutcome(true);
             }}
-            className="absolute top-2 left-12 px-2 py-1 rounded text-xs bg-amber-500/90 hover:bg-amber-500 text-black flex items-center gap-1 transition-colors cursor-pointer"
-            title={t('archives.card.confirmPendingTitle')}
+            disabled={!canModify('archives', 'update', archive.created_by_id)}
+            className="absolute top-2 left-12 px-2 py-1 rounded text-xs bg-amber-500/90 enabled:hover:bg-amber-500 text-black flex items-center gap-1 transition-colors enabled:cursor-pointer"
+            title={!canModify('archives', 'update', archive.created_by_id) ? t('archives.permission.noUpdateArchives') : t('archives.card.confirmPendingTitle')}
           >
             <ThumbsUp className="w-3 h-3" />
             {t('archives.card.confirmPending')}
@@ -2391,8 +2393,9 @@ function ArchiveListRow({
                   e.stopPropagation();
                   setShowConfirmOutcome(true);
                 }}
-                className="px-1.5 py-0.5 rounded text-[10px] leading-tight bg-amber-500/90 hover:bg-amber-500 text-black flex-shrink-0 transition-colors"
-                title={t('archives.card.confirmPendingTitle')}
+                disabled={!canModify('archives', 'update', archive.created_by_id)}
+                className="px-1.5 py-0.5 rounded text-[10px] leading-tight bg-amber-500/90 enabled:hover:bg-amber-500 text-black flex-shrink-0 transition-colors"
+                title={!canModify('archives', 'update', archive.created_by_id) ? t('archives.permission.noUpdateArchives') : t('archives.card.confirmPendingTitle')}
               >
                 {t('archives.card.confirmPending')}
               </button>
