@@ -2903,6 +2903,8 @@ export default {
     libraryStorageUnsaved: 'Ainda não salvo',
     libraryStorageSaved: 'Salvo',
     libraryAutoscan: 'Manter em dia com o diretório',
+    libraryScanOnOpen: 'Atualizar uma pasta ao abri-la',
+    libraryScanOnOpenHint: 'Sempre que uma pasta é aberta no gerenciador de arquivos, ela é comparada com o diretório. Não custa nada enquanto ninguém usa o Bambuddy.',
     libraryAutoscanHint: 'O que for movido ou apagado direto no diretório só chega ao Bambuddy por uma verificação. Aqui você define com que frequência isso acontece sozinho — 0 desliga e deixa para o botão.',
     libraryAutoscanUnit: 'minutos (0 = desligado)',
     libraryStorageScanButton: 'Verificar agora',
@@ -3168,6 +3170,7 @@ export default {
       project: 'Projetos',
       queueJob: 'Trabalhos na fila',
       libraryFolder: 'Pastas de pedido',
+      material: 'Números de material',
       enable: 'Atribuir números',
       prefix: 'Prefixo',
       suffix: 'Sufixo',
@@ -5099,6 +5102,9 @@ export default {
     // Internal material / article number (#2870)
     materialNumber: 'Nº do Material',
     materialNumberPlaceholder: 'ex. 15',
+    materialNumberNext: 'Próximo livre',
+    materialNumberNextHint: 'Pegar o próximo número da série de números de material — para um produto que ainda não tem.',
+    materialNumberNextFailed: 'Não foi possível atribuir um número de material.',
     materialNumberHelp: 'Número interno de compra - compartilhado por todos os carretéis deste produto. Novos carretéis do mesmo produto o herdam.',
     materialNumberNone: 'Sem número de material',
     suppliers: {

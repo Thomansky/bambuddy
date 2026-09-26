@@ -2971,6 +2971,8 @@ export default {
     libraryStorageUnsaved: 'Ще не збережено',
     libraryStorageSaved: 'Збережено',
     libraryAutoscan: 'Звіряти з каталогом',
+    libraryScanOnOpen: 'Оновлювати теку під час відкриття',
+    libraryScanOnOpenHint: 'Щоразу, коли теку відкривають у файловому менеджері, її звіряють із каталогом. Нічого не коштує, поки ніхто не працює з Bambuddy.',
     libraryAutoscanHint: 'Про те, що переміщено або видалено просто в каталозі, Bambuddy дізнається лише зі сканування. Тут задається, як часто воно відбувається саме — 0 вимикає і лишає це кнопці.',
     libraryAutoscanUnit: 'хвилин (0 — вимк.)',
     libraryStorageScanButton: 'Сканувати зараз',
@@ -3201,6 +3203,7 @@ export default {
       project: 'Проєкти',
       queueJob: 'Завдання черги',
       libraryFolder: 'Теки замовлень',
+      material: 'Номери матеріалів',
       enable: 'Видавати номери',
       prefix: 'Префікс',
       suffix: 'Суфікс',
@@ -5148,6 +5151,9 @@ export default {
     // Internal material / article number (#2870)
     materialNumber: 'Мат. №',
     materialNumberPlaceholder: 'напр. 15',
+    materialNumberNext: 'Наступний вільний',
+    materialNumberNextHint: 'Взяти наступний номер із серії номерів матеріалів — для продукту, який його ще не має.',
+    materialNumberNextFailed: 'Не вдалося видати номер матеріалу.',
     materialNumberHelp: 'Внутрішній закупівельний номер — спільний для всіх котушок цього продукту. Нові котушки того самого продукту успадковують його.',
     materialNumberNone: 'Без номера матеріалу',
     suppliers: {

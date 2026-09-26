@@ -107,6 +107,61 @@ async def autoscan_once(db: AsyncSession) -> dict:
     return {"scanned": len(targets), "added": added, "removed": removed, "skipped": None}
 
 
+SETTING_ON_OPEN = "library_scan_on_open"
+
+# How long a folder that was just reconciled is left alone. Clicking back and
+# forth between two job folders should not walk them both on every click; a
+# change made in Explorer a minute ago shows up on the next visit after this.
+REFRESH_MIN_SECONDS = 30.0
+_last_refresh: dict[int, float] = {}
+
+
+async def refresh_folder_on_open(db: AsyncSession, folder_id: int) -> dict:
+    """Reconcile the folder somebody just opened, if the library lives in a tree.
+
+    The cheap alternative to the interval: only the folder being looked at,
+    only when it is being looked at, and never while nobody uses Bambuddy. The
+    same reconciliation the Scan button runs, over that folder's subtree —
+    which for a job folder is a handful of files.
+
+    ``skipped`` says why nothing happened; none of those reasons is an error
+    the UI should show, because the user asked to open a folder, not to scan.
+    """
+    from backend.app.api.routes.settings import get_setting, setting_is_true
+
+    raw = await get_setting(db, SETTING_ON_OPEN)
+    # On unless switched off: it only ever does anything in directory mode.
+    if raw is not None and raw != "" and not setting_is_true(raw):
+        return {"added": 0, "removed": 0, "skipped": "switched off"}
+
+    root = await configured_storage_root(db)
+    if root is None:
+        return {"added": 0, "removed": 0, "skipped": "not a directory library"}
+
+    folder = (await db.execute(select(LibraryFolder).where(LibraryFolder.id == folder_id))).scalar_one_or_none()
+    if folder is None or not folder.is_external or not is_inside_tree(root, folder.external_path):
+        return {"added": 0, "removed": 0, "skipped": "not part of the library tree"}
+
+    now = time.monotonic()
+    if now - _last_refresh.get(folder_id, float("-inf")) < REFRESH_MIN_SECONDS:
+        return {"added": 0, "removed": 0, "skipped": "recently refreshed"}
+
+    # Same guard as the interval: a share that dropped off looks exactly like
+    # a folder whose files were all deleted, and must not be reconciled.
+    if storage_path_problem(str(root)) or not any(root.iterdir()):
+        return {"added": 0, "removed": 0, "skipped": "library directory unavailable"}
+
+    _last_refresh[folder_id] = now
+    from backend.app.api.routes.library import scan_external_folder
+
+    try:
+        result = await scan_external_folder(folder_id=folder_id, db=db, _=None)
+    except Exception as exc:  # noqa: BLE001 - opening a folder must never fail on this
+        logger.info("Refresh on open skipped for folder %s: %s", folder_id, exc)
+        return {"added": 0, "removed": 0, "skipped": "folder unavailable"}
+    return {"added": result.get("added", 0), "removed": result.get("removed", 0), "skipped": None}
+
+
 async def _interval_minutes(db: AsyncSession) -> int:
     from backend.app.api.routes.settings import get_setting
 

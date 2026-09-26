@@ -2817,6 +2817,8 @@ export default {
     libraryStorageUnsaved: '아직 저장되지 않음',
     libraryStorageSaved: '저장됨',
     libraryAutoscan: '디렉터리와 맞추기',
+    libraryScanOnOpen: '폴더를 열 때 동기화',
+    libraryScanOnOpenHint: '파일 관리자에서 폴더를 열 때마다 디렉터리와 대조합니다. 아무도 Bambuddy를 쓰지 않을 때는 부담이 없습니다.',
     libraryAutoscanHint: '디렉터리에서 직접 옮기거나 지운 것은 검사를 통해서만 Bambuddy에 전해집니다. 자동으로 수행할 주기를 여기서 정합니다. 0이면 꺼지고 버튼으로만 실행합니다.',
     libraryAutoscanUnit: '분 (0 = 끔)',
     libraryStorageScanButton: '지금 검사',
@@ -3034,6 +3036,7 @@ export default {
       project: '프로젝트',
       queueJob: '대기열 작업',
       libraryFolder: '주문 폴더',
+      material: '재료 번호',
       enable: '번호 부여',
       prefix: '접두사',
       suffix: '접미사',
@@ -4896,6 +4899,9 @@ export default {
     // Internal material / article number (#2870)
     materialNumber: '자재 번호',
     materialNumberPlaceholder: '예: 15',
+    materialNumberNext: '다음 빈 번호',
+    materialNumberNextHint: '재료 번호 일련번호에서 다음 번호를 가져옵니다 — 아직 번호가 없는 제품용입니다.',
+    materialNumberNextFailed: '재료 번호를 발급할 수 없습니다.',
     materialNumberHelp: '내부 구매 번호 - 이 제품의 모든 스풀이 공유합니다. 같은 제품의 새 스풀은 이 번호를 이어받습니다.',
     materialNumberNone: '자재 번호 없음',
     suppliers: {

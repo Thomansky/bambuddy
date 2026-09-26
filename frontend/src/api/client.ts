@@ -1635,6 +1635,9 @@ export interface AppSettings {
   library_storage_path: string;
   /** Minutes between automatic reconciliations of the tree; 0 is off. */
   library_autoscan_minutes: number;
+  /** Bring a folder of the tree up to date when it is opened. On by default;
+   *  does nothing outside directory mode. */
+  library_scan_on_open: boolean;
   // Camera view settings
   camera_view_mode: 'window' | 'embedded';
   // Preferred slicer (server-side API / sidecar)
@@ -7848,6 +7851,13 @@ export const api = {
     request<{ status: string; added: number; removed: number }>(`/library/folders/${folderId}/scan`, {
       method: 'POST',
     }),
+  refreshLibraryFolder: (folderId: number) =>
+    request<{ added: number; removed: number; skipped: string | null }>(
+      `/library/folders/${folderId}/refresh`,
+      { method: 'POST' },
+    ),
+  nextMaterialNumber: () =>
+    request<{ number: string }>('/inventory/material-numbers/next', { method: 'POST' }),
   scanLibraryStorage: () =>
     request<{ status: string; scanned: number; added: number; removed: number; skipped: string | null }>(
       '/library/storage/scan',

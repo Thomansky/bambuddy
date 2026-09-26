@@ -3120,6 +3120,30 @@ export function FileManagerPage() {
     },
     [libraryTreeRoot],
   );
+  // Opening a folder of the tree brings it up to date with the share (#3160):
+  // what somebody did in Explorer shows up when the folder is looked at, and
+  // nothing walks the share while nobody is. The server throttles per folder,
+  // so clicking back and forth costs one walk, not one per click. Fire and
+  // forget -- the listing is shown at once and refreshed if anything changed.
+  const scanOnOpen = settings?.library_scan_on_open !== false;
+  useEffect(() => {
+    if (!libraryTreeRoot || !scanOnOpen || selectedFolderId === null) return;
+    let cancelled = false;
+    api
+      .refreshLibraryFolder(selectedFolderId)
+      .then((result) => {
+        if (cancelled || !(result.added || result.removed)) return;
+        queryClient.invalidateQueries({ queryKey: ['library-files'] });
+        queryClient.invalidateQueries({ queryKey: ['library-folders'] });
+        queryClient.invalidateQueries({ queryKey: ['library-stats'] });
+      })
+      .catch(() => {
+        // Opening a folder must never fail on this; the listing stands.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [libraryTreeRoot, scanOnOpen, selectedFolderId, queryClient]);
   const rootViewSetting =
     configuredRootView === 'recent' && (rootWindowFiltered || showAllAtRoot) ? 'all' : configuredRootView;
   const rootView = selectedFolderId === null && !rootQueryOverridden ? rootViewSetting : 'all';

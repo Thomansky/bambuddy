@@ -517,6 +517,86 @@ class TestKeepingUpWithTheShare:
         assert settings["library_autoscan_minutes"] == 0
 
 
+class TestRefreshOnOpen:
+    """Opening a folder brings it up to date — the alternative to the interval.
+
+    Only the folder being looked at, only when it is looked at: nothing walks
+    the share while nobody is using Bambuddy.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _forget_throttle(self):
+        from backend.app.services import library_autoscan
+
+        library_autoscan._last_refresh.clear()
+        yield
+        library_autoscan._last_refresh.clear()
+
+    @pytest.mark.asyncio
+    async def test_a_file_put_there_in_explorer_shows_up_on_opening(self, async_client: AsyncClient, db_session, tree):
+        await _directory_mode(db_session, tree)
+        folder = (await async_client.post("/api/v1/library/folders", json={"name": "Kunden"})).json()
+        (tree / "Kunden" / "aus-dem-explorer.3mf").write_bytes(b"dropped in by hand")
+
+        response = await async_client.post(f"/api/v1/library/folders/{folder['id']}/refresh")
+        assert response.status_code == 200, response.text
+        assert response.json() == {"added": 1, "removed": 0, "skipped": None}
+
+        listed = (await async_client.get(f"/api/v1/library/files?folder_id={folder['id']}")).json()
+        assert [f["filename"] for f in listed] == ["aus-dem-explorer.3mf"]
+
+    @pytest.mark.asyncio
+    async def test_clicking_back_and_forth_does_not_walk_it_again(self, async_client: AsyncClient, db_session, tree):
+        await _directory_mode(db_session, tree)
+        folder = (await async_client.post("/api/v1/library/folders", json={"name": "Kunden"})).json()
+
+        first = (await async_client.post(f"/api/v1/library/folders/{folder['id']}/refresh")).json()
+        second = (await async_client.post(f"/api/v1/library/folders/{folder['id']}/refresh")).json()
+        assert first["skipped"] is None
+        assert second["skipped"] == "recently refreshed"
+
+    @pytest.mark.asyncio
+    async def test_it_does_nothing_in_managed_mode(self, async_client: AsyncClient, db_session):
+        folder = (await async_client.post("/api/v1/library/folders", json={"name": "Kunden"})).json()
+
+        response = await async_client.post(f"/api/v1/library/folders/{folder['id']}/refresh")
+        assert response.json()["skipped"] == "not a directory library"
+
+    @pytest.mark.asyncio
+    async def test_it_can_be_switched_off(self, async_client: AsyncClient, db_session, tree):
+        await _directory_mode(db_session, tree)
+        await _set(db_session, "library_scan_on_open", "false")
+        folder = (await async_client.post("/api/v1/library/folders", json={"name": "Kunden"})).json()
+        (tree / "Kunden" / "neu.3mf").write_bytes(b"x")
+
+        response = await async_client.post(f"/api/v1/library/folders/{folder['id']}/refresh")
+        assert response.json()["skipped"] == "switched off"
+
+    @pytest.mark.asyncio
+    async def test_a_share_that_dropped_off_is_left_alone(self, async_client: AsyncClient, db_session, tree):
+        await _directory_mode(db_session, tree)
+        folder = (await async_client.post("/api/v1/library/folders", json={"name": "Kunden"})).json()
+        (tree / "Kunden" / "teil.3mf").write_bytes(b"x")
+        first = (await async_client.post(f"/api/v1/library/folders/{folder['id']}/refresh")).json()
+        assert first["added"] == 1
+
+        from backend.app.services import library_autoscan
+
+        library_autoscan._last_refresh.clear()
+        # The mount goes away and leaves an empty directory behind.
+        (tree / "Kunden" / "teil.3mf").unlink()
+        (tree / "Kunden").rmdir()
+
+        second = (await async_client.post(f"/api/v1/library/folders/{folder['id']}/refresh")).json()
+        assert second["removed"] == 0
+        assert second["skipped"] == "library directory unavailable"
+
+    @pytest.mark.asyncio
+    async def test_it_is_on_by_default(self, async_client: AsyncClient):
+        settings = (await async_client.get("/api/v1/settings/")).json()
+        assert settings["library_scan_on_open"] is True
+
+
 class TestThePathGuard:
     def test_a_stored_path_outside_the_root_is_not_trusted(self, tmp_path):
         """The column is a string. A restored backup can name anything."""

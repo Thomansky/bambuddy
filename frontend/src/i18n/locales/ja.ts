@@ -2954,6 +2954,8 @@ export default {
     libraryStorageUnsaved: '未保存',
     libraryStorageSaved: '保存済み',
     libraryAutoscan: 'ディレクトリと同期を保つ',
+    libraryScanOnOpen: 'フォルダーを開いたときに同期する',
+    libraryScanOnOpenHint: 'ファイルマネージャーでフォルダーを開くたびにディレクトリと照合します。誰も Bambuddy を使っていないときは負荷がかかりません。',
     libraryAutoscanHint: 'ディレクトリ側で直接移動・削除したものは、スキャンを通してしか Bambuddy に伝わりません。自動で行う間隔をここで決めます。0 で無効になり、ボタン操作だけになります。',
     libraryAutoscanUnit: '分（0 で無効）',
     libraryStorageScanButton: '今すぐスキャン',
@@ -3182,6 +3184,7 @@ export default {
       project: 'プロジェクト',
       queueJob: 'キューのジョブ',
       libraryFolder: '注文フォルダ',
+      material: '材料番号',
       enable: '番号を割り当てる',
       prefix: '接頭辞',
       suffix: '接尾辞',
@@ -5113,6 +5116,9 @@ export default {
     // Internal material / article number (#2870)
     materialNumber: '資材番号',
     materialNumberPlaceholder: '例：15',
+    materialNumberNext: '次の空き番号',
+    materialNumberNextHint: '材料番号の連番から次の番号を取得します（まだ番号のない製品用）。',
+    materialNumberNextFailed: '材料番号を発行できませんでした。',
     materialNumberHelp: '社内の購買番号です。同じ製品のすべてのスプールで共有され、同じ製品の新しいスプールに自動的に引き継がれます。',
     materialNumberNone: '資材番号なし',
     // Supplier assignments on the spool (#2988)

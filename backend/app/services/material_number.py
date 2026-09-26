@@ -69,3 +69,14 @@ async def apply_material_number_inheritance(db: AsyncSession, payload: dict) -> 
         payload = dict(payload)
         payload["material_number"] = number
     return payload
+
+
+async def material_number_taken(db: AsyncSession, number: str) -> bool:
+    """Whether any spool already carries *number*, archived spools included.
+
+    A number on an archived spool still names that product in the cost
+    history, so handing it to a different product would merge two products'
+    figures under one line.
+    """
+    result = await db.execute(select(Spool.id).where(Spool.material_number == number).limit(1))
+    return result.first() is not None

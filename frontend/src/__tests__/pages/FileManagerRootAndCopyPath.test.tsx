@@ -321,6 +321,26 @@ describe('FileManagerPage — the library in a directory tree', () => {
     expect(await within(columns).findByText('001 EBZ')).toBeInTheDocument();
   });
 
+  it('brings a folder up to date when it is opened, and only then', async () => {
+    // What somebody did in Explorer shows up when the folder is looked at —
+    // and nothing is asked of the share while nobody opens anything.
+    const refreshed: number[] = [];
+    renderTree(treeFolders);
+    server.use(
+      http.post('/api/v1/library/folders/:id/refresh', ({ params }) => {
+        refreshed.push(Number(params.id));
+        return HttpResponse.json({ added: 0, removed: 0, skipped: null });
+      }),
+    );
+
+    const columns = await screen.findByTestId('columns-view');
+    await within(columns).findByText('001 EBZ');
+    expect(refreshed).toEqual([]);
+
+    await user.click(within(columns).getByText('001 EBZ'));
+    await waitFor(() => expect(refreshed).toEqual([30]));
+  });
+
   it('is unchanged in managed mode', async () => {
     // Same rows, no storage path: an external folder is external, as before.
     renderTree(treeFolders, false);

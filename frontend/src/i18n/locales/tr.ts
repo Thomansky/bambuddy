@@ -2956,6 +2956,8 @@ export default {
     libraryStorageUnsaved: 'Henüz kaydedilmedi',
     libraryStorageSaved: 'Kaydedildi',
     libraryAutoscan: 'Dizinle eşit tut',
+    libraryScanOnOpen: 'Klasörü açılırken güncelle',
+    libraryScanOnOpenHint: 'Dosya yöneticisinde bir klasör açıldığında dizinle karşılaştırılır. Kimse Bambuddy kullanmazken hiçbir yük getirmez.',
     libraryAutoscanHint: 'Doğrudan dizinde taşınan ya da silinen şeyler Bambuddy\'ye yalnızca taramayla ulaşır. Bunun kendiliğinden ne sıklıkta olacağını burada ayarlarsın — 0 kapatır ve işi düğmeye bırakır.',
     libraryAutoscanUnit: 'dakika (0 = kapalı)',
     libraryStorageScanButton: 'Şimdi tara',
@@ -3183,6 +3185,7 @@ export default {
       project: 'Projeler',
       queueJob: 'Kuyruk işleri',
       libraryFolder: 'Sipariş klasörleri',
+      material: 'Malzeme numaraları',
       enable: 'Numara ver',
       prefix: 'Ön ek',
       suffix: 'Son ek',
@@ -5099,6 +5102,9 @@ export default {
     // Internal material / article number (#2870)
     materialNumber: 'Malzeme No.',
     materialNumberPlaceholder: 'örn. 15',
+    materialNumberNext: 'Sıradaki boş',
+    materialNumberNextHint: 'Malzeme numarası serisinden sıradaki numarayı al — henüz numarası olmayan bir ürün için.',
+    materialNumberNextFailed: 'Malzeme numarası verilemedi.',
     materialNumberHelp: 'Dahili satın alma numarası - bu ürünün tüm makaraları tarafından paylaşılır. Aynı ürünün yeni makaraları bu numarayı devralır.',
     materialNumberNone: 'Malzeme numarası yok',
     suppliers: {

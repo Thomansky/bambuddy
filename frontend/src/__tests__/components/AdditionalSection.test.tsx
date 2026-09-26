@@ -1,6 +1,9 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { http, HttpResponse } from 'msw';
+import { server } from '../mocks/server';
 import { render } from '../utils';
 import { AdditionalSection } from '../../components/spool-form/AdditionalSection';
 import { defaultFormData } from '../../components/spool-form/types';
@@ -55,6 +58,39 @@ describe('AdditionalSection', () => {
     // whose value would be silently dropped.
     render(<AdditionalSection {...baseProps} spoolmanMode={true} />);
     expect(screen.queryByText('inventory.materialNumber')).toBeNull();
+  });
+
+  describe('material number from the series', () => {
+    // The number names a product; a spool of a known product inherits it. So
+    // the series is a deliberate click for a product that has none, and the
+    // button only exists while the series is switched on.
+    const series = (enabled: boolean) => [
+      { key: 'material', enabled, prefix: '', suffix: '', next_value: 77, padding: 0 },
+    ];
+
+    it('offers the next free number while the series is on, and fills it in', async () => {
+      const updateField = vi.fn();
+      server.use(
+        http.get('/api/v1/number-series/', () => HttpResponse.json(series(true))),
+        http.post('/api/v1/inventory/material-numbers/next', () => HttpResponse.json({ number: '77' })),
+      );
+      render(<AdditionalSection {...baseProps} updateField={updateField} spoolmanMode={false} />);
+
+      const button = await screen.findByRole('button', { name: /inventory.materialNumberNext/ });
+      await userEvent.click(button);
+
+      await waitFor(() => expect(updateField).toHaveBeenCalledWith('material_number', '77'));
+    });
+
+    it('stays out of the way while the series is off', async () => {
+      server.use(http.get('/api/v1/number-series/', () => HttpResponse.json(series(false))));
+      render(<AdditionalSection {...baseProps} spoolmanMode={false} />);
+
+      // Give the series query a chance to land before asserting absence.
+      await screen.findByText('inventory.materialNumber');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(screen.queryByRole('button', { name: /inventory.materialNumberNext/ })).toBeNull();
+    });
   });
 
   it('offers the VAT basis next to the cost and reports a change', async () => {

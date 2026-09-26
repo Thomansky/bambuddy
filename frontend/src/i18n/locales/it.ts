@@ -2904,6 +2904,8 @@ export default {
     libraryStorageUnsaved: 'Non ancora salvato',
     libraryStorageSaved: 'Salvato',
     libraryAutoscan: 'Tenere allineata la directory',
+    libraryScanOnOpen: 'Aggiornare una cartella quando viene aperta',
+    libraryScanOnOpenHint: 'Ogni volta che una cartella viene aperta nel gestore file, viene confrontata con la directory. Non costa nulla finché nessuno usa Bambuddy.',
     libraryAutoscanHint: 'Ciò che viene spostato o eliminato direttamente nella directory arriva a Bambuddy solo con una scansione. Qui imposti ogni quanto avviene da sola — 0 la disattiva e lascia fare al pulsante.',
     libraryAutoscanUnit: 'minuti (0 = disattivato)',
     libraryStorageScanButton: 'Scansiona ora',
@@ -3169,6 +3171,7 @@ export default {
       project: 'Progetti',
       queueJob: 'Lavori in coda',
       libraryFolder: 'Cartelle ordine',
+      material: 'Numeri materiale',
       enable: 'Assegna numeri',
       prefix: 'Prefisso',
       suffix: 'Suffisso',
@@ -5100,6 +5103,9 @@ export default {
     // Internal material / article number (#2870)
     materialNumber: 'N. materiale',
     materialNumberPlaceholder: 'es. 15',
+    materialNumberNext: 'Prossimo libero',
+    materialNumberNextHint: 'Prendi il prossimo numero dalla serie dei numeri materiale — per un prodotto che non ne ha ancora uno.',
+    materialNumberNextFailed: 'Non è stato possibile assegnare un numero materiale.',
     materialNumberHelp: 'Numero interno di acquisto - condiviso da tutte le bobine di questo prodotto. Le nuove bobine dello stesso prodotto lo ereditano.',
     materialNumberNone: 'Nessun numero materiale',
     suppliers: {

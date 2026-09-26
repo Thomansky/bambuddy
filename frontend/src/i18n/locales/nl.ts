@@ -2976,6 +2976,8 @@ export default {
     libraryStorageUnsaved: 'Nog niet opgeslagen',
     libraryStorageSaved: 'Opgeslagen',
     libraryAutoscan: 'Gelijk houden met de map',
+    libraryScanOnOpen: 'Een map bijwerken bij het openen',
+    libraryScanOnOpenHint: 'Telkens wanneer een map in de bestandsbeheerder wordt geopend, wordt die met de map op schijf vergeleken. Kost niets zolang niemand Bambuddy gebruikt.',
     libraryAutoscanHint: 'Wat direct in de map wordt verplaatst of verwijderd, bereikt Bambuddy alleen via een scan. Hier stel je in hoe vaak dat vanzelf gebeurt — 0 zet het uit en laat het aan de knop.',
     libraryAutoscanUnit: 'minuten (0 = uit)',
     libraryStorageScanButton: 'Nu scannen',
@@ -3206,6 +3208,7 @@ export default {
       project: 'Projecten',
       queueJob: 'Wachtrijtaken',
       libraryFolder: 'Ordermappen',
+      material: 'Materiaalnummers',
       enable: 'Nummers uitgeven',
       prefix: 'Voorvoegsel',
       suffix: 'Achtervoegsel',
@@ -5154,6 +5157,9 @@ export default {
     // Internal material / article number (#2870)
     materialNumber: 'Materiaalnr.',
     materialNumberPlaceholder: 'bijv. 15',
+    materialNumberNext: 'Volgende vrije',
+    materialNumberNextHint: 'Neem het volgende nummer uit de reeks materiaalnummers — voor een product dat er nog geen heeft.',
+    materialNumberNextFailed: 'Er kon geen materiaalnummer worden uitgegeven.',
     materialNumberHelp: 'Intern inkoopnummer - gedeeld door alle spoelen van dit product. Nieuwe spoelen van hetzelfde product nemen het over.',
     materialNumberNone: 'Geen materiaalnummer',
     // Supplier assignments on the spool (#2988)

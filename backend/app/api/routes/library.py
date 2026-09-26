@@ -1885,6 +1885,29 @@ async def get_library_storage_migration_plan(
     return {"storage_path": str(root), **plan.as_dict()}
 
 
+@router.post("/folders/{folder_id}/refresh")
+async def refresh_library_folder(
+    folder_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: tuple[User | None, bool] = Depends(
+        require_ownership_permission(
+            Permission.LIBRARY_READ_ALL,
+            Permission.LIBRARY_READ_OWN,
+        )
+    ),
+):
+    """Bring a folder of the library's directory tree up to date on opening it.
+
+    Called by the File Manager when a folder is entered. A read permission is
+    enough, because nothing the user did here changes anything: the rows are
+    brought in line with what is already on the share. Throttled per folder,
+    and a no-op outside directory mode.
+    """
+    from backend.app.services.library_autoscan import refresh_folder_on_open
+
+    return await refresh_folder_on_open(db, folder_id)
+
+
 @router.post("/storage/scan")
 async def scan_library_storage(
     db: AsyncSession = Depends(get_db),

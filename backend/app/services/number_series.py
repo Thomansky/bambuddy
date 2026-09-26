@@ -26,10 +26,20 @@ SERIES_QUEUE_JOB = "queue_job"
 # number is the one the project inherits when the order is placed, so the
 # enquiry, the quote, the print and the invoice all read the same.
 SERIES_LIBRARY_FOLDER = "library_folder"
+# The material number a spool is costed by (#2870). Unlike the other series it
+# numbers a *product*, not a spool: every spool of the same product shares it,
+# and inheritance already fills it for a product that has one. So this series
+# is drawn from on request, for a product that is new, never on every create.
+SERIES_MATERIAL = "material"
 
 # The series every install starts with. Seeded disabled so nothing changes for
 # an existing install until someone turns one on.
-DEFAULT_SERIES_KEYS: tuple[str, ...] = (SERIES_PROJECT, SERIES_QUEUE_JOB, SERIES_LIBRARY_FOLDER)
+DEFAULT_SERIES_KEYS: tuple[str, ...] = (
+    SERIES_PROJECT,
+    SERIES_QUEUE_JOB,
+    SERIES_LIBRARY_FOLDER,
+    SERIES_MATERIAL,
+)
 
 # Width of projects.number / library_folders.number / print_queue.job_number /
 # print_archives.job_number.

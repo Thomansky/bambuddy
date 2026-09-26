@@ -2956,6 +2956,8 @@ export default {
     libraryStorageUnsaved: 'Noch nicht gespeichert',
     libraryStorageSaved: 'Gespeichert',
     libraryAutoscan: 'Mit dem Verzeichnis abgleichen',
+    libraryScanOnOpen: 'Ordner beim Öffnen abgleichen',
+    libraryScanOnOpenHint: 'Sobald du im Dateimanager einen Ordner öffnest, wird er mit dem Verzeichnis abgeglichen. Kostet nichts, solange niemand mit Bambuddy arbeitet.',
     libraryAutoscanHint: 'Was direkt im Verzeichnis verschoben oder gelöscht wird, erfährt Bambuddy nur durch einen Scan. Hier stellst du ein, wie oft das von selbst passiert — 0 schaltet es ab und überlässt es dem Knopf.',
     libraryAutoscanUnit: 'Minuten (0 = aus)',
     libraryStorageScanButton: 'Jetzt scannen',
@@ -3183,6 +3185,7 @@ export default {
       project: 'Projekte',
       queueJob: 'Druckaufträge',
       libraryFolder: 'Auftragsordner',
+      material: 'Materialnummern',
       enable: 'Nummern vergeben',
       prefix: 'Präfix',
       suffix: 'Suffix',
@@ -5114,6 +5117,9 @@ export default {
     // Internal material / article number (#2870)
     materialNumber: 'Material-Nr.',
     materialNumberPlaceholder: 'z. B. 15',
+    materialNumberNext: 'Nächste freie',
+    materialNumberNextHint: 'Nächste Nummer aus dem Nummernkreis für Materialnummern holen — für ein Produkt, das noch keine hat.',
+    materialNumberNextFailed: 'Es konnte keine Materialnummer vergeben werden.',
     materialNumberHelp: 'Interne Einkaufsnummer - wird von allen Spulen dieses Produkts geteilt. Neue Spulen desselben Produkts übernehmen sie.',
     materialNumberNone: 'Keine Materialnummer',
     // Supplier assignments on the spool (#2988)

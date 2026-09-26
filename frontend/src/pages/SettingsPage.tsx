@@ -1326,6 +1326,7 @@ export function SettingsPage() {
       (baseline.library_root_view ?? 'all') !== (localSettings.library_root_view ?? 'all') ||
       (baseline.webdav_mode ?? 'off') !== (localSettings.webdav_mode ?? 'off') ||
       Number(baseline.library_autoscan_minutes ?? 0) !== Number(localSettings.library_autoscan_minutes ?? 0) ||
+      (baseline.library_scan_on_open ?? true) !== (localSettings.library_scan_on_open ?? true) ||
       (baseline.preferred_slicer ?? 'bambu_studio') !== (localSettings.preferred_slicer ?? 'bambu_studio') ||
       resolveEngine(baseline.slice_engine) !== resolveEngine(localSettings.slice_engine) ||
       (baseline.open_in_slicer ?? null) !== (localSettings.open_in_slicer ?? null) ||
@@ -1452,6 +1453,7 @@ export function SettingsPage() {
         library_root_view: localSettings.library_root_view,
         webdav_mode: localSettings.webdav_mode,
         library_autoscan_minutes: localSettings.library_autoscan_minutes,
+        library_scan_on_open: localSettings.library_scan_on_open,
         preferred_slicer: localSettings.preferred_slicer,
         slice_engine: localSettings.slice_engine,
         open_in_slicer: localSettings.open_in_slicer,
@@ -2980,6 +2982,20 @@ export function SettingsPage() {
                         share is real network IO. */}
                     <div className="border-t border-bambu-dark-tertiary pt-2 mt-2 space-y-2">
                       <p className="text-white text-sm">{t('settings.libraryAutoscan')}</p>
+                      {/* The cheap one first: only the folder being looked at,
+                          only when it is, never while nobody uses Bambuddy. */}
+                      <label className="flex items-start gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={localSettings.library_scan_on_open ?? true}
+                          onChange={(e) => updateSetting('library_scan_on_open', e.target.checked)}
+                          className="accent-bambu-green mt-1 flex-shrink-0"
+                        />
+                        <span className="min-w-0">
+                          <span className="block text-white text-sm">{t('settings.libraryScanOnOpen')}</span>
+                          <span className="block text-xs text-bambu-gray">{t('settings.libraryScanOnOpenHint')}</span>
+                        </span>
+                      </label>
                       <p className="text-xs text-bambu-gray">{t('settings.libraryAutoscanHint')}</p>
                       <div className="flex items-center gap-2 flex-wrap">
                         <input

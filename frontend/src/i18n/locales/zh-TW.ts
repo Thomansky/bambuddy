@@ -2948,6 +2948,8 @@ export default {
     libraryStorageUnsaved: '尚未儲存',
     libraryStorageSaved: '已儲存',
     libraryAutoscan: '與目錄保持一致',
+    libraryScanOnOpen: '開啟資料夾時同步',
+    libraryScanOnOpenHint: '每次在檔案管理員中開啟資料夾時，都會與目錄比對。沒人使用 Bambuddy 時不產生任何負擔。',
     libraryAutoscanHint: '直接在目錄裡移動或刪除的內容，只有透過掃描才會傳到 Bambuddy。在這裡設定自動掃描的間隔，0 表示關閉，只用按鈕手動掃描。',
     libraryAutoscanUnit: '分鐘（0 = 關閉）',
     libraryStorageScanButton: '立即掃描',
@@ -3168,6 +3170,7 @@ export default {
       project: '專案',
       queueJob: '佇列工作',
       libraryFolder: '訂單資料夾',
+      material: '材料編號',
       enable: '分配編號',
       prefix: '前綴',
       suffix: '後綴',
@@ -5099,6 +5102,9 @@ export default {
     // Internal material / article number (#2870)
     materialNumber: '料號',
     materialNumberPlaceholder: '例如：15',
+    materialNumberNext: '下一個空閒',
+    materialNumberNextHint: '從材料編號序列中取下一個編號——用於尚無編號的產品。',
+    materialNumberNextFailed: '無法分配材料編號。',
     materialNumberHelp: '內部採購編號 — 同一產品的所有料盤共用。同一產品的新料盤會自動繼承。',
     materialNumberNone: '無料號',
     suppliers: {

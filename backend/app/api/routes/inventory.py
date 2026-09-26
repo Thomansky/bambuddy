@@ -68,7 +68,7 @@ from backend.app.services.location_service import (
     prepare_internal_spool_payload,
     rename_location as rename_location_record,
 )
-from backend.app.services.material_number import apply_material_number_inheritance
+from backend.app.services.material_number import apply_material_number_inheritance, material_number_taken
 from backend.app.services.slicer_filament_resolver import resolve_slicer_filament
 from backend.app.services.slot_nozzle import resolve_slot_nozzle
 from backend.app.services.spool_csv import (
@@ -2520,6 +2520,46 @@ async def get_spool_usage_history(
         .limit(limit)
     )
     return list(result.scalars().all())
+
+
+@router.post("/material-numbers/next")
+async def next_material_number(
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_UPDATE),
+):
+    """Hand out the next material number for a product that has none yet.
+
+    Taken on request from the spool form rather than on every create: the
+    number names a product, and a new spool of a known product already gets
+    its number through inheritance. Drawing here consumes the number even if
+    the form is then cancelled — a gap in the series is harmless, handing the
+    same number to two products is not.
+    """
+    from backend.app.models.number_series import NumberSeries
+    from backend.app.services.number_series import (
+        SERIES_MATERIAL,
+        NumbersAlreadyInUse,
+        allocate_unused_number,
+    )
+
+    series = (await db.execute(select(NumberSeries).where(NumberSeries.key == SERIES_MATERIAL))).scalar_one_or_none()
+    if series is None or not series.enabled:
+        raise HTTPException(
+            status_code=409,
+            detail="The material number series is off — turn it on under Settings → Number series",
+        )
+    try:
+        number = await allocate_unused_number(db, SERIES_MATERIAL, lambda n: material_number_taken(db, n))
+    except NumbersAlreadyInUse as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"The material number series has run into numbers that are already in use "
+                f"(last tried '{exc.last_tried}') — raise its next number in Settings"
+            ),
+        ) from None
+    await db.commit()
+    return {"number": number}
 
 
 @router.get("/stats/material-numbers", response_model=list[MaterialNumberStats])

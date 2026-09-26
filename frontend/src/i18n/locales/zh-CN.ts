@@ -2948,6 +2948,8 @@ export default {
     libraryStorageUnsaved: '尚未保存',
     libraryStorageSaved: '已保存',
     libraryAutoscan: '与目录保持一致',
+    libraryScanOnOpen: '打开文件夹时同步',
+    libraryScanOnOpenHint: '每次在文件管理器中打开文件夹时，都会与目录比对。没人使用 Bambuddy 时不产生任何开销。',
     libraryAutoscanHint: '直接在目录里移动或删除的内容，只有通过扫描才会传到 Bambuddy。在这里设置自动扫描的间隔，0 表示关闭，只用按钮手动扫描。',
     libraryAutoscanUnit: '分钟（0 = 关闭）',
     libraryStorageScanButton: '立即扫描',
@@ -3168,6 +3170,7 @@ export default {
       project: '项目',
       queueJob: '队列作业',
       libraryFolder: '订单文件夹',
+      material: '材料编号',
       enable: '分配编号',
       prefix: '前缀',
       suffix: '后缀',
@@ -5099,6 +5102,9 @@ export default {
     // Internal material / article number (#2870)
     materialNumber: '物料号',
     materialNumberPlaceholder: '例如 15',
+    materialNumberNext: '下一个空闲',
+    materialNumberNextHint: '从材料编号序列中取下一个编号——用于尚无编号的产品。',
+    materialNumberNextFailed: '无法分配材料编号。',
     materialNumberHelp: '内部采购编号 — 同一产品的所有料盘共用。同一产品的新料盘会自动继承。',
     materialNumberNone: '无物料号',
     suppliers: {

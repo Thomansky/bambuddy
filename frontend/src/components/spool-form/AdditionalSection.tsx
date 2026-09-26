@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { Scale } from 'lucide-react';
+import { Hash, Loader2, Scale } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useQuery } from '@tanstack/react-query';
 import { useToast } from '../../contexts/ToastContext';
+import { api } from '../../api/client';
 import type { AdditionalSectionProps } from './types';
 
 function SpoolWeightPicker({
@@ -183,6 +185,27 @@ export function AdditionalSection({
 }: AdditionalSectionProps) {
   const { t } = useTranslation();
   const { showToast } = useToast();
+  // The material series, if it is switched on. The button only appears then:
+  // a control that answers "the series is off" on every click is noise.
+  const { data: numberSeries } = useQuery({
+    queryKey: ['number-series'],
+    queryFn: api.getNumberSeries,
+    enabled: !spoolmanMode,
+    staleTime: 60_000,
+  });
+  const materialSeriesOn = Boolean(numberSeries?.some((series) => series.key === 'material' && series.enabled));
+  const [drawingNumber, setDrawingNumber] = useState(false);
+  const drawMaterialNumber = async () => {
+    setDrawingNumber(true);
+    try {
+      const { number } = await api.nextMaterialNumber();
+      updateField('material_number', number);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t('inventory.materialNumberNextFailed'), 'error');
+    } finally {
+      setDrawingNumber(false);
+    }
+  };
   const [measuredInput, setMeasuredInput] = useState('');
   const [isMeasuredFocused, setIsMeasuredFocused] = useState(false);
   const [remainingInput, setRemainingInput] = useState('');
@@ -346,16 +369,33 @@ export function AdditionalSection({
         <label className="block text-sm font-medium text-bambu-gray mb-1" htmlFor="spool-material-number">
           {t('inventory.materialNumber')}
         </label>
-        <input
-          id="spool-material-number"
-          type="text"
-          list="spool-material-number-options"
-          className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm placeholder:text-bambu-gray/50 focus:outline-none focus:border-bambu-green"
-          placeholder={t('inventory.materialNumberPlaceholder')}
-          value={formData.material_number}
-          maxLength={64}
-          onChange={(e) => updateField('material_number', e.target.value)}
-        />
+        <div className="flex gap-2">
+          <input
+            id="spool-material-number"
+            type="text"
+            list="spool-material-number-options"
+            className="flex-1 min-w-0 px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm placeholder:text-bambu-gray/50 focus:outline-none focus:border-bambu-green"
+            placeholder={t('inventory.materialNumberPlaceholder')}
+            value={formData.material_number}
+            maxLength={64}
+            onChange={(e) => updateField('material_number', e.target.value)}
+          />
+          {/* For a product that has no number yet. A spool of a known product
+              already gets its number through inheritance, so this is a
+              deliberate click, never something the form does by itself. */}
+          {materialSeriesOn && (
+            <button
+              type="button"
+              onClick={drawMaterialNumber}
+              disabled={drawingNumber}
+              title={t('inventory.materialNumberNextHint')}
+              className="shrink-0 inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-bambu-dark-tertiary text-white text-sm hover:bg-bambu-dark-quaternary disabled:opacity-50"
+            >
+              {drawingNumber ? <Loader2 className="w-4 h-4 animate-spin" /> : <Hash className="w-4 h-4" />}
+              {t('inventory.materialNumberNext')}
+            </button>
+          )}
+        </div>
         {availableMaterialNumbers.length > 0 && (
           <datalist id="spool-material-number-options">
             {availableMaterialNumbers.map((n) => <option key={n} value={n} />)}

@@ -2977,6 +2977,8 @@ export default {
     libraryStorageUnsaved: 'Not saved yet',
     libraryStorageSaved: 'Saved',
     libraryAutoscan: 'Keep in step with the directory',
+    libraryScanOnOpen: 'Bring a folder up to date when it is opened',
+    libraryScanOnOpenHint: 'Whenever a folder is opened in the File Manager, it is compared with the directory. Costs nothing while nobody is using Bambuddy.',
     libraryAutoscanHint: 'Anything moved or deleted directly in the directory only reaches Bambuddy through a scan. Set how often that should happen by itself — 0 turns it off and leaves it to the button.',
     libraryAutoscanUnit: 'minutes (0 = off)',
     libraryStorageScanButton: 'Scan now',
@@ -3207,6 +3209,7 @@ export default {
       project: 'Projects',
       queueJob: 'Queue jobs',
       libraryFolder: 'Order folders',
+      material: 'Material numbers',
       enable: 'Hand out numbers',
       prefix: 'Prefix',
       suffix: 'Suffix',
@@ -5157,6 +5160,9 @@ export default {
     // Internal material / article number (#2870)
     materialNumber: 'Material No.',
     materialNumberPlaceholder: 'e.g. 15',
+    materialNumberNext: 'Next free',
+    materialNumberNextHint: 'Take the next number from the material number series — for a product that has none yet.',
+    materialNumberNextFailed: 'No material number could be drawn.',
     materialNumberHelp: 'Internal purchasing number — shared by all spools of this product. New spools of the same product inherit it.',
     materialNumberNone: 'No material number',
     // Supplier assignments on the spool (#2988)
