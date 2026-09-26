@@ -78,6 +78,7 @@ from backend.app.services.design_settings import (
 from backend.app.services.filament_requirements import annotate_rack_groups
 from backend.app.services.pdf_thumbnail import generate_pdf_thumbnail
 from backend.app.services.plate_thumbnail import inject_plate_thumbnails_if_missing
+from backend.app.services.print_confirmation import confirm_outcome_for_new_queue_item
 from backend.app.services.process_overrides import apply_process_overrides
 from backend.app.services.slice_output_check import (
     missing_start_gcode_message,
@@ -2972,6 +2973,10 @@ async def add_files_to_queue(
     pos_result = await db.execute(select(func.coalesce(func.max(PrintQueueItem.position), 0)))
     max_position = pos_result.scalar() or 0
 
+    # There is no per-job ask-for-outcome toggle on a bulk add, so the rows take
+    # the same default the print dialog seeds itself from (#1898).
+    confirm_outcome = await confirm_outcome_for_new_queue_item(db)
+
     for file_id in request.file_ids:
         lib_file = files.get(file_id)
 
@@ -3065,6 +3070,7 @@ async def add_files_to_queue(
                 or (folder_projects.get(lib_file.folder_id) if lib_file.folder_id is not None else None),
                 position=max_position,
                 status="pending",
+                confirm_outcome=confirm_outcome,
                 # Without this the row is ownerless, and `queue:read_own` filters
                 # on `created_by_id` — so the user who queued the file could not
                 # see it in their own queue.

@@ -129,6 +129,22 @@ def normalize_str_setting(key: str, value: object) -> str:
     raise HTTPException(400, f"{key} must be a string; got {type(value).__name__}")
 
 
+async def get_external_base_url(db: AsyncSession) -> str:
+    """Base URL for links Bambuddy hands to the outside world (no trailing slash).
+
+    ``external_url`` is optional and has no default, so anything that must be
+    absolute — a login link in an e-mail, the one-tap outcome verdict links
+    (#1898), whose Telegram/ntfy buttons are dropped for a relative URL — falls
+    back to APP_URL and finally to the dev origin.
+    """
+    import os
+
+    external_url = await get_setting(db, "external_url")
+    if external_url:
+        return external_url.rstrip("/")
+    return os.environ.get("APP_URL", "http://localhost:5173").rstrip("/")
+
+
 async def get_external_login_url(db: AsyncSession) -> str:
     """Get the external URL for the login page.
 
@@ -140,14 +156,7 @@ async def get_external_login_url(db: AsyncSession) -> str:
     Returns:
         Full URL to the login page
     """
-    import os
-
-    external_url = await get_setting(db, "external_url")
-    if external_url:
-        external_url = external_url.rstrip("/")
-    else:
-        external_url = os.environ.get("APP_URL", "http://localhost:5173")
-    return external_url + "/login"
+    return await get_external_base_url(db) + "/login"
 
 
 async def set_setting(db: AsyncSession, key: str, value: str) -> None:
@@ -199,6 +208,9 @@ async def _build_settings_response(db: AsyncSession, is_api_key: bool = False) -
             "default_vibration_cali",
             "default_layer_inspect",
             "default_timelapse",
+            "default_confirm_outcome",
+            "confirm_outcome_external_prints",
+            "confirm_default_good_on_plate_clear",
             "billing_enabled",
             "printer_kill_switch_enabled",
             "ldap_enabled",

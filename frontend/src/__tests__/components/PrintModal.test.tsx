@@ -1611,6 +1611,93 @@ describe('PrintModal', () => {
       expect(capturedBody?.cleanup_library_after_dispatch).toBeUndefined();
     });
   });
+
+  describe('ask-for-outcome pill (#1898 follow-up)', () => {
+    // The pill outside the collapsed Print Options panel and the row inside it
+    // edit the same printOptions.confirm_outcome, so flipping either must be
+    // reflected by the other and land in the submitted payload.
+    // Both carry the label "Ask for Outcome"; the pill is the only button with
+    // that name, the panel row is found through its description text.
+    const pill = () => screen.getByRole('button', { name: 'Ask for Outcome' });
+    const panelRowDesc = 'Ask whether the print came out well after it completes';
+    const panelRow = () => screen.getByText(panelRowDesc).closest('div')!.parentElement!;
+
+    it('starts off and toggles on a click', async () => {
+      const user = userEvent.setup();
+      render(
+        <PrintModal mode="create" archiveId={1} archiveName="Benchy" initialSelectedPrinterIds={[1]} onClose={mockOnClose} />
+      );
+
+      expect(pill()).toHaveAttribute('aria-pressed', 'false');
+      await user.click(pill());
+      expect(pill()).toHaveAttribute('aria-pressed', 'true');
+    });
+
+    it('shares its state with the row inside Print Options', async () => {
+      const user = userEvent.setup();
+      render(
+        <PrintModal mode="create" archiveId={1} archiveName="Benchy" initialSelectedPrinterIds={[1]} onClose={mockOnClose} />
+      );
+
+      await user.click(pill());
+      // The panel opens expanded when a printer is preselected; expand otherwise.
+      if (!screen.queryByText(panelRowDesc)) await user.click(screen.getByText('Print Options'));
+      const row = panelRow();
+      expect(within(row).getByRole('button', { name: 'On' })).toHaveClass('bg-bambu-green');
+
+      await user.click(within(row).getByRole('button', { name: 'Off' }));
+      expect(pill()).toHaveAttribute('aria-pressed', 'false');
+    });
+
+    it('submits confirm_outcome=true with the queue item when turned on', async () => {
+      let capturedBody: Record<string, unknown> | null = null;
+      server.use(
+        http.post('/api/v1/queue/', async ({ request }) => {
+          capturedBody = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json({ id: 1, status: 'pending' });
+        }),
+      );
+
+      const user = userEvent.setup();
+      render(
+        <PrintModal mode="create" archiveId={1} archiveName="Benchy" initialSelectedPrinterIds={[1]} onClose={mockOnClose} />
+      );
+
+      await user.click(pill());
+      await user.click(document.querySelector('button[type="submit"]') as HTMLElement);
+
+      await waitFor(() => expect(capturedBody).not.toBeNull());
+      expect(capturedBody!.confirm_outcome).toBe(true);
+    });
+
+    it('reflects the queue item value in edit mode and saves the change', async () => {
+      let capturedBody: Record<string, unknown> | null = null;
+      server.use(
+        http.patch('/api/v1/queue/:id', async ({ request }) => {
+          capturedBody = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json({ id: 1, status: 'pending' });
+        }),
+      );
+
+      const user = userEvent.setup();
+      render(
+        <PrintModal
+          mode="edit-queue-item"
+          archiveId={1}
+          archiveName="Test Print"
+          queueItem={createMockQueueItem({ confirm_outcome: true })}
+          onClose={mockOnClose}
+        />
+      );
+
+      expect(pill()).toHaveAttribute('aria-pressed', 'true');
+      await user.click(pill());
+      await user.click(screen.getByRole('button', { name: /save/i }));
+
+      await waitFor(() => expect(capturedBody).not.toBeNull());
+      expect(capturedBody!.confirm_outcome).toBe(false);
+    });
+  });
 });
 
 

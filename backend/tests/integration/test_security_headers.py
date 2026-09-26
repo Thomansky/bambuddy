@@ -137,6 +137,24 @@ async def test_overlay_route_allows_same_origin_framing(async_client: AsyncClien
 
 @pytest.mark.asyncio
 @pytest.mark.integration
+async def test_connect_authorize_allows_same_origin_framing(async_client: AsyncClient, monkeypatch):
+    """A connected app opened from the sidebar signs in inside Bambuddy's iframe.
+
+    Its "Sign in with Bambuddy" navigates that iframe to /connect/authorize;
+    with 'none' the browser refused to render the consent page there. 'self'
+    still refuses any foreign framer.
+    """
+    from backend.app import main as main_module
+
+    monkeypatch.setattr(main_module, "_TRUSTED_FRAME_ORIGINS", ())
+
+    resp = await async_client.get("/connect/authorize?client_id=x")
+    assert "frame-ancestors 'self';" in resp.headers.get("Content-Security-Policy", "")
+    assert resp.headers.get("X-Frame-Options") == "SAMEORIGIN"
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
 async def test_other_spa_routes_still_refuse_all_framing(async_client: AsyncClient, monkeypatch):
     """The #1422 carve-out is the overlay path only — everything else keeps
     'none', including paths that merely start with something similar."""
@@ -144,7 +162,16 @@ async def test_other_spa_routes_still_refuse_all_framing(async_client: AsyncClie
 
     monkeypatch.setattr(main_module, "_TRUSTED_FRAME_ORIGINS", ())
 
-    for path in ("/", "/settings", "/printers", "/overlays", "/camwall"):
+    for path in (
+        "/",
+        "/settings",
+        "/printers",
+        "/overlays",
+        "/camwall",
+        "/connect",
+        "/connect/authorize/x",
+        "/connect/other",
+    ):
         resp = await async_client.get(path)
         csp = resp.headers.get("Content-Security-Policy", "")
         assert "frame-ancestors 'none'" in csp, f"{path} must not be framable"

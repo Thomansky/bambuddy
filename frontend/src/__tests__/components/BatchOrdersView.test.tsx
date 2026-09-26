@@ -55,6 +55,8 @@ const batch = (over: Partial<PrintBatch> = {}): PrintBatch => {
   project_id: null,
   due_date: null,
   notes: null,
+  external_source: null,
+  external_ref: null,
   pending_count: 0,
   printing_count: 0,
   completed_count: 0,
