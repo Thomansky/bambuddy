@@ -9695,7 +9695,15 @@ async def security_headers_middleware(request, call_next):
         # overlay — Home Assistant on another port — remains what
         # TRUSTED_FRAME_ORIGINS is for, and _frame_ancestors already folds that
         # allowlist in.
-        embeddable_same_origin = request.url.path.startswith("/overlay/")
+        #
+        # The connected-app consent page (/connect/authorize) gets the same
+        # 'self': an app opened from Bambuddy's sidebar runs in an iframe, and
+        # its "Sign in with Bambuddy" navigates that iframe to this page. With
+        # 'none' the browser refuses to show it even inside Bambuddy. 'self'
+        # requires every ancestor to be this origin, so a foreign page -- a
+        # sidebar link's site included -- still cannot frame the consent
+        # screen to bait a click.
+        embeddable_same_origin = request.url.path.startswith("/overlay/") or request.url.path == "/connect/authorize"
         # 'wasm-unsafe-eval' permits WebAssembly compilation ONLY — it does
         # not allow eval()/Function() for JS, unlike 'unsafe-eval'. Needed by
         # the STEP preview, which triangulates in the browser via OpenCascade
