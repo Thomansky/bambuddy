@@ -127,7 +127,12 @@ class PrintArchive(Base):
     # capability was spent — a verdict changed later in the app must not be
     # dated by that older event.
     user_verdict_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    confirm_requested: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    # Nullable to match the ALTER that adds it to an existing install: a fresh
+    # database would otherwise get NOT NULL while an upgraded one gets a
+    # nullable column, and the two would disagree about the same table. The
+    # default still means every row written by Bambuddy is True or False; only
+    # `is_(True)` and truthiness read it, both of which treat NULL as off.
+    confirm_requested: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False, server_default="0")
     # Indexed and unique: the one-tap route is reachable with no credential
     # at all, so an unindexed lookup would let anyone turn a stream of
     # garbage tokens into a stream of full scans of this table. Uniqueness

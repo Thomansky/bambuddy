@@ -89,6 +89,36 @@ def test_the_model_declares_the_index():
 
 
 @pytest.mark.asyncio
+async def test_confirm_requested_is_nullable_on_both_kinds_of_install(tmp_path):
+    """A fresh database and an upgraded one must describe the column the same way.
+
+    ``ALTER TABLE ... ADD COLUMN confirm_requested BOOLEAN DEFAULT FALSE`` cannot
+    carry NOT NULL, so an upgraded install has a nullable column. The model has
+    to agree, or every install created from it has a stricter table than every
+    install that grew into it -- and the difference only ever shows up as an
+    IntegrityError on somebody else's machine.
+    """
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'confirm-nullable.db'}")
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+            def notnull(rows):
+                return {row[1]: row[3] for row in rows}
+
+            fresh = notnull((await conn.execute(text("PRAGMA table_info(print_archives)"))).all())
+            assert fresh["confirm_requested"] == 0
+
+            # ...and the column an upgrade adds, for comparison.
+            await conn.execute(text("ALTER TABLE print_archives DROP COLUMN confirm_requested"))
+            await run_migrations(conn)
+            upgraded = notnull((await conn.execute(text("PRAGMA table_info(print_archives)"))).all())
+            assert upgraded["confirm_requested"] == fresh["confirm_requested"]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_the_confirm_token_index_reaches_an_upgraded_install(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'confirm-token-index.db'}")
     try:

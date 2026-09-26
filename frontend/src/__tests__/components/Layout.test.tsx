@@ -793,6 +793,84 @@ describe('Layout', () => {
       expect(window.location.search).toBe('?confirm=not-an-id');
     });
 
+    // Round 4: the dialog's only outcome for a user who may not record a
+    // verdict is a 403 from the PATCH, so it is gated like plate-not-empty —
+    // on archives:update_all / archives:update_own, the names the June
+    // permission migration left in the default groups.
+    describe('without permission to record a verdict', () => {
+      const withPermissions = (permissions: string[]) => {
+        server.use(
+          http.get('/api/v1/auth/status', () =>
+            HttpResponse.json({ auth_enabled: true, requires_setup: false }),
+          ),
+          http.get('/api/v1/auth/me', () =>
+            HttpResponse.json({
+              id: 1,
+              username: 'tester',
+              role: 'user',
+              is_active: true,
+              is_admin: false,
+              groups: [{ id: 2, name: 'Standard Users' }],
+              permissions,
+              created_at: '2026-01-01T00:00:00Z',
+            }),
+          ),
+        );
+        // localStorage is a mock in this suite, so the token goes through the
+        // client the way the app sets it — AuthProvider will not fetch
+        // /auth/me without one, and the permissions would stay empty.
+        setAuthToken('test-token');
+      };
+
+      afterEach(() => {
+        setAuthToken(null);
+      });
+
+      it('ignores the event', async () => {
+        withPermissions(['archives:read_all']);
+        render(<Layout />);
+
+        await waitFor(() => {
+          expect(document.querySelector('aside')).toBeInTheDocument();
+        });
+        window.dispatchEvent(
+          new CustomEvent('print-confirm-request', { detail: { archive_id: 42 } })
+        );
+
+        await waitFor(() => {
+          expect(screen.queryByTestId('confirm-outcome-dialog')).toBeNull();
+        });
+      });
+
+      it('consumes the deep link without opening anything', async () => {
+        withPermissions(['archives:read_all']);
+        window.history.replaceState({}, '', '/archives?confirm=42');
+
+        render(<Layout />);
+
+        // The parameter still goes: a link that can open nothing should not
+        // survive a reload either.
+        await waitFor(() => {
+          expect(window.location.search).toBe('');
+        });
+        expect(screen.queryByTestId('confirm-outcome-dialog')).toBeNull();
+      });
+
+      it('opens for a user who may update their own archives', async () => {
+        withPermissions(['archives:read_own', 'archives:update_own']);
+        render(<Layout />);
+
+        await waitFor(() => {
+          expect(document.querySelector('aside')).toBeInTheDocument();
+        });
+        window.dispatchEvent(
+          new CustomEvent('print-confirm-request', { detail: { archive_id: 42 } })
+        );
+
+        expect(await screen.findByTestId('confirm-outcome-dialog')).toBeInTheDocument();
+      });
+    });
+
     it('still opens from the WebSocket event, which carries no URL', async () => {
       render(<Layout />);
 

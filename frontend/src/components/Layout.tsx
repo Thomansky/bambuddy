@@ -101,7 +101,7 @@ export function Layout() {
   // catalog fetched — and cached HSL-fallback color names during their first
   // render — refresh with the real catalog names. See #857.
   useColorCatalogVersion();
-  const { user, authEnabled, logout, hasPermission } = useAuth();
+  const { user, authEnabled, logout, hasPermission, hasAnyPermission, loading: authLoading } = useAuth();
   const { showToast } = useToast();
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
   const [changePasswordData, setChangePasswordData] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
@@ -465,8 +465,13 @@ export function Layout() {
   }, [hasPermission]);
 
   // A completed print asked for its outcome verdict (#1898). Same CustomEvent
-  // relay as plate-not-empty; the dialog itself checks nothing permission-wise
-  // beyond what the PATCH route enforces server-side.
+  // relay as plate-not-empty, and gated the same way: the PATCH route decides
+  // who may record a verdict, so a user who cannot should not be handed a
+  // dialog whose only outcome is a 403.
+  // Held until the auth state has landed: while it is loading, `authEnabled`
+  // is still false and every permission check answers yes, which would open
+  // the dialog for exactly the user this gate exists to spare.
+  const canConfirmOutcome = !authLoading && hasAnyPermission('archives:update_all', 'archives:update_own');
   useEffect(() => {
     const handleConfirmRequest = (event: Event) => {
       const detail = (event as CustomEvent).detail;
@@ -1058,7 +1063,13 @@ export function Layout() {
       )}
 
       {/* Post-print outcome confirmation (#1898) */}
-      {confirmOutcomeArchiveId !== null && (
+      {/* The dialog's only outcome for a user who may not record a verdict is
+          a 403 from the PATCH, so it is gated on the permissions that route
+          enforces — the names the June migration left in the default groups.
+          Gated on the render rather than on the two ways a request arrives:
+          one of them can land before /auth/me has answered, and a check made
+          then would drop it for everybody. */}
+      {canConfirmOutcome && confirmOutcomeArchiveId !== null && (
         <ConfirmOutcomeDialog
           archiveId={confirmOutcomeArchiveId}
           onClose={() => setConfirmOutcomeArchiveId(null)}

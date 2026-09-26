@@ -378,7 +378,9 @@ def archive_to_response(
         "user_verdict": archive.user_verdict,
         "user_verdict_source": archive.user_verdict_source,
         "user_verdict_at": archive.user_verdict_at,
-        "confirm_requested": archive.confirm_requested,
+        # bool() because the column is nullable to match the migration; the
+        # response contract stays a strict bool either way.
+        "confirm_requested": bool(archive.confirm_requested),
         "quantity": archive.quantity,
         "energy_kwh": archive.energy_kwh,
         "energy_cost": archive.energy_cost,

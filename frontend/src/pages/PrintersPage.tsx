@@ -2886,8 +2886,12 @@ function PrinterCard({
   // Post-print outcome confirmation (#1898): one-tap "good" from the card,
   // reject goes through the dialog for the optional reason + reprint.
   const [showConfirmOutcome, setShowConfirmOutcome] = useState(false);
+  // Only "good" is answered on the card. A reject wants a reason and possibly
+  // a reprint, so that button opens the dialog instead — and the parameter
+  // says as much, rather than accepting a verdict this path cannot send and
+  // then reporting it as good.
   const cardVerdictMutation = useMutation({
-    mutationFn: (verdict: 'good' | 'reject') =>
+    mutationFn: (verdict: 'good') =>
       api.updateArchive(pendingConfirmArchive!.id, {
         user_verdict: verdict,
         user_verdict_source: 'printer_card',

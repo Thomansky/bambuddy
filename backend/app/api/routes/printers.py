@@ -3540,10 +3540,12 @@ async def clear_plate(
     # #1898: releasing the plate without answering the outcome prompt can
     # count as "good" (opt-in setting) — this is the moment the operator
     # moves on, so an unanswered prompt would otherwise linger unconfirmed.
-    from backend.app.api.routes.settings import get_setting
+    from backend.app.api.routes.settings import get_setting, setting_is_true
 
-    default_good = await get_setting(db, "confirm_default_good_on_plate_clear")
-    if default_good and str(default_good).lower() == "true":
+    # setting_is_true rather than a comparison of our own: one reader deciding
+    # for itself what "on" spells is how two parts of the app end up
+    # disagreeing about the same row.
+    if setting_is_true(await get_setting(db, "confirm_default_good_on_plate_clear")):
         from backend.app.services.print_confirmation import resolve_pending_confirmation_as_good
 
         resolved = await resolve_pending_confirmation_as_good(db, printer_id)
