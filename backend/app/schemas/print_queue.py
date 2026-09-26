@@ -389,6 +389,19 @@ class PrintBatchCreate(BaseModel):
     project_id: int | None = None
     due_date: datetime | None = None
     notes: str | None = None
+    # The external record this batch fulfils, for integrations. ``external_ref``
+    # is unique within ``external_source``: creating a second batch with the
+    # same pair is a 409, which makes a retried create safe.
+    external_source: str | None = Field(default=None, min_length=1, max_length=32, pattern=r"^[a-z0-9_-]+$")
+    external_ref: str | None = Field(default=None, min_length=1, max_length=255)
+
+    @model_validator(mode="after")
+    def _external_link_is_complete(self) -> "PrintBatchCreate":
+        # A ref without its source can't be looked up, and a source without a
+        # ref would escape the uniqueness guarantee (NULLs never collide).
+        if (self.external_source is None) != (self.external_ref is None):
+            raise ValueError("external_source and external_ref must be given together")
+        return self
 
 
 class PrintBatchUpdate(BaseModel):
@@ -465,6 +478,8 @@ class PrintBatchResponse(BaseModel):
     project_id: int | None = None
     due_date: UTCDatetime | None = None
     notes: str | None = None
+    external_source: str | None = None
+    external_ref: str | None = None
     # Derived counts
     pending_count: int = 0
     printing_count: int = 0

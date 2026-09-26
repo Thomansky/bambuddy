@@ -2658,6 +2658,9 @@ export interface PrintBatch {
   project_id: number | null;
   due_date: string | null;
   notes: string | null;
+  /** Set when an integration (e.g. a shop connector) created the batch. */
+  external_source: string | null;
+  external_ref: string | null;
   pending_count: number;
   printing_count: number;
   completed_count: number;
