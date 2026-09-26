@@ -686,4 +686,24 @@ describe('ArchivesPage', () => {
       expect(await screen.findByTestId('confirm-outcome-dialog')).toBeInTheDocument();
     });
   });
+
+  describe('unconfirmed filter', () => {
+    afterEach(() => {
+      window.localStorage.removeItem('archiveFilterUnconfirmed');
+    });
+
+    it('is cleared by Reset like every other top filter', async () => {
+      render(<ArchivesPage />);
+      await screen.findByText('Benchy');
+
+      fireEvent.click(screen.getByTitle('Show only prints still waiting for their outcome verdict'));
+      // Neither fixture archive is waiting for a verdict, so the filter empties the list.
+      await waitFor(() => expect(screen.queryByText('Benchy')).not.toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
+
+      expect(await screen.findByText('Benchy')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Reset' })).not.toBeInTheDocument();
+    });
+  });
 });

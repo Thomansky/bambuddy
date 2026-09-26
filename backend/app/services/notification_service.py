@@ -548,12 +548,14 @@ class NotificationService:
         message: str,
         image_data: bytes | None = None,
         buttons: list[dict] | None = None,
+        link_preview: bool = True,
     ) -> tuple[bool, str]:
         """Send notification via Telegram bot.
 
         ``buttons`` is one row of inline URL buttons (``{"text", "url"}``
         entries), used by the outcome-confirmation event (#1898) to put
-        one-tap Good/Reject under the message.
+        one-tap Good/Reject under the message. ``link_preview=False`` asks
+        Telegram not to fetch the first URL in the text for a preview card.
         """
         bot_token = config.get("bot_token", "").strip()
         chat_id = config.get("chat_id", "").strip()
@@ -606,13 +608,9 @@ class NotificationService:
                 "chat_id": chat_id,
                 "text": message,
                 "parse_mode": "Markdown",
-                # Telegram's servers GET the first URL in the text to build a
-                # preview card. The outcome prompt (#1898) carries single-use
-                # verdict links in its body, so that fetch would answer the
-                # question before the operator saw it. Bambuddy's messages are
-                # status text; a preview card adds nothing to any of them.
-                "disable_web_page_preview": True,
             }
+            if not link_preview:
+                payload["disable_web_page_preview"] = True
             if message_thread_id is not None:
                 payload["message_thread_id"] = message_thread_id
             if with_buttons:
@@ -1091,8 +1089,20 @@ class NotificationService:
                         {"text": "\U0001f44d Good", "url": one_tap_url(_tg_good)},
                         {"text": "\U0001f44e Reject", "url": one_tap_url(_tg_reject)},
                     ]
+                # Telegram's servers GET the first URL in the text to build a
+                # preview card. An outcome prompt whose edited body still
+                # carries {good_url} would have that fetch answer the question
+                # before the operator saw it, so the preview is off for this
+                # event. Only for this one, for the same reason as the Slack
+                # unfurl in _send_webhook: when the finish photo is too large to attach,
+                # the preview is how a {finish_photo_url} in a print_complete
+                # body still shows up as a photo in the chat.
                 return await self._send_telegram(
-                    config, f"*{title}*\n{message}", image_data=image_data, buttons=tg_buttons
+                    config,
+                    f"*{title}*\n{message}",
+                    image_data=image_data,
+                    buttons=tg_buttons,
+                    link_preview=event_type != "print_confirm_request",
                 )
             elif provider.provider_type == "email":
                 # finish_photo_url is pulled from the rendered template variables

@@ -183,7 +183,7 @@ class TestTheOneTapMarkerRidesOnlyOnButtons:
         service = NotificationService()
         captured: dict = {}
 
-        async def _fake_telegram(config, message, image_data=None, buttons=None):
+        async def _fake_telegram(config, message, image_data=None, buttons=None, link_preview=True):
             captured["buttons"] = buttons
             captured["message"] = message
             return True, "ok"
@@ -299,6 +299,7 @@ class TestTelegramDoesNotAskForAPreview:
         ok, _ = await service._send_telegram(
             CONFIG,
             "*How did your print come out?*\nX1C: bracket.3mf\nGood: https://host/api/v1/archives/confirm/tok/good",
+            link_preview=False,
         )
 
         assert ok
@@ -316,8 +317,45 @@ class TestTelegramDoesNotAskForAPreview:
             {"text": "Good", "url": "https://host/api/v1/archives/confirm/tok/good"},
             {"text": "Reject", "url": "https://host/api/v1/archives/confirm/tok/reject"},
         ]
-        ok, _ = await service._send_telegram(CONFIG, "*T*\nbody", buttons=buttons)
+        ok, _ = await service._send_telegram(CONFIG, "*T*\nbody", buttons=buttons, link_preview=False)
 
         assert ok
         assert client.calls[0]["disable_web_page_preview"] is True
         assert client.calls[0]["reply_markup"] == {"inline_keyboard": [buttons]}
+
+    @pytest.mark.asyncio
+    async def test_every_other_message_keeps_its_preview(self):
+        """When the finish photo is too large to attach, the preview card is
+        how a {finish_photo_url} in a print_complete body still shows up as a
+        photo in the chat. Only the outcome prompt gives that up."""
+        service = NotificationService()
+        client = _Client()
+        service._http_client = client
+
+        ok, _ = await service._send_telegram(
+            CONFIG, "*Print complete*\nX1C: bracket.3mf\nhttps://farm.example.com/api/v1/archives/7/photos/finish_a.jpg"
+        )
+
+        assert ok
+        assert "disable_web_page_preview" not in client.calls[0]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("event_type", "expected"),
+        [("print_confirm_request", False), ("print_complete", True), (None, True)],
+    )
+    async def test_only_the_outcome_prompt_is_sent_without_a_preview(self, event_type, expected):
+        service = NotificationService()
+        captured: dict = {}
+
+        async def _fake_telegram(config, message, image_data=None, buttons=None, link_preview=True):
+            captured["link_preview"] = link_preview
+            return True, "ok"
+
+        service._send_telegram = _fake_telegram
+        provider = NotificationProvider(name="farm", provider_type="telegram", config=json.dumps(CONFIG))
+
+        ok, _ = await service._send_to_provider(provider, "Title", "body", event_type=event_type)
+
+        assert ok
+        assert captured["link_preview"] is expected

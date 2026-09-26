@@ -3707,6 +3707,7 @@ export function ArchivesPage() {
     setFilterMaterial(null);
     setFilterFavorites(false);
     setHideFailed(false);
+    setFilterUnconfirmed(false);
     setHideDuplicates(false);
     setFilterTag(null);
     setFilterFileType('all');

@@ -3420,54 +3420,85 @@ async def _ask_outcome_for_external_print(db, printer_id: int, observed_name: st
     """
     logger = logging.getLogger(__name__)
     try:
-        from backend.app.api.routes.settings import get_setting, setting_is_true
-
-        if not setting_is_true(await get_setting(db, "confirm_outcome_external_prints")):
-            return False
-
-        from backend.app.models.print_queue import PrintQueueItem
-
-        dispatched_here = await db.scalar(
-            select(PrintQueueItem)
-            .where(
-                PrintQueueItem.printer_id == printer_id,
-                PrintQueueItem.status == "printing",
-            )
-            .limit(1)
-        )
-        if dispatched_here is None:
-            return True
-
-        expected = await _queue_item_dispatched_name(db, dispatched_here)
-        observed = (observed_name or "").strip()
-        if not expected or not observed or _subtask_names_match(expected, observed):
-            logger.info(
-                "[CALLBACK] Not asking for the outcome on printer %s: queue item %s is still printing, so "
-                "Bambuddy dispatched this run and the item's own ask-for-outcome flag decides.",
-                printer_id,
-                dispatched_here.id,
-            )
-            return False
-
-        logger.info(
-            "[CALLBACK] Queue item %s is still marked printing on printer %s but was dispatched as %r, not "
-            "%r; treating this as an externally started print.",
-            dispatched_here.id,
-            printer_id,
-            expected,
-            observed,
-        )
-        return True
+        # A savepoint rather than a rollback of the caller's transaction on
+        # failure: a failed statement leaves the transaction unusable, but a
+        # full rollback also expires every object the caller has loaded (the
+        # printer, the archive it just created), and on an async session the
+        # next attribute read then raises instead of reloading. Everything here
+        # is a read, so undoing the savepoint loses nothing.
+        async with db.begin_nested():
+            return await _decide_outcome_for_external_print(db, printer_id, observed_name, logger)
     except Exception as e:
         logger.warning("[CALLBACK] Could not decide the outcome prompt for printer %s: %s", printer_id, e)
-        # A failed statement deactivates the transaction, so without this the
-        # caller's own add()/commit() would raise PendingRollbackError and the
-        # print would go unarchived over a question that answers "no".
+        return False
+
+
+async def _decide_outcome_for_external_print(db, printer_id: int, observed_name: str | None, logger) -> bool:
+    """The reads behind ``_ask_outcome_for_external_print``; see there."""
+    from backend.app.api.routes.settings import get_setting, setting_is_true
+
+    if not setting_is_true(await get_setting(db, "confirm_outcome_external_prints")):
+        return False
+
+    from backend.app.models.print_queue import PrintQueueItem
+
+    dispatched_here = await db.scalar(
+        select(PrintQueueItem)
+        .where(
+            PrintQueueItem.printer_id == printer_id,
+            PrintQueueItem.status == "printing",
+        )
+        .limit(1)
+    )
+    if dispatched_here is None:
+        return True
+
+    expected = await _queue_item_dispatched_name(db, dispatched_here)
+    observed = (observed_name or "").strip()
+    if not expected or not observed or _subtask_names_match(expected, observed):
+        logger.info(
+            "[CALLBACK] Not asking for the outcome on printer %s: queue item %s is still printing, so "
+            "Bambuddy dispatched this run and the item's own ask-for-outcome flag decides.",
+            printer_id,
+            dispatched_here.id,
+        )
+        return False
+
+    logger.info(
+        "[CALLBACK] Queue item %s is still marked printing on printer %s but was dispatched as %r, not "
+        "%r; treating this as an externally started print.",
+        dispatched_here.id,
+        printer_id,
+        expected,
+        observed,
+    )
+    return True
+
+
+async def _dispatch_outcome_confirmation_safely(
+    db,
+    printer_id: int,
+    printer_name: str,
+    data: dict,
+    archive_id: int,
+    archive_data: dict | None = None,
+) -> None:
+    """``dispatch_outcome_confirmation`` for a caller that has more to do on ``db``.
+
+    The completion task sends the per-user print email on the same session
+    right after the prompt. A failed statement in the prompt leaves that
+    session needing a rollback, and without one the email step fails with
+    PendingRollbackError; the prompt is the optional part, so it must not be
+    the reason the email never goes out.
+    """
+    try:
+        await dispatch_outcome_confirmation(db, printer_id, printer_name, data, archive_id, archive_data)
+    except Exception as e:
+        logging.getLogger(__name__).error("[NOTIFY-BG] Outcome-confirmation dispatch failed: %s", e, exc_info=True)
         try:
             await db.rollback()
         except Exception:
             pass
-        return False
 
 
 async def dispatch_outcome_confirmation(
@@ -4836,16 +4867,26 @@ async def on_print_start(printer_id: int, data: dict):
                 # start notification, the energy reading and the timelapse
                 # baseline below it with it, and a missing prompt is by far the
                 # cheaper failure.
+                archive_id = archive.id
                 try:
                     if await _ask_outcome_for_external_print(db, printer_id, subtask_name):
                         archive.confirm_requested = True
                         await db.commit()
                 except Exception as e:
-                    logger.warning("Could not flag archive %s for the outcome prompt: %s", archive.id, e)
+                    logger.warning("Could not flag archive %s for the outcome prompt: %s", archive_id, e)
+                    # The rollback expires every loaded object, and on an async
+                    # session reading one afterwards raises instead of
+                    # reloading, so the two this branch goes on to use are
+                    # fetched again. The archive itself was committed by
+                    # archive_print; only the flag is lost.
                     try:
                         await db.rollback()
-                    except Exception:
-                        pass
+                        archive = await db.get(PrintArchive, archive_id)
+                        printer = await db.get(Printer, printer_id)
+                    except Exception as reload_error:
+                        logger.warning(
+                            "Could not reload archive %s after the failed flag write: %s", archive_id, reload_error
+                        )
 
                 # Track this active print (use both original filename and downloaded filename)
                 _active_prints[(printer_id, downloaded_filename)] = archive.id
@@ -7887,12 +7928,9 @@ async def on_print_complete(printer_id: int, data: dict):
                 # background task so the finish photo fetched above rides
                 # along with the prompt.
                 if print_status == "completed" and archive_id:
-                    try:
-                        await dispatch_outcome_confirmation(
-                            db, printer_id, printer_name, data, archive_id, archive_data
-                        )
-                    except Exception as e:
-                        logger.error("[NOTIFY-BG] Outcome-confirmation dispatch failed: %s", e, exc_info=True)
+                    await _dispatch_outcome_confirmation_safely(
+                        db, printer_id, printer_name, data, archive_id, archive_data
+                    )
 
                 # Send user-specific email notification
                 if archive_data:

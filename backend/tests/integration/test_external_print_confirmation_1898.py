@@ -76,7 +76,7 @@ class _StubArchiveService:
         return archive
 
 
-async def _drive_print_start(test_engine, printer, *, download_ok: bool) -> None:
+async def _drive_print_start(test_engine, printer, *, download_ok: bool, extra_patches=()) -> dict:
     """Run ``on_print_start`` against the test database.
 
     ``download_ok`` picks the branch: False leaves the 3MF unreachable and the
@@ -116,9 +116,10 @@ async def _drive_print_start(test_engine, printer, *, download_ok: bool) -> None
         patch("backend.app.services.usage_tracker.on_print_start", new_callable=AsyncMock),
     ]
 
+    mocks: dict = {}
     with ExitStack() as stack:
-        for p in patches:
-            stack.enter_context(p)
+        for p in [*patches, *extra_patches]:
+            mocks[p.attribute] = stack.enter_context(p)
         notif = stack.enter_context(patch("backend.app.main.notification_service"))
         plug = stack.enter_context(patch("backend.app.main.smart_plug_manager"))
         ws = stack.enter_context(patch("backend.app.main.ws_manager"))
@@ -138,6 +139,7 @@ async def _drive_print_start(test_engine, printer, *, download_ok: bool) -> None
         from backend.app.main import on_print_start
 
         await on_print_start(printer.id, {"filename": DISPATCH, "subtask_name": SUBTASK})
+    return mocks
 
 
 async def _set_setting(db_session, key: str, value: str) -> None:
@@ -239,6 +241,79 @@ class TestExternalPrintGetsTheOutcomePrompt:
         await _drive_print_start(test_engine, printer, download_ok=False)
 
         assert (await _created_archive(db_session, printer.id)).confirm_requested is False
+
+
+class TestAFailureHereCostsOnlyThePrompt:
+    """The prompt is optional; the rest of print start is not.
+
+    After a failed statement, a rollback of the whole transaction expires every
+    object the session holds, and on an async session the next read of one
+    raises instead of reloading. The print start below the check reads both
+    the printer and the archive, so the check runs in a savepoint, and the flag
+    write reloads what it used after its own rollback.
+    """
+
+    @staticmethod
+    def _assert_print_start_finished(mocks, archive_id: int) -> None:
+        assert archive_id in _active_prints.values()
+        mocks["_record_energy_start"].assert_awaited()
+        assert mocks["_record_energy_start"].await_args.args[0].id == archive_id
+        mocks["_capture_timelapse_baseline_at_start"].assert_awaited()
+        assert mocks["_capture_timelapse_baseline_at_start"].await_args.kwargs["archive_id"] == archive_id
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    @pytest.mark.parametrize("download_ok", [True, False])
+    async def test_a_failing_query_in_the_check(self, test_engine, db_session, printer_factory, download_ok):
+        from sqlalchemy import text
+
+        from backend.app.api.routes import settings as settings_routes
+
+        real_get_setting = settings_routes.get_setting
+
+        async def _broken_for_this_key(db, key):
+            if key == "confirm_outcome_external_prints":
+                # A real failed statement, not just an exception: this is what
+                # leaves the transaction needing a rollback.
+                await db.execute(text("SELECT no_such_column FROM settings"))
+            return await real_get_setting(db, key)
+
+        printer = await printer_factory()
+        await _set_setting(db_session, "confirm_outcome_external_prints", "true")
+
+        mocks = await _drive_print_start(
+            test_engine,
+            printer,
+            download_ok=download_ok,
+            extra_patches=[patch.object(settings_routes, "get_setting", _broken_for_this_key)],
+        )
+
+        archive = await _created_archive(db_session, printer.id)
+        assert archive.confirm_requested is False
+        self._assert_print_start_finished(mocks, archive.id)
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_failing_flag_write(self, test_engine, db_session, printer_factory):
+        async def _yes_but_poison_the_commit(db, printer_id, observed_name=None):
+            # Two rows for one unique key: the commit that carries the flag fails.
+            db.add(Settings(key="x_1898_duplicate", value="a"))
+            db.add(Settings(key="x_1898_duplicate", value="b"))
+            return True
+
+        printer = await printer_factory()
+
+        mocks = await _drive_print_start(
+            test_engine,
+            printer,
+            download_ok=True,
+            extra_patches=[patch("backend.app.main._ask_outcome_for_external_print", _yes_but_poison_the_commit)],
+        )
+
+        archive = await _created_archive(db_session, printer.id)
+        # archive_print committed the row; only the flag is lost.
+        assert archive.confirm_requested is False
+        self._assert_print_start_finished(mocks, archive.id)
 
 
 class TestAQueuedPrintStillDecidesForItself:
@@ -535,6 +610,26 @@ class TestTheCompletionEmitsThePrompt:
         assert kwargs["good_url"].startswith("http")
         assert kwargs["reject_url"].startswith("http")
         assert kwargs["confirm_url"].startswith("http")
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_failed_prompt_leaves_the_session_usable_for_the_email(self, db_session):
+        """The completion task sends the per-user print email on the same
+        session right after the prompt, so a prompt that dies mid-flush must
+        not take the email with it."""
+        from backend.app.main import _dispatch_outcome_confirmation_safely
+
+        async def _dies_mid_flush(db, *args, **kwargs):
+            db.add(Settings(key="x_1898_duplicate", value="a"))
+            db.add(Settings(key="x_1898_duplicate", value="b"))
+            await db.flush()
+
+        with patch("backend.app.main.dispatch_outcome_confirmation", _dies_mid_flush):
+            await _dispatch_outcome_confirmation_safely(db_session, 1, "X1C", {}, 1, {})
+
+        # What _dispatch_user_print_email does next: read from the session.
+        # Without the rollback this raises PendingRollbackError.
+        await db_session.execute(select(Settings).limit(1))
 
     @pytest.mark.asyncio
     @pytest.mark.integration
