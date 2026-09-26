@@ -28,6 +28,7 @@ from backend.app.api.routes import (
     camera,
     camwall,
     cloud,
+    connected_apps,
     discovery,
     external_links,
     filaments,
@@ -9472,6 +9473,9 @@ PUBLIC_API_ROUTES = {
     "/api/v1/auth/oidc/providers",  # Public list of enabled providers
     "/api/v1/auth/oidc/callback",  # Redirect target from OIDC provider
     "/api/v1/auth/oidc/exchange",  # Exchange short-lived OIDC token for JWT
+    # Connected apps: the app's server swaps a code for the user's identity,
+    # authenticated by its client secret rather than a login token.
+    "/api/v1/connect/token",
     # Version check for updates (no sensitive data)
     "/api/v1/updates/version",
     # Metrics endpoint handles its own prometheus_token authentication
@@ -9939,6 +9943,7 @@ app.include_router(slicer_presets.router, prefix=app_settings.api_prefix)
 app.include_router(archive_purge.router, prefix=app_settings.api_prefix)
 app.include_router(makerworld.router, prefix=app_settings.api_prefix)
 app.include_router(api_keys.router, prefix=app_settings.api_prefix)
+app.include_router(connected_apps.router, prefix=app_settings.api_prefix)
 app.include_router(webhook.router, prefix=app_settings.api_prefix)
 app.include_router(ams_history.router, prefix=app_settings.api_prefix)
 app.include_router(printer_sensor_history.router, prefix=app_settings.api_prefix)

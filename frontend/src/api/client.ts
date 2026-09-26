@@ -335,6 +335,25 @@ export interface LongLivedCameraToken {
   token: string | null;
 }
 
+// An external application that signs users in with their Bambuddy account.
+// `client_secret` is present only in the create / rotate responses.
+export interface ConnectedApp {
+  id: number;
+  name: string;
+  client_id: string;
+  redirect_uri: string;
+  enabled: boolean;
+  created_at: string;
+  last_used_at: string | null;
+  client_secret?: string;
+}
+
+export interface ConnectAuthorizeInfo {
+  app_name: string;
+  username: string;
+  already_granted: boolean;
+}
+
 // One row of the token-authenticated Cam Wall feed (#2531). Deliberately
 // smaller than PrinterStatus: no serial, no IP, no print filename — a kiosk URL
 // is not a secret, so the payload behind it must not be either.
@@ -6856,6 +6875,30 @@ export const api = {
   // WebSocket handshake, so the token rides in the ?token= query param.
   getWebSocketToken: () =>
     request<{ token: string }>('/auth/ws-token', { method: 'POST' }),
+
+  // Connected apps: sign-in to external applications with Bambuddy
+  listConnectedApps: () => request<ConnectedApp[]>('/connect/apps'),
+  createConnectedApp: (payload: { name: string; redirect_uri: string }) =>
+    request<ConnectedApp>('/connect/apps', { method: 'POST', body: JSON.stringify(payload) }),
+  updateConnectedApp: (id: number, payload: { name?: string; redirect_uri?: string; enabled?: boolean }) =>
+    request<ConnectedApp>(`/connect/apps/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  rotateConnectedAppSecret: (id: number) =>
+    request<ConnectedApp>(`/connect/apps/${id}/rotate-secret`, { method: 'POST' }),
+  deleteConnectedApp: (id: number) => request<void>(`/connect/apps/${id}`, { method: 'DELETE' }),
+  getConnectAuthorizeInfo: (clientId: string, redirectUri: string) =>
+    request<ConnectAuthorizeInfo>(
+      `/connect/authorize/info?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}`,
+    ),
+  connectAuthorize: (payload: {
+    client_id: string;
+    redirect_uri: string;
+    code_challenge: string;
+    code_challenge_method: 'S256';
+  }) =>
+    request<{ code: string; redirect_uri: string }>('/connect/authorize', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 
   // Long-lived camera tokens (#1108, #2531)
   createLongLivedCameraToken: (payload: {

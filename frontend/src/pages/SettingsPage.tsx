@@ -22,6 +22,7 @@ import type { APIKey, AppSettings, AppSettingsUpdate, PrinterHASensor, LocationH
 import { Card, CardContent, CardDensityProvider, CardHeader } from '../components/Card';
 import { SlicerPipelinesPanel } from '../components/SlicerPipelinesPanel';
 import { CameraTokensSection } from './CameraTokensPage';
+import { ConnectedAppsSection } from '../components/ConnectedAppsSection';
 import { StreamOverlayBuilder } from '../components/StreamOverlayBuilder';
 import { Collapsible } from '../components/Collapsible';
 import { CopyButton } from '../components/CopyButton';
@@ -59,7 +60,7 @@ import { availableLanguages } from '../i18n';
 import { useToast } from '../contexts/ToastContext';
 import { useTheme, type ThemeStyle, type DarkBackground, type LightBackground, type ThemeAccent } from '../contexts/ThemeContext';
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Gauge, Palette } from 'lucide-react';
+import { Gauge, Link2, Palette } from 'lucide-react';
 import { registerSettingsSearch, getSettingsSearchEntries } from '../lib/settingsSearch';
 import type { UsersSubTab } from '../lib/settingsSearch';
 import { availableEngines, hasEngineChoice, resolveEngine, type SliceEngineId } from '../lib/sliceEngines';
@@ -102,6 +103,7 @@ registerSettingsSearch({ labelKey: 'settings.prometheusMetrics', tab: 'network',
 registerSettingsSearch({ labelKey: 'settings.createNewApiKey', tab: 'apikeys', keywords: 'api key create permission scope', anchor: 'card-createapi' });
 registerSettingsSearch({ labelKey: 'settings.webhookEndpoints', tab: 'apikeys', keywords: 'webhook endpoint post http', anchor: 'card-webhooks' });
 registerSettingsSearch({ labelKey: 'settings.apiBrowser', tab: 'apikeys', keywords: 'api browser endpoint documentation test', anchor: 'card-apibrowser' });
+registerSettingsSearch({ labelKey: 'connectedApps.title', tab: 'apikeys', keywords: 'connected app sign in single sign-on sso oauth login orders', anchor: 'card-connected-apps' });
 registerSettingsSearch({ labelKey: 'cameraTokens.title', tab: 'apikeys', keywords: 'camera token long-lived home assistant frigate kiosk stream', anchor: 'card-camera-tokens' });
 registerSettingsSearch({ labelKey: 'settings.tabs.virtualPrinter', tab: 'virtual-printer', keywords: 'virtual printer proxy archive slicer bambustudio orcaslicer ip bind', anchor: 'card-vp' });
 registerSettingsSearch({ labelKey: 'settings.tabs.spoolbuddy', tab: 'spoolbuddy', keywords: 'spoolbuddy device scale nfc rfid kiosk unregister', anchor: 'card-spoolbuddy' });
@@ -4786,6 +4788,22 @@ export function SettingsPage() {
               </CardContent>
             </Card>
             </>}
+
+            {/* Connected apps: "Sign in with Bambuddy" for external applications.
+                Admin-only, like the settings it sits between. */}
+            {hasPermission('settings:update') && (
+              <Card className="mt-6">
+                <CardHeader>
+                  <h3 className="text-base font-semibold text-white flex items-center gap-2" id="card-connected-apps">
+                    <Link2 className="w-4 h-4 text-bambu-green" />
+                    {t('connectedApps.title')}
+                  </h3>
+                </CardHeader>
+                <CardContent>
+                  <ConnectedAppsSection />
+                </CardContent>
+              </Card>
+            )}
 
             {/* Long-lived camera-stream tokens (#1108) */}
             <Card className="mt-6">
