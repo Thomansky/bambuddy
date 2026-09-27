@@ -6510,6 +6510,29 @@ _PLATE_RESTORE_SETTLE_SECONDS = 12.0
 _FINISH_PHOTO_PRODUCER_WAIT_SECONDS = _PLATE_RESTORE_SETTLE_SECONDS + 23.0
 
 
+# How many of a printer's newest archives the plate restore looks through for
+# the one the finished print is named after. The finished print is normally
+# the newest; the margin covers rows written by prints on the same printer in
+# the meantime.
+_PLATE_RESTORE_NAME_CANDIDATES = 25
+
+
+def _archive_is_named(archive, subtask_name: str) -> bool:
+    """Whether *archive* is the print the printer reported as *subtask_name*.
+
+    Equality after the printer's own rewrite of the name (``_normalise_subtask_name``),
+    against either the archive's display name or the name its file was
+    dispatched under. Deliberately not the truncation-tolerant match the queue
+    uses: this answer becomes the target of a Z move, and a cut-short name is
+    ambiguity the restore refuses rather than resolves.
+    """
+    wanted = _normalise_subtask_name(subtask_name)
+    if not wanted:
+        return False
+    names = (archive.print_name or "", _subtask_name_from_filename(archive.filename or ""))
+    return any(name and _normalise_subtask_name(name) == wanted for name in names)
+
+
 async def _max_z_for_current_print(printer_id: int, data: dict, logger) -> float | None:
     """Height of the print that just finished on ``printer_id``, or None (#2547).
 
@@ -6547,23 +6570,25 @@ async def _max_z_for_current_print(printer_id: int, data: dict, logger) -> float
         from backend.app.utils.threemf_tools import extract_max_z_height_from_3mf
 
         async with async_session() as db:
+            # The printer echoes the name with its spaces turned into
+            # underscores, so a SQL equality against the stored name never
+            # matched a file with a space in it. The recent rows for this
+            # printer are compared in Python by the rule the completion check
+            # uses -- still equality after that rewrite, never a substring.
             result = await db.execute(
                 select(PrintArchive)
                 .where(
                     PrintArchive.printer_id == printer_id,
                     PrintArchive.status.in_(("printing", "completed")),
                     PrintArchive.deleted_at.is_(None),
-                    or_(
-                        PrintArchive.print_name == subtask_name,
-                        PrintArchive.filename == subtask_name,
-                        PrintArchive.filename == f"{subtask_name}.3mf",
-                        PrintArchive.filename == f"{subtask_name}.gcode.3mf",
-                    ),
                 )
                 .order_by(PrintArchive.id.desc())
-                .limit(1)
+                .limit(_PLATE_RESTORE_NAME_CANDIDATES)
             )
-            archive = result.scalar_one_or_none()
+            archive = next(
+                (row for row in result.scalars().all() if _archive_is_named(row, subtask_name)),
+                None,
+            )
         if archive is None or not archive.file_path:
             logger.info("[PLATE-RESTORE] printer %s: no archive matches %r — skipping", printer_id, subtask_name)
             return None
@@ -6581,9 +6606,14 @@ async def _max_z_for_current_print(printer_id: int, data: dict, logger) -> float
             )
             return None
 
+        # Archives store their file relative to the data directory, which
+        # the settings call ``base_dir`` -- as every other reader of
+        # ``file_path`` resolves it. There is no ``data_dir`` attribute: the
+        # AttributeError was swallowed by the handler below, so every print
+        # with a relative path (all of them) lost its plate restore.
         path = Path(archive.file_path)
         if not path.is_absolute():
-            path = Path(app_settings.data_dir) / path
+            path = Path(app_settings.base_dir) / path
         return await asyncio.to_thread(extract_max_z_height_from_3mf, path, archive.plate_id or 1)
     except Exception as e:
         logger.debug("[PLATE-RESTORE] printer %s: no usable print height: %s", printer_id, e)

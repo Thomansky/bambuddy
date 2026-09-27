@@ -765,6 +765,8 @@ class TestMaxZResolution:
         base = {
             "id": 11,
             "file_path": "/data/archive/1/job/job.3mf",
+            "filename": "job.gcode.3mf",
+            "print_name": "job",
             "plate_id": 1,
             "total_layers": 30,
         }
@@ -779,7 +781,8 @@ class TestMaxZResolution:
         async def _session():
             async def _execute(stmt):
                 env["where"] = str(stmt)
-                return SimpleNamespace(scalar_one_or_none=lambda: env["archive"])
+                rows = [env["archive"]] if env["archive"] is not None else []
+                return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: rows))
 
             yield SimpleNamespace(execute=_execute)
 
@@ -842,6 +845,53 @@ class TestMaxZResolution:
         await main_module._max_z_for_current_print(1, {"subtask_name": "Cube"}, logging.getLogger(__name__))
 
         assert "LIKE" not in resolver_env["where"].upper()
+
+    async def test_a_relative_file_path_resolves_against_the_data_directory(self, resolver_env):
+        """Archives store ``archive/<printer>/<run>/<file>`` relative to the
+        data directory. The resolver joined that onto a settings attribute that
+        does not exist, and the swallowed AttributeError cost every real print
+        its plate restore; only the absolute paths of the other tests got by."""
+        seen = {}
+
+        def _height(path, _plate):
+            seen["path"] = path
+            return 16.0
+
+        resolver_env["archive"] = self._archive(file_path="archive/1/20260926_1635_job/job.gcode.3mf")
+        import backend.app.utils.threemf_tools as threemf_tools
+
+        original = threemf_tools.extract_max_z_height_from_3mf
+        threemf_tools.extract_max_z_height_from_3mf = _height
+        try:
+            height = await main_module._max_z_for_current_print(1, {"subtask_name": "job"}, logging.getLogger(__name__))
+        finally:
+            threemf_tools.extract_max_z_height_from_3mf = original
+
+        assert height == 16.0
+        assert (
+            seen["path"]
+            == main_module.Path(main_module.app_settings.base_dir) / "archive/1/20260926_1635_job/job.gcode.3mf"
+        )
+
+    async def test_a_name_with_spaces_is_found_by_its_echo(self, resolver_env):
+        """The printer reports a file saved with spaces under underscores.
+        Matching the stored name by SQL equality never found those, so their
+        finish photo went without the plate brought back up."""
+        resolver_env["archive"] = self._archive(
+            filename="Unterteil H2S mit Logo V24 .gcode.3mf", print_name="Unterteil H2S mit Logo V24"
+        )
+
+        height = await main_module._max_z_for_current_print(
+            1, {"subtask_name": "Unterteil_H2S_mit_Logo_V24_"}, logging.getLogger(__name__)
+        )
+        assert height == 16.0
+
+    async def test_a_similar_name_is_still_not_this_print(self, resolver_env):
+        """Normalising the name must not turn the match into a prefix match."""
+        resolver_env["archive"] = self._archive(filename="Cube v2.gcode.3mf", print_name="Cube v2")
+
+        height = await main_module._max_z_for_current_print(1, {"subtask_name": "Cube"}, logging.getLogger(__name__))
+        assert height is None
 
     async def test_refuses_when_the_archive_has_no_file(self, resolver_env):
         resolver_env["archive"] = self._archive(file_path=None)
