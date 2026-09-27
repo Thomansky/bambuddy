@@ -588,6 +588,25 @@ class NotificationService:
         one-tap Good/Reject under the message. ``link_preview=False`` asks
         Telegram not to fetch the first URL in the text for a preview card.
         """
+        ok, status, _ = await self._send_telegram_message(
+            config, message, image_data=image_data, buttons=buttons, link_preview=link_preview
+        )
+        return ok, status
+
+    async def _send_telegram_message(
+        self,
+        config: dict,
+        message: str,
+        image_data: bytes | None = None,
+        buttons: list[dict] | None = None,
+        link_preview: bool = True,
+    ) -> tuple[bool, str, dict | None]:
+        """Send via Telegram and also hand back the Bot API ``result`` (the sent Message).
+
+        The outcome confirmation in reaction mode (#3046) needs the
+        ``message_id`` from it to recognise the reaction later; every other
+        caller goes through ``_send_telegram`` and ignores it.
+        """
         bot_token = config.get("bot_token", "").strip()
         chat_id = config.get("chat_id", "").strip()
 
@@ -663,8 +682,71 @@ class NotificationService:
             failure = _failure(response)
 
         if failure:
-            return False, failure
-        return True, "Message sent successfully"
+            return False, failure, None
+        sent = response.json().get("result")
+        return True, "Message sent successfully", sent if isinstance(sent, dict) else None
+
+    async def _send_telegram_confirm_request(
+        self,
+        provider: NotificationProvider,
+        config: dict,
+        message: str,
+        db: AsyncSession | None,
+        image_data: bytes | None,
+        buttons: list[dict] | None,
+        archive_id: int | None,
+    ) -> tuple[bool, str]:
+        """Deliver the outcome prompt the way the provider's verdict mode asks (#3046).
+
+        "buttons" is the plain #1898 delivery. In "reactions" the inline
+        keyboard is dropped and the user answers with a thumbs-up/down on the
+        message itself; "both" keeps the keyboard as well. In either of those
+        the sent message is remembered in telegram_pending_verdicts so the
+        reaction poller can map the reaction back to the archive.
+        """
+        mode = provider.telegram_verdict_mode or "buttons"
+        # Preview off for the prompt, as for every print_confirm_request: a
+        # preview fetch of a verdict URL in the body would answer the prompt
+        # before the operator saw it.
+        if mode == "buttons":
+            return await self._send_telegram(
+                config, message, image_data=image_data, buttons=buttons, link_preview=False
+            )
+
+        if mode == "reactions":
+            buttons = None
+        message = f"{message}\n\n{TELEGRAM_REACTION_HINT}"
+        ok, status, sent = await self._send_telegram_message(
+            config, message, image_data=image_data, buttons=buttons, link_preview=False
+        )
+        if not ok:
+            return ok, status
+
+        message_id = (sent or {}).get("message_id")
+        if not isinstance(message_id, int) or message_id <= 0:
+            logger.warning("Telegram did not return a message_id for the outcome prompt; reactions cannot be matched")
+            return ok, status
+        if db is None or archive_id is None:
+            return ok, status
+
+        try:
+            db.add(
+                TelegramPendingVerdict(
+                    provider_id=provider.id,
+                    chat_id=str(((sent or {}).get("chat") or {}).get("id") or config.get("chat_id", "")).strip(),
+                    message_id=message_id,
+                    archive_id=archive_id,
+                    has_caption=image_data is not None,
+                    message_text=message,
+                )
+            )
+            await db.commit()
+        except Exception as e:
+            # The prompt went out; losing the reaction mapping is a degraded
+            # outcome, not a failed notification.
+            logger.warning("Failed to record the Telegram outcome prompt for reactions: %s", e)
+            await db.rollback()
+        return ok, status
 
     async def _send_email(
         self,
@@ -1113,6 +1195,19 @@ class NotificationService:
                         {"text": "\U0001f44d Good", "url": one_tap_url(_tg_good)},
                         {"text": "\U0001f44e Reject", "url": one_tap_url(_tg_reject)},
                     ]
+                if event_type == "print_confirm_request":
+                    # Telegram verdict mode (#3046): buttons, a reaction on
+                    # the message, or both.
+                    _archive_id = (variables or {}).get("archive_id")
+                    return await self._send_telegram_confirm_request(
+                        provider,
+                        config,
+                        f"*{title}*\n{message}",
+                        db,
+                        image_data,
+                        tg_buttons,
+                        _archive_id if isinstance(_archive_id, int) else None,
+                    )
                 # Telegram's servers GET the first URL in the text to build a
                 # preview card. An outcome prompt whose edited body still
                 # carries {good_url} would have that fetch answer the question
@@ -1527,6 +1622,7 @@ class NotificationService:
         good_url: str | None = None,
         reject_url: str | None = None,
         confirm_url: str | None = None,
+        archive_id: int | None = None,
     ):
         """Ask for a post-print outcome verdict (#1898).
 
@@ -1534,7 +1630,8 @@ class NotificationService:
         provider-level toggle exists to mute a channel, not to enable the
         feature. good_url / reject_url are the one-tap capability links
         (rendered as ntfy action buttons), confirm_url deep-links into the
-        archive's confirmation dialog in the web UI.
+        archive's confirmation dialog in the web UI. archive_id lets a Telegram
+        provider in reaction mode (#3046) tie the sent message to the archive.
         """
         providers = await self._get_providers_for_event(db, "on_print_confirm_request", printer_id)
         if not providers:
@@ -1553,6 +1650,8 @@ class NotificationService:
             variables["reject_url"] = reject_url
         if confirm_url:
             variables["confirm_url"] = confirm_url
+        if archive_id is not None:
+            variables["archive_id"] = archive_id
 
         image_data = None
         if archive_data:

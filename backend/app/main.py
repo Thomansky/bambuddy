@@ -3608,6 +3608,7 @@ async def dispatch_outcome_confirmation(
         good_url=good_url,
         reject_url=reject_url,
         confirm_url=confirm_url,
+        archive_id=archive_id,
     )
     return True
 

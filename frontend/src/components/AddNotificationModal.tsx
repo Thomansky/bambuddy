@@ -49,6 +49,10 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
   // Post-print outcome confirmation (#1898). Defaults ON — it only fires for
   // prints that opted in per-job, so the toggle exists to mute a channel.
   const [onPrintConfirmRequest, setOnPrintConfirmRequest] = useState(provider?.on_print_confirm_request ?? true);
+  // Telegram only (#3046): inline link buttons, a thumbs reaction, or both.
+  const [telegramVerdictMode, setTelegramVerdictMode] = useState<TelegramVerdictMode>(
+    provider?.telegram_verdict_mode ?? 'buttons'
+  );
   const [onBedCooled, setOnBedCooled] = useState(provider?.on_bed_cooled ?? false);
   const [onHaSensorAlert, setOnHaSensorAlert] = useState(provider?.on_ha_sensor_alert ?? false);
   const [onLocationHaSensorAlert, setOnLocationHaSensorAlert] = useState(
@@ -212,6 +216,7 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
       on_stock_break_alert: onStockBreakAlert,
       on_plate_clear_required: onPlateClearRequired,
       on_print_confirm_request: onPrintConfirmRequest,
+      telegram_verdict_mode: providerType === 'telegram' ? telegramVerdictMode : 'buttons',
       on_bed_cooled: onBedCooled,
       on_ha_sensor_alert: onHaSensorAlert,
       on_location_ha_sensor_alert: onLocationHaSensorAlert,

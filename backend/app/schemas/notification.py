@@ -95,6 +95,11 @@ class NotificationProviderBase(BaseModel):
         default=True,
         description="Notify with one-tap verdict links when a print that opted in asks for its outcome",
     )
+    # How a Telegram provider collects the verdict (#3046). Ignored elsewhere.
+    telegram_verdict_mode: Literal["buttons", "reactions", "both"] = Field(
+        default="buttons",
+        description="Telegram only: answer the outcome prompt via inline buttons, a thumbs reaction, or both",
+    )
 
     # Event triggers - Bed cooled
     on_bed_cooled: bool = Field(default=False, description="Notify when bed cools after print")
@@ -209,6 +214,7 @@ class NotificationProviderUpdate(BaseModel):
 
     # Event triggers - Post-print outcome confirmation (#1898)
     on_print_confirm_request: bool | None = None
+    telegram_verdict_mode: Literal["buttons", "reactions", "both"] | None = None
 
     # Event triggers - Bed cooled
     on_bed_cooled: bool | None = None

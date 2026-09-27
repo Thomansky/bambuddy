@@ -88,6 +88,8 @@ def _provider_to_dict(provider: NotificationProvider) -> dict:
         "on_plate_clear_required": provider.on_plate_clear_required,
         # Post-print outcome confirmation (#1898)
         "on_print_confirm_request": provider.on_print_confirm_request,
+        # Rows from before #3046 hold NULL here; "buttons" is what they did.
+        "telegram_verdict_mode": provider.telegram_verdict_mode or "buttons",
         # Bed cooled
         "on_bed_cooled": provider.on_bed_cooled,
         # First layer complete
@@ -186,6 +188,7 @@ async def create_notification_provider(
         on_plate_clear_required=provider_data.on_plate_clear_required,
         # Post-print outcome confirmation (#1898)
         on_print_confirm_request=provider_data.on_print_confirm_request,
+        telegram_verdict_mode=provider_data.telegram_verdict_mode,
         # Bed cooled
         on_bed_cooled=provider_data.on_bed_cooled,
         # First layer complete

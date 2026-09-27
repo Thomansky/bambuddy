@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from backend.app.models.notification import TelegramPendingVerdict
 from backend.app.models.print_log import PrintLogEntry
 from backend.app.services.notification_service import TELEGRAM_REACTION_HINT, NotificationService
-from backend.app.services.print_confirmation import apply_outcome_verdict
+from backend.app.services.print_confirmation import apply_outcome_verdict, one_tap_url
 from backend.app.services.telegram_reactions import (
     CONFLICT_COOLDOWN,
     MAX_BACKOFF,
@@ -143,20 +143,19 @@ class TestApplyOutcomeVerdict:
         printer = await printer_factory()
         archive = await archive_factory(printer.id, confirm_requested=True, confirm_token="tok")
 
-        assert await apply_outcome_verdict(db_session, archive, "reject", source="reaction", reason="warping") is True
+        assert await apply_outcome_verdict(db_session, archive, "reject", source="reaction") is True
         await db_session.commit()
         assert archive.user_verdict == "reject"
-        assert archive.failure_reason == "warping"
-        # #1898: the capability is spent, not deleted, so a later tap on the
-        # same link can be told what was recorded instead of getting a 404.
-        assert archive.confirm_token is not None
-        assert archive.confirm_token_used_at is not None
         assert archive.user_verdict_source == "reaction"
+        assert archive.user_verdict_at is not None
+        # The capability is spent, not destroyed: the one-tap route can still
+        # tell whoever taps an old button that this print was answered.
+        assert archive.confirm_token == "tok"
+        assert archive.confirm_token_used_at is not None
         entry = await db_session.scalar(
             select(PrintLogEntry).where(PrintLogEntry.archive_id == archive.id).order_by(PrintLogEntry.id.desc())
         )
         assert entry.user_verdict == "reject"
-        assert entry.failure_reason == "warping"
 
         # A later verdict from any path is a no-op.
         assert await apply_outcome_verdict(db_session, archive, "good", source="reaction") is False
@@ -169,6 +168,8 @@ class TestApplyOutcomeVerdict:
         archive = await archive_factory(printer.id)
         with pytest.raises(ValueError):
             await apply_outcome_verdict(db_session, archive, "meh", source="reaction")
+        with pytest.raises(ValueError):
+            await apply_outcome_verdict(db_session, archive, "good", source="carrier-pigeon")
 
 
 # ---------------------------------------------------------------------------
@@ -262,8 +263,8 @@ class TestSendingThePrompt:
         assert body["reply_markup"] == {
             "inline_keyboard": [
                 [
-                    {"text": f"{THUMBS_UP} Good", "url": CONFIRM_VARIABLES["good_url"]},
-                    {"text": f"{THUMBS_DOWN} Reject", "url": CONFIRM_VARIABLES["reject_url"]},
+                    {"text": f"{THUMBS_UP} Good", "url": one_tap_url(CONFIRM_VARIABLES["good_url"])},
+                    {"text": f"{THUMBS_DOWN} Reject", "url": one_tap_url(CONFIRM_VARIABLES["reject_url"])},
                 ]
             ]
         }
@@ -326,11 +327,8 @@ class TestPoller:
 
         await db_session.refresh(archive)
         assert archive.user_verdict == "good"
-        # #1898: the capability is spent, not deleted, so a later tap on the
-        # same link can be told what was recorded instead of getting a 404.
-        assert archive.confirm_token is not None
-        assert archive.confirm_token_used_at is not None
         assert archive.user_verdict_source == "reaction"
+        assert archive.confirm_token_used_at is not None
         entry = await db_session.scalar(
             select(PrintLogEntry).where(PrintLogEntry.archive_id == archive.id).order_by(PrintLogEntry.id.desc())
         )

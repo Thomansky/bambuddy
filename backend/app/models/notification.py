@@ -113,6 +113,12 @@ class NotificationProvider(Base):
     # fires for prints where the user opted in per-job, so the provider-level
     # toggle exists to silence a channel, not to enable the feature.
     on_print_confirm_request = Column(Boolean, default=True)
+    # How a Telegram provider collects that verdict (#3046): inline URL
+    # buttons ("buttons", the original behaviour), a thumbs-up/down reaction
+    # on the message ("reactions"), or both. Reactions need no inbound
+    # connectivity — the poller fetches them — so they work without an
+    # external_url. Ignored for every other provider type.
+    telegram_verdict_mode = Column(String(16), default="buttons")
 
     # Event triggers - Bed cooled after print
     on_bed_cooled = Column(Boolean, default=False)  # Bed cooled below threshold after print
