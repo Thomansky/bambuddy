@@ -2123,6 +2123,31 @@ class BambuMQTTClient:
                 self._captured_ams_mapping,
             )
 
+    def _tray_from_captured_mapping(self, slot: int, ams_on_extruder: list[int]) -> int | None:
+        """The global tray the running print was told to use at local *slot*.
+
+        H2D reports only the local slot (0-3) of the tray it feeds from. With
+        several AMS units on the active extruder, or none the extruder map
+        knows of, and no ``snow`` field, the slot alone cannot say which unit
+        it is on. The print command, though, named the exact trays the job
+        uses, and the tray being fed has to be one of them. Answers only when
+        that is unambiguous -- narrowed to the units on this extruder when two
+        mapped trays share the slot -- and None otherwise.
+        """
+        mapping = self._captured_ams_mapping
+        if not isinstance(mapping, list):
+            return None
+        matches = set()
+        for tray in mapping:
+            if not isinstance(tray, int) or tray < 0:
+                continue
+            # A regular AMS tray sits at id % 4; an AMS-HT unit has one slot, 0.
+            if (0 <= tray <= 15 and tray % 4 == slot) or (128 <= tray <= 135 and slot == 0):
+                matches.add(tray)
+        if len(matches) > 1 and ams_on_extruder:
+            matches = {tray for tray in matches if (tray // 4 if tray <= 15 else tray) in ams_on_extruder}
+        return matches.pop() if len(matches) == 1 else None
+
     def _resolve_captured_mapping(self, print_data: dict) -> object:
         """The ``ams_mapping`` of a project_file, with external spools resolved
         from its ``ams_mapping2`` (#3166)."""
@@ -3244,19 +3269,37 @@ class BambuMQTTClient:
                                         )
                                         self.state.tray_now = resolved
                                     else:
-                                        # Genuinely ambiguous - use slot as-is (will be wrong for non-first AMS)
-                                        logger.warning(
-                                            f"[{self.serial_number}] H2D tray_now: multiple AMS {ams_on_extruder} on extruder {active_ext}, "
-                                            f"no snow field, using slot {parsed_tray_now} (may be incorrect)"
-                                        )
-                                        self.state.tray_now = parsed_tray_now
+                                        mapped = self._tray_from_captured_mapping(parsed_tray_now, ams_on_extruder)
+                                        if mapped is not None:
+                                            # The print command named the trays this job
+                                            # uses; only one of them sits at this slot.
+                                            logger.debug(
+                                                f"[{self.serial_number}] H2D tray_now: multiple AMS {ams_on_extruder}, "
+                                                f"slot {parsed_tray_now} resolved by the print's mapping -> global ID {mapped}"
+                                            )
+                                            self.state.tray_now = mapped
+                                        else:
+                                            # Genuinely ambiguous - use slot as-is (will be wrong for non-first AMS)
+                                            logger.warning(
+                                                f"[{self.serial_number}] H2D tray_now: multiple AMS {ams_on_extruder} on extruder {active_ext}, "
+                                                f"no snow field, using slot {parsed_tray_now} (may be incorrect)"
+                                            )
+                                            self.state.tray_now = parsed_tray_now
                             else:
-                                # No AMS on this extruder - use slot as-is
-                                logger.warning(
-                                    f"[{self.serial_number}] H2D tray_now: no AMS on extruder {active_ext}, "
-                                    f"using slot {parsed_tray_now}"
-                                )
-                                self.state.tray_now = parsed_tray_now
+                                mapped = self._tray_from_captured_mapping(parsed_tray_now, [])
+                                if mapped is not None:
+                                    logger.debug(
+                                        f"[{self.serial_number}] H2D tray_now: no AMS mapped to extruder {active_ext}, "
+                                        f"slot {parsed_tray_now} resolved by the print's mapping -> global ID {mapped}"
+                                    )
+                                    self.state.tray_now = mapped
+                                else:
+                                    # No AMS on this extruder - use slot as-is
+                                    logger.warning(
+                                        f"[{self.serial_number}] H2D tray_now: no AMS on extruder {active_ext}, "
+                                        f"using slot {parsed_tray_now}"
+                                    )
+                                    self.state.tray_now = parsed_tray_now
                 elif not self._is_dual_nozzle and 0 <= parsed_tray_now <= 3:
                     # Single-nozzle printer with tray_now in 0-3 range.
                     # #1822: H2S firmware reports tray_now as the AMS's idle

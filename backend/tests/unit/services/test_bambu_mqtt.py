@@ -3100,6 +3100,43 @@ class TestTrayNowDualNozzleH2DFallback(_H2DFixtureMixin):
         h2d_client._process_message(_ams_payload(2))
         assert h2d_client.state.tray_now == 2
 
+    def test_multiple_ams_resolved_by_the_prints_mapping(self, h2d_client):
+        """Three AMS on the active extruder and no snow: the slot alone is
+        ambiguous, but the print command named AMS 2 slot 1 (global 9) and no
+        other mapped tray sits at slot 1. Taking the bare slot marked AMS 0
+        slot 1 as loaded instead."""
+        h2d_client.state.ams_extruder_map = {"0": 0, "1": 0, "2": 0}
+        h2d_client.state.tray_now = 255
+        h2d_client._captured_ams_mapping = [9]
+        h2d_client._process_message(_ams_payload(1))
+        assert h2d_client.state.tray_now == 9
+
+    def test_no_ams_on_extruder_resolved_by_the_prints_mapping(self, h2d_client):
+        """The extruder map places no AMS on the active extruder, yet the print
+        feeds from AMS 2 slot 2 (global 10) as its command said."""
+        h2d_client.state.ams_extruder_map = {"0": 1, "1": 1, "2": 1}
+        h2d_client._captured_ams_mapping = [10, -1]
+        h2d_client._process_message(_ams_payload(2))
+        assert h2d_client.state.tray_now == 10
+
+    def test_two_mapped_trays_on_one_slot_narrowed_to_this_extruder(self, h2d_client):
+        """AMS 0 slot 2 and AMS 1 slot 2 are both in the job; only AMS 1 is on
+        the active extruder, so the loaded tray is global 6."""
+        h2d_client.state.ams_extruder_map = {"0": 1, "1": 0, "2": 0}
+        h2d_client.state.tray_now = 255
+        h2d_client._captured_ams_mapping = [2, 6]
+        h2d_client._process_message(_ams_payload(2))
+        assert h2d_client.state.tray_now == 6
+
+    def test_a_mapping_without_a_tray_at_this_slot_decides_nothing(self, h2d_client):
+        """The mapping is evidence only when one of its trays sits at the slot
+        reported; otherwise the old fallback stands."""
+        h2d_client.state.ams_extruder_map = {"0": 0, "1": 0}
+        h2d_client.state.tray_now = 255
+        h2d_client._captured_ams_mapping = [0]
+        h2d_client._process_message(_ams_payload(3))
+        assert h2d_client.state.tray_now == 3
+
     def test_multiple_ams_slot_nonzero_narrows_to_single_ht_excluded(self, h2d_client):
         """Two regular AMS + one AMS-HT, slot > 0 → AMS-HT excluded but still ambiguous."""
         h2d_client.state.ams_extruder_map = {"0": 0, "1": 0, "128": 0}
