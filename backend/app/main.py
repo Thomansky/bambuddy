@@ -6961,8 +6961,16 @@ def _normalise_subtask_name(name: str) -> str:
     directory search normalises both sides before comparing. This exists so
     the completion check reads the same rule from the same place instead of
     growing its own, which is exactly how it came to disagree (#2829).
+
+    The substitution covers a space at either end too: a file saved as
+    ``Unterteil H2S mit Logo V24 .gcode.3mf`` is dispatched as
+    ``Unterteil H2S mit Logo V24 `` and echoed as
+    ``Unterteil_H2S_mit_Logo_V24_``. Stripping only whitespace left that
+    trailing underscore on one side and nothing on the other, so every such
+    print stranded its queue row until the stale-row sweep closed it. Edge
+    underscores are therefore dropped from both sides, after the substitution.
     """
-    return name.strip().replace(" ", "_").casefold()
+    return name.strip().replace(" ", "_").strip("_").casefold()
 
 
 def _subtask_names_match(expected: str, observed: str) -> bool:
