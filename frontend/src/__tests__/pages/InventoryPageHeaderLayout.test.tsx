@@ -1,5 +1,5 @@
 /**
- * The Spool Inventory header must not overflow a phone viewport (#2813).
+ * The Filament Inventory header must not overflow a phone viewport (#2813).
  *
  * Its five buttons come to roughly 600px side by side, and a flex row whose
  * items cannot shrink is as wide as its contents. At 390px that pushed the
@@ -45,7 +45,7 @@ describe('InventoryPage — header layout', () => {
   it('stacks the header below sm and keeps it a row from sm up', async () => {
     render(<InventoryPageRouter />);
 
-    const heading = await screen.findByRole('heading', { name: 'Spool Inventory' });
+    const heading = await screen.findByRole('heading', { name: 'Filament Inventory' });
     // h1 -> title block -> header row
     const header = heading.parentElement?.parentElement as HTMLElement;
 
@@ -60,7 +60,7 @@ describe('InventoryPage — header layout', () => {
 
     // Located through the heading rather than by button name: the empty-state
     // panel offers its own "Add Spool" further down the page.
-    const heading = await screen.findByRole('heading', { name: 'Spool Inventory' });
+    const heading = await screen.findByRole('heading', { name: 'Filament Inventory' });
     const header = heading.parentElement?.parentElement as HTMLElement;
     const group = header.lastElementChild as HTMLElement;
     await waitFor(() => {

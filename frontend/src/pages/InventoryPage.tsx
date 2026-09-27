@@ -7,11 +7,11 @@ import {
   Search, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
   TrendingDown, Layers, Printer, AlertTriangle, X, Clock, LayoutGrid, TableProperties, Columns,
   ArrowUp, ArrowDown, ArrowUpDown, Group, ChevronDown, Check, RefreshCw, TrendingUp, Lock, Copy, Eraser, MapPin,
-  Upload, Download, Link2, Banknote, Store, Boxes, PackagePlus,
+  Upload, Download, Link2, Banknote, Store, Boxes, PackagePlus, ShoppingCart, WandSparkles,
 } from 'lucide-react';
 import { ForecastPanel } from '../components/ForecastPanel';
 import { api, spoolbuddyApi, ApiError } from '../api/client';
-import type { InventorySpool, SpoolCatalogEntry, LocationHASensorReading } from '../api/client';
+import type { FilamentProduct, InventorySpool, SpoolCatalogEntry, LocationHASensorReading } from '../api/client';
 import { Button } from '../components/Button';
 import { FilamentSwatch } from '../components/FilamentSwatch';
 import { describeHASensorReading, iconForHASensor } from '../utils/haSensorDisplay';
@@ -25,6 +25,9 @@ import { LocationsModal } from '../components/LocationsModal';
 import { SuppliersModal } from '../components/SuppliersModal';
 import { ProductsPanel } from '../components/products/ProductsPanel';
 import { IntakeModal } from '../components/products/IntakeModal';
+import { ProductEditorModal } from '../components/products/ProductEditorModal';
+import { ConversionModal } from '../components/products/ConversionModal';
+import { ReorderModal } from '../components/products/ReorderModal';
 import { BulkEditSpoolsModal } from '../components/BulkEditSpoolsModal';
 import { SpoolGroupLinkModal } from '../components/SpoolGroupLinkModal';
 import { useToast } from '../contexts/ToastContext';
@@ -49,7 +52,11 @@ import {
 
 type ArchiveFilter = 'active' | 'archived';
 type UsageFilter = 'all' | 'used' | 'new' | 'lowstock';
-type ViewMode = 'table' | 'cards' | 'forecast' | 'products';
+// The page's sections: the spools, the stock forecast and the product master
+// data (#3165). Table or cards is only how the spools are drawn, so that is a
+// view option inside the spool section rather than a section of its own.
+type Section = 'spools' | 'forecast' | 'products';
+type DisplayMode = 'table' | 'cards';
 type SortDirection = 'asc' | 'desc';
 type SortState = { column: string; direction: SortDirection } | null;
 
@@ -683,6 +690,11 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
   // Goods-in from product master data (#3165): undefined = closed, else the
   // product to open the picker on (null = start with a scan).
   const [intakeProductId, setIntakeProductId] = useState<number | null | undefined>(undefined);
+  // The product dialogs, opened from the header of the Products section and
+  // from its rows. Editing: undefined = closed, null = a new product.
+  const [productEditing, setProductEditing] = useState<FilamentProduct | null | undefined>(undefined);
+  const [productConverting, setProductConverting] = useState(false);
+  const [productReordering, setProductReordering] = useState(false);
 
   // Filter state
   const [archiveFilter, setArchiveFilter] = useState<ArchiveFilter>('active');
@@ -697,10 +709,22 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
   const [spoolFilter, setSpoolFilter] = useState('');
   const [stockFilter, setStockFilter] = useState<'all' | 'stock' | 'configured'>('all');
   const [search, setSearch] = useState('');
-  const [viewMode, setViewMode] = useState<ViewMode>('table');
+  // The section lives in the URL (?section=forecast|products) so a reload or
+  // a bookmark lands where the user was. Products need the built-in inventory.
+  const sectionParam = searchParams.get('section');
+  const section: Section =
+    sectionParam === 'forecast' || (sectionParam === 'products' && !spoolmanMode) ? sectionParam : 'spools';
+  const setSection = (next: Section) => {
+    setSearchParams((prev) => {
+      if (next === 'spools') prev.delete('section');
+      else prev.set('section', next);
+      return prev;
+    }, { replace: true });
+  };
+  const [displayMode, setDisplayMode] = useState<DisplayMode>('table');
   // Forecast and Products replace the spool list, so its search, filters
   // and bulk bar step aside for both.
-  const isPanelView = viewMode === 'forecast' || viewMode === 'products';
+  const isPanelView = section !== 'spools';
   const [sortState, setSortState] = useState<SortState>(loadSortState);
   const [columnConfig, setColumnConfig] = useState<ColumnConfig[]>(loadColumnConfig);
   const [showColumnModal, setShowColumnModal] = useState(false);
@@ -797,6 +821,22 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
     queryKey: inventoryLocationsQueryKey,
     queryFn: api.getLocations,
   });
+
+  // Product master data (#3165), for the reorder badge in the header; the
+  // Products section reads the same cache.
+  const { data: products } = useQuery({
+    queryKey: ['filament-products'],
+    queryFn: api.getFilamentProducts,
+    enabled: !spoolmanMode,
+  });
+  const combinationsBelowTarget = useMemo(
+    () => (products ?? []).reduce((sum, p) => sum + p.variants.filter((v) => v.shortfall > 0).length, 0),
+    [products],
+  );
+  const refreshProducts = () => {
+    queryClient.invalidateQueries({ queryKey: ['filament-products'] });
+    queryClient.invalidateQueries({ queryKey: ['inventory-spools'] });
+  };
 
   // Deep-link / filter: ?location_id=<id> or ?location_id=__none__
   const _rawLocationParam = searchParams.get('location_id');
@@ -1329,8 +1369,8 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
   // them when a sensor column is actually visible, since the default
   // column config hides all three.
   const needsLocationReadings =
-    viewMode === 'cards' ||
-    (viewMode === 'table' &&
+    section === 'spools' &&
+    (displayMode === 'cards' ||
       columnConfig.some((c) => c.visible && (c.id === 'temperature' || c.id === 'humidity' || c.id === 'battery')));
 
   const locationReadingsQueries = useQueries({
@@ -1662,68 +1702,167 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
           <p className="text-bambu-gray mt-1">{t('inventory.subtitle')}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {/* CSV import/export (#1576). Operates on Bambuddy's local inventory.
-              In Spoolman mode the buttons stay visible (feature parity) but are
-              disabled with a hint pointing at Spoolman's own CSV export, since
-              Spoolman owns the data store in that mode. */}
-          <Button
-            variant="secondary"
-            disabled={spoolmanMode}
-            onClick={() => setCsvImportOpen(true)}
-            title={spoolmanCsvHint}
-          >
-            <Upload className="w-4 h-4" />
-            {t('inventory.csv.importButton', 'Import CSV')}
-          </Button>
-          <Button
-            variant="secondary"
-            disabled={spoolmanMode || exportingCsv}
-            onClick={handleExportCsv}
-            title={spoolmanCsvHint}
-          >
-            {exportingCsv ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-            {t('inventory.csv.exportButton', 'Export CSV')}
-          </Button>
-          <Button variant="secondary" onClick={() => setLocationsModalOpen(true)}>
-            <MapPin className="w-4 h-4" />
-            {t('locations.manage')}
-          </Button>
-          {/* Suppliers (#2988): inventory master data like Locations, so the
-              modal opens from the same toolbar — in both inventory modes. */}
-          <Button variant="secondary" onClick={() => setSuppliersModalOpen(true)}>
-            <Store className="w-4 h-4" />
-            {t('inventory.suppliers.title')}
-          </Button>
-          <Button
-            variant="secondary"
-            disabled={filteredSpools.length === 0}
-            // Pre-select every visible spool so the user lands in "all
-            // checked", then refines downward in the modal. Per-card icon
-            // pre-selects only that spool — both flows share the same picker.
-            onClick={() => setLabelPickerSpoolIds(filteredSpools.map((s) => s.id))}
-            title={
-              filteredSpools.length === 0
-                ? t('inventory.labels.noSpoolsTitle', 'No spools to label')
-                : t('inventory.labels.bulkTitle', 'Pick spools to print labels for from the {{count}} currently shown', { count: filteredSpools.length })
-            }
-          >
-            <Printer className="w-4 h-4" />
-            {t('inventory.labels.printLabels', 'Print labels…')}
-          </Button>
+          {/* The actions of the section on show: spool housekeeping for the
+              spools, the product master data's own for the products. */}
+          {section === 'spools' && (
+            <>
+              {/* CSV import/export (#1576). Operates on Bambuddy's local inventory.
+                  In Spoolman mode the buttons stay visible (feature parity) but are
+                  disabled with a hint pointing at Spoolman's own CSV export, since
+                  Spoolman owns the data store in that mode. */}
+              <Button
+                variant="secondary"
+                disabled={spoolmanMode}
+                onClick={() => setCsvImportOpen(true)}
+                title={spoolmanCsvHint}
+              >
+                <Upload className="w-4 h-4" />
+                {t('inventory.csv.importButton', 'Import CSV')}
+              </Button>
+              <Button
+                variant="secondary"
+                disabled={spoolmanMode || exportingCsv}
+                onClick={handleExportCsv}
+                title={spoolmanCsvHint}
+              >
+                {exportingCsv ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                {t('inventory.csv.exportButton', 'Export CSV')}
+              </Button>
+              <Button variant="secondary" onClick={() => setLocationsModalOpen(true)}>
+                <MapPin className="w-4 h-4" />
+                {t('locations.manage')}
+              </Button>
+            </>
+          )}
+          {/* Suppliers (#2988): inventory master data like Locations, and what
+              the products are bought from — so in both of those sections. */}
+          {section !== 'forecast' && (
+            <Button variant="secondary" onClick={() => setSuppliersModalOpen(true)}>
+              <Store className="w-4 h-4" />
+              {t('inventory.suppliers.title')}
+            </Button>
+          )}
+          {section === 'spools' && (
+            <Button
+              variant="secondary"
+              disabled={filteredSpools.length === 0}
+              // Pre-select every visible spool so the user lands in "all
+              // checked", then refines downward in the modal. Per-card icon
+              // pre-selects only that spool — both flows share the same picker.
+              onClick={() => setLabelPickerSpoolIds(filteredSpools.map((s) => s.id))}
+              title={
+                filteredSpools.length === 0
+                  ? t('inventory.labels.noSpoolsTitle', 'No spools to label')
+                  : t('inventory.labels.bulkTitle', 'Pick spools to print labels for from the {{count}} currently shown', { count: filteredSpools.length })
+              }
+            >
+              <Printer className="w-4 h-4" />
+              {t('inventory.labels.printLabels', 'Print labels…')}
+            </Button>
+          )}
+          {section === 'products' && (
+            <>
+              <Button variant="secondary" onClick={() => setProductConverting(true)}>
+                <WandSparkles className="w-4 h-4" />
+                {t('inventory.products.takeOver')}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => setProductReordering(true)}
+                className="relative"
+                title={
+                  combinationsBelowTarget > 0
+                    ? t('inventory.products.reorder.belowTarget', { count: combinationsBelowTarget })
+                    : undefined
+                }
+              >
+                <ShoppingCart className="w-4 h-4" />
+                {t('inventory.products.reorder.button')}
+                {combinationsBelowTarget > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-[1.1rem] text-center">
+                    {combinationsBelowTarget}
+                  </span>
+                )}
+              </Button>
+            </>
+          )}
           {/* Goods in from product master data (#3165). */}
-          <Button variant="secondary" disabled={spoolmanMode} onClick={() => setIntakeProductId(null)}>
-            <PackagePlus className="w-4 h-4" />
-            {t('inventory.products.intakeTitle')}
-          </Button>
-          <Button onClick={() => setFormModal({ spool: null, mode: 'create' })}>
-            <Plus className="w-4 h-4" />
-            {t('inventory.addSpool')}
-          </Button>
+          {section !== 'forecast' && (
+            <Button variant="secondary" disabled={spoolmanMode} onClick={() => setIntakeProductId(null)}>
+              <PackagePlus className="w-4 h-4" />
+              {t('inventory.products.intakeTitle')}
+            </Button>
+          )}
+          {section === 'spools' && (
+            <Button onClick={() => setFormModal({ spool: null, mode: 'create' })}>
+              <Plus className="w-4 h-4" />
+              {t('inventory.addSpool')}
+            </Button>
+          )}
+          {section === 'products' && (
+            <Button onClick={() => setProductEditing(null)}>
+              <Plus className="w-4 h-4" />
+              {t('inventory.products.newProduct')}
+            </Button>
+          )}
         </div>
       </div>
 
-      {/* Stats Bar */}
-      {stats && !isLoading && (
+      {/* Sections */}
+      <div className="flex gap-1 border-b border-bambu-dark-tertiary overflow-x-auto">
+        <button
+          onClick={() => setSection('spools')}
+          aria-current={section === 'spools' ? 'page' : undefined}
+          className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px flex items-center gap-2 whitespace-nowrap ${
+            section === 'spools'
+              ? 'text-bambu-green border-bambu-green'
+              : 'text-bambu-gray hover:text-gray-900 dark:hover:text-white border-transparent'
+          }`}
+        >
+          <Package className="w-4 h-4 shrink-0" />
+          {t('inventory.sections.spools')}
+        </button>
+        <button
+          onClick={() => canViewForecast && setSection('forecast')}
+          disabled={!canViewForecast}
+          title={canViewForecast ? undefined : t('forecast.noReadAccess')}
+          aria-current={section === 'forecast' ? 'page' : undefined}
+          className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px flex items-center gap-2 whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed ${
+            section === 'forecast'
+              ? 'text-bambu-green border-bambu-green'
+              : 'text-bambu-gray hover:text-gray-900 dark:hover:text-white border-transparent'
+          }`}
+        >
+          {canViewForecast ? <TrendingUp className="w-4 h-4 shrink-0" /> : <Lock className="w-4 h-4 shrink-0" />}
+          {t('inventory.sections.forecast')}
+        </button>
+        {/* Product master data (#3165) — built-in inventory only. */}
+        {!spoolmanMode && (
+          <button
+            onClick={() => setSection('products')}
+            aria-current={section === 'products' ? 'page' : undefined}
+            className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px flex items-center gap-2 whitespace-nowrap ${
+              section === 'products'
+                ? 'text-bambu-green border-bambu-green'
+                : 'text-bambu-gray hover:text-gray-900 dark:hover:text-white border-transparent'
+            }`}
+          >
+            <Boxes className="w-4 h-4 shrink-0" />
+            {t('inventory.sections.products')}
+            {combinationsBelowTarget > 0 && (
+              <span
+                className="text-xs bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded-full shrink-0"
+                title={t('inventory.products.reorder.belowTarget', { count: combinationsBelowTarget })}
+              >
+                {combinationsBelowTarget}
+              </span>
+            )}
+          </button>
+        )}
+      </div>
+
+      {/* Stats Bar — about the spools, so only above them */}
+      {section === 'spools' && stats && !isLoading && (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
           {/* Total Inventory */}
           <div className="bg-bambu-dark-secondary rounded-lg p-4">
@@ -1902,9 +2041,10 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
         </div>
       )}
 
-      {/* Toolbar: Search + View toggle */}
+      {/* Toolbar: search and the view options of the spool list */}
+      {section === 'spools' && (
       <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between">
-        <div className={`relative flex-1 max-w-md ${isPanelView ? 'invisible pointer-events-none' : ''}`}>
+        <div className="relative flex-1 max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-bambu-gray/50" />
           <input
             type="text"
@@ -1925,7 +2065,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
 
         <div className="flex items-center gap-2">
           {/* Columns button (table view only) */}
-          {viewMode === 'table' && (
+          {displayMode === 'table' && (
             <button
               onClick={() => setShowColumnModal(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-bambu-gray border border-bambu-dark-tertiary rounded-lg hover:bg-bambu-dark-tertiary transition-colors"
@@ -1935,27 +2075,30 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
               <span className="hidden sm:inline">{t('inventory.columns')}</span>
             </button>
           )}
-          {/* Group similar toggle — hidden in forecast mode */}
-          {!isPanelView && (
+          {/* Group similar toggle */}
+          <button
+            onClick={toggleGroupSimilar}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium border rounded-lg transition-colors ${
+              groupSimilar
+                ? 'bg-bambu-green/20 text-bambu-green border-bambu-green/30'
+                : 'text-bambu-gray border-bambu-dark-tertiary hover:bg-bambu-dark-tertiary'
+            }`}
+            title={t('inventory.groupSimilar')}
+          >
+            <Group className="w-4 h-4" />
+            <span className="hidden sm:inline">{t('inventory.groupSimilar')}</span>
+          </button>
+          {/* View: how the spools are drawn */}
+          <div
+            className="flex bg-bambu-dark-primary border border-bambu-dark-tertiary rounded-lg overflow-hidden"
+            role="group"
+            aria-label={t('inventory.displayMode')}
+          >
             <button
-              onClick={toggleGroupSimilar}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium border rounded-lg transition-colors ${
-                groupSimilar
-                  ? 'bg-bambu-green/20 text-bambu-green border-bambu-green/30'
-                  : 'text-bambu-gray border-bambu-dark-tertiary hover:bg-bambu-dark-tertiary'
-              }`}
-              title={t('inventory.groupSimilar')}
-            >
-              <Group className="w-4 h-4" />
-              <span className="hidden sm:inline">{t('inventory.groupSimilar')}</span>
-            </button>
-          )}
-          {/* Table / Cards toggle */}
-          <div className="flex bg-bambu-dark-primary border border-bambu-dark-tertiary rounded-lg overflow-hidden">
-            <button
-              onClick={() => setViewMode('table')}
+              onClick={() => setDisplayMode('table')}
+              aria-pressed={displayMode === 'table'}
               className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium transition-colors ${
-                viewMode === 'table'
+                displayMode === 'table'
                   ? 'bg-bambu-green text-white'
                   : 'text-bambu-gray hover:bg-bambu-dark-tertiary'
               }`}
@@ -1964,9 +2107,10 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
               <span className="hidden sm:inline">{t('inventory.table')}</span>
             </button>
             <button
-              onClick={() => setViewMode('cards')}
+              onClick={() => setDisplayMode('cards')}
+              aria-pressed={displayMode === 'cards'}
               className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium transition-colors ${
-                viewMode === 'cards'
+                displayMode === 'cards'
                   ? 'bg-bambu-green text-white'
                   : 'text-bambu-gray hover:bg-bambu-dark-tertiary'
               }`}
@@ -1974,36 +2118,10 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
               <LayoutGrid className="w-4 h-4" />
               <span className="hidden sm:inline">{t('inventory.cards')}</span>
             </button>
-            <button
-              onClick={() => canViewForecast && setViewMode('forecast')}
-              disabled={!canViewForecast}
-              title={canViewForecast ? undefined : t('forecast.noReadAccess')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-                viewMode === 'forecast'
-                  ? 'bg-bambu-green text-white'
-                  : 'text-bambu-gray hover:bg-bambu-dark-tertiary'
-              }`}
-            >
-              {canViewForecast ? <TrendingUp className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
-              <span className="hidden sm:inline">{t('forecast.title')}</span>
-            </button>
-            {/* Product master data (#3165) — built-in inventory only. */}
-            {!spoolmanMode && (
-              <button
-                onClick={() => setViewMode('products')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium transition-colors ${
-                  viewMode === 'products'
-                    ? 'bg-bambu-green text-white'
-                    : 'text-bambu-gray hover:bg-bambu-dark-tertiary'
-                }`}
-              >
-                <Boxes className="w-4 h-4" />
-                <span className="hidden sm:inline">{t('inventory.products.title')}</span>
-              </button>
-            )}
           </div>
         </div>
       </div>
+      )}
 
       {/* Filter chips row — hidden in forecast mode */}
       <div className={`flex flex-wrap items-center gap-2 ${isPanelView ? 'hidden' : ''}`}>
@@ -2341,16 +2459,18 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
         <div className="flex justify-center py-16">
           <Loader2 className="w-8 h-8 text-bambu-green animate-spin" />
         </div>
-      ) : viewMode === 'forecast' ? (
+      ) : section === 'forecast' ? (
         /* Forecast view */
         <ForecastPanel spools={spools || []} />
-      ) : viewMode === 'products' ? (
+      ) : section === 'products' ? (
         /* Product master data (#3165) */
         <ProductsPanel
           onIntake={(productId) => setIntakeProductId(productId)}
+          onEdit={(product) => setProductEditing(product)}
+          onConvert={() => setProductConverting(true)}
           unassignedCount={(spools || []).filter((s) => !s.archived_at && s.variant_id == null).length}
         />
-      ) : viewMode === 'cards' ? (
+      ) : displayMode === 'cards' ? (
         /* Cards view */
         pagedItems.length > 0 ? (
           <>
@@ -2850,6 +2970,28 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
 
       <SuppliersModal open={suppliersModalOpen} onClose={() => setSuppliersModalOpen(false)} />
 
+      {productEditing !== undefined && (
+        <ProductEditorModal
+          product={productEditing}
+          onClose={() => setProductEditing(undefined)}
+          onSaved={() => {
+            setProductEditing(undefined);
+            refreshProducts();
+          }}
+        />
+      )}
+      {productConverting && (
+        <ConversionModal
+          onClose={() => setProductConverting(false)}
+          onDone={() => {
+            setProductConverting(false);
+            refreshProducts();
+          }}
+        />
+      )}
+      {productReordering && (
+        <ReorderModal onClose={() => setProductReordering(false)} onDone={() => setProductReordering(false)} />
+      )}
       {intakeProductId !== undefined && (
         <IntakeModal initialProductId={intakeProductId} onClose={() => setIntakeProductId(undefined)} />
       )}
