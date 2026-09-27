@@ -165,6 +165,47 @@ class TestPrinterManager:
         manager._schedule_async(coro)
         coro.close()
 
+    def _schedule_into(self, manager, future):
+        """Schedule a coroutine whose outcome is *future*, which the test settles."""
+        mock_loop = MagicMock()
+        mock_loop.is_running.return_value = True
+        manager._loop = mock_loop
+
+        async def dummy_coro():
+            pass
+
+        coro = dummy_coro()
+        with patch("backend.app.services.printer_manager.asyncio.run_coroutine_threadsafe", return_value=future):
+            manager._schedule_async(coro)
+        coro.close()
+
+    def test_a_callback_cancelled_at_shutdown_is_not_an_error(self, manager, caplog):
+        """Stopping the loop cancels whatever is still pending; the log said
+        'ERROR ... Exception in scheduled callback' with a traceback for it on
+        every restart."""
+        import concurrent.futures
+        import logging
+
+        future = concurrent.futures.Future()
+        self._schedule_into(manager, future)
+
+        with caplog.at_level(logging.ERROR):
+            future.cancel()
+
+        assert "Exception in scheduled callback" not in caplog.text
+
+    def test_a_callback_that_fails_is_still_logged(self, manager, caplog):
+        import concurrent.futures
+        import logging
+
+        future = concurrent.futures.Future()
+        self._schedule_into(manager, future)
+
+        with caplog.at_level(logging.ERROR):
+            future.set_exception(RuntimeError("boom"))
+
+        assert "Exception in scheduled callback: boom" in caplog.text
+
     # ========================================================================
     # Tests for connect_printer
     # ========================================================================

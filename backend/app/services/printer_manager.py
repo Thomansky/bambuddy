@@ -706,6 +706,11 @@ class PrinterManager:
             future = asyncio.run_coroutine_threadsafe(coro, self._loop)
 
             def handle_exception(f):
+                # A callback still pending when the loop shuts down is
+                # cancelled. That is not a failure, and reporting it as one
+                # put an ERROR with a traceback in the log on every restart.
+                if f.cancelled():
+                    return
                 try:
                     # This will re-raise any exception from the coroutine
                     f.result()
