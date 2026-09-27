@@ -1332,6 +1332,7 @@ export default {
         alreadyDrying: 'secagem do AMS em andamento',
         bedTooWarm: 'mesa ainda quente, {{temp}} °C',
         bedTempUnknown: 'temperatura da mesa desconhecida',
+        visionPlate: 'placa do vision encoder necessária',
       },
     },
     slicerAmsMapping: {
@@ -1941,6 +1942,7 @@ export default {
       waitingPrinterOffline: 'Aguardando: impressora offline',
       waitingPrinterBusy: 'Aguardando: impressora ocupada',
       waitingPlateClear: 'Aguardando: mesa ainda não liberada',
+      waitingVisionPlate: 'Aguardando: coloque a placa do vision encoder e depois libere a placa',
       waitingAlreadyDrying: 'Aguardando: secagem do AMS em andamento',
       waitingBedTooWarm: 'Aguardando: mesa ainda quente ({{temp}} °C)',
       waitingBedTempUnknown: 'Aguardando: temperatura da mesa desconhecida',

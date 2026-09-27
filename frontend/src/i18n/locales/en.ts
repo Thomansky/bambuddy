@@ -1344,6 +1344,7 @@ export default {
         alreadyDrying: 'AMS drying in progress',
         bedTooWarm: 'bed still warm, {{temp}} °C',
         bedTempUnknown: 'bed temperature unknown',
+        visionPlate: 'vision encoder plate needed',
       },
     },
     slicerAmsMapping: {
@@ -1959,6 +1960,7 @@ export default {
       waitingPrinterOffline: 'Waiting: printer offline',
       waitingPrinterBusy: 'Waiting: printer busy',
       waitingPlateClear: 'Waiting: plate not released yet',
+      waitingVisionPlate: 'Waiting: put in the vision encoder plate, then release the plate',
       waitingAlreadyDrying: 'Waiting: AMS drying in progress',
       waitingBedTooWarm: 'Waiting: bed still warm ({{temp}} °C)',
       waitingBedTempUnknown: 'Waiting: bed temperature unknown',

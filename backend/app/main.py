@@ -153,7 +153,7 @@ from backend.app.utils.ams_humidity import ams_humidity_percent
 from backend.app.utils.filament_types import printer_filament_type
 from backend.app.utils.fts_routing import extruder_for_inlet
 from backend.app.utils.local_time import utcnow_naive
-from backend.app.utils.print_jobs import is_internal_printer_job
+from backend.app.utils.print_jobs import internal_job_needs_plate_check, is_internal_printer_job
 
 
 # =============================================================================
@@ -6583,16 +6583,21 @@ async def on_print_complete(printer_id: int, data: dict):
     # if that immediate attempt failed, the regular completion path retries.
     kill_switch_notification_task = _kill_switch_notification_tasks.pop(printer_id, None)
 
-    # The printer's own jobs end here (#3081, #3127). A calibration leaves no
-    # part on the plate, so the plate-clear gate must not be raised for it;
-    # it consumed no filament, so the usage tracker must not book AMS deltas
-    # against it (#3081 booked 1 kg per spool on an aborted run); it has no
-    # archive, no queue item and no owner to notify (#2634 saw the queue
-    # mislabel one as the waiting print). The only thing to do is tell the
-    # maintenance executor, which closes the run that asked for it -- and
-    # clear the user-stopped flag, which a Stop pressed during the calibration
-    # would otherwise carry into the next real print. is_internal_printer_job
-    # documents what counts and why both fields are tested.
+    # The printer's own jobs end here (#3081, #3127). A calibration consumed
+    # no filament, so the usage tracker must not book AMS deltas against it
+    # (#3081 booked 1 kg per spool on an aborted run); it has no archive, no
+    # queue item and no owner to notify (#2634 saw the queue mislabel one as
+    # the waiting print). What it does get is the plate-clear gate, exactly as
+    # a print does: the vision encoder calibration needs its own plate put in
+    # and taken out again, and without the gate the queue sent the next job
+    # seconds after a calibration -- onto whatever plate was in (farm report,
+    # an H2S started a print 13 s after its vision encoder run). Not after the
+    # pressure-advance line that opens a print; the print's end raises it.
+    # Then the maintenance executor is told, which closes the run that asked
+    # for it, and the user-stopped flag is cleared, which a Stop pressed
+    # during the calibration would otherwise carry into the next real print.
+    # is_internal_printer_job documents what counts and why both fields are
+    # tested.
     if is_internal_printer_job(data.get("filename", ""), data.get("subtask_name", "")):
         _user_stopped_printers.discard(printer_id)
         logger.info(
@@ -6601,6 +6606,8 @@ async def on_print_complete(printer_id: int, data: dict):
             data.get("subtask_name", ""),
             data.get("status"),
         )
+        if internal_job_needs_plate_check(data.get("filename", ""), data.get("subtask_name", "")):
+            printer_manager.set_awaiting_plate_clear(printer_id, True)
         raw_data = data.get("raw_data") or {}
         print_error = raw_data.get("print_error") if isinstance(raw_data, dict) else None
         print_error = int(print_error) if isinstance(print_error, (int, float)) and print_error else None

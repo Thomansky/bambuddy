@@ -100,6 +100,28 @@ def is_internal_printer_job(filename: str | None, subtask_name: str | None = Non
     return any(_normalize_job_name(value) in INTERNAL_JOB_NAMES for value in (filename, subtask_name) if value)
 
 
+# The one internal job that opens a user's print instead of being a job of
+# its own: the pressure-advance line the printer draws before the print when
+# flow dynamics calibration is on. Its end is not something the operator has to
+# look at -- the print it belongs to raises the plate gate when it finishes.
+PRINT_PREAMBLE_JOB_NAMES = frozenset({"auto_pa_line_calib_mode"})
+
+
+def internal_job_needs_plate_check(filename: str | None, subtask_name: str | None = None) -> bool:
+    """Whether the end of this internal job must wait for the plate to be released.
+
+    Every job the printer runs for itself ends with a bed nobody has looked at
+    since: a levelling run leaves the plate as it found it, the vision encoder
+    calibration needs its own plate put in before and taken out after, and a
+    manual flow-dynamics line or pattern is printed onto the plate. Only the
+    automatic pressure-advance line is left out, because it is the first part
+    of a print whose own end raises the gate.
+    """
+    return not any(
+        _normalize_job_name(value) in PRINT_PREAMBLE_JOB_NAMES for value in (filename, subtask_name) if value
+    )
+
+
 def job_names_for_action(action: str | None) -> frozenset[str]:
     """The reported job names a maintenance action's run waits for."""
     return ACTION_JOB_NAMES.get(action or "", frozenset())

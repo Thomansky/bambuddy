@@ -1332,6 +1332,7 @@ export default {
         alreadyDrying: 'AMS 正在乾燥',
         bedTooWarm: '熱床仍然較熱，{{temp}} °C',
         bedTempUnknown: '熱床溫度未知',
+        visionPlate: '需要視覺編碼器板',
       },
     },
     slicerAmsMapping: {
@@ -1941,6 +1942,7 @@ export default {
       waitingPrinterOffline: '等待中：印表機離線',
       waitingPrinterBusy: '等待中：印表機忙碌',
       waitingPlateClear: '等待中：列印板尚未確認清空',
+      waitingVisionPlate: '等待中：放入視覺編碼器板，然後釋放列印板',
       waitingAlreadyDrying: '等待中：AMS 正在乾燥',
       waitingBedTooWarm: '等待中：熱床仍然較熱（{{temp}} °C）',
       waitingBedTempUnknown: '等待中：熱床溫度未知',

@@ -1579,6 +1579,7 @@ export default {
         alreadyDrying: 'AMS 건조 진행 중',
         bedTooWarm: '베드가 아직 따뜻함, {{temp}} °C',
         bedTempUnknown: '베드 온도 알 수 없음',
+        visionPlate: '비전 인코더 플레이트 필요',
       },
     },
     slicerAmsMapping: {
@@ -1857,6 +1858,7 @@ export default {
       waitingPrinterOffline: '대기 중: 프린터 오프라인',
       waitingPrinterBusy: '대기 중: 프린터 사용 중',
       waitingPlateClear: '대기 중: 플레이트가 아직 해제되지 않음',
+      waitingVisionPlate: '대기 중: 비전 인코더 플레이트를 넣은 뒤 플레이트를 해제하세요',
       waitingAlreadyDrying: '대기 중: AMS 건조 진행 중',
       waitingBedTooWarm: '대기 중: 베드가 아직 따뜻함 ({{temp}} °C)',
       waitingBedTempUnknown: '대기 중: 베드 온도 알 수 없음',

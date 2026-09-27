@@ -1332,6 +1332,7 @@ export default {
         alreadyDrying: 'AMS-Trocknung läuft',
         bedTooWarm: 'Druckbett noch warm, {{temp}} °C',
         bedTempUnknown: 'Betttemperatur unbekannt',
+        visionPlate: 'Vision-Encoder-Platte nötig',
       },
     },
     slicerAmsMapping: {
@@ -1941,6 +1942,7 @@ export default {
       waitingPrinterOffline: 'Wartet: Drucker offline',
       waitingPrinterBusy: 'Wartet: Drucker beschäftigt',
       waitingPlateClear: 'Wartet: Druckplatte noch nicht freigegeben',
+      waitingVisionPlate: 'Wartet: Vision-Encoder-Platte einlegen, dann Druckplatte freigeben',
       waitingAlreadyDrying: 'Wartet: AMS-Trocknung läuft',
       waitingBedTooWarm: 'Wartet: Druckbett noch warm ({{temp}} °C)',
       waitingBedTempUnknown: 'Wartet: Betttemperatur unbekannt',
