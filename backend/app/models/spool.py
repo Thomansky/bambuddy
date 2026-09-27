@@ -84,6 +84,11 @@ class Spool(Base):
     # so referential cleanup is its job, not the database's.
     filament_group_id: Mapped[int | None] = mapped_column(Integer, index=True)
 
+    # The product variant this spool is a roll of (#3165). NULL = not yet
+    # assigned. Plain Integer like filament_group_id: the spool keeps its own
+    # copy of the master data, so a missing variant leaves nothing dangling.
+    variant_id: Mapped[int | None] = mapped_column(Integer, index=True)
+
     last_used: Mapped[datetime | None] = mapped_column(DateTime)  # Last time this spool was used in a print
     encode_time: Mapped[datetime | None] = mapped_column(DateTime)  # When spool was encoded/written to tag
     tag_uid: Mapped[str | None] = mapped_column(String(32))  # RFID tag UID (up to 32 hex chars)

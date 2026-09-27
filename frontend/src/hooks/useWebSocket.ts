@@ -408,6 +408,8 @@ export function useWebSocket() {
         debouncedInvalidate('inventory-spools');
         debouncedInvalidate('spoolman-inventory-spools');
         debouncedInvalidate(inventoryLocationsQueryKey[0]);
+        // Product stock counts are spools too (#3165).
+        debouncedInvalidate('filament-products');
         break;
 
       case 'spool_assignment_changed':

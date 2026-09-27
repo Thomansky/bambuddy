@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { X, Loader2, Save, Beaker, Palette, Zap, Tag, Unlink, Link2 } from 'lucide-react';
+import { X, Loader2, Save, Beaker, Palette, Zap, Tag, Unlink, Link2, Boxes } from 'lucide-react';
 import { api, ApiError } from '../api/client';
 import type { InventorySpool, SlicerSetting, SpoolCatalogEntry, LocalPreset, BuiltinFilament, SpoolmanBulkCreateResult, SpoolFilamentPresetInput, SpoolKProfileInput, SpoolmanFilamentEntry } from '../api/client';
 import { Button } from './Button';
@@ -946,6 +946,18 @@ export function SpoolFormModal({
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
+  // Product master data (#3165): the product this spool is a roll of.
+  const variantId = isEditing && !spoolmanMode ? spool?.variant_id ?? null : null;
+  const { data: filamentProducts } = useQuery({
+    queryKey: ['filament-products'],
+    queryFn: api.getFilamentProducts,
+    enabled: isOpen && variantId !== null,
+  });
+  const ownProduct = variantId !== null ? filamentProducts?.find((p) => p.variants.some((v) => v.id === variantId)) : undefined;
+  const ownVariant = ownProduct?.variants.find((v) => v.id === variantId);
+  const ownColor = ownProduct?.colors.find((c) => c.id === ownVariant?.color_id);
+  const ownSize = ownProduct?.sizes.find((s) => s.id === ownVariant?.size_id);
+
   if (!isOpen) return null;
 
   // Linked spools (#2936): other members of this spool's group, from the
@@ -1063,6 +1075,18 @@ export function SpoolFormModal({
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {ownProduct && (
+          <div className="flex items-center gap-2 px-4 py-2 border-b border-bambu-dark-tertiary flex-shrink-0">
+            <Boxes className="w-4 h-4 text-bambu-green" />
+            <span className="text-sm text-bambu-gray">
+              {t('inventory.products.spoolBelongsTo', {
+                product: `${ownProduct.material_number ? `${ownProduct.material_number} · ` : ''}${ownProduct.label}`,
+                variant: `${ownColor?.color_name ?? ''}${ownSize ? ` · ${ownSize.label_weight >= 1000 && ownSize.label_weight % 100 === 0 ? `${ownSize.label_weight / 1000} kg` : `${ownSize.label_weight} g`}` : ''}`,
+              })}
+            </span>
+          </div>
+        )}
 
         {/* Linked spools (#2936) — internal inventory, edit mode only.
             Shows the membership with an unlink action, or offers linking
@@ -1280,14 +1304,23 @@ export function SpoolFormModal({
                   manufacturer, not the seller), so the same section renders
                   in Spoolman mode and saves to the twin endpoint. */}
               <div>
-                <SupplierSection
-                  links={supplierLinks}
-                  onChange={(next) => {
-                    setSupplierLinks(next);
-                    setSupplierLinksTouched(true);
-                  }}
-                  currencySymbol={currencySymbol}
-                />
+                {ownProduct ? (
+                  /* Product master data (#3165): suppliers live on the product. */
+                  <p className="text-sm text-bambu-gray">
+                    {t('inventory.products.spoolSuppliersOnProduct', {
+                      suppliers: ownProduct.suppliers.map((s) => s.supplier_name).join(', ') || '–',
+                    })}
+                  </p>
+                ) : (
+                  <SupplierSection
+                    links={supplierLinks}
+                    onChange={(next) => {
+                      setSupplierLinks(next);
+                      setSupplierLinksTouched(true);
+                    }}
+                    currencySymbol={currencySymbol}
+                  />
+                )}
               </div>
 
               {/* Usage History (only when editing internal inventory; Spoolman tracks its own) */}
