@@ -7,10 +7,21 @@
  * the timeline drawing the pre-SJF queue forever (#3043).
  */
 
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { beforeEach, describe, it, expect } from 'vitest';
+import { screen, waitFor } from '@testing-library/react';
+import { http, HttpResponse } from 'msw';
+import { render } from '../utils';
+import { server } from '../mocks/server';
 import { QueueTimelineView } from '../../components/QueueTimelineView';
 import type { PrintQueueItem, Printer } from '../../api/client';
+
+// The timeline reads what already ran from the print log; empty unless a test
+// says otherwise.
+let printLog: unknown[] = [];
+beforeEach(() => {
+  printLog = [];
+  server.use(http.get('/api/v1/print-log/', () => HttpResponse.json({ items: printLog, total: printLog.length })));
+});
 
 const HOUR = 3600;
 
@@ -169,5 +180,46 @@ describe('QueueTimelineView and the scheduler waiting reasons (#3074)', () => {
       expect(barsLeftToRight()).toEqual(['Running now']);
       unmount();
     }
+  });
+});
+
+describe('QueueTimelineView history', () => {
+  it('draws a print that already ran on its printer, with its outcome', async () => {
+    const start = new Date(Date.now() - 20 * 60 * 1000);
+    const end = new Date(Date.now() - 5 * 60 * 1000);
+    // Naive UTC, the way the print log serialises it.
+    const naive = (d: Date) => d.toISOString().slice(0, 19);
+    printLog = [
+      {
+        id: 7,
+        archive_id: 42,
+        job_number: null,
+        print_name: 'Bracket v2',
+        printer_name: 'Workshop X1C',
+        printer_id: 1,
+        status: 'failed',
+        started_at: naive(start),
+        completed_at: naive(end),
+        duration_seconds: 900,
+        failure_reason: 'Spaghetti',
+        created_at: naive(end),
+      },
+    ];
+    render(
+      <QueueTimelineView
+        queueItems={[]}
+        printers={printers}
+        printerStatuses={{}}
+        sjfEnabled={false}
+        onItemClick={() => {}}
+        t={(key: string) => key}
+      />,
+    );
+
+    const bar = await screen.findByTitle(/^Bracket v2/);
+    expect(bar.getAttribute('title')).toContain('queue.timeline.history.failed');
+    expect(bar.getAttribute('title')).toContain('Spaghetti');
+    // With history on screen the view is not "empty".
+    await waitFor(() => expect(screen.queryByText('queue.timeline.nothingCommitted')).not.toBeInTheDocument());
   });
 });

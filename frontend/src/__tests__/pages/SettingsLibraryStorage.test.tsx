@@ -61,7 +61,8 @@ describe('SettingsPage — library storage', () => {
   let migrations: number;
 
   beforeEach(() => {
-    window.history.replaceState({}, '', '/');
+    // The File Manager card lives on Settings → Files → Library (#3161).
+    window.history.replaceState({}, '', '/settings?tab=files');
     localStorage.clear();
     setAuthToken(null);
     saved = [];

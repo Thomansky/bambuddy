@@ -1,9 +1,11 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
-import { ChevronLeft, ChevronRight, Clock, Layers, Printer as PrinterIcon } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
+import { CalendarDays, ChevronLeft, ChevronRight, Clock, Layers, Printer as PrinterIcon } from 'lucide-react';
 import { formatDuration, parseUTCDate } from '../utils/date';
 import { compareQueueOrder, queueLaneKey } from '../utils/queueOrder';
 import { isBusyOnlyWaitingReason } from '../utils/waitingReason';
-import type { PrintQueueItem, Printer } from '../api/client';
+import type { PrintLogEntry, PrintQueueItem, Printer } from '../api/client';
 import { api } from '../api/client';
 import { Button } from './Button';
 
@@ -28,6 +30,30 @@ interface ScheduleEvent {
   estimatedEnd: Date;
   progress?: number;
   type: 'printing' | 'queued';
+}
+
+/** A print that already ran, from the print log: drawn behind the queue so
+ *  the lanes read back in time as well as forward. */
+interface PastRun {
+  entry: PrintLogEntry;
+  start: Date;
+  end: Date;
+}
+
+// The print log is filtered by when a row was written, which is when the run
+// ended. A run that started in the window and ended after it is found by
+// looking this far past the window's end.
+const HISTORY_LOOKAHEAD_MS = 3 * 24 * HOUR_MS;
+
+/** The print log takes naive UTC timestamps. */
+function logTimestamp(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 19);
+}
+
+function pastRunClasses(status: string): string {
+  if (status === 'completed') return 'bg-slate-400/15 border border-slate-400/40';
+  if (status === 'failed') return 'bg-red-500/15 border border-red-400/50';
+  return 'bg-bambu-dark-tertiary/60 border border-bambu-gray/30';
 }
 
 interface QueueTimelineViewProps {
@@ -85,6 +111,54 @@ export function QueueTimelineView({
     return Math.floor(target / HOUR_MS) * HOUR_MS;
   }, [now, windowOffsetMs]);
   const rangeEndMs = rangeStartMs + RANGE_MS;
+  const navigate = useNavigate();
+
+  // What already ran in this window (timeline history): only fetched while the
+  // window reaches into the past.
+  const { data: history } = useQuery({
+    queryKey: ['queue-timeline-history', rangeStartMs],
+    queryFn: () =>
+      api.getPrintLog({
+        dateFrom: logTimestamp(rangeStartMs),
+        dateTo: logTimestamp(rangeEndMs + HISTORY_LOOKAHEAD_MS),
+        limit: 500,
+        sortBy: 'date',
+        sortDir: 'asc',
+      }),
+    enabled: rangeStartMs < Date.now(),
+    staleTime: 60_000,
+  });
+
+  const pastByLane = useMemo(() => {
+    const map = new Map<string, PastRun[]>();
+    for (const entry of history?.items ?? []) {
+      if (entry.printer_id == null) continue;
+      const start = parseUTCDate(entry.started_at);
+      if (!start) continue;
+      const end =
+        parseUTCDate(entry.completed_at) ??
+        (entry.duration_seconds ? new Date(start.getTime() + entry.duration_seconds * 1000) : null);
+      if (!end || end.getTime() <= rangeStartMs || start.getTime() >= rangeEndMs) continue;
+      const key = `printer:${entry.printer_id}`;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push({ entry, start, end });
+    }
+    return map;
+  }, [history, rangeStartMs, rangeEndMs]);
+  const hasPastRuns = pastByLane.size > 0;
+
+  // Jump straight to a day instead of stepping back twelve hours at a time.
+  const jumpToDay = (value: string) => {
+    if (!value) return;
+    const [y, m, d] = value.split('-').map(Number);
+    const target = new Date(y, m - 1, d, 0, 0, 0, 0).getTime();
+    setWindowOffsetMs(target - Date.now());
+  };
+  const dayInputValue = (() => {
+    const start = new Date(rangeStartMs);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())}`;
+  })();
   const nowMs = now.getTime();
 
   // Build schedule events. Only committed schedules are rendered:
@@ -300,6 +374,16 @@ export function QueueTimelineView({
               {t('queue.timeline.window.now')}
             </Button>
           )}
+          <label className="flex items-center gap-1.5 text-xs text-bambu-gray" title={t('queue.timeline.window.jumpTo')}>
+            <CalendarDays className="w-4 h-4" />
+            <input
+              type="date"
+              value={dayInputValue}
+              onChange={(e) => jumpToDay(e.target.value)}
+              className="px-2 py-1 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-xs focus:border-bambu-green focus:outline-none"
+              aria-label={t('queue.timeline.window.jumpTo')}
+            />
+          </label>
         </div>
         {allDoneBy && (
           <span className="text-xs text-bambu-gray flex items-center gap-1.5">
@@ -319,9 +403,34 @@ export function QueueTimelineView({
           committed (no scheduled_time / no active print to chain off).
           Without this, users see striped lanes with no bars and assume the
           timeline is broken — common confusion from the GHSA-r2qv era. */}
-      {lanes.length > 0 && events.length === 0 && (
+      {lanes.length > 0 && events.length === 0 && !hasPastRuns && (
         <div className="mb-4 p-3 rounded-lg border border-bambu-dark-tertiary bg-bambu-dark/40 text-xs text-bambu-gray">
           {t('queue.timeline.nothingCommitted')}
+        </div>
+      )}
+
+      {hasPastRuns && (
+        <div className="flex flex-wrap items-center gap-3 mb-3 text-[11px] text-bambu-gray">
+          <span className="flex items-center gap-1.5">
+            <span className={`inline-block w-3 h-3 rounded ${pastRunClasses('completed')}`} />
+            {t('queue.timeline.history.completed')}
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className={`inline-block w-3 h-3 rounded ${pastRunClasses('failed')}`} />
+            {t('queue.timeline.history.failed')}
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className={`inline-block w-3 h-3 rounded ${pastRunClasses('cancelled')}`} />
+            {t('queue.timeline.history.cancelled')}
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block w-3 h-3 rounded bg-blue-500/30 border border-blue-400/60" />
+            {t('queue.timeline.history.running')}
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block w-3 h-3 rounded bg-bambu-green/20 border border-bambu-green/40" />
+            {t('queue.timeline.history.planned')}
+          </span>
         </div>
       )}
 
@@ -389,6 +498,43 @@ export function QueueTimelineView({
                       }}
                       aria-hidden
                     />
+
+                    {/* What already ran (timeline history), behind the queue's bars */}
+                    {(pastByLane.get(lane.key) ?? []).map((run) => {
+                      const startMs = Math.max(rangeStartMs, run.start.getTime());
+                      const endMs = Math.min(rangeEndMs, run.end.getTime());
+                      const leftPct = ((startMs - rangeStartMs) / RANGE_MS) * 100;
+                      const widthPct = ((endMs - startMs) / RANGE_MS) * 100;
+                      const name = run.entry.print_name || `#${run.entry.id}`;
+                      const statusLabel = t(`queue.timeline.history.${
+                        run.entry.status === 'completed' ? 'completed' : run.entry.status === 'failed' ? 'failed' : 'cancelled'
+                      }`);
+                      const tooltip = [
+                        name,
+                        statusLabel,
+                        `${formatTooltipTime(run.start)} → ${formatTooltipTime(run.end)}`,
+                        run.entry.duration_seconds ? formatDuration(run.entry.duration_seconds) : null,
+                        run.entry.failure_reason,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ');
+                      return (
+                        <button
+                          key={`past-${run.entry.id}`}
+                          onClick={() => run.entry.archive_id != null && navigate(`/archives?highlight=${run.entry.archive_id}`)}
+                          title={tooltip}
+                          className={`absolute rounded-md overflow-hidden flex items-center px-1.5 text-left hover:brightness-125 ${pastRunClasses(run.entry.status)}`}
+                          style={{
+                            left: `${leftPct}%`,
+                            width: `max(${MIN_BAR_PX}px, ${widthPct}%)`,
+                            top: 8,
+                            height: LANE_BAR_HEIGHT_PX,
+                          }}
+                        >
+                          <span className="text-xs text-bambu-gray truncate leading-tight">{name}</span>
+                        </button>
+                      );
+                    })}
 
                     {/* Job bars */}
                     {laneEvents.map((ev) => {
