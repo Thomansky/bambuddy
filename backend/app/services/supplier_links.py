@@ -78,5 +78,29 @@ async def apply_supplier_inheritance(db: AsyncSession, spool: Spool) -> None:
         brand=spool.brand,
         color_name=spool.color_name,
     )
+    _attach(db, spool, templates)
+
+
+async def apply_supplier_inheritance_to_batch(db: AsyncSession, spools: list[Spool]) -> None:
+    """Inheritance for a bulk create: one donor lookup for the whole batch.
+
+    Every copy is built from the same payload, so the product tuple — and with
+    it the answer — is identical for all of them. The caller commits.
+    """
+    if not spools:
+        return
+    first = spools[0]
+    templates = await find_supplier_link_templates_for_product(
+        db,
+        material=first.material,
+        subtype=first.subtype,
+        brand=first.brand,
+        color_name=first.color_name,
+    )
+    for spool in spools:
+        _attach(db, spool, templates)
+
+
+def _attach(db: AsyncSession, spool: Spool, templates: list[dict]) -> None:
     for template in templates:
         db.add(SpoolSupplier(spool_id=spool.id, **template))

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useToast } from '../contexts/ToastContext';
 import { useTranslation } from 'react-i18next';
 import { api, ApiError } from '../api/client';
-import { inventoryLocationsQueryKey } from '../utils/inventoryQueries';
+import { inventoryLocationsQueryKey, inventorySuppliersQueryKey } from '../utils/inventoryQueries';
 
 // The only auth-failure close code /api/v1/ws emits (websocket.py
 // _WS_CLOSE_UNAUTHORIZED). A 4401 means the ws-token was missing / invalid /
@@ -410,6 +410,7 @@ export function useWebSocket() {
         debouncedInvalidate(inventoryLocationsQueryKey[0]);
         // The per-material-number aggregate is derived from the same rows (#2870).
         debouncedInvalidate('material-number-stats');
+        debouncedInvalidate(inventorySuppliersQueryKey[0]);
         break;
 
       case 'spool_assignment_changed':

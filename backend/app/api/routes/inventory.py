@@ -29,7 +29,7 @@ from backend.app.models.spool_assignment import SpoolAssignment
 from backend.app.models.spool_catalog import SpoolCatalogEntry
 from backend.app.models.spool_filament_preset import SpoolFilamentPreset
 from backend.app.models.spool_k_profile import SpoolKProfile
-from backend.app.models.supplier import SpoolmanSpoolSupplier, SpoolSupplier, Supplier
+from backend.app.models.supplier import SpoolmanSpoolSupplier, SpoolSupplier, Supplier, supplier_name_key
 from backend.app.models.user import User
 from backend.app.schemas.location import LocationCreate, LocationResponse, LocationUpdate
 from backend.app.schemas.spool import (
@@ -89,7 +89,7 @@ from backend.app.services.spool_links import (
     unlink_spool,
 )
 from backend.app.services.spoolman import SpoolmanClient, get_spoolman_client, init_spoolman_client
-from backend.app.services.supplier_links import apply_supplier_inheritance
+from backend.app.services.supplier_links import apply_supplier_inheritance, apply_supplier_inheritance_to_batch
 from backend.app.services.tag_conflict import tag_already_linked
 from backend.app.utils.filament_ids import (
     GENERIC_FILAMENT_IDS,
@@ -105,6 +105,20 @@ logger = logging.getLogger(__name__)
 _GENERIC_ID_VALUES = set(GENERIC_FILAMENT_IDS.values())
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
+
+
+def spool_response_loads():
+    """Loader options for every query that answers with a ``SpoolResponse``.
+
+    Both relationships the schema reads carry the default loader, so the ~50
+    other ``select(Spool)`` call sites across the usage tracker, AMS sync,
+    labels and backup pay nothing for them (#2988).
+    """
+    return (
+        selectinload(Spool.k_profiles),
+        selectinload(Spool.supplier_links).selectinload(SpoolSupplier.supplier),
+    )
+
 
 # Bounded read size for the CSV import body so a chunked upload with no
 # Content-Length can't stream past the cap into memory before we notice.
@@ -790,6 +804,22 @@ async def delete_location(
 # distinct from ``Spool.brand`` (who made it).
 
 
+DUPLICATE_SUPPLIER_NAME = "A supplier with this name already exists"
+
+
+async def _supplier_by_name(db: AsyncSession, name: str, *, exclude_id: int | None = None) -> Supplier | None:
+    """Case-insensitive name lookup behind the duplicate guard (#2988).
+
+    Matches on the stored ``name_key``, so the comparison is the Python fold
+    the CSV import also uses — ``func.lower()`` would have folded ASCII only
+    on SQLite and let an umlaut'd case variant past the check.
+    """
+    query = select(Supplier).where(Supplier.name_key == supplier_name_key(name))
+    if exclude_id is not None:
+        query = query.where(Supplier.id != exclude_id)
+    return (await db.execute(query)).scalars().first()
+
+
 async def _supplier_reference_counts(db: AsyncSession) -> dict[int, int]:
     """Spools referencing each supplier, across BOTH inventories.
 
@@ -803,6 +833,46 @@ async def _supplier_reference_counts(db: AsyncSession) -> dict[int, int]:
         for supplier_id, count in result.all():
             counts[supplier_id] = counts.get(supplier_id, 0) + count
     return counts
+
+
+async def _prune_orphaned_spoolman_supplier_rows(db: AsyncSession) -> int:
+    """Drop twin rows whose Spoolman spool no longer exists (#2988).
+
+    ``_purge_local_rows_for_spool`` covers the deletes Bambuddy performs, but
+    Spoolman is a separate application with its own UI: a spool deleted there
+    — or a Spoolman instance that was rebuilt or replaced — leaves
+    ``spoolman_spool_suppliers`` rows behind that keep the supplier's
+    reference count non-zero, and nothing in Bambuddy can show or remove the
+    phantom reference. Without this, that 409 is permanent.
+
+    Reconciled on the delete attempt rather than on every listing: it costs
+    one Spoolman call, and only the route that is about to refuse needs the
+    answer. Archived spools count as live — archiving is a soft delete and the
+    assignment has to survive it. Returns the number of rows removed; 0 when
+    Spoolman is off or unreachable, which leaves the 409 standing rather than
+    dropping rows on the strength of a failed lookup.
+    """
+    settings = await _load_settings_map(db)
+    if not _spoolman_is_enabled(settings):
+        return 0
+    local_ids = set((await db.execute(select(SpoolmanSpoolSupplier.spoolman_spool_id).distinct())).scalars().all())
+    if not local_ids:
+        return 0
+    client = await _ensure_spoolman_client(settings)
+    if not client:
+        return 0
+    try:
+        spools = await client.get_all_spools(allow_archived=True)
+    except Exception:
+        logger.warning("Failed to fetch Spoolman spools to reconcile supplier assignments", exc_info=True)
+        return 0
+    stale = local_ids - {s.get("id") for s in spools if isinstance(s, dict)}
+    if not stale:
+        return 0
+    await db.execute(delete(SpoolmanSpoolSupplier).where(SpoolmanSpoolSupplier.spoolman_spool_id.in_(stale)))
+    await db.commit()
+    logger.info("Dropped supplier assignments for %d Spoolman spool(s) that no longer exist", len(stale))
+    return len(stale)
 
 
 @router.get("/suppliers", response_model=list[SupplierResponse])
@@ -828,10 +898,17 @@ async def create_supplier(
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_UPDATE),
 ):
-    """Create a supplier."""
+    """Create a supplier (mirrors create_location, duplicate name included)."""
+    if await _supplier_by_name(db, data.name):
+        raise HTTPException(status_code=409, detail=DUPLICATE_SUPPLIER_NAME)
     supplier = Supplier(**data.model_dump())
     db.add(supplier)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        # The unique index behind the check above, for the concurrent case.
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=DUPLICATE_SUPPLIER_NAME) from exc
     await db.refresh(supplier)
     await ws_manager.broadcast({"type": "inventory_changed"})
     return SupplierResponse.model_validate(supplier)
@@ -850,9 +927,16 @@ async def update_supplier(
     if not supplier:
         raise HTTPException(status_code=404, detail="Supplier not found")
 
-    for field, value in data.model_dump(exclude_unset=True).items():
+    fields = data.model_dump(exclude_unset=True)
+    if "name" in fields and await _supplier_by_name(db, fields["name"], exclude_id=supplier_id):
+        raise HTTPException(status_code=409, detail=DUPLICATE_SUPPLIER_NAME)
+    for field, value in fields.items():
         setattr(supplier, field, value)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=DUPLICATE_SUPPLIER_NAME) from exc
     await db.refresh(supplier)
     await ws_manager.broadcast({"type": "inventory_changed"})
 
@@ -874,7 +958,11 @@ async def delete_supplier(
         raise HTTPException(status_code=404, detail="Supplier not found")
 
     if (await _supplier_reference_counts(db)).get(supplier_id, 0) > 0:
-        raise HTTPException(status_code=409, detail="Supplier has spools assigned and cannot be deleted")
+        # Last chance before refusing: the reference may be a Spoolman spool
+        # that was deleted in Spoolman itself, which Bambuddy never hears about.
+        await _prune_orphaned_spoolman_supplier_rows(db)
+        if (await _supplier_reference_counts(db)).get(supplier_id, 0) > 0:
+            raise HTTPException(status_code=409, detail="Supplier has spools assigned and cannot be deleted")
 
     await db.delete(supplier)
     await db.commit()
@@ -1303,7 +1391,7 @@ async def list_spools(
     _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_READ),
 ):
     """List all spools, excluding archived by default."""
-    query = select(Spool).options(selectinload(Spool.k_profiles))
+    query = select(Spool).options(*spool_response_loads())
     if not include_archived:
         query = query.where(Spool.archived_at.is_(None))
     query = query.order_by(Spool.material, Spool.brand, Spool.color_name)
@@ -1324,7 +1412,13 @@ async def export_spools_csv(
     """Export the active inventory as CSV (same schema the importer accepts)."""
     from datetime import datetime, timezone
 
-    query = select(Spool).where(Spool.archived_at.is_(None)).order_by(Spool.material, Spool.brand, Spool.color_name)
+    query = (
+        select(Spool)
+        # The supplier columns (#2988) read the assignments off each row.
+        .options(selectinload(Spool.supplier_links).selectinload(SpoolSupplier.supplier))
+        .where(Spool.archived_at.is_(None))
+        .order_by(Spool.material, Spool.brand, Spool.color_name)
+    )
     result = await db.execute(query)
     spools = list(result.scalars().all())
     content = serialize(spools)
@@ -1439,7 +1533,7 @@ async def get_spool_by_tag(
     if not normalized_tray_uuid and not normalized_tag_uid:
         raise HTTPException(400, "Provide tray_uuid and/or tag_uid")
 
-    base_query = select(Spool).options(selectinload(Spool.k_profiles))
+    base_query = select(Spool).options(*spool_response_loads())
     if not include_archived:
         base_query = base_query.where(Spool.archived_at.is_(None))
 
@@ -1464,7 +1558,7 @@ async def get_spool(
     _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_READ),
 ):
     """Get a single spool with k_profiles."""
-    result = await db.execute(select(Spool).options(selectinload(Spool.k_profiles)).where(Spool.id == spool_id))
+    result = await db.execute(select(Spool).options(*spool_response_loads()).where(Spool.id == spool_id))
     spool = result.scalar_one_or_none()
     if not spool:
         raise HTTPException(404, "Spool not found")
@@ -1504,7 +1598,7 @@ async def create_spool(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
     await db.commit()
     await db.refresh(spool)
-    result = await db.execute(select(Spool).options(selectinload(Spool.k_profiles)).where(Spool.id == spool.id))
+    result = await db.execute(select(Spool).options(*spool_response_loads()).where(Spool.id == spool.id))
     await ws_manager.broadcast({"type": "inventory_changed"})
     return result.scalar_one()
 
@@ -1530,10 +1624,8 @@ async def bulk_create_spools(
         db.add(spool)
         spools.append(spool)
     await db.flush()
-    # Inherit supplier assignments per copy (#2988); the donor lookup is
-    # identical for all copies but each spool gets its own link rows.
-    for spool in spools:
-        await apply_supplier_inheritance(db, spool)
+    # Every copy gets its own link rows, from one donor lookup (#2988).
+    await apply_supplier_inheritance_to_batch(db, spools)
     if link_to_spool_id is not None:
         try:
             await link_spools(db, [s.id for s in spools], source_spool_id=link_to_spool_id)
@@ -1541,7 +1633,7 @@ async def bulk_create_spools(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
     await db.commit()
     ids = [s.id for s in spools]
-    result = await db.execute(select(Spool).options(selectinload(Spool.k_profiles)).where(Spool.id.in_(ids)))
+    result = await db.execute(select(Spool).options(*spool_response_loads()).where(Spool.id.in_(ids)))
     await ws_manager.broadcast({"type": "inventory_changed"})
     return list(result.scalars().all())
 
@@ -1578,7 +1670,7 @@ async def update_spool(
         await propagate_master_data(db, spool)
 
     await db.commit()
-    result = await db.execute(select(Spool).options(selectinload(Spool.k_profiles)).where(Spool.id == spool_id))
+    result = await db.execute(select(Spool).options(*spool_response_loads()).where(Spool.id == spool_id))
     await ws_manager.broadcast({"type": "inventory_changed"})
     return result.scalar_one()
 
@@ -1620,7 +1712,7 @@ async def archive_spool(
 
     spool.archived_at = datetime.now(timezone.utc)
     await db.commit()
-    result = await db.execute(select(Spool).options(selectinload(Spool.k_profiles)).where(Spool.id == spool_id))
+    result = await db.execute(select(Spool).options(*spool_response_loads()).where(Spool.id == spool_id))
     await ws_manager.broadcast({"type": "inventory_changed"})
     return result.scalar_one()
 
@@ -1639,7 +1731,7 @@ async def restore_spool(
 
     spool.archived_at = None
     await db.commit()
-    result = await db.execute(select(Spool).options(selectinload(Spool.k_profiles)).where(Spool.id == spool_id))
+    result = await db.execute(select(Spool).options(*spool_response_loads()).where(Spool.id == spool_id))
     await ws_manager.broadcast({"type": "inventory_changed"})
     return result.scalar_one()
 
@@ -1671,7 +1763,7 @@ async def reset_spool_consumed_counter(
 
     spool.weight_used_baseline = spool.weight_used or 0
     await db.commit()
-    result = await db.execute(select(Spool).options(selectinload(Spool.k_profiles)).where(Spool.id == spool_id))
+    result = await db.execute(select(Spool).options(*spool_response_loads()).where(Spool.id == spool_id))
     await ws_manager.broadcast({"type": "inventory_changed"})
     return result.scalar_one()
 
@@ -1980,10 +2072,14 @@ async def replace_spool_suppliers(
         new_links.append(row)
 
     await db.commit()
-    for row in new_links:
-        await db.refresh(row)
+    refreshed = await db.execute(
+        select(SpoolSupplier)
+        .options(selectinload(SpoolSupplier.supplier))
+        .where(SpoolSupplier.id.in_([row.id for row in new_links]))
+        .order_by(SpoolSupplier.id)
+    )
     await ws_manager.broadcast({"type": "inventory_changed"})
-    return new_links
+    return list(refreshed.scalars().all())
 
 
 @router.get("/spools/{spool_id}/filament-presets", response_model=list[SpoolFilamentPresetResponse])
@@ -2066,7 +2162,7 @@ async def list_assignments(
     from backend.app.services.printer_manager import printer_manager
 
     query = select(SpoolAssignment).options(
-        selectinload(SpoolAssignment.spool).selectinload(Spool.k_profiles),
+        selectinload(SpoolAssignment.spool).options(*spool_response_loads()),
         selectinload(SpoolAssignment.printer),
     )
     if printer_id is not None:
@@ -2131,7 +2227,7 @@ async def assign_spool(
     from backend.app.services.printer_manager import printer_manager
 
     # 1. Validate spool exists and is not archived
-    result = await db.execute(select(Spool).options(selectinload(Spool.k_profiles)).where(Spool.id == data.spool_id))
+    result = await db.execute(select(Spool).options(*spool_response_loads()).where(Spool.id == data.spool_id))
     spool = result.scalar_one_or_none()
     if not spool:
         raise HTTPException(404, "Spool not found")
@@ -2310,7 +2406,7 @@ async def assign_spool(
     result = await db.execute(
         select(SpoolAssignment)
         .options(
-            selectinload(SpoolAssignment.spool).selectinload(Spool.k_profiles),
+            selectinload(SpoolAssignment.spool).options(*spool_response_loads()),
             selectinload(SpoolAssignment.printer),
         )
         .where(SpoolAssignment.id == assignment.id)
@@ -2415,7 +2511,7 @@ async def link_tag_to_spool(
     ``tag_already_linked`` 409, which names that spool so a caller can offer
     to move the tag instead of only reporting that it is taken (#3110).
     """
-    result = await db.execute(select(Spool).options(selectinload(Spool.k_profiles)).where(Spool.id == spool_id))
+    result = await db.execute(select(Spool).options(*spool_response_loads()).where(Spool.id == spool_id))
     spool = result.scalar_one_or_none()
     if not spool:
         raise HTTPException(404, "Spool not found")
@@ -2496,7 +2592,7 @@ async def link_tag_to_spool(
         spool.data_origin = data.data_origin
 
     await db.commit()
-    result = await db.execute(select(Spool).options(selectinload(Spool.k_profiles)).where(Spool.id == spool_id))
+    result = await db.execute(select(Spool).options(*spool_response_loads()).where(Spool.id == spool_id))
     return result.scalar_one()
 
 
@@ -2650,6 +2746,8 @@ async def get_material_number_stats(
 
 @router.get("/stats/suppliers", response_model=list[SupplierStats])
 async def get_supplier_stats(
+    date_from: date | None = Query(None, description="Start date (inclusive), YYYY-MM-DD"),
+    date_to: date | None = Query(None, description="End date (inclusive), YYYY-MM-DD"),
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_READ),
 ):
@@ -2660,10 +2758,19 @@ async def get_supplier_stats(
     supplier X" reads directly. Stock comes from active spools; consumption
     and cost from the recorded usage history, archived spools included —
     their consumption happened. Sorted by consumption, heaviest first.
+
+    ``date_from`` / ``date_to`` scope the usage half only, so the widget can
+    honour the dashboard timeframe like every other one on that page. Stock is
+    point-in-time by nature and is never windowed.
     """
     from backend.app.models.spool_usage_history import SpoolUsageHistory
 
     purchase_link = (SpoolSupplier.spool_id == Spool.id) & SpoolSupplier.is_purchase_source.is_(True)
+    usage_window = []
+    if date_from:
+        usage_window.append(SpoolUsageHistory.created_at >= datetime.combine(date_from, time.min, tzinfo=timezone.utc))
+    if date_to:
+        usage_window.append(SpoolUsageHistory.created_at <= datetime.combine(date_to, time.max, tzinfo=timezone.utc))
 
     inventory_rows = await db.execute(
         select(
@@ -2686,6 +2793,7 @@ async def get_supplier_stats(
         .select_from(SpoolUsageHistory)
         .join(Spool, SpoolUsageHistory.spool_id == Spool.id)
         .join(SpoolSupplier, purchase_link)
+        .where(*usage_window)
         .group_by(SpoolSupplier.supplier_id)
     )
 
@@ -3206,5 +3314,15 @@ async def create_spool_from_slot(
             "spool_id": spool.id,
         }
     )
-    result = await db.execute(select(Spool).options(selectinload(Spool.k_profiles)).where(Spool.id == spool.id))
+    # populate_existing because `spool` is the same identity-mapped instance
+    # create_spool_from_tray built: it pre-initialises `supplier_links` to []
+    # so the flush can't lazy-load it, and SQLAlchemy will not overwrite an
+    # already-loaded collection on a plain re-select — the inherited
+    # assignments (#2988) would be in the table but missing from the response.
+    result = await db.execute(
+        select(Spool)
+        .options(*spool_response_loads())
+        .where(Spool.id == spool.id)
+        .execution_options(populate_existing=True)
+    )
     return result.scalar_one()

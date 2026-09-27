@@ -303,7 +303,8 @@ class SpoolResponse(SpoolBase):
     k_profiles: list[SpoolKProfileResponse] = []
     # Supplier assignments (#2988): where this product can be bought, with
     # per-assignment article number / price and a purchase-source marker.
-    # Reads the selectin-loaded ORM relationship `supplier_links`.
+    # Reads the ORM relationship `supplier_links`, which every route
+    # answering with this schema loads explicitly (see spool_response_loads).
     suppliers: list[SpoolSupplierResponse] = Field(default=[], validation_alias="supplier_links")
     # Link group for shared master data (#2936); NULL = not linked. Read-only
     # here — membership changes go through the link/unlink endpoints.

@@ -476,7 +476,9 @@ async def list_spools(
         # Supplier assignments (#2988) live Bambuddy-side even for Spoolman
         # spools, so the list carries them in both modes identically.
         link_result = await db.execute(
-            select(SpoolmanSpoolSupplier).where(SpoolmanSpoolSupplier.spoolman_spool_id.in_(spool_ids))
+            select(SpoolmanSpoolSupplier)
+            .options(selectinload(SpoolmanSpoolSupplier.supplier))
+            .where(SpoolmanSpoolSupplier.spoolman_spool_id.in_(spool_ids))
         )
         links_by_spool: dict[int, list[dict]] = {}
         for link in link_result.scalars().all():
@@ -507,7 +509,9 @@ async def get_spool(
     kp_result = await db.execute(select(SpoolmanKProfile).where(SpoolmanKProfile.spoolman_spool_id == spool_id))
     mapped["k_profiles"] = [_k_profile_to_dict(kp) for kp in kp_result.scalars().all()]
     link_result = await db.execute(
-        select(SpoolmanSpoolSupplier).where(SpoolmanSpoolSupplier.spoolman_spool_id == spool_id)
+        select(SpoolmanSpoolSupplier)
+        .options(selectinload(SpoolmanSpoolSupplier.supplier))
+        .where(SpoolmanSpoolSupplier.spoolman_spool_id == spool_id)
     )
     mapped["suppliers"] = [_supplier_link_to_dict(link) for link in link_result.scalars().all()]
     await enrich_spool_dicts_with_location_id(db, [mapped])
@@ -907,6 +911,22 @@ async def update_spool(
     return _map_spoolman_spool(updated)
 
 
+async def _purge_local_rows_for_spool(db: AsyncSession, spool_id: int) -> None:
+    """Drop the Bambuddy-side rows a deleted Spoolman spool leaves behind.
+
+    Spoolman owns the spool; Bambuddy owns the K profiles, the filament preset
+    overrides and the supplier assignments, each keyed by the remote id with no
+    foreign key that could cascade. The K-profile and preset leaks are inert,
+    but a leaked ``spoolman_spool_suppliers`` row keeps the supplier's
+    reference count non-zero, so deleting that supplier answers 409 forever
+    with no way for the user to find the phantom reference (#2988).
+
+    The caller commits.
+    """
+    for model in (SpoolmanKProfile, SpoolmanFilamentPreset, SpoolmanSpoolSupplier):
+        await db.execute(delete(model).where(model.spoolman_spool_id == spool_id))
+
+
 @router.delete("/spools/{spool_id}")
 async def delete_spool(
     spool_id: int = Path(..., gt=0),
@@ -917,6 +937,8 @@ async def delete_spool(
     client = await _get_client(db)
     async with _translate_spoolman_errors():
         await client.delete_spool(spool_id)
+    await _purge_local_rows_for_spool(db, spool_id)
+    await db.commit()
     await ws_manager.broadcast({"type": "inventory_changed"})
     return {"status": "deleted"}
 
@@ -1044,6 +1066,7 @@ async def bulk_delete_spools(
         try:
             async with _translate_spoolman_errors():
                 await client.delete_spool(sid)
+            await _purge_local_rows_for_spool(db, sid)
             deleted += 1
         except HTTPException as exc:
             errors.append({"id": sid, "status": exc.status_code, "detail": exc.detail})
@@ -1051,6 +1074,7 @@ async def bulk_delete_spools(
             logger.exception("Spoolman bulk-delete failed for spool %s", sid)
             errors.append({"id": sid, "status": 500, "detail": str(exc)})
     if deleted:
+        await db.commit()
         await ws_manager.broadcast({"type": "inventory_changed"})
     return {"deleted": deleted, "errors": errors}
 
@@ -2174,7 +2198,11 @@ async def get_spoolman_spool_suppliers(
 ) -> list[dict]:
     """Supplier assignments for a Spoolman spool (#2988, Bambuddy-side rows)."""
     await _get_client(db)
-    result = await db.execute(select(SpoolmanSpoolSupplier).where(SpoolmanSpoolSupplier.spoolman_spool_id == spool_id))
+    result = await db.execute(
+        select(SpoolmanSpoolSupplier)
+        .options(selectinload(SpoolmanSpoolSupplier.supplier))
+        .where(SpoolmanSpoolSupplier.spoolman_spool_id == spool_id)
+    )
     return [_supplier_link_to_dict(link) for link in result.scalars().all()]
 
 
@@ -2213,7 +2241,11 @@ async def save_spoolman_spool_suppliers(
         db.add(row)
         saved.append(row)
     await db.commit()
-    for row in saved:
-        await db.refresh(row)
+    refreshed = await db.execute(
+        select(SpoolmanSpoolSupplier)
+        .options(selectinload(SpoolmanSpoolSupplier.supplier))
+        .where(SpoolmanSpoolSupplier.id.in_([row.id for row in saved]))
+        .order_by(SpoolmanSpoolSupplier.id)
+    )
     await ws_manager.broadcast({"type": "inventory_changed"})
-    return [_supplier_link_to_dict(link) for link in saved]
+    return [_supplier_link_to_dict(link) for link in refreshed.scalars().all()]

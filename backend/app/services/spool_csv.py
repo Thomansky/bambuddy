@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.color_catalog import ColorCatalogEntry
 from backend.app.models.spool import Spool
-from backend.app.models.supplier import Supplier
+from backend.app.models.supplier import Supplier, supplier_name_key
 from backend.app.schemas.spool import SpoolCreate
 
 # Fixed CSV header, in output order. Round-trips cleanly: export writes these
@@ -215,14 +215,16 @@ def _spool_key(material: str | None, brand: str | None, color_name: str | None) 
 
 
 async def _load_supplier_map(db: AsyncSession) -> dict[str, int]:
-    """Existing suppliers keyed by trimmed, lower-cased name for CSV matching.
+    """Existing suppliers keyed by ``Supplier.name_key`` for CSV matching.
 
     Import resolves the `suppliers` / `purchase_supplier` columns against
     this map and never creates suppliers — the master list is curated in the
-    UI, and a typo in a CSV must not silently mint a new supplier.
+    UI, and a typo in a CSV must not silently mint a new supplier. The key is
+    unambiguous because it is the same column the unique index is on, so two
+    names that land on one entry here cannot both exist as rows.
     """
-    result = await db.execute(select(Supplier.id, Supplier.name))
-    return {name.strip().lower(): supplier_id for supplier_id, name in result.all()}
+    result = await db.execute(select(Supplier.id, Supplier.name_key))
+    return {name_key: supplier_id for supplier_id, name_key in result.all()}
 
 
 async def _load_existing_spool_keys(db: AsyncSession) -> set[tuple[str, str, str]]:
@@ -339,6 +341,7 @@ async def parse_and_validate(raw_bytes: bytes, db: AsyncSession) -> ImportPrevie
     catalog = await _load_color_catalog(db)
     existing_keys = await _load_existing_spool_keys(db)
     supplier_map = await _load_supplier_map(db)
+    unknown_suppliers: set[str] = set()
 
     def cell(row: list[str], field: str) -> str:
         idx = col_index.get(field)
@@ -525,16 +528,21 @@ async def parse_and_validate(raw_bytes: bytes, db: AsyncSession) -> ImportPrevie
         purchase_supplier_id: int | None = None
         names = [n.strip() for n in cell(raw_row, "suppliers").split(";") if n.strip()]
         purchase_name = cell(raw_row, "purchase_supplier").strip()
-        if purchase_name and purchase_name.lower() not in (n.lower() for n in names):
+        if purchase_name and supplier_name_key(purchase_name) not in {supplier_name_key(n) for n in names}:
             names.append(purchase_name)
         for name in names:
-            supplier_id = supplier_map.get(name.lower())
+            key = supplier_name_key(name)
+            supplier_id = supplier_map.get(key)
             if supplier_id is None:
-                warnings.append(f"Row {row_number}: unknown supplier '{name}' — assignment dropped")
+                # Once per name, not once per row: a 500-row export against an
+                # empty supplier list is one missing supplier, not 500 problems.
+                if key not in unknown_suppliers:
+                    unknown_suppliers.add(key)
+                    warnings.append(f"Unknown supplier '{name}' — assignments dropped")
             elif supplier_id not in supplier_ids:
                 supplier_ids.append(supplier_id)
         if purchase_name:
-            purchase_supplier_id = supplier_map.get(purchase_name.lower())
+            purchase_supplier_id = supplier_map.get(supplier_name_key(purchase_name))
 
         rows.append(
             ImportRowResult(
@@ -618,7 +626,7 @@ def _cell_value(spool: Spool, col: str) -> str:
     if col == "suppliers":
         # Derived (#2988): "; "-joined supplier names, no decoration — the
         # purchase source has its own column so import can match plain names.
-        # supplier_links is selectin-loaded with the export query.
+        # The export query loads supplier_links explicitly.
         return "; ".join(link.supplier_name for link in spool.supplier_links)
     if col == "purchase_supplier":
         return next((link.supplier_name for link in spool.supplier_links if link.is_purchase_source), "")

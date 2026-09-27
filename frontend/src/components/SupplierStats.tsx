@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Loader2 } from 'lucide-react';
+import { AlertTriangle, Loader2 } from 'lucide-react';
 import { api } from '../api/client';
 
 // Consumption, cost and stock grouped by the purchase-source supplier
@@ -9,6 +9,10 @@ import { api } from '../api/client';
 
 interface SupplierStatsProps {
   currency: string;
+  // The dashboard timeframe, the same one every other widget on that page
+  // honours. It scopes consumption and cost; stock is point-in-time.
+  dateFrom?: string;
+  dateTo?: string;
 }
 
 function formatGrams(g: number): string {
@@ -16,11 +20,11 @@ function formatGrams(g: number): string {
   return `${Math.round(g)} g`;
 }
 
-export function SupplierStats({ currency }: SupplierStatsProps) {
+export function SupplierStats({ currency, dateFrom, dateTo }: SupplierStatsProps) {
   const { t } = useTranslation();
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['supplier-stats'],
-    queryFn: api.getSupplierStats,
+    queryKey: ['supplier-stats', dateFrom ?? 'all', dateTo ?? 'all'],
+    queryFn: () => api.getSupplierStats(dateFrom, dateTo),
   });
 
   if (isLoading) {
@@ -31,7 +35,19 @@ export function SupplierStats({ currency }: SupplierStatsProps) {
     );
   }
 
-  if (isError || !data || data.length === 0) {
+  // A failed request is not an empty inventory: reporting a 403 or a 500 as
+  // "you have not assigned any" tells the user they have not done something
+  // they have.
+  if (isError) {
+    return (
+      <p className="flex items-center gap-2 text-sm text-red-400 py-4">
+        <AlertTriangle className="w-4 h-4" />
+        {t('stats.suppliers.error')}
+      </p>
+    );
+  }
+
+  if (!data || data.length === 0) {
     return <p className="text-sm text-bambu-gray py-4">{t('stats.suppliers.empty')}</p>;
   }
 

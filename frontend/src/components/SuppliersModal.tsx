@@ -1,9 +1,11 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Store, Plus, Trash2, Loader2, Pencil, Check, X, Search, ExternalLink } from 'lucide-react';
+import { Store, Plus, Trash2, Loader2, Pencil, Check, X, Search, ExternalLink, AlertTriangle } from 'lucide-react';
 import { api, ApiError } from '../api/client';
 import type { Supplier } from '../api/client';
 import { useToast } from '../contexts/ToastContext';
+import { inventorySuppliersQueryKey, invalidateInventorySuppliers } from '../utils/inventoryQueries';
 import { ConfirmModal } from './ConfirmModal';
 
 interface SuppliersModalProps {
@@ -18,8 +20,15 @@ interface SuppliersModalProps {
 export function SuppliersModal({ open, onClose }: SuppliersModalProps) {
   const { t } = useTranslation();
   const { showToast } = useToast();
-  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
+  // The list lives in react-query under the key useWebSocket invalidates on
+  // inventory_changed, so a supplier created inline in the spool dialog — or
+  // by another user, in another tab — shows up here (#2988).
+  const { data: suppliers = [], isLoading: loading, isError } = useQuery({
+    queryKey: inventorySuppliersQueryKey,
+    queryFn: api.getSuppliers,
+    enabled: open,
+  });
   const [search, setSearch] = useState('');
 
   // Add/Edit form state
@@ -32,22 +41,6 @@ export function SuppliersModal({ open, onClose }: SuppliersModalProps) {
   const [saving, setSaving] = useState(false);
 
   const [deleteSupplier, setDeleteSupplier] = useState<Supplier | null>(null);
-
-  const loadSuppliers = useCallback(async () => {
-    setLoading(true);
-    try {
-      setSuppliers(await api.getSuppliers());
-    } catch (err) {
-      console.error('SuppliersModal.loadSuppliers failed:', err);
-      showToast(t('settings.suppliers.loadFailed'), 'error');
-    } finally {
-      setLoading(false);
-    }
-  }, [showToast, t]);
-
-  useEffect(() => {
-    if (open) loadSuppliers();
-  }, [open, loadSuppliers]);
 
   useEffect(() => {
     if (!open) return;
@@ -78,19 +71,23 @@ export function SuppliersModal({ open, onClose }: SuppliersModalProps) {
 
   const handleAdd = async () => {
     if (!formName.trim()) {
-      showToast(t('settings.suppliers.nameRequired'), 'error');
+      showToast(t('inventory.suppliers.nameRequired'), 'error');
       return;
     }
     setSaving(true);
     try {
-      const supplier = await api.createSupplier(formPayload());
-      setSuppliers((prev) => [...prev, supplier].sort((a, b) => a.name.localeCompare(b.name)));
+      await api.createSupplier(formPayload());
+      await invalidateInventorySuppliers(queryClient);
       setShowAddForm(false);
       resetForm();
-      showToast(t('settings.suppliers.added'), 'success');
+      showToast(t('inventory.suppliers.added'), 'success');
     } catch (err) {
       console.error('SuppliersModal.handleAdd failed:', err);
-      showToast(t('settings.suppliers.addFailed'), 'error');
+      // 409: the name is taken — say so instead of a generic failure.
+      showToast(
+        t(err instanceof ApiError && err.status === 409 ? 'inventory.suppliers.duplicateName' : 'inventory.suppliers.addFailed'),
+        'error',
+      );
     } finally {
       setSaving(false);
     }
@@ -111,18 +108,21 @@ export function SuppliersModal({ open, onClose }: SuppliersModalProps) {
 
   const handleUpdate = async (id: number) => {
     if (!formName.trim()) {
-      showToast(t('settings.suppliers.nameRequired'), 'error');
+      showToast(t('inventory.suppliers.nameRequired'), 'error');
       return;
     }
     setSaving(true);
     try {
-      const updated = await api.updateSupplier(id, formPayload());
-      setSuppliers((prev) => prev.map((s) => (s.id === id ? updated : s)).sort((a, b) => a.name.localeCompare(b.name)));
+      await api.updateSupplier(id, formPayload());
+      await invalidateInventorySuppliers(queryClient);
       cancelEdit();
-      showToast(t('settings.suppliers.updated'), 'success');
+      showToast(t('inventory.suppliers.updated'), 'success');
     } catch (err) {
       console.error('SuppliersModal.handleUpdate failed:', err);
-      showToast(t('settings.suppliers.updateFailed'), 'error');
+      showToast(
+        t(err instanceof ApiError && err.status === 409 ? 'inventory.suppliers.duplicateName' : 'inventory.suppliers.updateFailed'),
+        'error',
+      );
     } finally {
       setSaving(false);
     }
@@ -132,15 +132,15 @@ export function SuppliersModal({ open, onClose }: SuppliersModalProps) {
     if (!deleteSupplier) return;
     try {
       await api.deleteSupplier(deleteSupplier.id);
-      setSuppliers((prev) => prev.filter((s) => s.id !== deleteSupplier.id));
-      showToast(t('settings.suppliers.deleted'), 'success');
+      await invalidateInventorySuppliers(queryClient);
+      showToast(t('inventory.suppliers.deleted'), 'success');
     } catch (err) {
       console.error('SuppliersModal.handleDelete failed:', err);
       // 409: still referenced by spools — surface the guard, not a generic error.
       if (err instanceof ApiError && err.status === 409) {
-        showToast(t('settings.suppliers.deleteBlocked', { count: deleteSupplier.spool_count }), 'error');
+        showToast(t('inventory.suppliers.deleteBlocked', { count: deleteSupplier.spool_count }), 'error');
       } else {
-        showToast(t('settings.suppliers.deleteFailed'), 'error');
+        showToast(t('inventory.suppliers.deleteFailed'), 'error');
       }
     } finally {
       setDeleteSupplier(null);
@@ -152,7 +152,7 @@ export function SuppliersModal({ open, onClose }: SuppliersModalProps) {
       <input
         type="text"
         className="w-full px-3 py-2 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:border-bambu-green focus:outline-none"
-        placeholder={t('settings.suppliers.namePlaceholder')}
+        placeholder={t('inventory.suppliers.namePlaceholder')}
         value={formName}
         maxLength={200}
         onChange={(e) => setFormName(e.target.value)}
@@ -161,7 +161,7 @@ export function SuppliersModal({ open, onClose }: SuppliersModalProps) {
         <input
           type="text"
           className="flex-1 min-w-0 px-3 py-2 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:border-bambu-green focus:outline-none"
-          placeholder={t('settings.suppliers.websitePlaceholder')}
+          placeholder={t('inventory.suppliers.websitePlaceholder')}
           value={formWebsite}
           maxLength={500}
           onChange={(e) => setFormWebsite(e.target.value)}
@@ -169,7 +169,7 @@ export function SuppliersModal({ open, onClose }: SuppliersModalProps) {
         <input
           type="text"
           className="w-40 px-3 py-2 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:border-bambu-green focus:outline-none"
-          placeholder={t('settings.suppliers.customerNumberPlaceholder')}
+          placeholder={t('inventory.suppliers.customerNumberPlaceholder')}
           value={formCustomerNumber}
           maxLength={100}
           onChange={(e) => setFormCustomerNumber(e.target.value)}
@@ -178,7 +178,7 @@ export function SuppliersModal({ open, onClose }: SuppliersModalProps) {
       <input
         type="text"
         className="w-full px-3 py-2 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:border-bambu-green focus:outline-none"
-        placeholder={t('settings.suppliers.notePlaceholder')}
+        placeholder={t('inventory.suppliers.notePlaceholder')}
         value={formNote}
         maxLength={500}
         onChange={(e) => setFormNote(e.target.value)}
@@ -199,7 +199,7 @@ export function SuppliersModal({ open, onClose }: SuppliersModalProps) {
           <div className="flex items-center gap-2">
             <Store className="w-5 h-5 text-bambu-gray" />
             <h2 id="suppliers-modal-title" className="text-lg font-semibold text-white">
-              {t('settings.suppliers.title')}
+              {t('inventory.suppliers.title')}
             </h2>
             <span className="text-sm text-bambu-gray">({suppliers.length})</span>
           </div>
@@ -222,14 +222,14 @@ export function SuppliersModal({ open, onClose }: SuppliersModalProps) {
         </div>
 
         <div className="flex-1 min-h-0 overflow-y-auto px-6 py-4 space-y-4">
-          <p className="text-sm text-bambu-gray">{t('settings.suppliers.description')}</p>
+          <p className="text-sm text-bambu-gray">{t('inventory.suppliers.description')}</p>
 
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-bambu-gray" />
             <input
               type="text"
               className="w-full pl-10 pr-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white placeholder-bambu-gray focus:border-bambu-green focus:outline-none"
-              placeholder={t('settings.suppliers.search')}
+              placeholder={t('inventory.suppliers.search')}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -237,7 +237,7 @@ export function SuppliersModal({ open, onClose }: SuppliersModalProps) {
 
           {showAddForm && (
             <div className="p-4 bg-bambu-dark rounded-lg border border-bambu-dark-tertiary space-y-3">
-              <h3 className="text-sm font-medium text-white">{t('settings.suppliers.addNew')}</h3>
+              <h3 className="text-sm font-medium text-white">{t('inventory.suppliers.addNew')}</h3>
               {formFields}
               <div className="flex gap-2 justify-end">
                 <button
@@ -263,6 +263,13 @@ export function SuppliersModal({ open, onClose }: SuppliersModalProps) {
               <Loader2 className="w-5 h-5 animate-spin mr-2" />
               {t('common.loading')}
             </div>
+          ) : isError ? (
+            // A failed load must not read as "no suppliers yet" — that invites
+            // the user to create one that already exists.
+            <div className="flex items-center justify-center gap-2 py-8 text-sm text-red-400">
+              <AlertTriangle className="w-4 h-4" />
+              {t('inventory.suppliers.loadFailed')}
+            </div>
           ) : (
             <div className="border border-bambu-dark-tertiary rounded-lg">
               <table className="w-full text-sm">
@@ -270,10 +277,10 @@ export function SuppliersModal({ open, onClose }: SuppliersModalProps) {
                   <tr>
                     <th className="px-4 py-2 text-left text-bambu-gray font-medium">{t('common.name')}</th>
                     <th className="px-4 py-2 text-left text-bambu-gray font-medium hidden sm:table-cell">
-                      {t('settings.suppliers.customerNumber')}
+                      {t('inventory.suppliers.customerNumber')}
                     </th>
                     <th className="px-4 py-2 text-right text-bambu-gray font-medium w-20">
-                      {t('settings.suppliers.spools')}
+                      {t('inventory.suppliers.spools')}
                     </th>
                     <th className="px-4 py-2 w-24"></th>
                   </tr>
@@ -282,7 +289,7 @@ export function SuppliersModal({ open, onClose }: SuppliersModalProps) {
                   {filtered.length === 0 ? (
                     <tr>
                       <td colSpan={4} className="px-4 py-8 text-center text-bambu-gray">
-                        {search ? t('settings.suppliers.noMatch') : t('settings.suppliers.empty')}
+                        {search ? t('inventory.suppliers.noMatch') : t('inventory.suppliers.empty')}
                       </td>
                     </tr>
                   ) : (
@@ -359,14 +366,14 @@ export function SuppliersModal({ open, onClose }: SuppliersModalProps) {
 
       {deleteSupplier && (
         <ConfirmModal
-          title={t('settings.suppliers.deleteTitle')}
+          title={t('inventory.suppliers.deleteTitle')}
           message={
             deleteSupplier.spool_count > 0
-              ? t('settings.suppliers.deleteConfirmReferenced', {
+              ? t('inventory.suppliers.deleteConfirmReferenced', {
                   name: deleteSupplier.name,
                   count: deleteSupplier.spool_count,
                 })
-              : t('settings.suppliers.deleteConfirm', { name: deleteSupplier.name })
+              : t('inventory.suppliers.deleteConfirm', { name: deleteSupplier.name })
           }
           confirmText={t('common.delete')}
           variant="danger"
