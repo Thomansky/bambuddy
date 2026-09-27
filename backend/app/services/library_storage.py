@@ -16,6 +16,13 @@ to the tree instead of having a parallel implementation to keep honest. What
 this module adds is the piece external folders never had: a *root*, so a writer
 with no folder in hand still knows where the library lives.
 
+The root is also what gives the tree a trash of its own. #124's delete drops
+the row and leaves the bytes, which in the tree means the next scan files them
+straight back into the library; so a delete there moves them into
+``<root>/.bambuddy-trash`` instead, and the row goes through the ordinary trash
+pointing at them. A purge unlinks bytes from that directory and from nowhere
+else on the share.
+
 Two rules run through everything here:
 
 * Every constructed path goes through ``safe_join_under`` / ``assert_under``
@@ -31,11 +38,15 @@ Two rules run through everything here:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import logging
 import os
+import re
 import shutil
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -478,10 +489,11 @@ def prune_empty_directory(root: Path, directory: Path | None) -> bool:
     """Remove *directory* and any empty directories under it. True if it went.
 
     A directory still holding files is kept, and that is the whole behaviour:
-    the tree is somebody's share, and a folder delete in Bambuddy removing a
-    customer's drawings from it is not a trade anyone would accept for tidiness.
-    The route says so in its answer, because the files staying means the next
-    scan finds them again.
+    the tree is somebody's share, and tidiness is never a reason to remove a
+    customer's drawings from it. A folder of the tree goes to the trash whole
+    (:func:`trash_tree_folder`); this is for a folder delete that cannot —
+    a read-only folder keeps its files where they are, and the route says so
+    in its answer — and for an entry of the trash once its last file is gone.
     """
     if directory is None:
         return False
@@ -503,6 +515,402 @@ def prune_empty_directory(root: Path, directory: Path | None) -> bool:
         logger.warning("Could not remove %s from the share: %s", directory, exc)
         return False
     return True
+
+
+# ── The trash on the share ──────────────────────────────────────────────────
+# A delete in the tree has to take the bytes out of the tree: the row is only
+# the index, and the scan believes the directory. So they move into a hidden
+# directory at the root, one entry per deletion, and the row goes into the
+# ordinary trash pointing at them. Restore moves them back; the sweeper and
+# "Delete now" unlink them there and nowhere else. The same order as above:
+# the share first, the database second, and a move that fails leaves every row
+# as it was.
+
+TRASH_DIR_NAME = ".bambuddy-trash"
+
+# ``<stamp>-f<file id>`` for one file, ``<stamp>-d<folder id>`` for a folder's
+# directory, stamped in UTC — the sweeper reads an entry's age from its name.
+# The counter only appears when one row is deleted twice within a second.
+_TRASH_STAMP_FORMAT = "%Y%m%d-%H%M%S"
+_TRASH_ENTRY_NAME = re.compile(r"^(?P<stamp>\d{8}-\d{6})-[fd]\d+(?:-\d+)?$")
+
+
+@dataclass(slots=True)
+class TrashMove:
+    """One move between the tree and its trash, kept so it can be undone."""
+
+    source: Path
+    target: Path
+    entry: Path
+
+
+def trash_directory(root: Path) -> Path:
+    """``<root>/.bambuddy-trash``, where the tree keeps what was deleted from it."""
+    return root / TRASH_DIR_NAME
+
+
+def _located_in_trash(root: Path | None, path: Path | str | None) -> tuple[Path, Path] | None:
+    """``(entry, path)`` for a stored path lying inside an entry of the trash.
+
+    The directory part is resolved and the name is not: a symlink moved into
+    the trash is the link's own entry there, and a link elsewhere pointing
+    *into* the trash is not in it — so what this hands back to be unlinked is
+    always something inside the trash, never what a link reaches outside it.
+    The trash directory and an entry are not "in" the trash themselves; only
+    something below an entry is.
+    """
+    if root is None or not path:
+        return None
+    candidate = Path(path)
+    if candidate.name in ("", ".", ".."):
+        return None
+    try:
+        trash = trash_directory(root).resolve()
+        located = candidate.parent.resolve() / candidate.name
+        relative = located.relative_to(trash)
+    except (OSError, ValueError):
+        return None
+    if len(relative.parts) < 2:
+        return None
+    return trash / relative.parts[0], located
+
+
+def trash_entry_of(root: Path | None, path: Path | str | None) -> Path | None:
+    """The trash entry *path* lies in, or ``None`` when it is not in the tree's trash."""
+    located = _located_in_trash(root, path)
+    return located[0] if located is not None else None
+
+
+def _new_trash_entry(root: Path, kind: str, row_id: int) -> Path:
+    """Make a fresh, empty entry in the tree's trash and return it."""
+    trash = trash_directory(root)
+    trash.mkdir(exist_ok=True)
+    name = f"{datetime.now(timezone.utc).strftime(_TRASH_STAMP_FORMAT)}-{kind}{row_id}"
+    for attempt in range(1, 100):
+        entry = safe_join_under(trash, name if attempt == 1 else f"{name}-{attempt}", http=False)
+        try:
+            entry.mkdir()
+        except FileExistsError:
+            continue
+        return entry
+    raise OSError(f"every trash entry name for {name} is taken")
+
+
+def _rmdir_quietly(directory: Path) -> None:
+    """Remove a directory that was made for nothing. Only ever an empty one."""
+    with contextlib.suppress(OSError):
+        directory.rmdir()
+
+
+async def move_into_trash(root: Path, kind: str, row_id: int, source: Path) -> TrashMove:
+    """Move *source* — a file, or a folder's whole directory — into a new entry.
+
+    One ``os.rename``: the trash is on the same share, so the move is atomic
+    and a directory takes its subtree along. A failure raises 400 naming it,
+    after taking the empty entry away again, so a refused delete changes
+    neither the share nor the rows.
+    """
+    try:
+        entry = await asyncio.to_thread(_new_trash_entry, root, kind, row_id)
+    except (OSError, PathTraversalError) as exc:
+        raise HTTPException(status_code=400, detail=f"Could not create the trash on the share: {exc}") from None
+    try:
+        target = safe_join_under(entry, source.name, http=False)
+        # to_thread because a rename on a mounted share is network IO.
+        await asyncio.to_thread(os.rename, source, target)
+    except (OSError, PathTraversalError) as exc:
+        await asyncio.to_thread(_rmdir_quietly, entry)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not move {source.name!r} into the trash on the share: {exc}",
+        ) from None
+    return TrashMove(source=source, target=target, entry=entry)
+
+
+async def undo_trash_moves(moves: Sequence[TrashMove]) -> None:
+    """Put back what a request moved, newest first, when its database write failed.
+
+    The rows still name the places the bytes came from, and a file left in
+    the trash behind a live row is one the next scan drops from the library
+    while its bytes wait out the retention window — a delete nobody can undo.
+    Best effort: a move that cannot be reversed is logged with both paths,
+    which is what putting it right by hand needs.
+    """
+    for move in reversed(moves):
+        try:
+            await asyncio.to_thread(os.rename, move.target, move.source)
+        except OSError as exc:
+            logger.error(
+                "Library trash: could not move %s back to %s after the database write failed: %s",
+                move.target,
+                move.source,
+                exc,
+            )
+            continue
+        await asyncio.to_thread(_rmdir_quietly, move.entry)
+
+
+async def trash_tree_file(db: AsyncSession, file: LibraryFile) -> TrashMove | None:
+    """Move a file of the tree into the trash on the share, and trash its row.
+
+    ``None`` when *file* is not part of the tree — managed, on one of #124's
+    external folders somewhere else, or in a read-only folder — and the
+    caller keeps the behaviour it always had. ``None`` too when the bytes are
+    already gone from the share: there is nothing to restore, and the scan
+    would drop the row anyway.
+
+    The row keeps its folder, so a restore puts the file back where it was.
+    """
+    if not file.is_external:
+        return None
+    root = await configured_storage_root(db)
+    if root is None or not is_inside_tree(root, file.file_path):
+        return None
+    if file.folder_id is not None:
+        folder = (
+            await db.execute(select(LibraryFolder).where(LibraryFolder.id == file.folder_id))
+        ).scalar_one_or_none()
+        if folder is not None and folder.external_readonly:
+            return None
+    root = await storage_root_for_write(db)
+    source = Path(file.file_path)
+    if not await asyncio.to_thread(os.path.lexists, source):
+        return None
+
+    move = await move_into_trash(root, "f", file.id, source)
+    file.file_path = str(move.target)
+    file.deleted_at = datetime.now(timezone.utc)
+    logger.info("Library tree: moved %s to the trash at %s; file id %s", source, move.target, file.id)
+    return move
+
+
+async def trash_tree_folder(db: AsyncSession, folder: LibraryFolder) -> TrashMove | None:
+    """Move *folder*'s directory into the trash on the share, and trash its files.
+
+    One rename for the whole subtree. Every file row whose bytes went along is
+    re-pointed into the entry, stamped deleted, and taken out of its folder:
+    the folder rows are deleted next and ``folder_id`` cascades, so a row left
+    in the subtree would go with them and take its restore along. A restored
+    file therefore lands in the library's root.
+
+    A row trashed on its own before is taken out the same way, whether or not
+    the directory moves — deleting the folder a file was deleted from, once it
+    is empty, must not cost that file its restore.
+
+    Returns the move, or ``None`` when no directory moved and the caller keeps
+    the behaviour it always had: the folder is not part of the tree (managed,
+    another mount, read-only), or its directory is already gone from the
+    share. Flushes, so the cascade after it no longer sees the rows that left
+    the subtree. An entry holding no file is the caller's to tidy once the
+    rows are committed (:func:`tidy_trash_entries`).
+    """
+    if not folder.is_external:
+        return None
+    root = await configured_storage_root(db)
+    if root is None:
+        return None
+
+    directory = None
+    if not folder.external_readonly and is_inside_tree(root, folder.external_path):
+        directory = await folder_directory(db, root, folder)
+    move: TrashMove | None = None
+    if directory is not None:
+        root = await storage_root_for_write(db)
+        # A folder mounted at the root itself is not a directory of the tree,
+        # and nothing already in the trash goes into it a second time.
+        movable = directory != root and not is_inside_tree(trash_directory(root), directory)
+        if movable and await asyncio.to_thread(directory.is_dir):
+            move = await move_into_trash(root, "d", folder.id, directory)
+
+    try:
+        now = datetime.now(timezone.utc)
+        trashed = 0
+        _, files = await descendant_rows(db, folder.id)
+        for file in files:
+            if not file.is_external:
+                continue
+            moved = _reparent(file.file_path, directory, move.target) if move is not None else None
+            if moved is not None:
+                file.file_path = moved
+                if file.deleted_at is None:
+                    file.deleted_at = now
+                file.folder_id = None
+                trashed += 1
+            elif file.deleted_at is not None and trash_entry_of(root, file.file_path) is not None:
+                file.folder_id = None
+        await db.flush()
+    except Exception:
+        if move is not None:
+            await undo_trash_moves([move])
+        raise
+    if move is not None:
+        logger.info(
+            "Library tree: moved %s to the trash at %s with %d file row(s); folder id %s",
+            directory,
+            move.target,
+            trashed,
+            folder.id,
+        )
+    return move
+
+
+async def restore_trashed_file(db: AsyncSession, file: LibraryFile) -> TrashMove | None:
+    """Move a file of the tree back out of the trash on the share.
+
+    ``None`` when the row's bytes are not in the tree's trash — a managed
+    file, or an external one that never went through it — and there is
+    nothing to move. Otherwise the returned move is what the caller undoes if
+    its commit fails, and the entry is the caller's to tidy once it did not.
+
+    The file goes back into its folder's directory under the name it had on
+    the share, or into the root when the folder is gone or no longer part of
+    the tree, and the row then belongs to no folder. A name taken there in
+    the meantime is a 409 and changes nothing: whatever somebody put in its
+    place is theirs, and a restore overwriting it would be a delete of its own.
+    """
+    if not file.is_external:
+        return None
+    root = await configured_storage_root(db)
+    if trash_entry_of(root, file.file_path) is None:
+        return None
+    root = await storage_root_for_write(db)
+    located = _located_in_trash(root, file.file_path)
+    if located is None:  # pragma: no cover - the root resolved differently between the two reads
+        return None
+    entry, source = located
+
+    folder: LibraryFolder | None = None
+    if file.folder_id is not None:
+        folder = (
+            await db.execute(select(LibraryFolder).where(LibraryFolder.id == file.folder_id))
+        ).scalar_one_or_none()
+    directory = None
+    if folder is not None and not folder.external_readonly:
+        directory = await folder_directory(db, root, folder)
+    if directory is None:
+        folder, directory = None, root
+
+    if not await asyncio.to_thread(os.path.lexists, source):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{source.name!r} is no longer in the trash on the share ({entry})",
+        )
+    try:
+        target: Path | None = safe_join_under(directory, source.name, http=False)
+    except PathTraversalError:
+        # The name is one plain component, so the only way out of the
+        # directory is a link already sitting under that name.
+        target = None
+    if target is None or await asyncio.to_thread(os.path.lexists, target):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{source.name!r} already exists in {directory} on the share. "
+                "Rename or move that file, then restore this one again"
+            ),
+        )
+
+    created = await asyncio.to_thread(adopt_or_create_directory, directory, root)
+    try:
+        await asyncio.to_thread(os.rename, source, target)
+    except OSError as exc:
+        if created:
+            await asyncio.to_thread(_rmdir_quietly, directory)
+        if isinstance(exc, FileExistsError):
+            raise HTTPException(
+                status_code=409,
+                detail=f"{source.name!r} already exists in {directory} on the share",
+            ) from None
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not move {source.name!r} out of the trash on the share: {exc}",
+        ) from None
+
+    file.file_path = str(target)
+    file.folder_id = folder.id if folder is not None else None
+    logger.info("Library tree: restored %s from the trash to %s; file id %s", source, target, file.id)
+    return TrashMove(source=source, target=target, entry=entry)
+
+
+def tidy_trash_entry(root: Path, entry: Path) -> bool:
+    """Remove *entry* once nothing but empty directories is left in it."""
+    return prune_empty_directory(trash_directory(root), entry)
+
+
+async def tidy_trash_entries(db: AsyncSession, moves: Sequence[TrashMove]) -> None:
+    """Remove the entries of *moves* that hold no file, once the rows are committed.
+
+    A folder deleted while empty leaves an entry of empty directories, and a
+    restored file the entry it came out of; nothing can point into either.
+    Not before the commit: until then, :func:`undo_trash_moves` may still
+    need the entry to move back into.
+    """
+    if not moves:
+        return
+    root = await configured_storage_root(db)
+    if root is None:
+        return
+    for move in moves:
+        await asyncio.to_thread(tidy_trash_entry, root, move.entry)
+
+
+def unlink_from_trash(root: Path | None, path: Path | str | None) -> bool:
+    """Unlink a file from the tree's trash, then its entry once nothing is left.
+
+    Anything that is not inside an entry of the trash is refused: a trashed
+    row pointing at a live file on the share must never cost that file.
+    Returns whether something was unlinked.
+    """
+    located = _located_in_trash(root, path)
+    if located is None:
+        return False
+    entry, target = located
+    try:
+        target.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning("Library trash: failed to unlink %s from the share: %s", target, exc)
+        return False
+    tidy_trash_entry(root, entry)
+    return True
+
+
+def remove_expired_trash_entries(root: Path, cutoff: datetime, claimed: Iterable[str]) -> int:
+    """Remove the trash entries older than *cutoff* that no row points into.
+
+    What a folder delete leaves once its files are purged: the drawings and
+    notes the scan never indexed, and the directories they sat in. Nothing has
+    a row for them, so the row sweep never reaches them. Only whole entries
+    this module named — the stamp is how their age is known — and never one a
+    row in *claimed* still points into, trashed or not.
+    """
+    trash = trash_directory(root)
+    if not trash.is_dir():
+        return 0
+    keep = {entry for entry in (trash_entry_of(root, path) for path in claimed) if entry is not None}
+    removed = 0
+    for child in trash.iterdir():
+        match = _TRASH_ENTRY_NAME.match(child.name)
+        if match is None or child.is_symlink() or not child.is_dir():
+            continue
+        try:
+            stamp = datetime.strptime(match["stamp"], _TRASH_STAMP_FORMAT).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if stamp >= cutoff:
+            continue
+        try:
+            entry = assert_under(trash, child, http=False)
+        except PathTraversalError:
+            continue
+        if entry in keep:
+            continue
+        try:
+            shutil.rmtree(entry)
+        except OSError as exc:
+            logger.warning("Library trash: could not remove the expired entry %s: %s", entry, exc)
+            continue
+        removed += 1
+    return removed
 
 
 # ── Moving an existing library into the tree ────────────────────────────────
