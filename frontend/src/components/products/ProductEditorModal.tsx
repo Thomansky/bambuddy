@@ -1,12 +1,16 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Barcode, Boxes, Check, Hash, Loader2, Plus, Star, Store, Trash2, X } from 'lucide-react';
 import { api, ApiError } from '../../api/client';
 import type { FilamentProduct, FilamentProductInput, FilamentVariant } from '../../api/client';
 import { useToast } from '../../contexts/ToastContext';
 import { ConfirmModal } from '../ConfirmModal';
 import { FilamentSwatch } from '../FilamentSwatch';
+import { SuppliersModal } from '../SuppliersModal';
+import { PresetPicker } from '../spool-form/PresetPicker';
+import { findPresetOption } from '../spool-form/utils';
+import { usePresetOptions } from './usePresetOptions';
 import { getCurrencySymbol } from '../../utils/currency';
 import { costPerKg, formatMoney, formatStock, formatWeight, parsePrice, priceText } from './productUtils';
 
@@ -61,14 +65,25 @@ function toInt(text: string): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
+/** Sizes lightest first; one without a weight yet waits at the end. The sort
+ *  is stable, so two rows with the same weight keep their order. */
+function sortSizes(rows: SizeRow[]): SizeRow[] {
+  const weight = (row: SizeRow) => toInt(row.label_weight) ?? Number.MAX_SAFE_INTEGER;
+  return [...rows].sort((a, b) => weight(a) - weight(b));
+}
+
 // Product master data (#3165): one product, its colours and sizes, and the
 // matrix of combinations that exist. Saving sends the whole document; the
 // backend writes master-data changes through to the spools (never the price).
 export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorModalProps) {
   const { t } = useTranslation();
   const { showToast } = useToast();
+  const queryClient = useQueryClient();
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.getSettings });
-  const { data: allSuppliers = [] } = useQuery({ queryKey: ['suppliers'], queryFn: api.getSuppliers });
+  const { data: allSuppliers = [], isLoading: loadingSuppliers } = useQuery({
+    queryKey: ['suppliers'],
+    queryFn: api.getSuppliers,
+  });
   const currency = getCurrencySymbol(settings?.currency || 'USD');
 
   const [brand, setBrand] = useState(product?.brand ?? '');
@@ -80,17 +95,22 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
   const [tempMin, setTempMin] = useState(product?.nozzle_temp_min?.toString() ?? '');
   const [tempMax, setTempMax] = useState(product?.nozzle_temp_max?.toString() ?? '');
   const [note, setNote] = useState(product?.note ?? '');
-  const [sizes, setSizes] = useState<SizeRow[]>(
-    () =>
+  // A size's price is what one spool costs at the usual supplier: with
+  // suppliers on the product it is entered in their table below and shown here,
+  // without them it is entered here. So every price has exactly one field.
+  const [sizes, setSizes] = useState<SizeRow[]>(() => {
+    const usual = product?.suppliers.find((row) => row.preferred) ?? product?.suppliers[0];
+    return sortSizes(
       product?.sizes.map((s) => ({
         id: s.id,
         key: `s${s.id}`,
         label_weight: String(s.label_weight),
         core_weight: String(s.core_weight),
-        price: priceText(s.price),
+        price: priceText(usual?.prices.find((p) => p.size_id === s.id)?.price ?? s.price),
         price_vat_included: s.price_vat_included,
       })) ?? [],
-  );
+    );
+  });
   const [colors, setColors] = useState<ColorRow[]>(
     () =>
       product?.colors.map((c) => ({
@@ -111,11 +131,12 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
   );
   const [supplierRows, setSupplierRows] = useState<SupplierRow[]>(
     () =>
-      product?.suppliers.map((row) => ({
+      product?.suppliers.map((row, index) => ({
         key: newKey('p'),
         supplier_id: row.supplier_id,
         article_number: row.article_number ?? '',
-        preferred: row.preferred,
+        // One supplier is always the usual one: its prices are the sizes'.
+        preferred: row.preferred || (index === 0 && !product.suppliers.some((r) => r.preferred)),
         prices: Object.fromEntries(row.prices.map((p) => [`s${p.size_id}`, priceText(p.price)])),
         articles: Object.fromEntries(
           (row.articles ?? []).flatMap((article) => {
@@ -140,6 +161,12 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
   const [targetForAll, setTargetForAll] = useState('');
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // The supplier master list, opened on top so a supplier can be created
+  // while setting a product up.
+  const [suppliersOpen, setSuppliersOpen] = useState(false);
+  const { options: presetOptions, loading: loadingPresets } = usePresetOptions();
+  const selectedPreset = useMemo(() => findPresetOption(slicerFilament, presetOptions), [slicerFilament, presetOptions]);
+  const hasSuppliers = supplierRows.length > 0;
 
   // Existing variants by cell, for stock counts and the removal guard.
   const existingByCell = useMemo(() => {
@@ -150,11 +177,17 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !confirmDelete) onClose();
+      if (e.key === 'Escape' && !confirmDelete && !suppliersOpen) onClose();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, confirmDelete]);
+  }, [onClose, confirmDelete, suppliersOpen]);
+
+  const closeSuppliers = () => {
+    setSuppliersOpen(false);
+    // The master list edits outside react-query, so the picker below refetches.
+    queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+  };
 
   const spoolsInCell = (key: string) => existingByCell.get(key)?.spool_count ?? 0;
   const spoolsInRow = (colorKey: string) =>
@@ -165,17 +198,19 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
   const addSize = (grams?: number) => {
     if (grams && sizes.some((s) => toInt(s.label_weight) === grams)) return;
     const key = newKey('s');
-    setSizes((prev) => [
-      ...prev,
-      {
-        id: null,
-        key,
-        label_weight: grams ? String(grams) : '',
-        core_weight: grams && grams <= 1000 ? '250' : '',
-        price: '',
-        price_vat_included: prev[0]?.price_vat_included ?? true,
-      },
-    ]);
+    setSizes((prev) =>
+      sortSizes([
+        ...prev,
+        {
+          id: null,
+          key,
+          label_weight: grams ? String(grams) : '',
+          core_weight: grams && grams <= 1000 ? '250' : '',
+          price: '',
+          price_vat_included: prev[0]?.price_vat_included ?? true,
+        },
+      ]),
+    );
     // A new size is usually sold in every colour — tick the column.
     setCells((prev) => {
       const next = new Map(prev);
@@ -252,6 +287,36 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
       prev.map((r) => (r.key === rowKey ? { ...r, articles: { ...r.articles, [cell]: value } } : r)),
     );
 
+  // The usual supplier's prices live in the sizes. Starring another one hands
+  // them back to the old usual supplier as its own and brings the new one's in.
+  const makeUsual = (rowKey: string) => {
+    const current = supplierRows.find((r) => r.preferred);
+    const next = supplierRows.find((r) => r.key === rowKey);
+    if (!next || current?.key === rowKey) return;
+    const sizePrices = Object.fromEntries(sizes.map((size) => [size.key, size.price]));
+    setSupplierRows((prev) =>
+      prev.map((r) => {
+        if (r.key === rowKey) return { ...r, preferred: true };
+        if (r.key === current?.key) return { ...r, preferred: false, prices: sizePrices };
+        return { ...r, preferred: false };
+      }),
+    );
+    setSizes((prev) => prev.map((size) => ({ ...size, price: next.prices[size.key] ?? '' })));
+  };
+
+  const removeSupplierRow = (rowKey: string) => {
+    const removed = supplierRows.find((r) => r.key === rowKey);
+    const rest = supplierRows.filter((r) => r.key !== rowKey);
+    // Keep one usual supplier when the usual one goes; its prices take over.
+    // With no supplier left the sizes keep theirs and become editable again.
+    if (removed?.preferred && rest.length > 0 && !rest.some((r) => r.preferred)) {
+      rest[0] = { ...rest[0], preferred: true };
+      const incoming = rest[0].prices;
+      setSizes((prev) => prev.map((size) => ({ ...size, price: incoming[size.key] ?? '' })));
+    }
+    setSupplierRows(rest);
+  };
+
   const updateSize = (key: string, patch: Partial<SizeRow>) =>
     setSizes((prev) => prev.map((s) => (s.key === key ? { ...s, ...patch } : s)));
   const updateColor = (key: string, patch: Partial<ColorRow>) =>
@@ -323,11 +388,13 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
           supplier_id: row.supplier_id as number,
           article_number: row.article_number.trim() || null,
           preferred: row.preferred,
-          prices: Object.fromEntries(
-            Object.entries(row.prices)
-              .filter(([key]) => sizeKeys.has(key))
-              .map(([key, text]) => [key, parsePrice(text)]),
-          ),
+          prices: row.preferred
+            ? Object.fromEntries(sizes.map((size) => [size.key, parsePrice(size.price)]))
+            : Object.fromEntries(
+                Object.entries(row.prices)
+                  .filter(([key]) => sizeKeys.has(key))
+                  .map(([key, text]) => [key, parsePrice(text)]),
+              ),
           article_numbers: Object.fromEntries(
             Object.entries(row.articles)
               .filter(([key, text]) => isLiveCell(key) && text.trim())
@@ -395,7 +462,7 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
       <div
-        className="relative w-full max-w-5xl mx-4 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-xl shadow-2xl max-h-[92vh] flex flex-col"
+        className="relative w-full max-w-[1800px] mx-4 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-xl shadow-2xl max-h-[95vh] flex flex-col"
         role="dialog"
         aria-modal="true"
         aria-labelledby="product-editor-title"
@@ -452,24 +519,33 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
                   onChange={(e) => setMaterialNumber(e.target.value)}
                 />
               </label>
-              <label className="block">
-                <span className="text-xs text-bambu-gray">{t('inventory.products.slicerPreset')}</span>
-                <input
-                  className={inputClass}
-                  value={slicerFilamentName}
-                  maxLength={100}
-                  onChange={(e) => setSlicerFilamentName(e.target.value)}
+              <div className="block sm:col-span-2">
+                <span className="text-xs text-bambu-gray flex items-center gap-1">
+                  {t('inventory.products.slicerPreset')}
+                  {loadingPresets && <Loader2 className="w-3 h-3 animate-spin" />}
+                </span>
+                <PresetPicker
+                  value={selectedPreset?.code ?? ''}
+                  options={presetOptions}
+                  inheritLabel={
+                    // A preset the lists do not know (cloud not connected) is
+                    // still shown by its stored name rather than as none.
+                    !selectedPreset && slicerFilament
+                      ? `${slicerFilamentName || slicerFilament} (${slicerFilament})`
+                      : t('inventory.products.noPreset')
+                  }
+                  onChange={(option) => {
+                    setSlicerFilament(option?.code ?? '');
+                    setSlicerFilamentName(option?.displayName ?? '');
+                  }}
+                  ariaLabel={t('inventory.products.slicerPreset')}
                 />
-              </label>
-              <label className="block">
-                <span className="text-xs text-bambu-gray">{t('inventory.products.slicerPresetId')}</span>
-                <input
-                  className={inputClass}
-                  value={slicerFilament}
-                  maxLength={50}
-                  onChange={(e) => setSlicerFilament(e.target.value)}
-                />
-              </label>
+                {selectedPreset && (
+                  <span className="text-[11px] text-bambu-gray">
+                    {t('inventory.products.slicerPresetId')}: <span className="font-mono">{selectedPreset.code}</span>
+                  </span>
+                )}
+              </div>
               <label className="block">
                 <span className="text-xs text-bambu-gray">{t('inventory.products.nozzleTemp')}</span>
                 <div className="flex items-center gap-1">
@@ -500,7 +576,7 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
             )}
           </section>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] gap-6">
             {/* Sizes */}
             <section className="space-y-2">
               <div className="flex items-center justify-between">
@@ -524,10 +600,14 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
                   </button>
                 ))}
               </div>
+              {hasSuppliers && sizes.length > 0 && (
+                <p className="text-xs text-bambu-gray">{t('inventory.products.pricesAtSuppliers')}</p>
+              )}
               {sizes.length === 0 ? (
                 <p className="text-xs text-bambu-gray py-2">{t('inventory.products.noSizes')}</p>
               ) : (
-                <table className="w-full text-sm">
+                <div className="overflow-x-auto">
+                <table className="w-full min-w-[36rem] text-sm">
                   <thead>
                     <tr className="text-xs text-bambu-gray">
                       <th className="text-left font-medium pb-1">{t('inventory.products.labelWeight')}</th>
@@ -551,6 +631,7 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
                                 inputMode="numeric"
                                 value={size.label_weight}
                                 onChange={(e) => updateSize(size.key, { label_weight: e.target.value })}
+                                onBlur={() => setSizes((prev) => sortSizes(prev))}
                                 aria-label={t('inventory.products.labelWeight')}
                               />
                               <span className="text-xs text-bambu-gray">g</span>
@@ -569,17 +650,26 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
                             </div>
                           </td>
                           <td className="pr-2 py-1">
-                            <div className="flex items-center gap-1">
-                              <span className="text-xs text-bambu-gray">{currency}</span>
-                              <input
-                                className={smallInputClass}
-                                inputMode="decimal"
-                                value={size.price}
-                                placeholder="0.00"
-                                onChange={(e) => updateSize(size.key, { price: e.target.value })}
-                                aria-label={t('inventory.products.pricePerSpool')}
-                              />
-                            </div>
+                            {hasSuppliers ? (
+                              <span
+                                className="block px-2 py-1.5 text-sm text-white whitespace-nowrap"
+                                title={t('inventory.products.priceAtUsualSupplier')}
+                              >
+                                {formatMoney(parsePrice(size.price), currency)}
+                              </span>
+                            ) : (
+                              <div className="flex items-center gap-1">
+                                <span className="text-xs text-bambu-gray">{currency}</span>
+                                <input
+                                  className={smallInputClass}
+                                  inputMode="decimal"
+                                  value={size.price}
+                                  placeholder="0.00"
+                                  onChange={(e) => updateSize(size.key, { price: e.target.value })}
+                                  aria-label={t('inventory.products.pricePerSpool')}
+                                />
+                              </div>
+                            )}
                           </td>
                           <td className="pr-2 py-1">
                             <select
@@ -611,6 +701,7 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
                     })}
                   </tbody>
                 </table>
+                </div>
               )}
             </section>
 
@@ -841,9 +932,25 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
                 <Plus className="w-3.5 h-3.5" />
                 {t('inventory.products.addSupplier')}
               </button>
+              <button
+                onClick={() => setSuppliersOpen(true)}
+                className="px-2 py-1 text-xs bg-bambu-dark border border-bambu-dark-tertiary text-bambu-gray hover:text-white rounded flex items-center gap-1 shrink-0"
+              >
+                <Store className="w-3.5 h-3.5" />
+                {t('inventory.products.manageSuppliers')}
+              </button>
             </div>
-            {allSuppliers.length === 0 ? (
-              <p className="text-xs text-bambu-gray py-1">{t('inventory.products.noSuppliersYet')}</p>
+            {supplierRows.length === 0 && allSuppliers.length === 0 && !loadingSuppliers ? (
+              <div className="flex flex-wrap items-center gap-2 py-1">
+                <p className="text-xs text-bambu-gray">{t('inventory.products.noSuppliersYet')}</p>
+                <button
+                  onClick={() => setSuppliersOpen(true)}
+                  className="px-2 py-1 text-xs bg-bambu-green text-white rounded flex items-center gap-1 hover:bg-bambu-green/80"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  {t('inventory.products.createSuppliers')}
+                </button>
+              </div>
             ) : supplierRows.length === 0 ? (
               <p className="text-xs text-bambu-gray py-1">{t('inventory.products.noProductSuppliers')}</p>
             ) : (
@@ -878,9 +985,7 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
                                 type="radio"
                                 name="preferred-supplier"
                                 checked={row.preferred}
-                                onChange={() =>
-                                  setSupplierRows((prev) => prev.map((r) => ({ ...r, preferred: r.key === row.key })))
-                                }
+                                onChange={() => makeUsual(row.key)}
                                 className="accent-bambu-green"
                                 aria-label={t('inventory.products.preferredHint')}
                               />
@@ -929,14 +1034,18 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
                                   <input
                                     className={smallInputClass}
                                     inputMode="decimal"
-                                    value={row.prices[size.key] ?? ''}
-                                    placeholder={size.price || '–'}
+                                    value={row.preferred ? size.price : (row.prices[size.key] ?? '')}
+                                    placeholder="–"
                                     onChange={(e) =>
-                                      setSupplierRows((prev) =>
-                                        prev.map((r) =>
-                                          r.key === row.key ? { ...r, prices: { ...r.prices, [size.key]: e.target.value } } : r,
-                                        ),
-                                      )
+                                      row.preferred
+                                        ? updateSize(size.key, { price: e.target.value })
+                                        : setSupplierRows((prev) =>
+                                            prev.map((r) =>
+                                              r.key === row.key
+                                                ? { ...r, prices: { ...r.prices, [size.key]: e.target.value } }
+                                                : r,
+                                            ),
+                                          )
                                     }
                                     aria-label={`${t('inventory.products.pricePerSpool')} ${size.label_weight} g`}
                                   />
@@ -961,16 +1070,7 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
                                 )}
                               </button>
                               <button
-                                onClick={() =>
-                                  setSupplierRows((prev) => {
-                                    const rest = prev.filter((r) => r.key !== row.key);
-                                    // Keep one usual supplier when the usual one goes.
-                                    if (row.preferred && rest.length > 0 && !rest.some((r) => r.preferred)) {
-                                      rest[0] = { ...rest[0], preferred: true };
-                                    }
-                                    return rest;
-                                  })
-                                }
+                                onClick={() => removeSupplierRow(row.key)}
                                 className="p-1 rounded text-red-500 hover:bg-red-500/10"
                                 aria-label={t('common.delete')}
                               >
@@ -1048,12 +1148,6 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
                 </table>
               </div>
             )}
-            {allSuppliers.length === 0 && (
-              <p className="text-xs text-bambu-gray flex items-center gap-1">
-                <Store className="w-3.5 h-3.5" />
-                {t('inventory.products.suppliersWhere')}
-              </p>
-            )}
           </section>
 
           {/* Codes learnt at intake */}
@@ -1113,6 +1207,8 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
           </div>
         </div>
       </div>
+
+      <SuppliersModal open={suppliersOpen} onClose={closeSuppliers} />
 
       {confirmDelete && product && (
         <ConfirmModal
