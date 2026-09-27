@@ -411,6 +411,8 @@ export function useWebSocket() {
         // The per-material-number aggregate is derived from the same rows (#2870).
         debouncedInvalidate('material-number-stats');
         debouncedInvalidate(inventorySuppliersQueryKey[0]);
+        // Product stock counts are spools too (#3165).
+        debouncedInvalidate('filament-products');
         break;
 
       case 'spool_assignment_changed':

@@ -59,6 +59,7 @@ from backend.app.schemas.supplier import (
     SupplierUpdate,
 )
 from backend.app.services.ams_slot_presence import spool_present
+from backend.app.services.filament_products import IDENTITY_FIELDS, auto_assign_spools, spool_identity
 from backend.app.services.location_service import (
     DUPLICATE_LOCATION_NAME,
     assign_location_name,
@@ -963,6 +964,16 @@ async def delete_supplier(
         await _prune_orphaned_spoolman_supplier_rows(db)
         if (await _supplier_reference_counts(db)).get(supplier_id, 0) > 0:
             raise HTTPException(status_code=409, detail="Supplier has spools assigned and cannot be deleted")
+    # Product master data (#3165) keeps suppliers on the product as well.
+    from backend.app.models.filament_product import FilamentProductSupplier
+
+    on_products = (
+        await db.execute(
+            select(func.count(FilamentProductSupplier.id)).where(FilamentProductSupplier.supplier_id == supplier_id)
+        )
+    ).scalar_one()
+    if on_products:
+        raise HTTPException(status_code=409, detail="Supplier is assigned to products and cannot be deleted")
 
     await db.delete(supplier)
     await db.commit()
@@ -1474,6 +1485,7 @@ async def import_spools_csv(
         return preview
 
     created = 0
+    created_spools: list[Spool] = []
     for row in preview.rows:
         if row.status == "valid" and row.spool is not None:
             # Deliberately no material-number inheritance here (#2870), unlike
@@ -1482,6 +1494,7 @@ async def import_spools_csv(
             # one to be guessed from whatever else is in the inventory.
             spool = Spool(**row.spool)
             db.add(spool)
+            created_spools.append(spool)
             # Supplier assignments resolved by name during parsing (#2988).
             # Flush first so the spool has an id to hang the links on.
             if row.supplier_ids:
@@ -1497,6 +1510,8 @@ async def import_spools_csv(
             created += 1
 
     if created:
+        await db.flush()
+        await auto_assign_spools(db, created_spools)
         await db.commit()
         await ws_manager.broadcast({"type": "inventory_changed"})
 
@@ -1596,6 +1611,9 @@ async def create_spool(
             await link_spools(db, [spool.id], source_spool_id=link_to_spool_id)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+    # Product master data (#3165): the new spool finds its variant by itself
+    # and fills what it arrived without from the product.
+    await auto_assign_spools(db, [spool])
     await db.commit()
     await db.refresh(spool)
     result = await db.execute(select(Spool).options(*spool_response_loads()).where(Spool.id == spool.id))
@@ -1631,6 +1649,7 @@ async def bulk_create_spools(
             await link_spools(db, [s.id for s in spools], source_spool_id=link_to_spool_id)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await auto_assign_spools(db, spools)
     await db.commit()
     ids = [s.id for s in spools]
     result = await db.execute(select(Spool).options(*spool_response_loads()).where(Spool.id.in_(ids)))
@@ -1660,14 +1679,25 @@ async def update_spool(
     if "weight_used" in update_data and "weight_locked" not in update_data:
         update_data["weight_locked"] = True
 
+    identity_before = spool_identity(spool)
     for field, value in update_data.items():
         setattr(spool, field, value)
 
     # Linked spools (#2936): a master-data edit propagates to the whole
     # group inside the same transaction; per-spool fields never do. The UI
     # asks before sending, naming the number of affected records.
+    propagated = False
     if spool.filament_group_id is not None and touches_master_data(update_data):
         await propagate_master_data(db, spool)
+        propagated = True
+
+    # Product master data (#3165): an edit that changes what the spool IS
+    # (brand, material, type, colour, size) moves it to the matching variant,
+    # or takes it off its product when there is none. A correction of a wrong
+    # colour is thereby also a correction of the stock.
+    if spool_identity(spool) != identity_before:
+        members = await get_group_members(db, spool.filament_group_id) if propagated else [spool]
+        await auto_assign_spools(db, members, fill_empty=False)
 
     await db.commit()
     result = await db.execute(select(Spool).options(*spool_response_loads()).where(Spool.id == spool_id))
@@ -1906,6 +1936,13 @@ async def bulk_update_spools(
                 for field, value in master_patch.items():
                     setattr(member, field, value)
                 propagated_ids.add(member.id)
+    # Product master data (#3165): a bulk edit that changes what the spools
+    # ARE moves them to the matching variant, exactly like the single PATCH.
+    if any(name in prepared for name in IDENTITY_FIELDS):
+        touched = list(spools.values())
+        if propagated_ids:
+            touched += list((await db.execute(select(Spool).where(Spool.id.in_(propagated_ids)))).scalars().all())
+        await auto_assign_spools(db, touched, fill_empty=False)
     await db.commit()
     if updated_ids:
         await ws_manager.broadcast({"type": "inventory_changed"})

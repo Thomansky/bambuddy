@@ -296,6 +296,7 @@ async def init_db():
         connected_app,
         external_link,
         filament,
+        filament_product,
         filament_sku_settings,
         finance,
         github_backup,
@@ -5536,6 +5537,12 @@ async def run_migrations(conn):
             text("UPDATE api_keys SET can_send_notifications = :off WHERE can_send_notifications IS NULL"),
             {"off": False},
         )
+
+    # Migration: spools point at the product variant they are a roll of
+    # (#3165). The product tables come from create_all(); the spool gains a
+    # nullable plain-integer reference, the same shape as filament_group_id.
+    await _safe_execute(conn, "ALTER TABLE spool ADD COLUMN variant_id INTEGER")
+    await _safe_execute(conn, "CREATE INDEX IF NOT EXISTS ix_spool_variant_id ON spool (variant_id)")
 
 
 async def _migrate_confirm_prompt_body_template(conn) -> None:

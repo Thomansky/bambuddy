@@ -6,6 +6,15 @@ from backend.app.models.auth_ephemeral import AuthEphemeralToken, AuthRateLimitE
 from backend.app.models.color_catalog import ColorCatalogEntry
 from backend.app.models.connected_app import ConnectedApp, ConnectedAppGrant
 from backend.app.models.filament import Filament
+from backend.app.models.filament_product import (
+    FilamentProduct,
+    FilamentProductColor,
+    FilamentProductSize,
+    FilamentProductSupplier,
+    FilamentProductSupplierPrice,
+    FilamentVariant,
+    FilamentVariantCode,
+)
 from backend.app.models.github_backup import GitHubBackupConfig, GitHubBackupLog
 from backend.app.models.group import Group, user_groups
 from backend.app.models.kprofile_note import KProfileNote
@@ -95,6 +104,13 @@ __all__ = [
     "SpoolAssignment",
     "SpoolCatalogEntry",
     "SpoolLinkGroup",
+    "FilamentProduct",
+    "FilamentProductColor",
+    "FilamentProductSize",
+    "FilamentProductSupplier",
+    "FilamentProductSupplierPrice",
+    "FilamentVariant",
+    "FilamentVariantCode",
     "SpoolUsageHistory",
     "Supplier",
     "SpoolSupplier",

@@ -3920,6 +3920,136 @@ export interface InventorySpool {
   // Link group for shared filament master data (#2936); null = not linked.
   // Membership changes go through linkSpools / unlinkSpoolGroup, never PATCH.
   filament_group_id?: number | null;
+  // Product variant this spool is a roll of (#3165); null = not assigned.
+  variant_id?: number | null;
+}
+
+// ── Product master data (#3165) ────────────────────────────────────────────
+
+/** A size the product is sold in; `price` is what ONE spool costs. */
+export interface FilamentProductSize {
+  id: number;
+  label_weight: number;
+  core_weight: number;
+  core_weight_catalog_id: number | null;
+  price: number | null;
+  price_vat_included: boolean;
+}
+
+export interface FilamentProductColor {
+  id: number;
+  color_name: string | null;
+  rgba: string | null;
+  extra_colors: string | null;
+  effect_type: string | null;
+}
+
+/** A colour × size combination that exists. */
+export interface FilamentVariant {
+  id: number;
+  color_id: number;
+  size_id: number;
+  /** Only set where this combination costs more than its size. */
+  price_override: number | null;
+  effective_price: number | null;
+  cost_per_kg: number | null;
+  codes: { id: number; code: string }[];
+  /** Active spools and their remaining grams. */
+  spool_count: number;
+  remaining_g: number;
+}
+
+/** Where a product is bought: article number there, price per size there. */
+export interface FilamentProductSupplier {
+  supplier_id: number;
+  supplier_name: string;
+  article_number: string | null;
+  /** The usual supplier — goods-in starts from it. */
+  preferred: boolean;
+  prices: { size_id: number; price: number }[];
+}
+
+export interface FilamentProduct {
+  id: number;
+  label: string;
+  brand: string | null;
+  material: string;
+  subtype: string | null;
+  material_number: string | null;
+  slicer_filament: string | null;
+  slicer_filament_name: string | null;
+  nozzle_temp_min: number | null;
+  nozzle_temp_max: number | null;
+  note: string | null;
+  sizes: FilamentProductSize[];
+  colors: FilamentProductColor[];
+  variants: FilamentVariant[];
+  suppliers: FilamentProductSupplier[];
+  spool_count: number;
+  remaining_g: number;
+}
+
+/** The editor's save document. New sizes/colours have no id yet, so the
+ *  combinations reference them by a client-side key. */
+export interface FilamentProductInput {
+  brand: string | null;
+  material: string;
+  subtype: string | null;
+  material_number: string | null;
+  slicer_filament: string | null;
+  slicer_filament_name: string | null;
+  nozzle_temp_min: number | null;
+  nozzle_temp_max: number | null;
+  note: string | null;
+  sizes: {
+    id: number | null;
+    key: string;
+    label_weight: number;
+    core_weight: number;
+    price: number | null;
+    price_vat_included: boolean;
+  }[];
+  colors: { id: number | null; key: string; color_name: string | null; rgba: string | null }[];
+  variants: { color_key: string; size_key: string; price_override: number | null }[];
+  /** Prices by the document's size key. */
+  suppliers: {
+    supplier_id: number;
+    article_number: string | null;
+    preferred: boolean;
+    prices: Record<string, number | null>;
+  }[];
+}
+
+export interface ProductConversionPlan {
+  spools_to_assign: number;
+  already_assigned: number;
+  new_products: number;
+  existing_products: number;
+  new_colors: number;
+  new_sizes: number;
+  new_variants: number;
+  conflicts: (
+    | { kind: 'several_numbers'; product: string; numbers: { number: string; spools: number }[] }
+    | { kind: 'shared_number'; number: string; products: string[] }
+    | { kind: 'same_color'; product: string; hex: string; names: string[] }
+  )[];
+  products: {
+    label: string;
+    existing_id: number | null;
+    material_number: string | null;
+    spool_count: number;
+    colors: { color_name: string | null; rgba: string | null; is_new: boolean; spool_count: number }[];
+    sizes: { label_weight: number; core_weight: number; price: number | null; is_new: boolean; spool_count: number }[];
+    variant_count: number;
+  }[];
+}
+
+export interface ProductIntakeInput {
+  quantity: number;
+  price_per_spool: number | null;
+  price_vat_included: boolean;
+  location_id: number | null;
+  note?: string | null;
 }
 
 // ── Suppliers (#2988) ──────────────────────────────────────────────────────
@@ -7176,6 +7306,38 @@ export const api = {
     request<Supplier>(`/inventory/suppliers/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteSupplier: (id: number) =>
     request<{ status: string }>(`/inventory/suppliers/${id}`, { method: 'DELETE' }),
+  // Product master data (#3165)
+  getFilamentProducts: () =>
+    request<FilamentProduct[]>('/inventory/products'),
+  createFilamentProduct: (data: FilamentProductInput) =>
+    request<FilamentProduct>('/inventory/products', { method: 'POST', body: JSON.stringify(data) }),
+  updateFilamentProduct: (id: number, data: FilamentProductInput) =>
+    request<{ product: FilamentProduct; spools_updated: number }>(`/inventory/products/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  deleteFilamentProduct: (id: number) =>
+    request<{ spools_unlinked: number }>(`/inventory/products/${id}`, { method: 'DELETE' }),
+  getProductConversionPlan: () =>
+    request<ProductConversionPlan>('/inventory/products/conversion'),
+  runProductConversion: () =>
+    request<ProductConversionPlan>('/inventory/products/conversion', { method: 'POST' }),
+  lookupProductCode: (code: string) =>
+    request<{ variant_id: number; product: FilamentProduct }>(
+      `/inventory/products/lookup?code=${encodeURIComponent(code)}`,
+    ),
+  addVariantCode: (variantId: number, code: string) =>
+    request<{ id: number; code: string; variant_id: number }>(`/inventory/products/variants/${variantId}/codes`, {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    }),
+  deleteVariantCode: (codeId: number) =>
+    request<{ status: string }>(`/inventory/products/codes/${codeId}`, { method: 'DELETE' }),
+  intakeVariant: (variantId: number, data: ProductIntakeInput) =>
+    request<{ spool_ids: number[]; cost_per_kg: number | null }>(`/inventory/products/variants/${variantId}/intake`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
   setSpoolSuppliers: (spoolId: number, links: SpoolSupplierLinkInput[]) =>
     request<SpoolSupplierLink[]>(`/inventory/spools/${spoolId}/suppliers`, {
       method: 'PUT',

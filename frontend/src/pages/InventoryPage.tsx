@@ -7,7 +7,7 @@ import {
   Search, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
   TrendingDown, Layers, Printer, AlertTriangle, X, Clock, LayoutGrid, TableProperties, Columns,
   ArrowUp, ArrowDown, ArrowUpDown, Group, ChevronDown, Check, RefreshCw, TrendingUp, Lock, Copy, Eraser, MapPin,
-  Upload, Download, Link2, Banknote, Store,
+  Upload, Download, Link2, Banknote, Store, Boxes, PackagePlus,
 } from 'lucide-react';
 import { ForecastPanel } from '../components/ForecastPanel';
 import { api, spoolbuddyApi, ApiError } from '../api/client';
@@ -23,6 +23,8 @@ import { LabelTemplatePickerModal } from '../components/LabelTemplatePickerModal
 import { SpoolCsvImportModal } from '../components/SpoolCsvImportModal';
 import { LocationsModal } from '../components/LocationsModal';
 import { SuppliersModal } from '../components/SuppliersModal';
+import { ProductsPanel } from '../components/products/ProductsPanel';
+import { IntakeModal } from '../components/products/IntakeModal';
 import { BulkEditSpoolsModal } from '../components/BulkEditSpoolsModal';
 import { SpoolGroupLinkModal } from '../components/SpoolGroupLinkModal';
 import { useToast } from '../contexts/ToastContext';
@@ -47,7 +49,7 @@ import {
 
 type ArchiveFilter = 'active' | 'archived';
 type UsageFilter = 'all' | 'used' | 'new' | 'lowstock';
-type ViewMode = 'table' | 'cards' | 'forecast';
+type ViewMode = 'table' | 'cards' | 'forecast' | 'products';
 type SortDirection = 'asc' | 'desc';
 type SortState = { column: string; direction: SortDirection } | null;
 
@@ -678,6 +680,9 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
   const [exportingCsv, setExportingCsv] = useState(false);
   const [locationsModalOpen, setLocationsModalOpen] = useState(false);
   const [suppliersModalOpen, setSuppliersModalOpen] = useState(false);
+  // Goods-in from product master data (#3165): undefined = closed, else the
+  // product to open the picker on (null = start with a scan).
+  const [intakeProductId, setIntakeProductId] = useState<number | null | undefined>(undefined);
 
   // Filter state
   const [archiveFilter, setArchiveFilter] = useState<ArchiveFilter>('active');
@@ -693,6 +698,9 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
   const [stockFilter, setStockFilter] = useState<'all' | 'stock' | 'configured'>('all');
   const [search, setSearch] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('table');
+  // Forecast and Products replace the spool list, so its search, filters
+  // and bulk bar step aside for both.
+  const isPanelView = viewMode === 'forecast' || viewMode === 'products';
   const [sortState, setSortState] = useState<SortState>(loadSortState);
   const [columnConfig, setColumnConfig] = useState<ColumnConfig[]>(loadColumnConfig);
   const [showColumnModal, setShowColumnModal] = useState(false);
@@ -1702,6 +1710,11 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
             <Printer className="w-4 h-4" />
             {t('inventory.labels.printLabels', 'Print labels…')}
           </Button>
+          {/* Goods in from product master data (#3165). */}
+          <Button variant="secondary" disabled={spoolmanMode} onClick={() => setIntakeProductId(null)}>
+            <PackagePlus className="w-4 h-4" />
+            {t('inventory.products.intakeTitle')}
+          </Button>
           <Button onClick={() => setFormModal({ spool: null, mode: 'create' })}>
             <Plus className="w-4 h-4" />
             {t('inventory.addSpool')}
@@ -1891,7 +1904,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
 
       {/* Toolbar: Search + View toggle */}
       <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between">
-        <div className={`relative flex-1 max-w-md ${viewMode === 'forecast' ? 'invisible pointer-events-none' : ''}`}>
+        <div className={`relative flex-1 max-w-md ${isPanelView ? 'invisible pointer-events-none' : ''}`}>
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-bambu-gray/50" />
           <input
             type="text"
@@ -1923,7 +1936,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
             </button>
           )}
           {/* Group similar toggle — hidden in forecast mode */}
-          {viewMode !== 'forecast' && (
+          {!isPanelView && (
             <button
               onClick={toggleGroupSimilar}
               className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium border rounded-lg transition-colors ${
@@ -1974,12 +1987,26 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
               {canViewForecast ? <TrendingUp className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
               <span className="hidden sm:inline">{t('forecast.title')}</span>
             </button>
+            {/* Product master data (#3165) — built-in inventory only. */}
+            {!spoolmanMode && (
+              <button
+                onClick={() => setViewMode('products')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium transition-colors ${
+                  viewMode === 'products'
+                    ? 'bg-bambu-green text-white'
+                    : 'text-bambu-gray hover:bg-bambu-dark-tertiary'
+                }`}
+              >
+                <Boxes className="w-4 h-4" />
+                <span className="hidden sm:inline">{t('inventory.products.title')}</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
 
       {/* Filter chips row — hidden in forecast mode */}
-      <div className={`flex flex-wrap items-center gap-2 ${viewMode === 'forecast' ? 'hidden' : ''}`}>
+      <div className={`flex flex-wrap items-center gap-2 ${isPanelView ? 'hidden' : ''}`}>
         {/* Active / Archived chips */}
         <div className="flex items-center rounded-lg border border-bambu-dark-tertiary overflow-hidden">
           <button
@@ -2244,7 +2271,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
         )}
 
         {/* Results count — hidden in forecast mode */}
-        {viewMode !== 'forecast' && (
+        {!isPanelView && (
           <span className="ml-auto text-xs text-bambu-gray">
             {sortedSpools.length} {sortedSpools.length !== 1 ? t('inventory.spools') : t('inventory.spool')}
             {groupSimilar && totalDisplayItems < sortedSpools.length && ` (${totalDisplayItems} ${t('inventory.groupedRows')})`}
@@ -2255,7 +2282,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
       {/* Bulk action toolbar (#1795). Appears as soon as at least one
           spool is selected; sticky so it stays visible while the user
           scrolls a long list. */}
-      {selectedIds.size > 0 && viewMode !== 'forecast' && (
+      {selectedIds.size > 0 && !isPanelView && (
         <div className="sticky top-2 z-10 mb-4 flex items-center gap-2 px-3 py-2 bg-bambu-green/10 border border-bambu-green/30 rounded-lg backdrop-blur-sm">
           <span className="text-sm text-bambu-green font-medium">
             {t('inventory.bulk.selectionCount', { count: selectedIds.size })}
@@ -2317,6 +2344,12 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
       ) : viewMode === 'forecast' ? (
         /* Forecast view */
         <ForecastPanel spools={spools || []} />
+      ) : viewMode === 'products' ? (
+        /* Product master data (#3165) */
+        <ProductsPanel
+          onIntake={(productId) => setIntakeProductId(productId)}
+          unassignedCount={(spools || []).filter((s) => !s.archived_at && s.variant_id == null).length}
+        />
       ) : viewMode === 'cards' ? (
         /* Cards view */
         pagedItems.length > 0 ? (
@@ -2816,6 +2849,10 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
       />
 
       <SuppliersModal open={suppliersModalOpen} onClose={() => setSuppliersModalOpen(false)} />
+
+      {intakeProductId !== undefined && (
+        <IntakeModal initialProductId={intakeProductId} onClose={() => setIntakeProductId(undefined)} />
+      )}
     </div>
   );
 }

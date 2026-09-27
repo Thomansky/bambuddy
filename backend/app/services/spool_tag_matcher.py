@@ -301,6 +301,12 @@ async def create_spool_from_tray(db: AsyncSession, tray_data: dict) -> Spool:
                 "Auto-linked scanned spool %d to spool %d (group %s)", spool.id, donor.id, spool.filament_group_id
             )
 
+    # Product master data (#3165): the scanned roll takes its place under its
+    # variant and arrives with the product's number and price.
+    from backend.app.services.filament_products import auto_assign_spools
+
+    await auto_assign_spools(db, [spool])
+
     logger.info(
         "Auto-created spool %d from AMS tray data: %s %s %s (tag=%s uuid=%s)",
         spool.id,
@@ -363,6 +369,21 @@ async def find_matching_untagged_spool(db: AsyncSession, tray_data: dict) -> Spo
         elif color_code and color_code[0] == "T":
             subtype = "Tri Color"
 
+    # Product master data (#3165): a roll booked in at goods-in is waiting
+    # untagged as a spool of its variant — it takes the tag first.
+    from backend.app.services.filament_products import untagged_spool_for_tray
+
+    try:
+        tray_weight = int(tray_data.get("tray_weight") or 0)
+    except (TypeError, ValueError):
+        tray_weight = 0
+    booked_in = await untagged_spool_for_tray(
+        db, material=material, subtype=subtype, rgba=tray_color, label_weight=tray_weight
+    )
+    if booked_in is not None:
+        logger.info("Found booked-in spool %d of its variant for the tag just read", booked_in.id)
+        return booked_in
+
     # Active, untagged spools matching material + color + Bambu-or-unset brand.
     query = (
         select(Spool)
@@ -391,10 +412,15 @@ async def find_matching_untagged_spool(db: AsyncSession, tray_data: dict) -> Spo
             )
         ).order_by(
             case((func.upper(Spool.subtype) == subtype.upper(), 0), else_=1),
+            # A 1 kg tag should not take a 500 g roll while a 1 kg one waits.
+            case((Spool.label_weight == tray_weight, 0), else_=1),
             Spool.created_at.asc(),
         )
     else:
-        query = query.where(Spool.subtype.is_(None)).order_by(Spool.created_at.asc())
+        query = query.where(Spool.subtype.is_(None)).order_by(
+            case((Spool.label_weight == tray_weight, 0), else_=1),
+            Spool.created_at.asc(),
+        )
 
     query = query.limit(1)
 

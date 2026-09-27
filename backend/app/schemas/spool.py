@@ -309,6 +309,8 @@ class SpoolResponse(SpoolBase):
     # Link group for shared master data (#2936); NULL = not linked. Read-only
     # here — membership changes go through the link/unlink endpoints.
     filament_group_id: int | None = None
+    # Product variant this spool is a roll of (#3165); NULL = not assigned.
+    variant_id: int | None = None
 
     class Config:
         from_attributes = True
