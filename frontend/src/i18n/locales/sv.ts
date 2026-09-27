@@ -1698,7 +1698,7 @@ export default {
     failureReasons: 'Orsaker till fel',
     topFailureReasons: 'Vanligaste orsaker till fel',
     failedPrintsCount: '{{failed}} / {{total}} utskrifter misslyckades',
-    rejectedPrintsCount: '{{rejected}} kasserade efter slutförande',
+    rejectedPrintsCount: 'Kasserade efter slutförande: {{rejected}}',
     yieldRate: 'Utbyte: {{rate}}%',
     lastWeekRate: 'Förra veckan: {{rate}}%',
     // Actions
