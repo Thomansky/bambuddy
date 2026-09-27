@@ -74,8 +74,13 @@ describe('file preview i18n (#2976)', () => {
   it.each(codes.filter((c) => c !== 'en'))(
     '%s translates every fileManager.preview key and keeps its interpolations',
     (code) => {
-      const reference = get(en, 'fileManager.preview') as Record<string, string>;
-      const translated = get(locales[code], 'fileManager.preview') as Record<string, string>;
+      // The preview strings are the flat ones. A nested block (the fork's
+      // e-mail header labels under `msg`) belongs to its own feature, where
+      // "Cc" may rightly read the same in every language.
+      const strings = (node: Node) =>
+        Object.fromEntries(Object.entries(node as Record<string, unknown>).filter(([, v]) => typeof v === 'string')) as Record<string, string>;
+      const reference = strings(get(en, 'fileManager.preview') as Node);
+      const translated = strings(get(locales[code], 'fileManager.preview') as Node);
       expect(Object.keys(translated)).toEqual(Object.keys(reference));
       for (const [key, enValue] of Object.entries(reference)) {
         expect(translated[key], key).toBeTypeOf('string');
