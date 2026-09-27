@@ -7,6 +7,11 @@ says the right thing about a directory nobody made is exactly the failure this
 feature has to not have.
 """
 
+import os
+import re
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -16,6 +21,8 @@ from backend.app.models.settings import Settings
 from backend.app.services import library_storage
 
 pytestmark = pytest.mark.integration
+
+TRASH = library_storage.TRASH_DIR_NAME
 
 
 @pytest.fixture(autouse=True)
@@ -50,6 +57,24 @@ async def _set(db_session, key: str, value: str) -> None:
 async def _directory_mode(db_session, tree) -> None:
     await _set(db_session, "library_storage_mode", "directory")
     await _set(db_session, "library_storage_path", str(tree))
+
+
+async def _row(db_session, file_id: int) -> LibraryFile | None:
+    """The file's row as the database has it now, not as this session cached it."""
+    db_session.expire_all()
+    return (await db_session.execute(select(LibraryFile).where(LibraryFile.id == file_id))).scalar_one_or_none()
+
+
+def _walk(nodes):
+    for node in nodes:
+        yield node
+        yield from _walk(node.get("children") or [])
+
+
+def _trash_entries(tree: Path) -> list[Path]:
+    """The entries of the tree's trash; none when it was never made."""
+    trash = tree / TRASH
+    return sorted(trash.iterdir()) if trash.is_dir() else []
 
 
 class TestTheMode:
@@ -197,17 +222,28 @@ class TestFolders:
         response = await async_client.delete(f"/api/v1/library/folders/{folder['id']}")
         assert response.status_code == 200
         assert not (tree / "Leer").exists()
+        # Nothing in it to restore, so nothing of it waits in the trash either.
+        assert _trash_entries(tree) == []
 
     @pytest.mark.asyncio
-    async def test_delete_keeps_a_directory_that_still_holds_files(self, async_client: AsyncClient, db_session, tree):
+    async def test_delete_moves_a_directory_that_still_holds_files_into_the_trash(
+        self, async_client: AsyncClient, db_session, tree
+    ):
+        """Left on the share, the next scan would hand the whole folder back.
+
+        A file nobody scanned yet is somebody's file all the same: it goes to
+        the trash with its folder, never away.
+        """
         await _directory_mode(db_session, tree)
         folder = (await async_client.post("/api/v1/library/folders", json={"name": "Kunden"})).json()
         (tree / "Kunden" / "drawing.3mf").write_bytes(b"x")
 
         response = await async_client.delete(f"/api/v1/library/folders/{folder['id']}")
         assert response.status_code == 200
-        assert response.json()["directory_kept"] == str(tree / "Kunden")
-        assert (tree / "Kunden" / "drawing.3mf").exists()
+        assert "directory_kept" not in response.json()
+        assert not (tree / "Kunden").exists()
+        [entry] = _trash_entries(tree)
+        assert (entry / "Kunden" / "drawing.3mf").read_bytes() == b"x"
 
 
 class TestWhereFilesLand:
@@ -597,6 +633,549 @@ class TestRefreshOnOpen:
         assert settings["library_scan_on_open"] is True
 
 
+def _in_use(source, target):
+    """What a share answers for a file that is open on a workstation."""
+    raise PermissionError(13, "The file is in use by another process")
+
+
+class TestTheTrashOnTheShare:
+    """A delete in the tree moves the bytes into ``.bambuddy-trash`` (#3160).
+
+    Dropping only the row, which is what #124's external folders do, left the
+    file where it was — and the next scan filed it straight back into the
+    library. So everything here is asserted on the share first: the share is
+    what the next scan believes.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _forget_throttle(self):
+        from backend.app.services import library_autoscan
+
+        library_autoscan._last_refresh.clear()
+        yield
+        library_autoscan._last_refresh.clear()
+
+    async def _scanned(self, async_client: AsyncClient, folder_id: int) -> list[dict]:
+        scan = await async_client.post(f"/api/v1/library/folders/{folder_id}/scan")
+        assert scan.status_code == 200, scan.text
+        return (await async_client.get(f"/api/v1/library/files?folder_id={folder_id}")).json()
+
+    async def _folder_with_file(self, async_client: AsyncClient, db_session, tree) -> tuple[dict, dict]:
+        await _directory_mode(db_session, tree)
+        folder = (await async_client.post("/api/v1/library/folders", json={"name": "Kunden"})).json()
+        (tree / "Kunden" / "teil.3mf").write_bytes(b"the real part")
+        [file] = await self._scanned(async_client, folder["id"])
+        return folder, file
+
+    async def _trashed_path(self, async_client: AsyncClient, db_session, file_id: int) -> Path:
+        response = await async_client.delete(f"/api/v1/library/files/{file_id}")
+        assert response.status_code == 200, response.text
+        return Path((await _row(db_session, file_id)).file_path)
+
+    @pytest.mark.asyncio
+    async def test_a_deleted_file_moves_into_the_trash_and_stays_gone(
+        self, async_client: AsyncClient, db_session, tree
+    ):
+        folder, file = await self._folder_with_file(async_client, db_session, tree)
+
+        response = await async_client.delete(f"/api/v1/library/files/{file['id']}")
+        assert response.status_code == 200, response.text
+        assert response.json()["trashed"] is True
+        assert not (tree / "Kunden" / "teil.3mf").exists()
+
+        row = await _row(db_session, file["id"])
+        assert row.deleted_at is not None
+        # The folder stays on the row: it is where a restore puts the file.
+        assert row.folder_id == folder["id"]
+        trashed = Path(row.file_path)
+        assert trashed.read_bytes() == b"the real part"
+        assert trashed.parent.parent == (tree / TRASH).resolve()
+        assert re.fullmatch(rf"\d{{8}}-\d{{6}}-f{file['id']}", trashed.parent.name)
+
+        # Neither the Scan button nor opening the folder brings it back.
+        assert await self._scanned(async_client, folder["id"]) == []
+        refresh = await async_client.post(f"/api/v1/library/folders/{folder['id']}/refresh")
+        assert refresh.json() == {"added": 0, "removed": 0, "skipped": None}
+        trash = (await async_client.get("/api/v1/library/trash")).json()
+        assert [item["id"] for item in trash["items"]] == [file["id"]]
+
+    @pytest.mark.asyncio
+    async def test_a_scan_never_indexes_the_trash_even_showing_hidden_files(self, async_client: AsyncClient, tree):
+        """A dot-directory, but "show hidden" is about the user's files, not this."""
+        deleted = tree / TRASH / "20260101-000000-d7" / "Kunden"
+        deleted.mkdir(parents=True)
+        (deleted / "geloescht.3mf").write_bytes(b"deleted once")
+        (tree / "Auftrag").mkdir()
+        (tree / "Auftrag" / "teil.3mf").write_bytes(b"a real file")
+
+        created = await async_client.post(
+            "/api/v1/library/folders/external",
+            json={"name": "Freigabe", "external_path": str(tree), "readonly": False, "show_hidden": True},
+        )
+        assert created.status_code == 200, created.text
+        scan = await async_client.post(f"/api/v1/library/folders/{created.json()['id']}/scan")
+        assert scan.status_code == 200, scan.text
+        assert scan.json()["added"] == 1
+
+        folders = (await async_client.get("/api/v1/library/folders")).json()
+        names = {node["name"] for node in _walk(folders)}
+        assert "Auftrag" in names
+        assert not {TRASH, "20260101-000000-d7", "Kunden"} & names
+
+    @pytest.mark.asyncio
+    async def test_restore_puts_the_file_back_where_it_was(self, async_client: AsyncClient, db_session, tree):
+        folder, file = await self._folder_with_file(async_client, db_session, tree)
+        trashed = await self._trashed_path(async_client, db_session, file["id"])
+
+        response = await async_client.post(f"/api/v1/library/trash/{file['id']}/restore")
+        assert response.status_code == 200, response.text
+        assert (tree / "Kunden" / "teil.3mf").read_bytes() == b"the real part"
+        row = await _row(db_session, file["id"])
+        assert row.deleted_at is None
+        assert row.folder_id == folder["id"]
+        assert Path(row.file_path) == (tree / "Kunden" / "teil.3mf").resolve()
+        # The emptied entry goes with it; the trash directory itself stays.
+        assert not trashed.parent.exists()
+        assert _trash_entries(tree) == []
+        # A library file again, and the same one: the scan finds no second row.
+        assert [f["id"] for f in await self._scanned(async_client, folder["id"])] == [file["id"]]
+
+    @pytest.mark.asyncio
+    async def test_restore_onto_a_name_taken_since_is_refused_and_changes_nothing(
+        self, async_client: AsyncClient, db_session, tree
+    ):
+        _, file = await self._folder_with_file(async_client, db_session, tree)
+        trashed = await self._trashed_path(async_client, db_session, file["id"])
+        (tree / "Kunden" / "teil.3mf").write_bytes(b"a newer part")
+
+        response = await async_client.post(f"/api/v1/library/trash/{file['id']}/restore")
+        assert response.status_code == 409, response.text
+        assert "already exists" in response.json()["detail"]
+        assert (tree / "Kunden" / "teil.3mf").read_bytes() == b"a newer part"
+        assert trashed.read_bytes() == b"the real part"
+        row = await _row(db_session, file["id"])
+        assert row.deleted_at is not None
+        assert Path(row.file_path) == trashed
+
+    @pytest.mark.asyncio
+    async def test_restore_with_the_share_gone_is_refused_and_changes_nothing(
+        self, async_client: AsyncClient, db_session, tree
+    ):
+        _, file = await self._folder_with_file(async_client, db_session, tree)
+        trashed = await self._trashed_path(async_client, db_session, file["id"])
+
+        offline = tree.with_name("Bambuddy-offline")
+        tree.rename(offline)
+        try:
+            response = await async_client.post(f"/api/v1/library/trash/{file['id']}/restore")
+        finally:
+            offline.rename(tree)
+
+        assert response.status_code == 400, response.text
+        assert "does not exist" in response.json()["detail"]
+        row = await _row(db_session, file["id"])
+        assert row.deleted_at is not None
+        assert Path(row.file_path) == trashed
+        assert trashed.exists()
+
+    @pytest.mark.asyncio
+    async def test_delete_now_unlinks_it_from_the_trash_and_nothing_else(
+        self, async_client: AsyncClient, db_session, tree
+    ):
+        _, file = await self._folder_with_file(async_client, db_session, tree)
+        (tree / "Kunden" / "nachbar.3mf").write_bytes(b"a neighbour")
+        trashed = await self._trashed_path(async_client, db_session, file["id"])
+
+        response = await async_client.delete(f"/api/v1/library/trash/{file['id']}")
+        assert response.status_code == 200, response.text
+        assert not trashed.exists()
+        assert not trashed.parent.exists()
+        assert (tree / TRASH).is_dir()
+        assert (tree / "Kunden" / "nachbar.3mf").read_bytes() == b"a neighbour"
+        assert await _row(db_session, file["id"]) is None
+
+    @pytest.mark.asyncio
+    async def test_a_purge_never_unlinks_a_live_file_on_the_share(self, async_client: AsyncClient, db_session, tree):
+        """A trashed row is evidence of nothing: only the trash is ever emptied."""
+        await _directory_mode(db_session, tree)
+        (tree / "Kunden").mkdir()
+        live = tree / "Kunden" / "live.3mf"
+        live.write_bytes(b"in use")
+        row = LibraryFile(
+            filename="live.3mf",
+            file_path=str(live),
+            file_type="3mf",
+            file_size=6,
+            is_external=True,
+            deleted_at=datetime.now(timezone.utc),
+        )
+        db_session.add(row)
+        await db_session.commit()
+
+        response = await async_client.delete(f"/api/v1/library/trash/{row.id}")
+        assert response.status_code == 200, response.text
+        assert live.read_bytes() == b"in use"
+        assert await _row(db_session, row.id) is None
+
+    @pytest.mark.asyncio
+    async def test_the_sweeper_purges_it_from_the_trash_after_the_retention_window(
+        self, async_client: AsyncClient, db_session, tree
+    ):
+        from backend.app.services.library_trash import library_trash_service
+
+        _, file = await self._folder_with_file(async_client, db_session, tree)
+        trashed = await self._trashed_path(async_client, db_session, file["id"])
+        row = await _row(db_session, file["id"])
+        row.deleted_at = datetime.now(timezone.utc) - timedelta(days=400)
+        await db_session.commit()
+
+        assert await library_trash_service._sweep(db_session) == 1
+        assert not trashed.exists()
+        assert not trashed.parent.exists()
+        assert await _row(db_session, file["id"]) is None
+
+    @pytest.mark.asyncio
+    async def test_a_move_the_share_refuses_changes_nothing(
+        self, async_client: AsyncClient, db_session, tree, monkeypatch
+    ):
+        """A file held open on a workstation cannot be moved: 400, rows as they were."""
+        _, file = await self._folder_with_file(async_client, db_session, tree)
+        before = (await _row(db_session, file["id"])).file_path
+
+        with monkeypatch.context() as patched:
+            patched.setattr(library_storage.os, "rename", _in_use)
+            response = await async_client.delete(f"/api/v1/library/files/{file['id']}")
+
+        assert response.status_code == 400, response.text
+        assert "in use" in response.json()["detail"]
+        assert (tree / "Kunden" / "teil.3mf").read_bytes() == b"the real part"
+        row = await _row(db_session, file["id"])
+        assert row.deleted_at is None
+        assert row.file_path == before
+        assert _trash_entries(tree) == []
+
+    @pytest.mark.asyncio
+    async def test_a_deleted_folder_moves_into_the_trash_whole(self, async_client: AsyncClient, db_session, tree):
+        from backend.app.services.library_autoscan import autoscan_once
+
+        await _directory_mode(db_session, tree)
+        kunden = (await async_client.post("/api/v1/library/folders", json={"name": "Kunden"})).json()
+        rafi = (
+            await async_client.post("/api/v1/library/folders", json={"name": "RAFI", "parent_id": kunden["id"]})
+        ).json()
+        (tree / "Kunden" / "a.3mf").write_bytes(b"a")
+        (tree / "Kunden" / "RAFI" / "b.3mf").write_bytes(b"b")
+        (tree / "Kunden" / "notiz.txt").write_text("not a library file")
+        scan = await async_client.post(f"/api/v1/library/folders/{kunden['id']}/scan")
+        assert scan.json()["added"] == 2
+        db_session.expire_all()
+        ids = {row.filename: row.id for row in (await db_session.execute(select(LibraryFile))).scalars()}
+
+        response = await async_client.delete(f"/api/v1/library/folders/{kunden['id']}")
+        assert response.status_code == 200, response.text
+        assert "directory_kept" not in response.json()
+        assert not (tree / "Kunden").exists()
+
+        [entry] = _trash_entries(tree)
+        assert re.fullmatch(rf"\d{{8}}-\d{{6}}-d{kunden['id']}", entry.name)
+        assert (entry / "Kunden" / "a.3mf").read_bytes() == b"a"
+        assert (entry / "Kunden" / "RAFI" / "b.3mf").read_bytes() == b"b"
+        assert (entry / "Kunden" / "notiz.txt").exists()
+
+        # The rows survived the cascade: trashed, and out of the deleted folders.
+        for name, parts in (("a.3mf", ("Kunden", "a.3mf")), ("b.3mf", ("Kunden", "RAFI", "b.3mf"))):
+            row = await _row(db_session, ids[name])
+            assert row is not None
+            assert row.deleted_at is not None
+            assert row.folder_id is None
+            assert Path(row.file_path) == entry.resolve().joinpath(*parts)
+        folder_ids = [kunden["id"], rafi["id"]]
+        assert (await db_session.execute(select(LibraryFolder).where(LibraryFolder.id.in_(folder_ids)))).all() == []
+
+        # Nothing comes back with the next scan, neither the folder nor a file.
+        assert (await autoscan_once(db_session))["added"] == 0
+        folders = (await async_client.get("/api/v1/library/folders")).json()
+        assert not {"Kunden", "RAFI"} & {node["name"] for node in _walk(folders)}
+        trash = (await async_client.get("/api/v1/library/trash")).json()
+        assert {item["id"] for item in trash["items"]} == {ids["a.3mf"], ids["b.3mf"]}
+
+    @pytest.mark.asyncio
+    async def test_scanning_the_parent_does_not_bring_a_deleted_folder_back(
+        self, async_client: AsyncClient, db_session, tree
+    ):
+        await _directory_mode(db_session, tree)
+        kunden = (await async_client.post("/api/v1/library/folders", json={"name": "Kunden"})).json()
+        rafi = (
+            await async_client.post("/api/v1/library/folders", json={"name": "RAFI", "parent_id": kunden["id"]})
+        ).json()
+        (tree / "Kunden" / "RAFI" / "b.3mf").write_bytes(b"b")
+        assert (await async_client.post(f"/api/v1/library/folders/{kunden['id']}/scan")).json()["added"] == 1
+
+        response = await async_client.delete(f"/api/v1/library/folders/{rafi['id']}")
+        assert response.status_code == 200, response.text
+        assert (tree / "Kunden").is_dir()
+        assert not (tree / "Kunden" / "RAFI").exists()
+
+        scan = await async_client.post(f"/api/v1/library/folders/{kunden['id']}/scan")
+        assert scan.json() == {"status": "success", "added": 0, "removed": 0}
+        folders = (await async_client.get("/api/v1/library/folders")).json()
+        names = {node["name"] for node in _walk(folders)}
+        assert "Kunden" in names
+        assert "RAFI" not in names
+
+    @pytest.mark.asyncio
+    async def test_a_file_of_a_deleted_folder_restores_into_the_root(self, async_client: AsyncClient, db_session, tree):
+        folder, file = await self._folder_with_file(async_client, db_session, tree)
+        assert (await async_client.delete(f"/api/v1/library/folders/{folder['id']}")).status_code == 200
+
+        response = await async_client.post(f"/api/v1/library/trash/{file['id']}/restore")
+        assert response.status_code == 200, response.text
+        assert (tree / "teil.3mf").read_bytes() == b"the real part"
+        row = await _row(db_session, file["id"])
+        assert row.deleted_at is None
+        assert row.folder_id is None
+        assert Path(row.file_path) == (tree / "teil.3mf").resolve()
+        # With its only file out, the folder's entry had nothing left and went.
+        assert _trash_entries(tree) == []
+
+    @pytest.mark.asyncio
+    async def test_a_file_deleted_before_its_folder_keeps_its_restore(
+        self, async_client: AsyncClient, db_session, tree
+    ):
+        """Delete the file, then the folder it left empty: the file is still in the trash."""
+        folder, file = await self._folder_with_file(async_client, db_session, tree)
+        trashed = await self._trashed_path(async_client, db_session, file["id"])
+
+        response = await async_client.delete(f"/api/v1/library/folders/{folder['id']}")
+        assert response.status_code == 200, response.text
+        assert not (tree / "Kunden").exists()
+
+        row = await _row(db_session, file["id"])
+        assert row is not None
+        assert row.deleted_at is not None
+        assert row.folder_id is None
+        assert Path(row.file_path) == trashed
+        assert trashed.exists()
+
+        restored = await async_client.post(f"/api/v1/library/trash/{file['id']}/restore")
+        assert restored.status_code == 200, restored.text
+        assert (tree / "teil.3mf").read_bytes() == b"the real part"
+
+    @pytest.mark.asyncio
+    async def test_a_folder_the_share_refuses_to_move_stays_whole(
+        self, async_client: AsyncClient, db_session, tree, monkeypatch
+    ):
+        folder, file = await self._folder_with_file(async_client, db_session, tree)
+
+        with monkeypatch.context() as patched:
+            patched.setattr(library_storage.os, "rename", _in_use)
+            response = await async_client.delete(f"/api/v1/library/folders/{folder['id']}")
+
+        assert response.status_code == 400, response.text
+        assert (tree / "Kunden" / "teil.3mf").read_bytes() == b"the real part"
+        assert _trash_entries(tree) == []
+        db_session.expire_all()
+        still = (await db_session.execute(select(LibraryFolder).where(LibraryFolder.id == folder["id"]))).scalar_one()
+        assert still.external_path == str(tree / "Kunden")
+        row = await _row(db_session, file["id"])
+        assert row.deleted_at is None
+        assert row.folder_id == folder["id"]
+
+    @pytest.mark.asyncio
+    async def test_emptying_the_trash_takes_the_files_and_nothing_else(
+        self, async_client: AsyncClient, db_session, tree
+    ):
+        folder, file = await self._folder_with_file(async_client, db_session, tree)
+        (tree / "Kunden" / "notiz.txt").write_text("not a library file")
+        assert (await async_client.delete(f"/api/v1/library/folders/{folder['id']}")).status_code == 200
+        [entry] = _trash_entries(tree)
+
+        response = await async_client.delete("/api/v1/library/trash")
+        assert response.status_code == 200, response.text
+        assert response.json()["deleted"] == 1
+        assert not (entry / "Kunden" / "teil.3mf").exists()
+        # The note never had a row; it waits, entry and all, for the sweeper.
+        assert (entry / "Kunden" / "notiz.txt").exists()
+
+    @pytest.mark.asyncio
+    async def test_the_file_managers_multi_select_delete_trashes_them_too(
+        self, async_client: AsyncClient, db_session, tree
+    ):
+        await _directory_mode(db_session, tree)
+        folder = (await async_client.post("/api/v1/library/folders", json={"name": "Kunden"})).json()
+        (tree / "Kunden" / "eins.3mf").write_bytes(b"1")
+        (tree / "Kunden" / "zwei.3mf").write_bytes(b"2")
+        ids = [f["id"] for f in await self._scanned(async_client, folder["id"])]
+
+        response = await async_client.post("/api/v1/library/bulk-delete", json={"file_ids": ids})
+        assert response.status_code == 200, response.text
+        assert response.json()["deleted_files"] == 2
+        assert list((tree / "Kunden").iterdir()) == []
+        for file_id in ids:
+            row = await _row(db_session, file_id)
+            assert row.deleted_at is not None
+            assert Path(row.file_path).exists()
+        assert await self._scanned(async_client, folder["id"]) == []
+
+    @pytest.mark.asyncio
+    async def test_a_multi_select_delete_puts_back_what_it_moved_when_a_later_file_fails(
+        self, async_client: AsyncClient, db_session, tree, monkeypatch
+    ):
+        """All or nothing: the share has to match the rows the rollback leaves."""
+        await _directory_mode(db_session, tree)
+        folder = (await async_client.post("/api/v1/library/folders", json={"name": "Kunden"})).json()
+        (tree / "Kunden" / "eins.3mf").write_bytes(b"1")
+        (tree / "Kunden" / "zwei.3mf").write_bytes(b"2")
+        ids = [f["id"] for f in await self._scanned(async_client, folder["id"])]
+
+        real_rename = os.rename
+        renames: list[str] = []
+
+        def the_second_one_is_in_use(source, target):
+            renames.append(str(source))
+            if len(renames) == 2:
+                _in_use(source, target)
+            real_rename(source, target)
+
+        with monkeypatch.context() as patched:
+            patched.setattr(library_storage.os, "rename", the_second_one_is_in_use)
+            response = await async_client.post("/api/v1/library/bulk-delete", json={"file_ids": ids})
+
+        assert response.status_code == 400, response.text
+        # The first one went into the trash and came back out.
+        assert len(renames) == 3
+        assert sorted(p.name for p in (tree / "Kunden").iterdir()) == ["eins.3mf", "zwei.3mf"]
+        assert _trash_entries(tree) == []
+        for file_id in ids:
+            row = await _row(db_session, file_id)
+            assert row.deleted_at is None
+            assert Path(row.file_path).parent == (tree / "Kunden").resolve()
+
+    @pytest.mark.asyncio
+    async def test_an_external_folder_outside_the_tree_keeps_its_files(
+        self, async_client: AsyncClient, db_session, tree, tmp_path
+    ):
+        """#124's rule, unchanged: the row goes, the bytes are somebody else's."""
+        await _directory_mode(db_session, tree)
+        mount = tmp_path / "anderes-laufwerk"
+        mount.mkdir()
+        (mount / "fremd.3mf").write_bytes(b"not ours")
+        (mount / "auch-fremd.3mf").write_bytes(b"not ours either")
+        created = await async_client.post(
+            "/api/v1/library/folders/external",
+            json={"name": "Fremd", "external_path": str(mount), "readonly": False},
+        )
+        assert created.status_code == 200, created.text
+        folder = created.json()
+        files = {f["filename"]: f for f in await self._scanned(async_client, folder["id"])}
+
+        response = await async_client.delete(f"/api/v1/library/files/{files['fremd.3mf']['id']}")
+        assert response.status_code == 200, response.text
+        assert response.json()["trashed"] is False
+        assert await _row(db_session, files["fremd.3mf"]["id"]) is None
+        assert (mount / "fremd.3mf").read_bytes() == b"not ours"
+
+        response = await async_client.delete(f"/api/v1/library/folders/{folder['id']}")
+        assert response.status_code == 200, response.text
+        assert (mount / "auch-fremd.3mf").read_bytes() == b"not ours either"
+        assert await _row(db_session, files["auch-fremd.3mf"]["id"]) is None
+        assert not (tree / TRASH).exists()
+        assert not (mount / TRASH).exists()
+
+    @pytest.mark.asyncio
+    async def test_a_read_only_folder_in_the_tree_keeps_its_files(self, async_client: AsyncClient, db_session, tree):
+        await _directory_mode(db_session, tree)
+        archive = tree / "Archiv"
+        archive.mkdir()
+        (archive / "alt.3mf").write_bytes(b"old")
+        (archive / "uralt.3mf").write_bytes(b"older")
+        created = await async_client.post(
+            "/api/v1/library/folders/external",
+            json={"name": "Archiv", "external_path": str(archive), "readonly": True},
+        )
+        assert created.status_code == 200, created.text
+        folder = created.json()
+        files = {f["filename"]: f for f in await self._scanned(async_client, folder["id"])}
+
+        response = await async_client.delete(f"/api/v1/library/files/{files['alt.3mf']['id']}")
+        assert response.status_code == 200, response.text
+        assert response.json()["trashed"] is False
+        assert await _row(db_session, files["alt.3mf"]["id"]) is None
+        assert (archive / "alt.3mf").read_bytes() == b"old"
+
+        response = await async_client.delete(f"/api/v1/library/folders/{folder['id']}")
+        assert response.status_code == 200, response.text
+        assert Path(response.json()["directory_kept"]) == archive.resolve()
+        assert (archive / "uralt.3mf").read_bytes() == b"older"
+        assert not (tree / TRASH).exists()
+
+    @pytest.mark.asyncio
+    async def test_managed_mode_keeps_the_trash_it_always_had(self, async_client: AsyncClient, db_session, tree):
+        from backend.app.api.routes.library import to_absolute_path
+
+        uploaded = await async_client.post(
+            "/api/v1/library/files",
+            files={"file": ("managed.stl", b"solid managed\nfacet\n", "application/octet-stream")},
+        )
+        assert uploaded.status_code == 200, uploaded.text
+        file_id = uploaded.json()["id"]
+        before = (await _row(db_session, file_id)).file_path
+
+        response = await async_client.delete(f"/api/v1/library/files/{file_id}")
+        assert response.json()["trashed"] is True
+        row = await _row(db_session, file_id)
+        assert row.deleted_at is not None
+        assert row.is_external is False
+        assert row.file_path == before
+        assert to_absolute_path(before).is_file()
+
+        restored = await async_client.post(f"/api/v1/library/trash/{file_id}/restore")
+        assert restored.status_code == 200, restored.text
+        row = await _row(db_session, file_id)
+        assert row.deleted_at is None
+        assert row.file_path == before
+        assert not (tree / TRASH).exists()
+
+    @pytest.mark.asyncio
+    async def test_the_sweeper_removes_what_a_folder_delete_left_once_it_expired(
+        self, async_client: AsyncClient, db_session, tree
+    ):
+        """A note the scan never indexed has no row, so no row sweep reaches it."""
+        from backend.app.services.library_trash import library_trash_service
+
+        await _directory_mode(db_session, tree)
+        await library_trash_service.set_retention_days(db_session, 30)
+        trash = tree / TRASH
+        expired = trash / "20200101-000000-d7"
+        (expired / "Kunden").mkdir(parents=True)
+        (expired / "Kunden" / "notiz.txt").write_text("left behind by a folder delete")
+        recent = trash / f"{datetime.now(timezone.utc) - timedelta(days=1):%Y%m%d-%H%M%S}-d8"
+        (recent / "Kunden").mkdir(parents=True)
+        (recent / "Kunden" / "notiz.txt").write_text("still within the window")
+        claimed = trash / "20200101-000000-f9"
+        claimed.mkdir()
+        (claimed / "teil.3mf").write_bytes(b"a row still points here")
+        db_session.add(
+            LibraryFile(
+                filename="teil.3mf",
+                file_path=str(claimed / "teil.3mf"),
+                file_type="3mf",
+                file_size=23,
+                is_external=True,
+                deleted_at=datetime.now(timezone.utc) - timedelta(days=2),
+            )
+        )
+        await db_session.commit()
+        foreign = trash / "nicht-von-bambuddy"
+        foreign.mkdir()
+
+        assert await library_trash_service._sweep_share_trash(db_session) == 1
+        assert not expired.exists()
+        assert recent.exists()
+        assert claimed.exists()
+        assert foreign.exists()
+
+
 class TestThePathGuard:
     def test_a_stored_path_outside_the_root_is_not_trusted(self, tmp_path):
         """The column is a string. A restored backup can name anything."""
@@ -605,6 +1184,18 @@ class TestThePathGuard:
         assert library_storage.is_inside_tree(root, root / "Kunden") is True
         assert library_storage.is_inside_tree(root, tmp_path / "elsewhere") is False
         assert library_storage.is_inside_tree(None, root / "Kunden") is False
+
+    def test_only_something_inside_an_entry_is_in_the_trash(self, tmp_path):
+        """What a purge may unlink: below an entry, and nothing a ``..`` reaches."""
+        root = tmp_path / "tree"
+        entry = root / TRASH / "20260101-000000-f1"
+        entry.mkdir(parents=True)
+        assert library_storage.trash_entry_of(root, entry / "teil.3mf") == entry.resolve()
+        assert library_storage.trash_entry_of(root, entry) is None
+        assert library_storage.trash_entry_of(root, root / TRASH) is None
+        assert library_storage.trash_entry_of(root, root / "Kunden" / "teil.3mf") is None
+        assert library_storage.trash_entry_of(root, root / TRASH / ".." / "Kunden" / "teil.3mf") is None
+        assert library_storage.trash_entry_of(None, entry / "teil.3mf") is None
 
     def test_a_component_is_reduced_to_one_directory_name(self):
         assert library_storage.directory_component("a/b", None) == "a-b"

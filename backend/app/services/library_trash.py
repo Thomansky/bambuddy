@@ -12,6 +12,13 @@ Two-stage file deletion for the library:
 
 External files (``is_external=True``) are never placed in the trash — their
 bytes live outside Bambuddy's control, so there's nothing to restore.
+
+The one exception is the library's own directory tree (#3160). A row dropped
+there comes straight back with the next scan, so a delete moves the bytes into
+``<root>/.bambuddy-trash`` on the share (``library_storage``) and the row goes
+through this trash like a managed one: restore moves the bytes back, and the
+purge unlinks them — from that directory and nowhere else. An external row
+pointing anywhere outside it keeps its bytes whatever happens to the row.
 """
 
 from __future__ import annotations
@@ -29,6 +36,7 @@ from backend.app.core.database import async_session
 from backend.app.models.library import LibraryFile
 from backend.app.models.print_queue import PrintQueueItem, PrintQueueVariant
 from backend.app.models.settings import Settings
+from backend.app.services import library_storage
 from backend.app.utils.library_paths import remove_library_photos_dir
 from backend.app.utils.local_time import utcnow_naive
 
@@ -139,6 +147,7 @@ class LibraryTrashService:
                 await asyncio.sleep(self._check_interval)
                 async with async_session() as db:
                     await self._sweep(db)
+                    await self._sweep_share_trash(db)
                     await self._sweep_abandoned_uploads(db)
                     await self._maybe_run_auto_purge(db)
             except asyncio.CancelledError:
@@ -360,8 +369,10 @@ class LibraryTrashService:
         if not rows:
             return 0
 
+        tree_root = await library_storage.configured_storage_root(db)
         deleted = 0
         for row in rows:
+            await self._unlink_from_share_trash(tree_root, row)
             self._unlink_on_disk(row)
             deleted += 1
         await delete_dependent_variants(db, [r.id for r in rows])
@@ -372,6 +383,44 @@ class LibraryTrashService:
         await db.commit()
         logger.info("Library trash sweeper: hard-deleted %d row(s) past %d-day retention", deleted, retention)
         return deleted
+
+    async def _sweep_share_trash(self, db: AsyncSession) -> int:
+        """Empty what the rows never covered out of the tree's trash (#3160).
+
+        A folder goes to the trash as one directory, and its rows only cover
+        the library files in it: a drawing the scan does not index, a note, the
+        subdirectories themselves have no row for :meth:`_sweep` to purge. An
+        entry past the retention window that no row points into any more is
+        exactly that remainder — or what is left when a purge found the share
+        unreachable — so it goes whole. Rows still pointing into an entry keep
+        it, trashed or not.
+        """
+        root = await library_storage.configured_storage_root(db)
+        if root is None:
+            return 0
+        retention = await self._read_retention(db)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=retention)
+        claimed = (
+            (
+                await db.execute(
+                    select(LibraryFile.file_path).where(
+                        LibraryFile.is_external.is_(True),
+                        LibraryFile.file_path.contains(library_storage.TRASH_DIR_NAME),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        try:
+            # A walk of a mounted share is network IO, hence the thread.
+            removed = await asyncio.to_thread(library_storage.remove_expired_trash_entries, root, cutoff, claimed)
+        except OSError as e:
+            logger.warning("Library trash sweeper: could not read the trash on the share: %s", e)
+            return 0
+        if removed:
+            logger.info("Library trash sweeper: removed %d expired entry/ies from the trash on the share", removed)
+        return removed
 
     async def _sweep_abandoned_uploads(self, db: AsyncSession) -> int:
         """Drop rows a WebDAV client created and never filled in (#3152).
@@ -433,8 +482,14 @@ class LibraryTrashService:
 
     @staticmethod
     def _unlink_on_disk(row: LibraryFile) -> None:
-        """Best-effort cleanup of the file, thumbnail and photos (#3077) on disk."""
-        for rel in (row.file_path, row.thumbnail_path):
+        """Best-effort cleanup of the file, thumbnail and photos (#3077) on disk.
+
+        An external row's bytes are left alone here: they are on somebody's
+        share, and :meth:`_unlink_from_share_trash` is the only way any of them
+        is ever unlinked.
+        """
+        stored = (row.thumbnail_path,) if row.is_external else (row.file_path, row.thumbnail_path)
+        for rel in stored:
             abs_path = _to_absolute_path(rel)
             if abs_path is None:
                 continue
@@ -445,17 +500,43 @@ class LibraryTrashService:
                 logger.warning("Trash sweep: failed to unlink %s: %s", abs_path, e)
         remove_library_photos_dir(row.id)
 
+    @staticmethod
+    async def _unlink_from_share_trash(tree_root: Path | None, row: LibraryFile) -> None:
+        """Unlink an external row's bytes if, and only if, they are in the tree's trash (#3160).
+
+        A row pointing anywhere else names a live file on the share — one of
+        #124's mounts, or a tree whose trash it never went through — and the
+        purge takes the row, never that file.
+        """
+        if row.is_external:
+            await asyncio.to_thread(library_storage.unlink_from_trash, tree_root, row.file_path)
+
     # ---- User-facing trash ops ----------------------------------------
 
     async def restore(self, db: AsyncSession, file: LibraryFile) -> LibraryFile:
-        """Clear ``deleted_at`` so the file reappears in listings."""
+        """Clear ``deleted_at`` so the file reappears in listings.
+
+        A file of the library's directory tree (#3160) gets its bytes moved
+        back out of the trash on the share first: a 409 when its name has been
+        taken there since, a 400 when the share cannot be reached, and either
+        way the row stays in the trash exactly as it was.
+        """
+        moved = await library_storage.restore_trashed_file(db, file)
         file.deleted_at = None
-        await db.commit()
+        try:
+            await db.commit()
+        except Exception:
+            if moved is not None:
+                await library_storage.undo_trash_moves([moved])
+            raise
+        if moved is not None:
+            await library_storage.tidy_trash_entries(db, [moved])
         await db.refresh(file)
         return file
 
     async def hard_delete_now(self, db: AsyncSession, file: LibraryFile) -> None:
         """Bypass retention and delete this trashed file + its bytes immediately."""
+        await self._unlink_from_share_trash(await library_storage.configured_storage_root(db), file)
         self._unlink_on_disk(file)
         await delete_dependent_variants(db, [file.id])
         await release_queue_references(db, [file.id])

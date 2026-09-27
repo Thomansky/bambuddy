@@ -3288,6 +3288,8 @@ export function FileManagerPage() {
       queryClient.invalidateQueries({ queryKey: ['library-folders'] });
       queryClient.invalidateQueries({ queryKey: ['library-files'] });
       queryClient.invalidateQueries({ queryKey: ['library-stats'] });
+      // A folder of the library's directory tree sends its files to the trash.
+      queryClient.invalidateQueries({ queryKey: ['library-trash-count'] });
       if (selectedFolderId === deleteConfirm?.id) {
         setSelectedFolderId(null);
       }

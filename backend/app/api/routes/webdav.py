@@ -1223,12 +1223,13 @@ def _blob_destination(name: str) -> Path:
 async def _is_unclaimed_name(db: AsyncSession, folder: LibraryFolder | None, name: str) -> bool:
     """Whether a name in an external folder belongs to no library row at all.
 
-    Deleting an external file removes its row and leaves the bytes on the share
-    — the File Manager's own rule, and the reason the next scan finds the file
-    again. In between, the name is absent from every listing while the
-    directory still holds it, so re-saving the name you just deleted was told
-    that a file exists which nothing shows. A PUT says "these bytes, at this
-    path", so the file on the share is replaced and the row comes back.
+    Deleting an external file outside the library's own tree removes its row
+    and leaves the bytes on the share — the File Manager's own rule, and the
+    reason the next scan finds the file again. In between, the name is absent
+    from every listing while the directory still holds it, so re-saving the
+    name you just deleted was told that a file exists which nothing shows. A
+    PUT says "these bytes, at this path", so the file on the share is replaced
+    and the row comes back.
 
     Deliberately not filtered by what the caller may see, and deliberately
     counting trashed rows too: a file somebody else owns is missing from *this*
@@ -1421,8 +1422,9 @@ async def webdav_delete(
     if not can_delete_all:
         _require_permission(principal.user, Permission.LIBRARY_DELETE_OWN)
     # The File Manager's own delete, called rather than copied: it is the one
-    # place that knows an external row leaves the trash out of it, and which
-    # dependants have to be released first.
+    # place that knows which external rows leave the trash out of it — and that
+    # one in the library's own tree goes to the trash on the share (#3160) —
+    # and which dependants have to be released first.
     await delete_file(file_id=file.id, db=db, auth_result=(principal.user, can_delete_all))
     return Response(status_code=204)
 

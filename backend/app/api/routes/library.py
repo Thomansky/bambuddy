@@ -1763,6 +1763,11 @@ async def delete_folder(
     Folders have no ownership tracking, so cascade deletion requires
     library:delete_all. Users with only library:delete_own may delete empty,
     non-external, non-linked folders (#1781).
+
+    A folder of the library's directory tree (#3160) goes to the trash on the
+    share instead: its directory in one rename, its files' rows into the
+    trash, from where they restore into the library's root. Deleting only the
+    rows would hand the whole folder back on the next scan.
     """
     _, can_modify_all = auth_result
     result = await db.execute(select(LibraryFolder).where(LibraryFolder.id == folder_id))
@@ -1776,12 +1781,19 @@ async def delete_folder(
         if blocker:
             raise HTTPException(status_code=403, detail=blocker)
 
-    # External folders: only remove DB records, never delete files from external path
+    # External folders: only remove DB records, never delete files from external
+    # path. A folder of the tree goes to the trash whole instead, and the rows
+    # of its files leave the subtree first, so the cascade below does not
+    # reach them.
     is_ext = folder.is_external
+    trash_move = await library_storage.trash_tree_folder(db, folder)
 
     # Read while the row is still there: after the cascade there is nothing left
-    # to ask where the folder lived (#3160).
-    tree_directory = await library_storage.folder_directory_for_delete(db, folder)
+    # to ask where the folder lived (#3160). A folder that went to the trash
+    # has no directory left behind to tidy.
+    tree_directory = None
+    if trash_move is None:
+        tree_directory = await library_storage.folder_directory_for_delete(db, folder)
 
     # Get all files in this folder and subfolders to delete from disk
     async def get_all_file_ids(fid: int) -> list[int]:
@@ -1813,24 +1825,36 @@ async def delete_folder(
 
         return file_ids
 
-    doomed_file_ids = await get_all_file_ids(folder_id)
+    try:
+        doomed_file_ids = await get_all_file_ids(folder_id)
 
-    # The folder cascade hard-deletes every file row under it, so the queue has
-    # to be taken off them first — same as the single-file delete below (#2819).
-    # The return value used to be discarded here, which is why this never
-    # happened for a folder delete.
-    from backend.app.services.library_trash import delete_dependent_variants, release_queue_references
+        # The folder cascade hard-deletes every file row under it, so the queue
+        # has to be taken off them first — same as the single-file delete below
+        # (#2819). The return value used to be discarded here, which is why this
+        # never happened for a folder delete. Rows that went to the trash are no
+        # longer under the folder, and keep theirs like any trashed file.
+        from backend.app.services.library_trash import delete_dependent_variants, release_queue_references
 
-    await delete_dependent_variants(db, doomed_file_ids)
-    await release_queue_references(db, doomed_file_ids)
-    for doomed_id in doomed_file_ids:
-        remove_library_photos_dir(doomed_id)
+        await delete_dependent_variants(db, doomed_file_ids)
+        await release_queue_references(db, doomed_file_ids)
+        for doomed_id in doomed_file_ids:
+            remove_library_photos_dir(doomed_id)
 
-    # Delete folder (cascade will handle files and subfolders)
-    await db.delete(folder)
-    await db.commit()
+        # Delete folder (cascade will handle files and subfolders)
+        await db.delete(folder)
+        await db.commit()
+    except Exception:
+        # The rows still say the directory is where it was, so it goes back.
+        if trash_move is not None:
+            await library_storage.undo_trash_moves([trash_move])
+        raise
 
-    # The directory goes only when nothing is left in it. A directory still
+    if trash_move is not None:
+        await library_storage.tidy_trash_entries(db, [trash_move])
+        return {"status": "success", "message": "Folder deleted. Its files were moved to the trash.", "trashed": True}
+
+    # A folder the trash did not take — a read-only one — keeps its files where
+    # they are: the directory goes only when nothing is left in it. One still
     # holding files stays, and the answer says so: the bytes are on somebody's
     # share, the next scan will find them again, and a folder delete in
     # Bambuddy quietly emptying a customer directory is not a trade worth
@@ -1840,7 +1864,7 @@ async def delete_folder(
         storage_root = await library_storage.configured_storage_root(db)
         if storage_root is not None:
             removed = await asyncio.to_thread(library_storage.prune_empty_directory, storage_root, tree_directory)
-            directory_kept = not removed
+            directory_kept = not removed and await asyncio.to_thread(tree_directory.is_dir)
 
     if directory_kept:
         return {
@@ -1975,6 +1999,9 @@ SHARE_SYSTEM_DIRS = frozenset(
         ".fseventsd",
         ".Spotlight-V100",
         "lost+found",  # Linux
+        # Bambuddy's own: what was deleted from the library's tree (#3160). A
+        # dot-name, but skipped even when a folder shows hidden files.
+        library_storage.TRASH_DIR_NAME,
     }
 )
 
@@ -2484,7 +2511,8 @@ async def scan_external_folder(
                         abs_thumb.unlink()
                 except OSError:
                     pass
-            # The row is gone for good -- external files skip the trash -- so
+            # The row is gone for good -- the file left the disk without
+            # passing through the trash, so there is nothing to restore -- and
             # its photos go with it rather than being orphaned under an id
             # nothing points at any more (#3077).
             remove_library_photos_dir(db_file.id)
@@ -5680,6 +5708,11 @@ async def delete_file(
     files skip the trash entirely — they can't be restored from disk and the
     underlying file is outside Bambuddy's control, so we just drop the DB
     record and thumbnail.
+
+    Except in the library's own directory tree (#3160): there a dropped row is
+    a file the next scan finds and files straight back into the library. So
+    the bytes move into the trash on the share and the row is trashed like a
+    managed one, restorable to where it was.
     """
     user, can_modify_all = auth_result
 
@@ -5695,7 +5728,17 @@ async def delete_file(
             raise HTTPException(status_code=403, detail="You can only delete your own files")
 
     if file.is_external:
-        # External files bypass the trash — just drop the DB row + our thumbnail.
+        trash_move = await library_storage.trash_tree_file(db, file)
+        if trash_move is not None:
+            # The thumbnail stays until the purge, as for a managed file.
+            try:
+                await db.commit()
+            except Exception:
+                await library_storage.undo_trash_moves([trash_move])
+                raise
+            return {"status": "success", "message": "File moved to trash", "trashed": True}
+
+        # Anywhere else external files bypass the trash — just drop the DB row + our thumbnail.
         abs_thumb_path = to_absolute_path(file.thumbnail_path)
         if abs_thumb_path and abs_thumb_path.exists():
             try:
@@ -6660,7 +6703,30 @@ async def bulk_delete(
     """Delete multiple files and/or folders.
 
     Files not owned by the user are skipped (unless user has *_all permission).
+
+    All or nothing where the library's directory tree is involved (#3160): its
+    files and folders move into the trash on the share one at a time, and when
+    a later one cannot — a file open on a workstation, say — the ones already
+    moved go back before the error is answered, so the share still matches the
+    rows the rollback leaves.
     """
+    trash_moves: list[library_storage.TrashMove] = []
+    try:
+        response = await _bulk_delete(data, db, auth_result, trash_moves)
+    except Exception:
+        await library_storage.undo_trash_moves(trash_moves)
+        raise
+    await library_storage.tidy_trash_entries(db, trash_moves)
+    return response
+
+
+async def _bulk_delete(
+    data: BulkDeleteRequest,
+    db: AsyncSession,
+    auth_result: tuple[User | None, bool],
+    trash_moves: list[library_storage.TrashMove],
+) -> BulkDeleteResponse:
+    """The body of :func:`bulk_delete`, recording every move into the trash."""
     from backend.app.services.library_trash import delete_dependent_variants, release_queue_references
 
     user, can_modify_all = auth_result
@@ -6673,7 +6739,8 @@ async def bulk_delete(
 
     # Delete files first. Managed files go to trash (sweeper hard-deletes bytes
     # later); external files bypass trash since their disk state is outside our
-    # control and can't be restored from trash anyway.
+    # control and can't be restored from trash anyway -- except those of the
+    # library's own tree, whose bytes go to the trash on the share (#3160).
     now = datetime.now(timezone.utc)
     for file_id in data.file_ids:
         result = await db.execute(LibraryFile.active().where(LibraryFile.id == file_id))
@@ -6685,6 +6752,11 @@ async def bulk_delete(
             continue
 
         if file.is_external:
+            trash_move = await library_storage.trash_tree_file(db, file)
+            if trash_move is not None:
+                trash_moves.append(trash_move)
+                deleted_files += 1
+                continue
             abs_thumb_path = to_absolute_path(file.thumbnail_path)
             if abs_thumb_path and abs_thumb_path.exists():
                 try:
@@ -6725,6 +6797,12 @@ async def bulk_delete(
                 )
             )
             deleted_files += file_count_result.scalar() or 0
+            # A folder of the tree goes to the trash on the share, and the rows
+            # of its files leave the subtree before the cascade below — same as
+            # DELETE /folders/{id}.
+            trash_move = await library_storage.trash_tree_folder(db, folder)
+            if trash_move is not None:
+                trash_moves.append(trash_move)
             tree_file_ids = await _folder_tree_file_ids(db, folder_id)
             await delete_dependent_variants(db, tree_file_ids)
             await release_queue_references(db, tree_file_ids)
