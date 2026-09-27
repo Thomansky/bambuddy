@@ -2020,6 +2020,8 @@ export default {
       failureDetection: '故障檢測',
       users: '身份驗證',
       backup: '備份',
+      files: '檔案',
+      library: '檔案庫',
       emailAuth: '信箱認證',
       ldap: 'LDAP',
       twoFa: '雙因素認證',

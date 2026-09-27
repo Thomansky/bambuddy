@@ -2020,6 +2020,8 @@ export default {
       failureDetection: '失敗検出',
       users: '認証',
       backup: 'バックアップ',
+      files: 'ファイル',
+      library: 'ライブラリ',
       emailAuth: 'メール認証',
       ldap: 'LDAP',
       twoFa: '二段階認証',

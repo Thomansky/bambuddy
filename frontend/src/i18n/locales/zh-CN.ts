@@ -2020,6 +2020,8 @@ export default {
       failureDetection: '故障检测',
       users: '身份验证',
       backup: '备份',
+      files: '文件',
+      library: '文件库',
       emailAuth: '邮箱认证',
       ldap: 'LDAP',
       twoFa: '双因素认证',

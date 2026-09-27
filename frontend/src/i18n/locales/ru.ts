@@ -1930,6 +1930,8 @@ export default {
       failureDetection: "Обнаружение сбоев",
       users: "Аутентификация",
       backup: "Резервное копирование",
+      files: 'Файлы',
+      library: 'Библиотека',
       emailAuth: "Аутентификация по email",
       ldap: "LDAP",
       twoFa: "Двухфакторная аутентификация",

@@ -2040,6 +2040,8 @@ export default {
       failureDetection: 'Failure Detection',
       users: 'Authentication',
       backup: 'Backup',
+      files: 'Files',
+      library: 'Library',
       emailAuth: 'Email Authentication',
       ldap: 'LDAP',
       twoFa: 'Two-Factor Auth',

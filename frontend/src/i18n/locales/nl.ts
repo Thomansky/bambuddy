@@ -2039,6 +2039,8 @@ export default {
       failureDetection: 'Foutdetectie',
       users: 'Authenticatie',
       backup: 'Back-up',
+      files: 'Bestanden',
+      library: 'Bibliotheek',
       emailAuth: 'E-mailauthenticatie',
       ldap: 'LDAP',
       twoFa: 'Tweefactorauthenticatie',

@@ -1933,6 +1933,8 @@ export default {
       failureDetection: '실패 감지',
       users: '인증',
       backup: '백업',
+      files: '파일',
+      library: '라이브러리',
       emailAuth: '이메일 인증',
       ldap: 'LDAP',
       twoFa: '이중 인증',

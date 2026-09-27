@@ -2022,6 +2022,8 @@ export default {
       failureDetection: 'Başarısızlık Algılama',
       users: 'Kimlik Doğrulama',
       backup: 'Yedekleme',
+      files: 'Dosyalar',
+      library: 'Kütüphane',
       emailAuth: 'E-posta Kimlik Doğrulama',
       ldap: 'LDAP',
       twoFa: 'İki Faktörlü Kimlik Doğrulama',

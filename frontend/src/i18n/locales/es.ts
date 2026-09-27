@@ -2022,6 +2022,8 @@ export default {
       failureDetection: 'Detección de fallos',
       users: 'Autenticación',
       backup: 'Copia de seguridad',
+      files: 'Archivos',
+      library: 'Biblioteca',
       emailAuth: 'Autenticación por correo',
       ldap: 'LDAP',
       twoFa: 'Autenticación de dos factores',

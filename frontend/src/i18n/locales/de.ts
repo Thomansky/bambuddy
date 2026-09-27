@@ -2021,6 +2021,8 @@ export default {
       failureDetection: 'Fehlererkennung',
       users: 'Authentifizierung',
       backup: 'Sicherung',
+      files: 'Dateien',
+      library: 'Bibliothek',
       emailAuth: 'E-Mail-Authentifizierung',
       ldap: 'LDAP',
       twoFa: 'Zwei-Faktor-Auth',

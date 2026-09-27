@@ -1,5 +1,5 @@
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Plus, Plug, AlertTriangle, RotateCcw, Bell, Download, RefreshCw, ExternalLink, Globe, Droplets, Thermometer, FileText, Edit2, Pencil, Send, CheckCircle, XCircle, History, Trash2, Zap, TrendingUp, Calendar, DollarSign, Power, PowerOff, Key, Copy, Database, X, Shield, Printer, Cylinder, Wifi, Home, Video, Users, Lock, Unlock, ChevronDown, Save, Mail, Flame, Layers, ListOrdered, Code, Search, Scale, Settings as SettingsIcon, ScanEye, Cog, QrCode, Heart, Briefcase, Workflow, UploadCloud, MonitorPlay } from 'lucide-react';
+import { Loader2, Plus, Plug, AlertTriangle, RotateCcw, Bell, Download, RefreshCw, ExternalLink, Globe, Droplets, Thermometer, FileText, Edit2, Pencil, Send, CheckCircle, XCircle, History, Trash2, Zap, TrendingUp, Calendar, DollarSign, Power, PowerOff, Key, Copy, Database, X, Shield, Printer, Cylinder, Wifi, Home, Video, Users, Lock, Unlock, ChevronDown, Save, Mail, Flame, Layers, ListOrdered, Code, Search, Scale, Settings as SettingsIcon, ScanEye, Cog, QrCode, Heart, Briefcase, Workflow, UploadCloud, MonitorPlay, FolderOpen, Library } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
@@ -66,10 +66,10 @@ import { useTheme, type ThemeStyle, type DarkBackground, type LightBackground, t
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Gauge, Link2, Palette } from 'lucide-react';
 import { registerSettingsSearch, getSettingsSearchEntries } from '../lib/settingsSearch';
-import type { UsersSubTab } from '../lib/settingsSearch';
+import type { FilesSubTab, UsersSubTab } from '../lib/settingsSearch';
 import { availableEngines, hasEngineChoice, resolveEngine, type SliceEngineId } from '../lib/sliceEngines';
 
-const validTabs = ['general', 'plugs', 'sensors', 'notifications', 'queue', 'filament', 'network', 'apikeys', 'virtual-printer', 'spoolbuddy', 'failure-detection', 'users', 'backup'] as const;
+const validTabs = ['general', 'plugs', 'sensors', 'notifications', 'queue', 'filament', 'network', 'apikeys', 'virtual-printer', 'spoolbuddy', 'failure-detection', 'users', 'files'] as const;
 type TabType = typeof validTabs[number];
 
 // Cross-tab search registrations for cards rendered inline in this file.
@@ -80,7 +80,7 @@ registerSettingsSearch({ labelKey: 'settings.appearance', tab: 'general', keywor
 registerSettingsSearch({ labelKey: 'settings.archiveSettings', tab: 'general', keywords: 'archive auto save thumbnails captures', anchor: 'card-archive' });
 registerSettingsSearch({ labelKey: 'settings.camera', tab: 'general', keywords: 'camera external video stream', anchor: 'card-camera' });
 registerSettingsSearch({ labelKey: 'settings.costTracking', tab: 'general', keywords: 'currency filament cost energy kwh price', anchor: 'card-cost' });
-registerSettingsSearch({ labelKey: 'settings.fileManager', tab: 'general', keywords: 'file manager archive mode disk warning storage webdav network drive share', anchor: 'card-filemanager' });
+registerSettingsSearch({ labelKey: 'settings.fileManager', tab: 'files', subTab: 'library', keywords: 'file manager archive mode disk warning storage webdav network drive share', anchor: 'card-filemanager' });
 registerSettingsSearch({ labelKey: 'settings.updates', tab: 'general', keywords: 'updates version firmware beta check', anchor: 'card-updates' });
 registerSettingsSearch({ labelKey: 'settings.dataManagement', tab: 'general', keywords: 'data reset clear logs notifications preferences', anchor: 'card-data' });
 registerSettingsSearch({ labelKey: 'settings.smartPlugs', tab: 'plugs', keywords: 'smart plug energy power automation tapo kasa tplink shelly', anchor: 'card-plugs' });
@@ -118,7 +118,7 @@ registerSettingsSearch({ labelKey: 'settings.groups', tab: 'users', subTab: 'use
 registerSettingsSearch({ labelKey: 'settings.sessionPolicy.title', labelFallback: 'Session Policy', tab: 'users', subTab: 'users', keywords: 'session timeout expiry logout remember me jwt token lifetime', anchor: 'card-session-policy' });
 registerSettingsSearch({ labelKey: 'settings.email.smtpSettings', labelFallback: 'SMTP Configuration', tab: 'users', subTab: 'email', keywords: 'smtp email send server port password auth starttls ssl', anchor: 'card-smtp' });
 registerSettingsSearch({ labelKey: 'settings.ldap.title', labelFallback: 'LDAP Authentication', tab: 'users', subTab: 'ldap', keywords: 'ldap active directory ad authentication bind dn search base group mapping', anchor: 'card-ldap' });
-registerSettingsSearch({ labelKey: 'settings.tabs.backup', tab: 'backup', keywords: 'backup github restore download cloud sync profiles archives', anchor: 'card-backup' });
+registerSettingsSearch({ labelKey: 'settings.tabs.backup', tab: 'files', subTab: 'backup', keywords: 'backup github restore download cloud sync profiles archives', anchor: 'card-backup' });
 // Sidebar (system pages and external links settings is rendered in the General tab)
 registerSettingsSearch({ labelKey: 'externalLinks.sidebarLayout', labelFallback: 'Sidebar', tab: 'general', keywords: 'sidebar layout links pages hide show external custom navigation url add', anchor: 'card-sidebar-links' });
 // Filament tab — integrations
@@ -142,10 +142,10 @@ registerSettingsSearch({ labelKey: 'settings.oidc.title', labelFallback: 'Single
 // LDAP server config card (complements existing card-ldap)
 registerSettingsSearch({ labelKey: 'settings.ldap.serverConfig', labelFallback: 'LDAP Server Configuration', tab: 'users', subTab: 'ldap', keywords: 'ldap server url bind dn user search base group filter tls', anchor: 'card-ldap-server' });
 // Backup sub-cards
-registerSettingsSearch({ labelKey: 'backup.githubBackup', labelFallback: 'GitHub Backup', tab: 'backup', keywords: 'github backup cloud remote sync profiles token', anchor: 'card-backup-github' });
-registerSettingsSearch({ labelKey: 'backup.history', labelFallback: 'Backup History', tab: 'backup', keywords: 'backup history log runs github commits', anchor: 'card-backup-history' });
-registerSettingsSearch({ labelKey: 'backup.localBackup', labelFallback: 'Local Backup', tab: 'backup', keywords: 'local backup download zip manual export', anchor: 'card-backup-local' });
-registerSettingsSearch({ labelKey: 'backup.scheduledBackup', labelFallback: 'Scheduled Backups', tab: 'backup', keywords: 'scheduled backup automatic hourly daily weekly retention local path', anchor: 'card-backup-scheduled' });
+registerSettingsSearch({ labelKey: 'backup.githubBackup', labelFallback: 'GitHub Backup', tab: 'files', subTab: 'backup', keywords: 'github backup cloud remote sync profiles token', anchor: 'card-backup-github' });
+registerSettingsSearch({ labelKey: 'backup.history', labelFallback: 'Backup History', tab: 'files', subTab: 'backup', keywords: 'backup history log runs github commits', anchor: 'card-backup-history' });
+registerSettingsSearch({ labelKey: 'backup.localBackup', labelFallback: 'Local Backup', tab: 'files', subTab: 'backup', keywords: 'local backup download zip manual export', anchor: 'card-backup-local' });
+registerSettingsSearch({ labelKey: 'backup.scheduledBackup', labelFallback: 'Scheduled Backups', tab: 'files', subTab: 'backup', keywords: 'scheduled backup automatic hourly daily weekly retention local path', anchor: 'card-backup-scheduled' });
 
 // Lowest humidity an AMS reports while its own dryer is running, measured on an
 // H2D/AMS 2 Pro that read 10-13% cold and 15-20% throughout every cycle (#2770).
@@ -378,7 +378,13 @@ export function SettingsPage() {
   // Initialize tab from URL params (handle legacy ?tab=email → users tab + email sub-tab)
   const tabParam = searchParams.get('tab');
   const isLegacyEmailTab = tabParam === 'email';
-  const initialTab = isLegacyEmailTab ? 'users' : (tabParam && validTabs.includes(tabParam as TabType) ? tabParam as TabType : 'general');
+  // Backup moved under Files (#3161); bookmarked ?tab=backup links still open it.
+  const isLegacyBackupTab = tabParam === 'backup';
+  const initialTab = isLegacyEmailTab
+    ? 'users'
+    : isLegacyBackupTab
+      ? 'files'
+      : (tabParam && validTabs.includes(tabParam as TabType) ? tabParam as TabType : 'general');
   const [activeTab, setActiveTab] = useState<TabType>(initialTab);
   const [usersSubTab, setUsersSubTab] = useState<UsersSubTab>(isLegacyEmailTab ? 'email' : 'users');
   // Workflow tab sub-tabs (#1425): 'dispatch' = current Workflow content,
@@ -386,6 +392,11 @@ export function SettingsPage() {
   const initialQueueSub: 'dispatch' | 'pipelines' =
     tabParam === 'queue' && searchParams.get('sub') === 'pipelines' ? 'pipelines' : 'dispatch';
   const [queueSubTab, setQueueSubTab] = useState<'dispatch' | 'pipelines'>(initialQueueSub);
+  // Files tab sub-tabs (#3161): everything that decides what happens to the
+  // files in one place. URL: ?tab=files&sub=backup.
+  const initialFilesSub: FilesSubTab =
+    isLegacyBackupTab || (tabParam === 'files' && searchParams.get('sub') === 'backup') ? 'backup' : 'library';
+  const [filesSubTab, setFilesSubTab] = useState<FilesSubTab>(initialFilesSub);
 
   // Update URL when tab changes
   const handleTabChange = (tab: TabType) => {
@@ -397,12 +408,30 @@ export function SettingsPage() {
       setQueueSubTab('dispatch');
       searchParams.delete('sub');
     }
+    if (tab === 'files') {
+      setFilesSubTab('library');
+      searchParams.delete('sub');
+    }
     if (tab === 'general') {
       searchParams.delete('tab');
     } else {
       searchParams.set('tab', tab);
     }
     setSearchParams(searchParams, { replace: true });
+  };
+
+  const handleFilesSubTabChange = (sub: FilesSubTab) => {
+    setFilesSubTab(sub);
+    if (sub === 'backup') {
+      searchParams.set('sub', 'backup');
+    } else {
+      searchParams.delete('sub');
+    }
+    setSearchParams(searchParams, { replace: true });
+  };
+  const openBackup = () => {
+    handleTabChange('files');
+    handleFilesSubTabChange('backup');
   };
 
   // Switch the Workflow tab's sub-tab and reflect it in the URL so deep-links work.
@@ -1653,7 +1682,9 @@ export function SettingsPage() {
 
   const jumpToSetting = (entry: typeof searchIndex[number]) => {
     handleTabChange(entry.tab as TabType);
-    if (entry.subTab) {
+    if (entry.subTab && entry.tab === 'files') {
+      handleFilesSubTabChange(entry.subTab as FilesSubTab);
+    } else if (entry.subTab) {
       setUsersSubTab(entry.subTab as UsersSubTab);
     }
     setSettingsSearch('');
@@ -1906,15 +1937,15 @@ export function SettingsPage() {
           )}
         </button>
         <button
-          onClick={() => handleTabChange('backup')}
+          onClick={() => handleTabChange('files')}
           className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px lg:border-b-0 lg:border-l-2 lg:-ml-px lg:mb-0 lg:justify-start flex items-center gap-2 ${
-            activeTab === 'backup'
+            activeTab === 'files'
               ? 'text-bambu-green border-bambu-green'
               : 'text-bambu-gray hover:text-gray-900 dark:hover:text-white border-transparent'
           }`}
         >
-          <Database className="w-4 h-4" />
-          {t('settings.tabs.backup')}
+          <FolderOpen className="w-4 h-4" />
+          {t('settings.tabs.files')}
           <span className={`w-2 h-2 rounded-full ${(cloudAuthStatus?.is_authenticated && githubBackupStatus?.configured && githubBackupStatus?.enabled) || settings?.local_backup_enabled ? 'bg-green-400' : 'bg-gray-500'}`} />
         </button>
       </nav>
@@ -2822,381 +2853,6 @@ export function SettingsPage() {
             </CardContent>
           </Card>
 
-          {/* File Manager Settings */}
-          <Card id="card-filemanager">
-            <CardHeader>
-              <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-                <FileText className="w-5 h-5 text-bambu-green" />
-                {t('settings.fileManager')}
-              </h2>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {/* Archive Mode */}
-              <div>
-                <label className="block text-sm text-bambu-gray mb-1">
-                  {t('settings.createArchiveEntry')}
-                </label>
-                <select
-                  value={localSettings.library_archive_mode ?? 'ask'}
-                  onChange={(e) => updateSetting('library_archive_mode', e.target.value as 'always' | 'never' | 'ask')}
-                  className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
-                >
-                  <option value="always">{t('settings.archiveMode.always')}</option>
-                  <option value="never">{t('settings.archiveMode.never')}</option>
-                  <option value="ask">{t('settings.archiveMode.ask')}</option>
-                </select>
-                <p className="text-xs text-bambu-gray mt-1">
-                  {t('settings.createArchiveEntryDescription')}
-                </p>
-              </div>
-
-              {/* Disk Space Warning Threshold */}
-              <div>
-                <label className="block text-sm text-bambu-gray mb-1">
-                  {t('settings.lowDiskSpaceWarning')}
-                </label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    min="0.5"
-                    max="100"
-                    step="0.5"
-                    value={localSettings.library_disk_warning_gb ?? 5}
-                    onChange={(e) => updateSetting('library_disk_warning_gb', parseFloat(e.target.value) || 5)}
-                    className="w-24 px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
-                  />
-                  <span className="text-bambu-gray">GB</span>
-                </div>
-                <p className="text-xs text-bambu-gray mt-1">
-                  {t('settings.lowDiskSpaceDescription')}
-                </p>
-              </div>
-
-              {/* What the File Manager's root shows */}
-              <div>
-                <p className="text-sm text-bambu-gray mb-1">{t('settings.libraryRootView')}</p>
-                <div role="radiogroup" aria-label={t('settings.libraryRootView')} className="space-y-2">
-                  {ROOT_VIEW_OPTIONS.map(({ value, labelKey, descriptionKey }) => (
-                    <label key={value} className="flex items-start gap-2 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="library-root-view"
-                        value={value}
-                        checked={(localSettings.library_root_view ?? 'all') === value}
-                        onChange={() => updateSetting('library_root_view', value)}
-                        className="accent-bambu-green mt-1 flex-shrink-0"
-                      />
-                      <span className="min-w-0">
-                        <span className="block text-white">{t(labelKey)}</span>
-                        <span className="block text-xs text-bambu-gray">{t(descriptionKey)}</span>
-                      </span>
-                    </label>
-                  ))}
-                </div>
-                <p className="text-xs text-bambu-gray mt-1">
-                  {t('settings.libraryRootViewDescription')}
-                </p>
-              </div>
-
-              {/* WebDAV view of the library (#3152). The hints below appear only
-                  once it is on: off, they describe a URL that answers 404, and
-                  the Windows registry note is advice nobody needs yet. */}
-              <div className="border-t border-bambu-dark-tertiary pt-3 mt-3">
-                <p className="text-white">{t('settings.webdavMode')}</p>
-                <p className="text-sm text-bambu-gray">{t('settings.webdavDescription')}</p>
-                <div role="radiogroup" aria-label={t('settings.webdavMode')} className="space-y-2 mt-2">
-                  {WEBDAV_MODE_OPTIONS.map(({ value, labelKey, descriptionKey }) => (
-                    <label key={value} className="flex items-start gap-2 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="webdav-mode"
-                        value={value}
-                        checked={(localSettings.webdav_mode ?? 'off') === value}
-                        onChange={() => updateSetting('webdav_mode', value)}
-                        className="accent-bambu-green mt-1 flex-shrink-0"
-                      />
-                      <span className="min-w-0">
-                        <span className="block text-white">{t(labelKey)}</span>
-                        <span className="block text-xs text-bambu-gray">{t(descriptionKey)}</span>
-                      </span>
-                    </label>
-                  ))}
-                </div>
-                {(localSettings.webdav_mode ?? 'off') !== 'off' && (
-                  <div className="mt-2 space-y-1">
-                    <p className="text-xs text-bambu-gray">
-                      {t('settings.webdavAddressHint', { url: `${window.location.origin}/webdav` })}
-                    </p>
-                    <p className="text-xs text-bambu-gray">{t('settings.webdavCredentialsHint')}</p>
-                    <p className="text-xs text-bambu-gray">{t('settings.webdavTwoFactorHint')}</p>
-                    <p className="text-xs text-bambu-gray">{t('settings.webdavHttpsHint')}</p>
-                    <p className="text-xs text-bambu-gray">{t('settings.webdavWindowsHint')}</p>
-                    {localSettings.webdav_mode === 'readwrite' && (
-                      <p className="text-xs text-bambu-gray">{t('settings.webdavWriteHint')}</p>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Where the library's bytes live (#3160). The hints appear only
-                  for the tree: in managed mode they describe a drift that
-                  cannot happen, and the migration is not an action that has
-                  any meaning yet. */}
-              <div className="border-t border-bambu-dark-tertiary pt-3 mt-3">
-                <p className="text-white">{t('settings.libraryStorageMode')}</p>
-                <p className="text-sm text-bambu-gray">{t('settings.libraryStorageDescription')}</p>
-                <div role="radiogroup" aria-label={t('settings.libraryStorageMode')} className="space-y-2 mt-2">
-                  {LIBRARY_STORAGE_MODE_OPTIONS.map(({ value, labelKey, descriptionKey }) => (
-                    <label key={value} className="flex items-start gap-2 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="library-storage-mode"
-                        value={value}
-                        checked={(localSettings.library_storage_mode ?? 'managed') === value}
-                        onChange={() => updateSetting('library_storage_mode', value)}
-                        className="accent-bambu-green mt-1 flex-shrink-0"
-                      />
-                      <span className="min-w-0">
-                        <span className="block text-white">{t(labelKey)}</span>
-                        <span className="block text-xs text-bambu-gray">{t(descriptionKey)}</span>
-                      </span>
-                    </label>
-                  ))}
-                </div>
-                {(localSettings.library_storage_mode ?? 'managed') === 'directory' && (
-                  <div className="mt-3 space-y-2">
-                    <label className="block text-sm text-bambu-gray" htmlFor="library-storage-path">
-                      {t('settings.libraryStoragePath')}
-                    </label>
-                    <input
-                      id="library-storage-path"
-                      type="text"
-                      value={localSettings.library_storage_path ?? ''}
-                      onChange={(e) => updateSetting('library_storage_path', e.target.value)}
-                      placeholder="/mnt/nas/bambuddy"
-                      className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-sm"
-                    />
-                    <p className="text-xs text-bambu-gray">{t('settings.libraryStoragePathHint')}</p>
-                    <p className="text-xs text-bambu-gray">{t('settings.libraryStorageDriftHint')}</p>
-                    <p className="text-xs text-bambu-gray">{t('settings.libraryStorageHashHint')}</p>
-
-                    {/* What keeps the two in step once somebody works in the
-                        share directly. Off by default: a walk of a mounted
-                        share is real network IO. */}
-                    <div className="border-t border-bambu-dark-tertiary pt-2 mt-2 space-y-2">
-                      <p className="text-white text-sm">{t('settings.libraryAutoscan')}</p>
-                      {/* The cheap one first: only the folder being looked at,
-                          only when it is, never while nobody uses Bambuddy. */}
-                      <label className="flex items-start gap-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={localSettings.library_scan_on_open ?? true}
-                          onChange={(e) => updateSetting('library_scan_on_open', e.target.checked)}
-                          className="accent-bambu-green mt-1 flex-shrink-0"
-                        />
-                        <span className="min-w-0">
-                          <span className="block text-white text-sm">{t('settings.libraryScanOnOpen')}</span>
-                          <span className="block text-xs text-bambu-gray">{t('settings.libraryScanOnOpenHint')}</span>
-                        </span>
-                      </label>
-                      <p className="text-xs text-bambu-gray">{t('settings.libraryAutoscanHint')}</p>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <input
-                          type="number"
-                          min={0}
-                          max={1440}
-                          value={localSettings.library_autoscan_minutes ?? 0}
-                          onChange={(e) => updateSetting('library_autoscan_minutes', Number(e.target.value))}
-                          className="w-24 px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-sm"
-                        />
-                        <span className="text-xs text-bambu-gray">{t('settings.libraryAutoscanUnit')}</span>
-                        <button
-                          type="button"
-                          onClick={handleStorageScan}
-                          disabled={storageBusy}
-                          className="px-3 py-1.5 text-sm rounded bg-bambu-dark-tertiary text-white hover:bg-bambu-dark-quaternary disabled:opacity-50"
-                        >
-                          {t('settings.libraryStorageScanButton')}
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Saved on demand, not while typing. The mode and the path
-                        are one setting in two fields: sending the mode the
-                        moment the radio is clicked means sending it with an
-                        empty path, which the server refuses -- correctly, and
-                        the card used to report that as a failure. */}
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={handleStorageModeSave}
-                        disabled={storageBusy || storageModeIncomplete}
-                        className="px-3 py-1.5 text-sm rounded bg-bambu-green text-white hover:bg-bambu-green/80 disabled:bg-bambu-dark-tertiary disabled:text-bambu-gray disabled:cursor-not-allowed"
-                      >
-                        {t('common.save')}
-                      </button>
-                      {storageModeIncomplete && (
-                        <span className="text-xs text-bambu-gray">{t('settings.libraryStoragePathRequired')}</span>
-                      )}
-                      {!storageModeIncomplete && storageModeDirty && (
-                        <span className="text-xs text-amber-500">{t('settings.libraryStorageUnsaved')}</span>
-                      )}
-                      {!storageModeIncomplete && !storageModeDirty && (
-                        <span className="text-xs text-bambu-gray">{t('settings.libraryStorageSaved')}</span>
-                      )}
-                    </div>
-
-                    {/* The migration is its own action, and its plan is shown
-                        before anything moves: a collision is a decision about
-                        which file gets renamed, and nobody can make that from
-                        a progress bar. */}
-                    <div className="border-t border-bambu-dark-tertiary pt-2 mt-2 space-y-2">
-                      <p className="text-white text-sm">{t('settings.libraryStorageMigration')}</p>
-                      <p className="text-xs text-bambu-gray">{t('settings.libraryStorageMigrationHint')}</p>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={handleStoragePlan}
-                          disabled={storageBusy}
-                          className="px-3 py-1.5 text-sm rounded bg-bambu-dark-tertiary text-white hover:bg-bambu-dark-quaternary disabled:opacity-50"
-                        >
-                          {t('settings.libraryStoragePlanButton')}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleStorageMigrate}
-                          disabled={storageBusy || !storagePlan || storagePlan.blockers.length > 0}
-                          // Greyed rather than dimmed-green, and with the reason
-                          // on the title: a green button that does nothing when
-                          // pressed is worse than one that looks unavailable.
-                          title={
-                            !storagePlan
-                              ? t('settings.libraryStoragePlanFirst')
-                              : storagePlan.blockers.length > 0
-                                ? t('settings.libraryStorageBlocked', { blockers: storagePlan.blockers.length })
-                                : undefined
-                          }
-                          className="px-3 py-1.5 text-sm rounded bg-bambu-green text-white hover:bg-bambu-green/80 disabled:bg-bambu-dark-tertiary disabled:text-bambu-gray disabled:cursor-not-allowed"
-                        >
-                          {t('settings.libraryStorageMigrateButton')}
-                        </button>
-                      </div>
-                      {storagePlan && (
-                        <div className="text-xs space-y-1" data-testid="library-storage-plan">
-                          <p className="text-bambu-gray">
-                            {t('settings.libraryStoragePlanSummary', {
-                              files: storagePlan.file_count,
-                              folders: storagePlan.folder_count,
-                              size: formatFileSize(storagePlan.total_bytes),
-                            })}
-                          </p>
-                          {storagePlan.blockers.length > 0 && (
-                            <p className="text-red-400 font-medium">
-                              {t('settings.libraryStorageBlocked', { blockers: storagePlan.blockers.length })}
-                            </p>
-                          )}
-                          {(
-                            storagePlan.blocker_details ??
-                            // A server that only sends the sentences: render those
-                            // rather than nothing. The reverse case is what broke
-                            // an open tab once, and it is not worth a second one.
-                            storagePlan.blockers.map((message) => ({
-                              kind: 'message',
-                              target: '',
-                              names: [message],
-                              message,
-                            }))
-                          ).map((blocker) => (
-                            <div key={blocker.message} className="text-red-400">
-                              {/* The names first, the path second: what the user
-                                  has to do is rename one of these two, and the
-                                  directory they are in is context for that. */}
-                              <p>
-                                {blocker.kind === 'message'
-                                  ? blocker.message
-                                  : blocker.kind === 'exists'
-                                    ? t('settings.libraryStorageBlockerExists', { name: blocker.names[0] })
-                                    : t('settings.libraryStorageBlockerCollision', {
-                                        first: blocker.names[0],
-                                        second: blocker.names[1],
-                                      })}
-                              </p>
-                              <p className="text-bambu-gray break-all">{blocker.target}</p>
-                            </div>
-                          ))}
-                          {storagePlan.missing.map((entry) => (
-                            <p key={entry} className="text-yellow-400 break-all">
-                              {entry}
-                            </p>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Auto-purge (#1008). Admin-only — users without library:purge
-                  don't see this section since they can't trigger a bulk purge
-                  even manually. */}
-              {canPurge && trashSettings && (
-                <div className="border-t border-bambu-dark-tertiary pt-3 mt-3 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-white">{t('libraryAutoPurge.enableLabel')}</p>
-                      <p className="text-sm text-bambu-gray">{t('libraryAutoPurge.enableDescription')}</p>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={trashSettings.auto_purge_enabled}
-                        onChange={(e) => saveTrashSettings({ auto_purge_enabled: e.target.checked })}
-                        className="sr-only peer"
-                      />
-                      <div className="w-11 h-6 bg-bambu-dark-tertiary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-bambu-green"></div>
-                    </label>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm text-bambu-gray mb-1">
-                      {t('libraryAutoPurge.ageLabel')}
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="number"
-                        min={7}
-                        max={3650}
-                        disabled={!trashSettings.auto_purge_enabled}
-                        value={trashSettings.auto_purge_days}
-                        onChange={(e) =>
-                          saveTrashSettings({
-                            auto_purge_days: Math.max(7, Math.min(3650, parseInt(e.target.value || '0', 10) || 0)),
-                          })
-                        }
-                        className="w-24 px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none disabled:opacity-50"
-                      />
-                      <span className="text-bambu-gray">{t('libraryAutoPurge.days')}</span>
-                    </div>
-                    <p className="text-xs text-bambu-gray mt-1">
-                      {t('libraryAutoPurge.ageDescription')}
-                    </p>
-                  </div>
-
-                  <label className="flex items-center gap-2 text-sm text-white cursor-pointer">
-                    <input
-                      type="checkbox"
-                      disabled={!trashSettings.auto_purge_enabled}
-                      checked={trashSettings.auto_purge_include_never_printed}
-                      onChange={(e) => saveTrashSettings({ auto_purge_include_never_printed: e.target.checked })}
-                      className="rounded border-gray-300 disabled:opacity-50"
-                    />
-                    {t('libraryAutoPurge.includeNeverPrinted')}
-                  </label>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
           {/* Data Management */}
           <Card id="card-data">
             <CardHeader>
@@ -3362,7 +3018,7 @@ export function SettingsPage() {
                 <Button
                   variant="secondary"
                   size="sm"
-                  onClick={() => handleTabChange('backup')}
+                  onClick={openBackup}
                 >
                   <Database className="w-4 h-4" />
                   {t('settings.goToBackup')}
@@ -8119,13 +7775,423 @@ export function SettingsPage() {
         </div>
       )}
 
-      {activeTab === 'backup' && (
-        <div id="card-backup">
-          <div className="mb-4 p-3 bg-amber-50 dark:bg-amber-500/10 border border-amber-300 dark:border-amber-500/30 rounded-lg flex items-start gap-2">
-            <Shield className="text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" size={16} />
-            <p className="text-sm text-amber-700 dark:text-amber-400">{t('backup.includesEncryptionKey')}</p>
+      {activeTab === 'files' && (
+        <div className="space-y-3">
+          {/* Sub-tab nav (#3161), the same pattern as Workflow and Authentication */}
+          <div className="flex gap-1 border-b border-bambu-dark-tertiary">
+            <button
+              onClick={() => handleFilesSubTabChange('library')}
+              className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px flex items-center gap-2 ${
+                filesSubTab === 'library'
+                  ? 'text-bambu-green border-bambu-green'
+                  : 'text-bambu-gray hover:text-gray-900 dark:hover:text-white border-transparent'
+              }`}
+            >
+              <Library className="w-4 h-4" />
+              {t('settings.tabs.library')}
+            </button>
+            <button
+              onClick={() => handleFilesSubTabChange('backup')}
+              className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px flex items-center gap-2 ${
+                filesSubTab === 'backup'
+                  ? 'text-bambu-green border-bambu-green'
+                  : 'text-bambu-gray hover:text-gray-900 dark:hover:text-white border-transparent'
+              }`}
+            >
+              <Database className="w-4 h-4" />
+              {t('settings.tabs.backup')}
+              <span className={`w-2 h-2 rounded-full ${(cloudAuthStatus?.is_authenticated && githubBackupStatus?.configured && githubBackupStatus?.enabled) || settings?.local_backup_enabled ? 'bg-green-400' : 'bg-gray-500'}`} />
+            </button>
           </div>
-          <GitHubBackupSettings />
+
+          {filesSubTab === 'library' && (
+            <div className="max-w-3xl space-y-3">
+            {/* File Manager Settings */}
+            <Card id="card-filemanager">
+              <CardHeader>
+                <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                  <FileText className="w-5 h-5 text-bambu-green" />
+                  {t('settings.fileManager')}
+                </h2>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {/* Archive Mode */}
+                <div>
+                  <label className="block text-sm text-bambu-gray mb-1">
+                    {t('settings.createArchiveEntry')}
+                  </label>
+                  <select
+                    value={localSettings.library_archive_mode ?? 'ask'}
+                    onChange={(e) => updateSetting('library_archive_mode', e.target.value as 'always' | 'never' | 'ask')}
+                    className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                  >
+                    <option value="always">{t('settings.archiveMode.always')}</option>
+                    <option value="never">{t('settings.archiveMode.never')}</option>
+                    <option value="ask">{t('settings.archiveMode.ask')}</option>
+                  </select>
+                  <p className="text-xs text-bambu-gray mt-1">
+                    {t('settings.createArchiveEntryDescription')}
+                  </p>
+                </div>
+
+                {/* Disk Space Warning Threshold */}
+                <div>
+                  <label className="block text-sm text-bambu-gray mb-1">
+                    {t('settings.lowDiskSpaceWarning')}
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min="0.5"
+                      max="100"
+                      step="0.5"
+                      value={localSettings.library_disk_warning_gb ?? 5}
+                      onChange={(e) => updateSetting('library_disk_warning_gb', parseFloat(e.target.value) || 5)}
+                      className="w-24 px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                    />
+                    <span className="text-bambu-gray">GB</span>
+                  </div>
+                  <p className="text-xs text-bambu-gray mt-1">
+                    {t('settings.lowDiskSpaceDescription')}
+                  </p>
+                </div>
+
+                {/* What the File Manager's root shows */}
+                <div>
+                  <p className="text-sm text-bambu-gray mb-1">{t('settings.libraryRootView')}</p>
+                  <div role="radiogroup" aria-label={t('settings.libraryRootView')} className="space-y-2">
+                    {ROOT_VIEW_OPTIONS.map(({ value, labelKey, descriptionKey }) => (
+                      <label key={value} className="flex items-start gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="library-root-view"
+                          value={value}
+                          checked={(localSettings.library_root_view ?? 'all') === value}
+                          onChange={() => updateSetting('library_root_view', value)}
+                          className="accent-bambu-green mt-1 flex-shrink-0"
+                        />
+                        <span className="min-w-0">
+                          <span className="block text-white">{t(labelKey)}</span>
+                          <span className="block text-xs text-bambu-gray">{t(descriptionKey)}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  <p className="text-xs text-bambu-gray mt-1">
+                    {t('settings.libraryRootViewDescription')}
+                  </p>
+                </div>
+
+                {/* WebDAV view of the library (#3152). The hints below appear only
+                    once it is on: off, they describe a URL that answers 404, and
+                    the Windows registry note is advice nobody needs yet. */}
+                <div className="border-t border-bambu-dark-tertiary pt-3 mt-3">
+                  <p className="text-white">{t('settings.webdavMode')}</p>
+                  <p className="text-sm text-bambu-gray">{t('settings.webdavDescription')}</p>
+                  <div role="radiogroup" aria-label={t('settings.webdavMode')} className="space-y-2 mt-2">
+                    {WEBDAV_MODE_OPTIONS.map(({ value, labelKey, descriptionKey }) => (
+                      <label key={value} className="flex items-start gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="webdav-mode"
+                          value={value}
+                          checked={(localSettings.webdav_mode ?? 'off') === value}
+                          onChange={() => updateSetting('webdav_mode', value)}
+                          className="accent-bambu-green mt-1 flex-shrink-0"
+                        />
+                        <span className="min-w-0">
+                          <span className="block text-white">{t(labelKey)}</span>
+                          <span className="block text-xs text-bambu-gray">{t(descriptionKey)}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  {(localSettings.webdav_mode ?? 'off') !== 'off' && (
+                    <div className="mt-2 space-y-1">
+                      <p className="text-xs text-bambu-gray">
+                        {t('settings.webdavAddressHint', { url: `${window.location.origin}/webdav` })}
+                      </p>
+                      <p className="text-xs text-bambu-gray">{t('settings.webdavCredentialsHint')}</p>
+                      <p className="text-xs text-bambu-gray">{t('settings.webdavTwoFactorHint')}</p>
+                      <p className="text-xs text-bambu-gray">{t('settings.webdavHttpsHint')}</p>
+                      <p className="text-xs text-bambu-gray">{t('settings.webdavWindowsHint')}</p>
+                      {localSettings.webdav_mode === 'readwrite' && (
+                        <p className="text-xs text-bambu-gray">{t('settings.webdavWriteHint')}</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Where the library's bytes live (#3160). The hints appear only
+                    for the tree: in managed mode they describe a drift that
+                    cannot happen, and the migration is not an action that has
+                    any meaning yet. */}
+                <div className="border-t border-bambu-dark-tertiary pt-3 mt-3">
+                  <p className="text-white">{t('settings.libraryStorageMode')}</p>
+                  <p className="text-sm text-bambu-gray">{t('settings.libraryStorageDescription')}</p>
+                  <div role="radiogroup" aria-label={t('settings.libraryStorageMode')} className="space-y-2 mt-2">
+                    {LIBRARY_STORAGE_MODE_OPTIONS.map(({ value, labelKey, descriptionKey }) => (
+                      <label key={value} className="flex items-start gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="library-storage-mode"
+                          value={value}
+                          checked={(localSettings.library_storage_mode ?? 'managed') === value}
+                          onChange={() => updateSetting('library_storage_mode', value)}
+                          className="accent-bambu-green mt-1 flex-shrink-0"
+                        />
+                        <span className="min-w-0">
+                          <span className="block text-white">{t(labelKey)}</span>
+                          <span className="block text-xs text-bambu-gray">{t(descriptionKey)}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  {(localSettings.library_storage_mode ?? 'managed') === 'directory' && (
+                    <div className="mt-3 space-y-2">
+                      <label className="block text-sm text-bambu-gray" htmlFor="library-storage-path">
+                        {t('settings.libraryStoragePath')}
+                      </label>
+                      <input
+                        id="library-storage-path"
+                        type="text"
+                        value={localSettings.library_storage_path ?? ''}
+                        onChange={(e) => updateSetting('library_storage_path', e.target.value)}
+                        placeholder="/mnt/nas/bambuddy"
+                        className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-sm"
+                      />
+                      <p className="text-xs text-bambu-gray">{t('settings.libraryStoragePathHint')}</p>
+                      <p className="text-xs text-bambu-gray">{t('settings.libraryStorageDriftHint')}</p>
+                      <p className="text-xs text-bambu-gray">{t('settings.libraryStorageHashHint')}</p>
+
+                      {/* What keeps the two in step once somebody works in the
+                          share directly. Off by default: a walk of a mounted
+                          share is real network IO. */}
+                      <div className="border-t border-bambu-dark-tertiary pt-2 mt-2 space-y-2">
+                        <p className="text-white text-sm">{t('settings.libraryAutoscan')}</p>
+                        {/* The cheap one first: only the folder being looked at,
+                            only when it is, never while nobody uses Bambuddy. */}
+                        <label className="flex items-start gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={localSettings.library_scan_on_open ?? true}
+                            onChange={(e) => updateSetting('library_scan_on_open', e.target.checked)}
+                            className="accent-bambu-green mt-1 flex-shrink-0"
+                          />
+                          <span className="min-w-0">
+                            <span className="block text-white text-sm">{t('settings.libraryScanOnOpen')}</span>
+                            <span className="block text-xs text-bambu-gray">{t('settings.libraryScanOnOpenHint')}</span>
+                          </span>
+                        </label>
+                        <p className="text-xs text-bambu-gray">{t('settings.libraryAutoscanHint')}</p>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <input
+                            type="number"
+                            min={0}
+                            max={1440}
+                            value={localSettings.library_autoscan_minutes ?? 0}
+                            onChange={(e) => updateSetting('library_autoscan_minutes', Number(e.target.value))}
+                            className="w-24 px-3 py-1.5 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-sm"
+                          />
+                          <span className="text-xs text-bambu-gray">{t('settings.libraryAutoscanUnit')}</span>
+                          <button
+                            type="button"
+                            onClick={handleStorageScan}
+                            disabled={storageBusy}
+                            className="px-3 py-1.5 text-sm rounded bg-bambu-dark-tertiary text-white hover:bg-bambu-dark-quaternary disabled:opacity-50"
+                          >
+                            {t('settings.libraryStorageScanButton')}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Saved on demand, not while typing. The mode and the path
+                          are one setting in two fields: sending the mode the
+                          moment the radio is clicked means sending it with an
+                          empty path, which the server refuses -- correctly, and
+                          the card used to report that as a failure. */}
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleStorageModeSave}
+                          disabled={storageBusy || storageModeIncomplete}
+                          className="px-3 py-1.5 text-sm rounded bg-bambu-green text-white hover:bg-bambu-green/80 disabled:bg-bambu-dark-tertiary disabled:text-bambu-gray disabled:cursor-not-allowed"
+                        >
+                          {t('common.save')}
+                        </button>
+                        {storageModeIncomplete && (
+                          <span className="text-xs text-bambu-gray">{t('settings.libraryStoragePathRequired')}</span>
+                        )}
+                        {!storageModeIncomplete && storageModeDirty && (
+                          <span className="text-xs text-amber-500">{t('settings.libraryStorageUnsaved')}</span>
+                        )}
+                        {!storageModeIncomplete && !storageModeDirty && (
+                          <span className="text-xs text-bambu-gray">{t('settings.libraryStorageSaved')}</span>
+                        )}
+                      </div>
+
+                      {/* The migration is its own action, and its plan is shown
+                          before anything moves: a collision is a decision about
+                          which file gets renamed, and nobody can make that from
+                          a progress bar. */}
+                      <div className="border-t border-bambu-dark-tertiary pt-2 mt-2 space-y-2">
+                        <p className="text-white text-sm">{t('settings.libraryStorageMigration')}</p>
+                        <p className="text-xs text-bambu-gray">{t('settings.libraryStorageMigrationHint')}</p>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={handleStoragePlan}
+                            disabled={storageBusy}
+                            className="px-3 py-1.5 text-sm rounded bg-bambu-dark-tertiary text-white hover:bg-bambu-dark-quaternary disabled:opacity-50"
+                          >
+                            {t('settings.libraryStoragePlanButton')}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleStorageMigrate}
+                            disabled={storageBusy || !storagePlan || storagePlan.blockers.length > 0}
+                            // Greyed rather than dimmed-green, and with the reason
+                            // on the title: a green button that does nothing when
+                            // pressed is worse than one that looks unavailable.
+                            title={
+                              !storagePlan
+                                ? t('settings.libraryStoragePlanFirst')
+                                : storagePlan.blockers.length > 0
+                                  ? t('settings.libraryStorageBlocked', { blockers: storagePlan.blockers.length })
+                                  : undefined
+                            }
+                            className="px-3 py-1.5 text-sm rounded bg-bambu-green text-white hover:bg-bambu-green/80 disabled:bg-bambu-dark-tertiary disabled:text-bambu-gray disabled:cursor-not-allowed"
+                          >
+                            {t('settings.libraryStorageMigrateButton')}
+                          </button>
+                        </div>
+                        {storagePlan && (
+                          <div className="text-xs space-y-1" data-testid="library-storage-plan">
+                            <p className="text-bambu-gray">
+                              {t('settings.libraryStoragePlanSummary', {
+                                files: storagePlan.file_count,
+                                folders: storagePlan.folder_count,
+                                size: formatFileSize(storagePlan.total_bytes),
+                              })}
+                            </p>
+                            {storagePlan.blockers.length > 0 && (
+                              <p className="text-red-400 font-medium">
+                                {t('settings.libraryStorageBlocked', { blockers: storagePlan.blockers.length })}
+                              </p>
+                            )}
+                            {(
+                              storagePlan.blocker_details ??
+                              // A server that only sends the sentences: render those
+                              // rather than nothing. The reverse case is what broke
+                              // an open tab once, and it is not worth a second one.
+                              storagePlan.blockers.map((message) => ({
+                                kind: 'message',
+                                target: '',
+                                names: [message],
+                                message,
+                              }))
+                            ).map((blocker) => (
+                              <div key={blocker.message} className="text-red-400">
+                                {/* The names first, the path second: what the user
+                                    has to do is rename one of these two, and the
+                                    directory they are in is context for that. */}
+                                <p>
+                                  {blocker.kind === 'message'
+                                    ? blocker.message
+                                    : blocker.kind === 'exists'
+                                      ? t('settings.libraryStorageBlockerExists', { name: blocker.names[0] })
+                                      : t('settings.libraryStorageBlockerCollision', {
+                                          first: blocker.names[0],
+                                          second: blocker.names[1],
+                                        })}
+                                </p>
+                                <p className="text-bambu-gray break-all">{blocker.target}</p>
+                              </div>
+                            ))}
+                            {storagePlan.missing.map((entry) => (
+                              <p key={entry} className="text-yellow-400 break-all">
+                                {entry}
+                              </p>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Auto-purge (#1008). Admin-only — users without library:purge
+                    don't see this section since they can't trigger a bulk purge
+                    even manually. */}
+                {canPurge && trashSettings && (
+                  <div className="border-t border-bambu-dark-tertiary pt-3 mt-3 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-white">{t('libraryAutoPurge.enableLabel')}</p>
+                        <p className="text-sm text-bambu-gray">{t('libraryAutoPurge.enableDescription')}</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={trashSettings.auto_purge_enabled}
+                          onChange={(e) => saveTrashSettings({ auto_purge_enabled: e.target.checked })}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-bambu-dark-tertiary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-bambu-green"></div>
+                      </label>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm text-bambu-gray mb-1">
+                        {t('libraryAutoPurge.ageLabel')}
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min={7}
+                          max={3650}
+                          disabled={!trashSettings.auto_purge_enabled}
+                          value={trashSettings.auto_purge_days}
+                          onChange={(e) =>
+                            saveTrashSettings({
+                              auto_purge_days: Math.max(7, Math.min(3650, parseInt(e.target.value || '0', 10) || 0)),
+                            })
+                          }
+                          className="w-24 px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none disabled:opacity-50"
+                        />
+                        <span className="text-bambu-gray">{t('libraryAutoPurge.days')}</span>
+                      </div>
+                      <p className="text-xs text-bambu-gray mt-1">
+                        {t('libraryAutoPurge.ageDescription')}
+                      </p>
+                    </div>
+
+                    <label className="flex items-center gap-2 text-sm text-white cursor-pointer">
+                      <input
+                        type="checkbox"
+                        disabled={!trashSettings.auto_purge_enabled}
+                        checked={trashSettings.auto_purge_include_never_printed}
+                        onChange={(e) => saveTrashSettings({ auto_purge_include_never_printed: e.target.checked })}
+                        className="rounded border-gray-300 disabled:opacity-50"
+                      />
+                      {t('libraryAutoPurge.includeNeverPrinted')}
+                    </label>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+            </div>
+          )}
+
+          {filesSubTab === 'backup' && (
+            <div id="card-backup">
+              <div className="mb-4 p-3 bg-amber-50 dark:bg-amber-500/10 border border-amber-300 dark:border-amber-500/30 rounded-lg flex items-start gap-2">
+                <Shield className="text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" size={16} />
+                <p className="text-sm text-amber-700 dark:text-amber-400">{t('backup.includesEncryptionKey')}</p>
+              </div>
+              <GitHubBackupSettings />
+            </div>
+          )}
         </div>
       )}
 

@@ -20,12 +20,16 @@ export type SettingsSearchTab =
   | 'virtual-printer'
   | 'spoolbuddy'
   | 'users'
-  | 'backup'
+  | 'files'
   | 'failure-detection';
 
-export type SettingsSearchSubTab = 'users' | 'email' | 'ldap' | 'oidc' | 'twofa' | 'security';
+export type UsersSubTab = 'users' | 'email' | 'ldap' | 'oidc' | 'twofa' | 'security';
 
-export type UsersSubTab = SettingsSearchSubTab;
+// The Files tab (#3161): the library and the backups, one place for what
+// happens to the files.
+export type FilesSubTab = 'library' | 'backup';
+
+export type SettingsSearchSubTab = UsersSubTab | FilesSubTab;
 
 export interface SettingsSearchEntry {
   /** i18n key for the label. Resolved with t() at render time. */

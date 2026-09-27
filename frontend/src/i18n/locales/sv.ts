@@ -1928,6 +1928,8 @@ export default {
       failureDetection: 'Feldetektering',
       users: 'Autentisering',
       backup: 'Säkerhetskopia',
+      files: 'Filer',
+      library: 'Bibliotek',
       emailAuth: 'E-postautentisering',
       ldap: 'LDAP',
       twoFa: 'Tvåfaktorsautentisering',

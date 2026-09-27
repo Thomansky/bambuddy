@@ -2019,6 +2019,8 @@ export default {
       failureDetection: 'Rilevamento guasti',
       users: 'Utenti',
       backup: 'Backup',
+      files: 'File',
+      library: 'Libreria',
       emailAuth: 'Autenticazione Email',
       ldap: 'LDAP',
       twoFa: 'Autenticazione 2FA',

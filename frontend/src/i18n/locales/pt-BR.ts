@@ -2019,6 +2019,8 @@ export default {
       failureDetection: 'Detecção de Falhas',
       users: 'Autenticação',
       backup: 'Backup',
+      files: 'Arquivos',
+      library: 'Biblioteca',
       emailAuth: 'Autenticação por Email',
       ldap: 'LDAP',
       twoFa: 'Autenticação 2FA',
