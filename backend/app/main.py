@@ -148,6 +148,7 @@ from backend.app.services.spoolman_tracking import (
     store_print_data as _store_spoolman_print_data,
 )
 from backend.app.services.tasmota import tasmota_service
+from backend.app.services.telegram_reactions import telegram_reaction_poller
 from backend.app.utils.ams_drying import is_drying_active, temperature_alarm_suppressed
 from backend.app.utils.ams_humidity import ams_humidity_percent
 from backend.app.utils.filament_types import printer_filament_type
@@ -3577,6 +3578,7 @@ async def dispatch_outcome_confirmation(
         good_url=good_url,
         reject_url=reject_url,
         confirm_url=confirm_url,
+        archive_id=archive_id,
     )
     return True
 
@@ -9561,6 +9563,10 @@ async def lifespan(app: FastAPI):
     # Start the notification digest scheduler
     notification_service.start_digest_scheduler()
 
+    # Start the Telegram reaction pollers (#3046), one per bot token used by a
+    # provider in reactions/both mode; the notification routes resync them.
+    await telegram_reaction_poller.start()
+
     # Start the GitHub backup scheduler
     await github_backup_service.start_scheduler()
 
@@ -9640,6 +9646,7 @@ async def lifespan(app: FastAPI):
     ha_sensor_manager.stop()
     location_ha_sensor_manager.stop()
     notification_service.stop_digest_scheduler()
+    await telegram_reaction_poller.aclose()
     github_backup_service.stop_scheduler()
     local_backup_service.stop_scheduler()
     library_trash_service.stop_scheduler()
