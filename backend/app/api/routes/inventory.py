@@ -1868,7 +1868,7 @@ async def unlink_spool_endpoint(
     await unlink_spool(db, spool)
     await db.commit()
     await ws_manager.broadcast({"type": "inventory_changed"})
-    result = await db.execute(select(Spool).options(selectinload(Spool.k_profiles)).where(Spool.id == spool_id))
+    result = await db.execute(select(Spool).options(*spool_response_loads()).where(Spool.id == spool_id))
     return result.scalar_one()
 
 
