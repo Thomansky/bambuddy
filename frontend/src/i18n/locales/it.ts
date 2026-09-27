@@ -1703,6 +1703,7 @@ export default {
     materialNumbers: {
       title: 'Per numero materiale',
       empty: 'Nessun numero materiale assegnato. Aggiungili alle bobine nell\'inventario per raggruppare qui consumi e costi.',
+      loadFailed: 'Impossibile caricare le statistiche per numero materiale.',
       spools: 'Bobine',
       remaining: 'Rimanente',
       consumed: 'Consumato',

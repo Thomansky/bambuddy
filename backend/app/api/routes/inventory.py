@@ -1,11 +1,12 @@
 import json
 import logging
+from datetime import date, datetime, time, timezone
 
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import delete, func, select
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -1381,6 +1382,10 @@ async def import_spools_csv(
     created = 0
     for row in preview.rows:
         if row.status == "valid" and row.spool is not None:
+            # Deliberately no material-number inheritance here (#2870), unlike
+            # the other create paths: the file is authoritative. A CSV that
+            # leaves the column blank is stating "no number", not asking for
+            # one to be guessed from whatever else is in the inventory.
             spool = Spool(**row.spool)
             db.add(spool)
             # Supplier assignments resolved by name during parsing (#2988).
@@ -2564,6 +2569,8 @@ async def next_material_number(
 
 @router.get("/stats/material-numbers", response_model=list[MaterialNumberStats])
 async def get_material_number_stats(
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_READ),
 ):
@@ -2574,17 +2581,35 @@ async def get_material_number_stats(
     by — unlike brand+material+colour. Two queries: active-spool counts and
     remaining weight from the spool table, consumption and cost from the
     recorded usage history (archived spools included — their consumption
-    happened). Sorted by consumption, heaviest first.
+    happened).
+
+    ``date_from``/``date_to`` narrow the usage half only, so the widget can
+    follow the dashboard timeframe the rest of the stats page uses. Stock is
+    point-in-time by nature and stays unfiltered — "how much do I hold" has
+    no date range. Sorted by consumption, heaviest first, then by number so
+    a range where nothing was consumed still lists in a stable order.
     """
     from backend.app.models.spool_usage_history import SpoolUsageHistory
 
-    has_number = Spool.material_number.is_not(None) & (Spool.material_number != "")
+    # material_number is normalised to NULL-or-non-empty by the schema
+    # validator, so NULL is the only "unset" state to exclude here.
+    has_number = Spool.material_number.is_not(None)
 
+    usage_filters = [has_number]
+    if date_from:
+        usage_filters.append(SpoolUsageHistory.created_at >= datetime.combine(date_from, time.min, tzinfo=timezone.utc))
+    if date_to:
+        usage_filters.append(SpoolUsageHistory.created_at <= datetime.combine(date_to, time.max, tzinfo=timezone.utc))
+
+    # Clamped PER SPOOL, like every other remaining-weight computation in the
+    # codebase: a spool whose weight_used overshot its label_weight holds 0 g,
+    # it does not subtract from the other spools sharing the number.
+    per_spool_remaining = func.coalesce(Spool.label_weight, 0) - func.coalesce(Spool.weight_used, 0)
     inventory_rows = await db.execute(
         select(
             Spool.material_number,
             func.count(Spool.id),
-            func.sum(Spool.label_weight - Spool.weight_used),
+            func.sum(case((per_spool_remaining > 0, per_spool_remaining), else_=0.0)),
         )
         .where(has_number, Spool.archived_at.is_(None))
         .group_by(Spool.material_number)
@@ -2597,7 +2622,7 @@ async def get_material_number_stats(
             func.sum(SpoolUsageHistory.cost),
         )
         .join(Spool, SpoolUsageHistory.spool_id == Spool.id)
-        .where(has_number)
+        .where(*usage_filters)
         .group_by(Spool.material_number)
     )
 
@@ -2606,7 +2631,7 @@ async def get_material_number_stats(
         stats[number] = MaterialNumberStats(
             material_number=number,
             spool_count=count,
-            remaining_g=max(0.0, float(remaining or 0)),
+            remaining_g=float(remaining or 0),
             consumed_g=0.0,
             cost=0.0,
         )
@@ -2620,7 +2645,7 @@ async def get_material_number_stats(
         entry.consumed_g = float(consumed or 0)
         entry.cost = float(cost or 0)
 
-    return sorted(stats.values(), key=lambda s: s.consumed_g, reverse=True)
+    return sorted(stats.values(), key=lambda s: (-s.consumed_g, s.material_number))
 
 
 @router.get("/stats/suppliers", response_model=list[SupplierStats])

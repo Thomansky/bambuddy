@@ -37,8 +37,9 @@ async def find_material_number_for_product(
     result = await db.execute(
         select(Spool.material_number)
         .where(
+            # Normalised to NULL-or-non-empty by the schema validator, so
+            # NULL is the only "unset" state left to exclude.
             Spool.material_number.is_not(None),
-            Spool.material_number != "",
             Spool.material == material,
             _same(Spool.subtype, subtype),
             _same(Spool.brand, brand),

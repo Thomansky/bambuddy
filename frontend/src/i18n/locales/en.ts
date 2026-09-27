@@ -1721,6 +1721,7 @@ export default {
     materialNumbers: {
       title: 'By Material Number',
       empty: 'No material numbers assigned yet. Add them to spools in the inventory to group consumption and costs here.',
+      loadFailed: 'Could not load the material number statistics.',
       spools: 'Spools',
       remaining: 'Remaining',
       consumed: 'Consumed',

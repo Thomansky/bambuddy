@@ -62,7 +62,8 @@ class Spool(Base):
     # `category` (production grouping) and `note` (free text). Free text, no
     # uniqueness — several spools of the same product share the number, which
     # is exactly what makes it a sort/filter/statistics key. New spools of a
-    # matching product inherit it on creation (see prepare_internal_spool_payload).
+    # matching product inherit it on creation (services/material_number.py,
+    # applied by the spool create routes and the RFID auto-add).
     material_number: Mapped[str | None] = mapped_column(String(64))
 
     # Cost tracking

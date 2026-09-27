@@ -346,7 +346,10 @@ def _map_spoolman_spool(spool: dict) -> MappedSpoolFields:
         "cost_per_kg": _safe_optional_float(spool.get("price")),
         # Spoolman's filament.article_number maps 1:1 onto the internal
         # material number (#2870): both identify the purchasable product.
-        "material_number": (filament.get("article_number") or None),
+        # Trimmed for the same reason the schema validator trims the internal
+        # one — the filter chip builds its options from trimmed values and
+        # matches exactly, so a padded number would list and match nothing.
+        "material_number": ((filament.get("article_number") or "").strip() or None),
         "storage_location": spool.get("location") or None,
         "location_id": None,
         "k_profiles": [],
