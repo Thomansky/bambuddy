@@ -2,9 +2,11 @@ import type {
   FilamentProduct,
   FilamentProductColor,
   FilamentProductSize,
+  FilamentProductSupplier,
   FilamentVariant,
   ProductReorderLine,
 } from '../../api/client';
+import type { ColumnConfig } from '../ColumnConfigModal';
 
 /** Product master data (#3165) — small shared helpers for the views. */
 
@@ -106,4 +108,87 @@ export function priceText(value: number | null | undefined): string {
 export function reorderPrice(line: ProductReorderLine, supplierId: number | null): number | null {
   if (supplierId === null) return line.list_price;
   return line.suppliers.find((s) => s.supplier_id === supplierId)?.price ?? line.list_price;
+}
+
+/** The supplier a product is usually bought from: the starred one, else the first. */
+export function usualSupplier(product: FilamentProduct): FilamentProductSupplier | undefined {
+  return product.suppliers.find((s) => s.preferred) ?? product.suppliers[0];
+}
+
+export interface ProductTotals {
+  /** Spools the targets ask for, over the combinations that have one. */
+  target: number;
+  onOrder: number;
+  /** Spools short of the targets once what is on order is counted. */
+  shortfall: number;
+  /** Combinations below their target. */
+  below: number;
+}
+
+export function productTotals(product: FilamentProduct): ProductTotals {
+  return product.variants.reduce<ProductTotals>(
+    (sum, v) => ({
+      target: sum.target + (v.min_stock ?? 0),
+      onOrder: sum.onOrder + v.on_order,
+      shortfall: sum.shortfall + v.shortfall,
+      below: sum.below + (v.shortfall > 0 ? 1 : 0),
+    }),
+    { target: 0, onOrder: 0, shortfall: 0, below: 0 },
+  );
+}
+
+/** Cheapest and dearest spool of the product, or null when nothing is priced. */
+export function priceRange(product: FilamentProduct): [number, number] | null {
+  const prices = product.variants.map((v) => v.effective_price).filter((p): p is number => p !== null);
+  if (prices.length === 0) return null;
+  return [Math.min(...prices), Math.max(...prices)];
+}
+
+/** Whether a product answers a search: its names, number, colours, suppliers,
+ *  their article numbers and the codes learnt at intake. */
+export function productMatches(product: FilamentProduct, needle: string): boolean {
+  const query = needle.trim().toLowerCase();
+  if (!query) return true;
+  const haystack = [
+    product.label,
+    product.brand,
+    product.material,
+    product.subtype,
+    product.material_number,
+    product.slicer_filament_name,
+    product.note,
+    ...product.colors.map((c) => c.color_name),
+    ...product.suppliers.flatMap((s) => [s.supplier_name, s.article_number, ...s.articles.map((a) => a.article_number)]),
+    ...product.variants.flatMap((v) => v.codes.map((c) => c.code)),
+  ];
+  return haystack.some((value) => (value ?? '').toLowerCase().includes(query));
+}
+
+/** Sort values compare numbers as numbers and text numerically ("2" before "15"). */
+export function compareSortValues(a: string | number, b: string | number): number {
+  if (typeof a === 'number' && typeof b === 'number') return a - b;
+  return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
+}
+
+/** A stored column layout brought up to date: columns that no longer exist
+ *  go, columns added since land at their default place, and the user's order
+ *  and visibility are kept for the rest. */
+export function mergeColumnConfig(stored: ColumnConfig[] | null, defaults: ColumnConfig[]): ColumnConfig[] {
+  if (!stored) return defaults.map((c) => ({ ...c }));
+  const known = new Set(defaults.map((c) => c.id));
+  const merged = stored.filter((c) => known.has(c.id)).map((c) => ({ ...c }));
+  const present = new Set(merged.map((c) => c.id));
+  defaults.forEach((col, index) => {
+    if (present.has(col.id)) return;
+    let insertAt = merged.length;
+    for (let i = index - 1; i >= 0; i--) {
+      const at = merged.findIndex((c) => c.id === defaults[i].id);
+      if (at !== -1) {
+        insertAt = at + 1;
+        break;
+      }
+    }
+    merged.splice(insertAt, 0, { ...col });
+  });
+  return merged;
 }
