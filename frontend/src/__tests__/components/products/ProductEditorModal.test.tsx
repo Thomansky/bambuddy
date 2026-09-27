@@ -113,3 +113,143 @@ describe('ProductEditorModal — targets and article numbers', () => {
     expect(saved[0].suppliers[0].article_numbers).toEqual({ 'c1|s10': 'FS-BLK-1', 'c2|s10': 'FS-WHT-1' });
   });
 });
+
+describe('ProductEditorModal — setting a product up', () => {
+  beforeEach(() => {
+    server.use(
+      http.get('/api/v1/settings/', () => HttpResponse.json({ currency: 'EUR' })),
+      http.get('/api/v1/inventory/suppliers', () => HttpResponse.json([])),
+    );
+  });
+
+  const weights = () => screen.getAllByRole('textbox', { name: 'Net weight' }).map((input) => (input as HTMLInputElement).value);
+
+  it('keeps the sizes in weight order', async () => {
+    const user = userEvent.setup();
+    render(<ProductEditorModal product={PRODUCT} onClose={vi.fn()} onSaved={vi.fn()} />);
+
+    await user.click(screen.getByRole('button', { name: '+ 5 kg' }));
+    await user.click(screen.getByRole('button', { name: '+ 250 g' }));
+    expect(weights()).toEqual(['250', '1000', '5000']);
+
+    // A size typed in by hand settles into its place once the field is left.
+    await user.click(screen.getByRole('button', { name: 'Size' }));
+    const typed = screen.getAllByRole('textbox', { name: 'Net weight' }).at(-1) as HTMLInputElement;
+    await user.type(typed, '750');
+    expect(weights()).toEqual(['250', '1000', '5000', '750']);
+    await user.tab();
+    expect(weights()).toEqual(['250', '750', '1000', '5000']);
+  });
+
+  it('opens the supplier list when there is no supplier yet', async () => {
+    const user = userEvent.setup();
+    render(<ProductEditorModal product={{ ...PRODUCT, suppliers: [] }} onClose={vi.fn()} onSaved={vi.fn()} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Create suppliers' }));
+
+    expect(await screen.findByRole('dialog', { name: 'Suppliers' })).toBeInTheDocument();
+  });
+});
+
+describe('ProductEditorModal — one place per price, and the preset list', () => {
+  let saved: FilamentProductInput[];
+
+  const withSuppliers = (suppliers: FilamentProduct['suppliers']): FilamentProduct => ({
+    ...PRODUCT,
+    sizes: [{ ...PRODUCT.sizes[0], price: 20 }],
+    suppliers,
+  });
+
+  beforeEach(() => {
+    saved = [];
+    server.use(
+      http.get('/api/v1/settings/', () => HttpResponse.json({ currency: 'EUR' })),
+      http.get('/api/v1/inventory/suppliers', () =>
+        HttpResponse.json([
+          { id: 7, name: 'Filament Shop' },
+          { id: 8, name: 'Other Shop' },
+        ]),
+      ),
+      http.get('/api/v1/cloud/builtin-filaments', () =>
+        HttpResponse.json([{ filament_id: 'GFA00', name: 'Bambu PLA Basic' }]),
+      ),
+      http.put('/api/v1/inventory/products/1', async ({ request }) => {
+        saved.push((await request.json()) as FilamentProductInput);
+        return HttpResponse.json({ product: PRODUCT, spools_updated: 0 });
+      }),
+    );
+  });
+
+  it("shows the usual supplier's price at the size and takes it from the supplier table", async () => {
+    const onSaved = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ProductEditorModal
+        product={withSuppliers([
+          { supplier_id: 7, supplier_name: 'Filament Shop', article_number: null, preferred: true, prices: [{ size_id: 10, price: 18.5 }], articles: [] },
+        ])}
+        onClose={vi.fn()}
+        onSaved={onSaved}
+      />,
+    );
+
+    // No price field at the size: it is the supplier's.
+    expect(screen.queryByRole('textbox', { name: 'Price per spool' })).not.toBeInTheDocument();
+    expect((await screen.findAllByText('€18.50')).length).toBeGreaterThan(0);
+    const atSupplier = screen.getByRole('textbox', { name: 'Price per spool 1000 g' });
+    expect(atSupplier).toHaveValue('18.5');
+
+    await user.clear(atSupplier);
+    await user.type(atSupplier, '17');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(saved[0].sizes[0].price).toBe(17);
+    expect(saved[0].suppliers[0].prices).toEqual({ s10: 17 });
+  });
+
+  it("brings the new usual supplier's prices in when the star moves", async () => {
+    const onSaved = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ProductEditorModal
+        product={withSuppliers([
+          { supplier_id: 7, supplier_name: 'Filament Shop', article_number: null, preferred: true, prices: [{ size_id: 10, price: 18.5 }], articles: [] },
+          { supplier_id: 8, supplier_name: 'Other Shop', article_number: null, preferred: false, prices: [{ size_id: 10, price: 16 }], articles: [] },
+        ])}
+        onClose={vi.fn()}
+        onSaved={onSaved}
+      />,
+    );
+
+    await user.click(screen.getAllByRole('radio', { name: 'Usual supplier' })[1]);
+    expect((await screen.findAllByText('€16.00')).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(saved[0].sizes[0].price).toBe(16);
+    const bySupplier = Object.fromEntries(saved[0].suppliers.map((row) => [row.supplier_id, row]));
+    expect(bySupplier[7]).toMatchObject({ preferred: false, prices: { s10: 18.5 } });
+    expect(bySupplier[8]).toMatchObject({ preferred: true, prices: { s10: 16 } });
+  });
+
+  it('asks for the price at the size while the product has no supplier', async () => {
+    render(<ProductEditorModal product={withSuppliers([])} onClose={vi.fn()} onSaved={vi.fn()} />);
+
+    expect(screen.getByRole('textbox', { name: 'Price per spool' })).toHaveValue('20');
+  });
+
+  it('picks the slicer preset from the list the spool dialog offers', async () => {
+    const onSaved = vi.fn();
+    const user = userEvent.setup();
+    render(<ProductEditorModal product={withSuppliers([])} onClose={vi.fn()} onSaved={onSaved} />);
+
+    await user.click(screen.getByRole('button', { name: 'Slicer preset' }));
+    await user.click(await screen.findByRole('option', { name: /Bambu PLA Basic/ }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(saved[0].slicer_filament).toBe('GFA00');
+    expect(saved[0].slicer_filament_name).toBe('Bambu PLA Basic');
+  });
+});
