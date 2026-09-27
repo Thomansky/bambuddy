@@ -38,6 +38,24 @@ class TestTheReportedCase:
         assert _subtask_names_match(expected, "H2D_Carbon_Filter_(V2)_Body_&_Solid_Lid")
 
 
+class TestASpaceAtTheEnd:
+    """A file saved with a space before its extension. The printer turns that
+    space into an underscore like every other; stripping whitespace before the
+    substitution left the underscore on the echo alone. Verbatim from a
+    production log, where it stranded four queue rows in a day."""
+
+    def test_a_trailing_space_matches_its_trailing_underscore(self):
+        expected = _subtask_name_from_filename("Unterteil H2S mit Logo V24 .gcode.3mf")
+
+        assert _subtask_names_match(expected, "Unterteil_H2S_mit_Logo_V24_")
+
+    def test_a_leading_space_matches_its_leading_underscore(self):
+        assert _subtask_names_match(" Deckel", "_Deckel")
+
+    def test_it_still_refuses_a_different_print(self):
+        assert not _subtask_names_match("Unterteil H2S mit Logo V24 ", "Unterteil_H2S_mit_Logo_V25_")
+
+
 class TestTruncation:
     """The printer cuts long names and marks the cut with '...'.
 
@@ -101,6 +119,8 @@ class TestNormalisation:
             ("A_B", "a_b"),
             (" A  B ", "a__b"),
             ("Mundstück", "mundstück"),
+            ("V24 ", "v24"),
+            ("V24_", "v24"),
         ],
     )
     def test_canonical_form(self, raw, expected):
