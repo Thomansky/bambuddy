@@ -224,6 +224,7 @@ async def test_engine():
         color_catalog,
         external_link,
         filament,
+        filament_product,
         group,
         kprofile_note,
         maintenance,
@@ -238,6 +239,7 @@ async def test_engine():
         project_bom,
         scheduled_drying,
         settings,
+        shopping_list,
         slot_preset,
         smart_plug,
         smart_plug_energy_snapshot,  # noqa: F401

@@ -3,6 +3,7 @@ import type {
   FilamentProductColor,
   FilamentProductSize,
   FilamentVariant,
+  ProductReorderLine,
 } from '../../api/client';
 
 /** Product master data (#3165) — small shared helpers for the views. */
@@ -98,4 +99,11 @@ export function parsePrice(text: string): number | null {
 
 export function priceText(value: number | null | undefined): string {
   return value === null || value === undefined ? '' : String(value);
+}
+
+/** What one spool of a reorder line costs at the chosen supplier — the list
+ *  price without one, or where the supplier has none of its own. */
+export function reorderPrice(line: ProductReorderLine, supplierId: number | null): number | null {
+  if (supplierId === null) return line.list_price;
+  return line.suppliers.find((s) => s.supplier_id === supplierId)?.price ?? line.list_price;
 }

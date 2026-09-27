@@ -59,7 +59,7 @@ export function IntakeModal({ onClose, initialProductId = null }: IntakeModalPro
   const [locationId, setLocationId] = useState<number | null>(null);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
-  const [created, setCreated] = useState<{ ids: number[]; label: string } | null>(null);
+  const [created, setCreated] = useState<{ ids: number[]; label: string; settled: number } | null>(null);
   const scanRef = useRef<HTMLInputElement>(null);
 
   const product: FilamentProduct | undefined = useMemo(
@@ -161,10 +161,15 @@ export function IntakeModal({ onClose, initialProductId = null }: IntakeModalPro
       setCreated({
         ids: result.spool_ids,
         label: `${product.label} · ${colorLabel(parts.color)} · ${formatWeight(parts.size.label_weight)}`,
+        settled: result.orders_settled ?? 0,
       });
       setStep('done');
       queryClient.invalidateQueries({ queryKey: ['inventory-spools'] });
       queryClient.invalidateQueries({ queryKey: ['filament-products'] });
+      if (result.orders_settled) {
+        queryClient.invalidateQueries({ queryKey: ['shopping-list'] });
+        queryClient.invalidateQueries({ queryKey: ['filament-products-reorder'] });
+      }
     } catch (err) {
       console.error('IntakeModal.handleCreate failed:', err);
       showToast(t('inventory.products.intakeFailed'), 'error');
@@ -524,6 +529,11 @@ export function IntakeModal({ onClose, initialProductId = null }: IntakeModalPro
                   <div className="text-bambu-gray text-xs mt-1">
                     {created.ids.map((id) => `#${id}`).join(', ')}
                   </div>
+                  {created.settled > 0 && (
+                    <div className="text-bambu-green text-xs mt-1">
+                      {t('inventory.products.ordersSettled', { count: created.settled })}
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="flex justify-end gap-2">

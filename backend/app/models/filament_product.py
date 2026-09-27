@@ -105,6 +105,9 @@ class FilamentVariant(Base):
     size_id: Mapped[int] = mapped_column(ForeignKey("filament_product_sizes.id", ondelete="CASCADE"), index=True)
     # Only for the few combinations that cost more than their size (silk, glow).
     price_override: Mapped[float | None] = mapped_column(Float)
+    # How many spools of it should be on the shelf. A spool below the
+    # low-stock threshold no longer counts; the reorder list asks for the rest.
+    min_stock: Mapped[int | None] = mapped_column(Integer)
 
     product: Mapped[FilamentProduct] = relationship(back_populates="variants")
     color: Mapped[FilamentProductColor] = relationship(lazy="selectin")
@@ -146,6 +149,11 @@ class FilamentProductSupplier(Base):
     prices: Mapped[list["FilamentProductSupplierPrice"]] = relationship(
         back_populates="product_supplier", cascade="all", lazy="selectin"
     )
+    # Shops number every colour and size separately; the product-level
+    # article number above is what applies where no row says otherwise.
+    articles: Mapped[list["FilamentProductSupplierArticle"]] = relationship(
+        back_populates="product_supplier", cascade="all", lazy="selectin"
+    )
 
 
 class FilamentProductSupplierPrice(Base):
@@ -164,3 +172,21 @@ class FilamentProductSupplierPrice(Base):
     price: Mapped[float] = mapped_column(Float)
 
     product_supplier: Mapped[FilamentProductSupplier] = relationship(back_populates="prices")
+
+
+class FilamentProductSupplierArticle(Base):
+    """A supplier's own article number for one colour × size."""
+
+    __tablename__ = "filament_product_supplier_articles"
+    __table_args__ = (
+        UniqueConstraint("product_supplier_id", "variant_id", name="uq_filament_product_supplier_articles_variant"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    product_supplier_id: Mapped[int] = mapped_column(
+        ForeignKey("filament_product_suppliers.id", ondelete="CASCADE"), index=True
+    )
+    variant_id: Mapped[int] = mapped_column(ForeignKey("filament_variants.id", ondelete="CASCADE"), index=True)
+    article_number: Mapped[str] = mapped_column(String(100))
+
+    product_supplier: Mapped[FilamentProductSupplier] = relationship(back_populates="articles")

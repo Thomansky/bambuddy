@@ -1,13 +1,27 @@
 import { Fragment, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Barcode, Boxes, ChevronDown, ChevronRight, Loader2, PackagePlus, Pencil, Plus, Search, WandSparkles, X } from 'lucide-react';
+import {
+  Barcode,
+  Boxes,
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  PackagePlus,
+  Pencil,
+  Plus,
+  Search,
+  ShoppingCart,
+  WandSparkles,
+  X,
+} from 'lucide-react';
 import { api } from '../../api/client';
 import type { FilamentProduct } from '../../api/client';
 import { FilamentSwatch } from '../FilamentSwatch';
 import { getCurrencySymbol } from '../../utils/currency';
 import { ConversionModal } from './ConversionModal';
 import { ProductEditorModal } from './ProductEditorModal';
+import { ReorderModal } from './ReorderModal';
 import { colorLabel, compareProducts, findVariant, formatMoney, formatStock, formatWeight } from './productUtils';
 
 interface ProductsPanelProps {
@@ -33,6 +47,7 @@ export function ProductsPanel({ onIntake, unassignedCount = 0 }: ProductsPanelPr
   // undefined = closed, null = a new product
   const [editing, setEditing] = useState<FilamentProduct | null | undefined>(undefined);
   const [converting, setConverting] = useState(false);
+  const [reordering, setReordering] = useState(false);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
 
   const visible = useMemo(() => {
@@ -65,6 +80,8 @@ export function ProductsPanel({ onIntake, unassignedCount = 0 }: ProductsPanelPr
     () => ({
       variants: products.reduce((sum, p) => sum + p.variants.length, 0),
       spools: products.reduce((sum, p) => sum + p.spool_count, 0),
+      // Combinations below their target stock (#3165).
+      below: products.reduce((sum, p) => sum + p.variants.filter((v) => v.shortfall > 0).length, 0),
     }),
     [products],
   );
@@ -92,6 +109,21 @@ export function ProductsPanel({ onIntake, unassignedCount = 0 }: ProductsPanelPr
           )}
         </div>
         <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => setReordering(true)}
+            className="relative flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-bambu-gray border border-bambu-dark-tertiary rounded-lg hover:bg-bambu-dark-tertiary hover:text-white transition-colors"
+            title={
+              totals.below > 0 ? t('inventory.products.reorder.belowTarget', { count: totals.below }) : undefined
+            }
+          >
+            <ShoppingCart className="w-4 h-4" />
+            {t('inventory.products.reorder.button')}
+            {totals.below > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-[1.1rem] text-center">
+                {totals.below}
+              </span>
+            )}
+          </button>
           <button
             onClick={() => setConverting(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-bambu-gray border border-bambu-dark-tertiary rounded-lg hover:bg-bambu-dark-tertiary hover:text-white transition-colors"
@@ -224,7 +256,17 @@ export function ProductsPanel({ onIntake, unassignedCount = 0 }: ProductsPanelPr
                             ))}
                           </div>
                         </td>
-                        <td className="px-3 py-2 text-right text-white">{product.spool_count}</td>
+                        <td className="px-3 py-2 text-right text-white whitespace-nowrap">
+                          {product.spool_count}
+                          {missingOf(product) > 0 && (
+                            <span
+                              className="ml-1.5 text-xs text-red-400"
+                              title={t('inventory.products.reorder.missing', { count: missingOf(product) })}
+                            >
+                              −{missingOf(product)}
+                            </span>
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-right text-bambu-gray hidden sm:table-cell">
                           {formatStock(product.remaining_g)}
                         </td>
@@ -282,6 +324,7 @@ export function ProductsPanel({ onIntake, unassignedCount = 0 }: ProductsPanelPr
           }}
         />
       )}
+      {reordering && <ReorderModal onClose={() => setReordering(false)} onDone={() => setReordering(false)} />}
       {converting && (
         <ConversionModal
           onClose={() => setConverting(false)}
@@ -293,6 +336,11 @@ export function ProductsPanel({ onIntake, unassignedCount = 0 }: ProductsPanelPr
       )}
     </div>
   );
+}
+
+/** Spools a product lacks to reach its targets, less what is on order. */
+function missingOf(product: FilamentProduct): number {
+  return product.variants.reduce((sum, v) => sum + v.shortfall, 0);
 }
 
 /** Colours × sizes with the stock of each variant. */
@@ -357,6 +405,21 @@ function StockMatrix({ product, currency }: { product: FilamentProduct; currency
                     )}
                     {variant.price_override !== null && (
                       <span className="block text-[10px] text-amber-300">{formatMoney(variant.price_override, currency)}</span>
+                    )}
+                    {variant.min_stock !== null && (
+                      <span
+                        className={`block text-[10px] ${variant.shortfall > 0 ? 'text-red-400' : 'text-bambu-gray'}`}
+                      >
+                        {[
+                          t('inventory.products.targetShort', { count: variant.min_stock }),
+                          variant.spool_count > variant.in_stock
+                            ? t('inventory.products.lowShort', { count: variant.spool_count - variant.in_stock })
+                            : null,
+                          variant.on_order > 0 ? t('inventory.products.onOrderShort', { count: variant.on_order }) : null,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </span>
                     )}
                   </td>
                 );

@@ -1258,6 +1258,12 @@ function ShoppingListPanel({
       item?: ShoppingListItem;
       avgSpoolG?: number;
     }) => {
+      if (status === 'received' && item?.variant_id) {
+        // A line from the product reorder list (#3165) is booked in through
+        // its product: full spools with all master data and its price.
+        await api.receiveProductOrder(id);
+        return;
+      }
       await api.updateShoppingListStatus(id, status);
       if (status === 'received' && item) {
         // Add received spools to stock category
@@ -1289,6 +1295,8 @@ function ShoppingListPanel({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['shopping-list'] });
       queryClient.invalidateQueries({ queryKey: ['spools'] });
+      queryClient.invalidateQueries({ queryKey: ['inventory-spools'] });
+      queryClient.invalidateQueries({ queryKey: ['filament-products'] });
     },
   });
 

@@ -6,17 +6,20 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app.core.auth import RequirePermissionIfAuthEnabled
+from backend.app.core.auth import RequireAnyPermissionIfAuthEnabled, RequirePermissionIfAuthEnabled
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
 from backend.app.core.websocket import ws_manager
 from backend.app.models.filament_product import FilamentProduct, FilamentVariantCode
 from backend.app.models.location import Location
+from backend.app.models.shopping_list import ShoppingListItem
 from backend.app.models.user import User
 from backend.app.services.filament_products import (
     CodeTaken,
     ProductError,
     ProductInUse,
+    VariantStock,
+    add_to_shopping_list,
     apply_conversion,
     assign_code,
     delete_product,
@@ -29,7 +32,11 @@ from backend.app.services.filament_products import (
     plan_conversion,
     price_to_cost_per_kg,
     product_label,
+    receive_order,
+    reorder_lines,
     save_product,
+    shortfall,
+    variant_on_order,
     variant_stock,
 )
 
@@ -59,6 +66,8 @@ class ProductVariantIn(BaseModel):
     color_key: str
     size_key: str
     price_override: float | None = Field(default=None, ge=0)
+    # Spools of it that should be on the shelf; empty = no target.
+    min_stock: int | None = Field(default=None, ge=0, le=1000)
 
 
 class ProductSupplierIn(BaseModel):
@@ -67,6 +76,9 @@ class ProductSupplierIn(BaseModel):
     preferred: bool = False
     # Price per spool at this supplier, by the document's size key.
     prices: dict[str, float | None] = {}
+    # The supplier's article number per combination, keyed
+    # "<colour key>|<size key>"; the product-level number covers the rest.
+    article_numbers: dict[str, str | None] = {}
 
 
 class ProductIn(BaseModel):
@@ -97,13 +109,24 @@ class IntakeIn(BaseModel):
     note: str | None = Field(default=None, max_length=500)
 
 
-def _product_out(product: FilamentProduct, stock: dict[int, tuple[int, float]]) -> dict:
+class ReorderItemIn(BaseModel):
+    variant_id: int
+    quantity: int = Field(ge=1, le=100)
+    supplier_id: int | None = None
+
+
+class ReorderIn(BaseModel):
+    items: list[ReorderItemIn] = Field(min_length=1, max_length=500)
+
+
+def _product_out(product: FilamentProduct, stock: dict[int, VariantStock], on_order: dict[int, int]) -> dict:
     sizes = {size.id: size for size in product.sizes}
     variants = []
     for variant in product.variants:
         size = sizes.get(variant.size_id)
         price = effective_price(variant, size) if size else None
-        count, remaining = stock.get(variant.id, (0, 0.0))
+        here = stock.get(variant.id, VariantStock())
+        ordered = on_order.get(variant.id, 0)
         variants.append(
             {
                 "id": variant.id,
@@ -113,8 +136,12 @@ def _product_out(product: FilamentProduct, stock: dict[int, tuple[int, float]]) 
                 "effective_price": price,
                 "cost_per_kg": price_to_cost_per_kg(price, size.label_weight if size else None),
                 "codes": [{"id": code.id, "code": code.code} for code in variant.codes],
-                "spool_count": count,
-                "remaining_g": round(remaining),
+                "spool_count": here.spools,
+                "remaining_g": round(here.remaining_g),
+                "min_stock": variant.min_stock,
+                "in_stock": here.in_stock,
+                "on_order": ordered,
+                "shortfall": shortfall(variant.min_stock, here.in_stock, ordered),
             }
         )
     return {
@@ -158,6 +185,10 @@ def _product_out(product: FilamentProduct, stock: dict[int, tuple[int, float]]) 
                 "article_number": row.article_number,
                 "preferred": row.preferred,
                 "prices": [{"size_id": price.size_id, "price": price.price} for price in row.prices],
+                "articles": [
+                    {"variant_id": article.variant_id, "article_number": article.article_number}
+                    for article in row.articles
+                ],
             }
             for row in product.suppliers
         ],
@@ -169,8 +200,9 @@ def _product_out(product: FilamentProduct, stock: dict[int, tuple[int, float]]) 
 async def _fresh_product_out(db: AsyncSession, product_id: int) -> dict:
     db.expire_all()
     product = await load_product(db, product_id)
-    stock = await variant_stock(db, [variant.id for variant in product.variants])
-    return _product_out(product, stock)
+    variant_ids = [variant.id for variant in product.variants]
+    stock = await variant_stock(db, variant_ids)
+    return _product_out(product, stock, await variant_on_order(db, variant_ids))
 
 
 @router.get("")
@@ -180,7 +212,59 @@ async def list_products(
 ):
     products = await load_products(db)
     stock = await variant_stock(db)
-    return [_product_out(product, stock) for product in products]
+    on_order = await variant_on_order(db)
+    return [_product_out(product, stock, on_order) for product in products]
+
+
+@router.get("/reorder")
+async def list_reorder(
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_READ),
+):
+    """Every combination below its target stock, with what is missing once
+    the spools already on the shopping list are counted, and where it can be
+    bought."""
+    return await reorder_lines(db)
+
+
+@router.post("/reorder")
+async def order_reorder_lines(
+    data: ReorderIn,
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequireAnyPermissionIfAuthEnabled(
+        Permission.INVENTORY_FORECAST_WRITE, Permission.INVENTORY_UPDATE
+    ),
+):
+    """Put reorder lines on the shopping list, each tied to its combination
+    and supplier so goods-in can tick it off again."""
+    try:
+        result = await add_to_shopping_list(db, data.items)
+    except ProductError as exc:
+        await db.rollback()
+        raise HTTPException(400, str(exc)) from exc
+    await db.commit()
+    return result
+
+
+@router.post("/orders/{item_id}/receive")
+async def receive_shopping_list_line(
+    item_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_UPDATE),
+):
+    """Book a shopping-list line in through the product: full spools of its
+    combination with all master data, priced from its supplier."""
+    item = (await db.execute(select(ShoppingListItem).where(ShoppingListItem.id == item_id))).scalar_one_or_none()
+    if item is None:
+        raise HTTPException(404, "Item not found")
+    try:
+        result = await receive_order(db, item)
+    except ProductError as exc:
+        await db.rollback()
+        raise HTTPException(400, str(exc)) from exc
+    await db.commit()
+    await ws_manager.broadcast({"type": "inventory_changed"})
+    return {"spool_ids": result.spool_ids, "cost_per_kg": result.cost_per_kg, "orders_settled": result.orders_settled}
 
 
 @router.get("/conversion")
@@ -349,4 +433,4 @@ async def intake_variant(
         raise HTTPException(400, str(exc)) from exc
     await db.commit()
     await ws_manager.broadcast({"type": "inventory_changed"})
-    return {"spool_ids": result.spool_ids, "cost_per_kg": result.cost_per_kg}
+    return {"spool_ids": result.spool_ids, "cost_per_kg": result.cost_per_kg, "orders_settled": result.orders_settled}

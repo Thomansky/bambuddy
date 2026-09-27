@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
-import { Barcode, Boxes, Check, Loader2, Plus, Star, Store, Trash2, X } from 'lucide-react';
+import { Barcode, Boxes, Check, Hash, Loader2, Plus, Star, Store, Trash2, X } from 'lucide-react';
 import { api, ApiError } from '../../api/client';
 import type { FilamentProduct, FilamentProductInput, FilamentVariant } from '../../api/client';
 import { useToast } from '../../contexts/ToastContext';
@@ -33,6 +33,8 @@ interface SupplierRow {
   preferred: boolean;
   /** Price text per size key. */
   prices: Record<string, string>;
+  /** The supplier's article number per matrix cell; empty uses `article_number`. */
+  articles: Record<string, string>;
 }
 
 interface ColorRow {
@@ -115,8 +117,27 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
         article_number: row.article_number ?? '',
         preferred: row.preferred,
         prices: Object.fromEntries(row.prices.map((p) => [`s${p.size_id}`, priceText(p.price)])),
+        articles: Object.fromEntries(
+          (row.articles ?? []).flatMap((article) => {
+            const variant = (product?.variants ?? []).find((v) => v.id === article.variant_id);
+            return variant ? [[cellKey(`c${variant.color_id}`, `s${variant.size_id}`), article.article_number]] : [];
+          }),
+        ),
       })) ?? [],
   );
+  // Supplier rows whose per-colour article numbers are unfolded.
+  const [articlesOpen, setArticlesOpen] = useState<Set<string>>(new Set());
+  // Target stock per ticked cell (#3165): how many spools should be on the shelf.
+  const [minStock, setMinStock] = useState<Map<string, string>>(
+    () =>
+      new Map(
+        (product?.variants ?? [])
+          .filter((v) => v.min_stock !== null && v.min_stock !== undefined)
+          .map((v) => [cellKey(`c${v.color_id}`, `s${v.size_id}`), String(v.min_stock)]),
+      ),
+  );
+  const [matrixMode, setMatrixMode] = useState<'price' | 'target'>('price');
+  const [targetForAll, setTargetForAll] = useState('');
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -206,6 +227,31 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
     });
   };
 
+  const applyTargetToAll = () => {
+    const value = targetForAll.trim();
+    setMinStock((prev) => {
+      const next = new Map(prev);
+      for (const key of cells.keys()) {
+        if (value) next.set(key, value);
+        else next.delete(key);
+      }
+      return next;
+    });
+  };
+
+  const toggleArticles = (rowKey: string) =>
+    setArticlesOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(rowKey)) next.delete(rowKey);
+      else next.add(rowKey);
+      return next;
+    });
+
+  const updateSupplierArticle = (rowKey: string, cell: string, value: string) =>
+    setSupplierRows((prev) =>
+      prev.map((r) => (r.key === rowKey ? { ...r, articles: { ...r.articles, [cell]: value } } : r)),
+    );
+
   const updateSize = (key: string, patch: Partial<SizeRow>) =>
     setSizes((prev) => prev.map((s) => (s.key === key ? { ...s, ...patch } : s)));
   const updateColor = (key: string, patch: Partial<ColorRow>) =>
@@ -232,6 +278,10 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
     }
     const sizeKeys = new Set(sizes.map((s) => s.key));
     const colorKeys = new Set(colors.map((c) => c.key));
+    const isLiveCell = (key: string) => {
+      const [colorKey, sizeKey] = key.split('|');
+      return cells.has(key) && colorKeys.has(colorKey) && sizeKeys.has(sizeKey);
+    };
     const document: FilamentProductInput = {
       brand: brand.trim() || null,
       material: material.trim(),
@@ -259,7 +309,12 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
       variants: [...cells.entries()]
         .map(([key, price]) => {
           const [colorKey, sizeKey] = key.split('|');
-          return { color_key: colorKey, size_key: sizeKey, price_override: parsePrice(price) };
+          return {
+            color_key: colorKey,
+            size_key: sizeKey,
+            price_override: parsePrice(price),
+            min_stock: toInt(minStock.get(key) ?? ''),
+          };
         })
         .filter((v) => colorKeys.has(v.color_key) && sizeKeys.has(v.size_key)),
       suppliers: supplierRows
@@ -272,6 +327,11 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
             Object.entries(row.prices)
               .filter(([key]) => sizeKeys.has(key))
               .map(([key, text]) => [key, parsePrice(text)]),
+          ),
+          article_numbers: Object.fromEntries(
+            Object.entries(row.articles)
+              .filter(([key, text]) => isLiveCell(key) && text.trim())
+              .map(([key, text]) => [key, text.trim()]),
           ),
         })),
     };
@@ -612,10 +672,44 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
                 <div>
                   <h3 className="text-sm font-medium text-white">{t('inventory.products.variants')}</h3>
                   <p className="text-xs text-bambu-gray">
-                    {t('inventory.products.variantsHint', { count: tickedCount })}
+                    {matrixMode === 'target'
+                      ? t('inventory.products.targetsHint')
+                      : t('inventory.products.variantsHint', { count: tickedCount })}
                   </p>
                 </div>
-                <div className="flex gap-1">
+                <div className="flex flex-wrap items-center gap-1">
+                  <div className="flex bg-bambu-dark border border-bambu-dark-tertiary rounded-md p-0.5" role="group">
+                    {(['price', 'target'] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        onClick={() => setMatrixMode(mode)}
+                        aria-pressed={matrixMode === mode}
+                        className={`px-2 py-0.5 text-xs rounded transition-colors ${
+                          matrixMode === mode ? 'bg-bambu-dark-tertiary text-white' : 'text-bambu-gray hover:text-white'
+                        }`}
+                      >
+                        {mode === 'price' ? t('inventory.products.matrixPrices') : t('inventory.products.matrixTargets')}
+                      </button>
+                    ))}
+                  </div>
+                  {matrixMode === 'target' && (
+                    <div className="flex items-center gap-1">
+                      <input
+                        className="w-12 px-1.5 py-0.5 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-xs text-center focus:border-bambu-green focus:outline-none"
+                        inputMode="numeric"
+                        value={targetForAll}
+                        placeholder="–"
+                        onChange={(e) => setTargetForAll(e.target.value.replace(/[^0-9]/g, ''))}
+                        aria-label={t('inventory.products.targetForAll')}
+                      />
+                      <button
+                        onClick={applyTargetToAll}
+                        className="px-2 py-1 text-xs bg-bambu-dark border border-bambu-dark-tertiary text-bambu-gray hover:text-white rounded"
+                      >
+                        {t('inventory.products.targetForAll')}
+                      </button>
+                    </div>
+                  )}
                   <button
                     onClick={() => setAllCells(true)}
                     className="px-2 py-1 text-xs bg-bambu-dark border border-bambu-dark-tertiary text-bambu-gray hover:text-white rounded"
@@ -675,7 +769,20 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
                                   className="w-4 h-4 accent-bambu-green disabled:opacity-60"
                                   aria-label={`${color.color_name} ${size.label_weight} g`}
                                 />
-                                {ticked && (
+                                {ticked && matrixMode === 'target' && (
+                                  <input
+                                    className="w-14 px-1.5 py-0.5 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-xs text-center placeholder-bambu-gray/50 focus:border-bambu-green focus:outline-none"
+                                    inputMode="numeric"
+                                    value={minStock.get(key) ?? ''}
+                                    placeholder="–"
+                                    title={t('inventory.products.minStock')}
+                                    aria-label={`${t('inventory.products.minStock')} ${color.color_name} ${size.label_weight} g`}
+                                    onChange={(e) =>
+                                      setMinStock((prev) => new Map(prev).set(key, e.target.value.replace(/[^0-9]/g, '')))
+                                    }
+                                  />
+                                )}
+                                {ticked && matrixMode === 'price' && (
                                   <input
                                     className="w-20 px-1.5 py-0.5 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-xs text-center placeholder-bambu-gray/50 focus:border-bambu-green focus:outline-none"
                                     inputMode="decimal"
@@ -718,7 +825,14 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
                 onClick={() =>
                   setSupplierRows((prev) => [
                     ...prev,
-                    { key: newKey('p'), supplier_id: null, article_number: '', preferred: prev.length === 0, prices: {} },
+                    {
+                      key: newKey('p'),
+                      supplier_id: null,
+                      article_number: '',
+                      preferred: prev.length === 0,
+                      prices: {},
+                      articles: {},
+                    },
                   ])
                 }
                 disabled={allSuppliers.length === 0 || supplierRows.length >= allSuppliers.length}
@@ -751,98 +865,185 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
                     </tr>
                   </thead>
                   <tbody>
-                    {supplierRows.map((row) => (
-                      <tr key={row.key} className="border-t border-bambu-dark-tertiary">
-                        <td className="px-2 py-1.5">
-                          <input
-                            type="radio"
-                            name="preferred-supplier"
-                            checked={row.preferred}
-                            onChange={() =>
-                              setSupplierRows((prev) => prev.map((r) => ({ ...r, preferred: r.key === row.key })))
-                            }
-                            className="accent-bambu-green"
-                            aria-label={t('inventory.products.preferredHint')}
-                          />
-                        </td>
-                        <td className="px-2 py-1.5 min-w-[10rem]">
-                          <select
-                            className={smallInputClass}
-                            value={row.supplier_id ?? ''}
-                            onChange={(e) =>
-                              setSupplierRows((prev) =>
-                                prev.map((r) =>
-                                  r.key === row.key ? { ...r, supplier_id: e.target.value ? Number(e.target.value) : null } : r,
-                                ),
-                              )
-                            }
-                          >
-                            <option value="">{t('inventory.products.choose')}</option>
-                            {allSuppliers
-                              .filter(
-                                (s) => s.id === row.supplier_id || !supplierRows.some((r) => r.supplier_id === s.id),
-                              )
-                              .map((s) => (
-                                <option key={s.id} value={s.id}>
-                                  {s.name}
-                                </option>
-                              ))}
-                          </select>
-                        </td>
-                        <td className="px-2 py-1.5 min-w-[8rem]">
-                          <input
-                            className={smallInputClass}
-                            value={row.article_number}
-                            maxLength={100}
-                            placeholder={t('inventory.products.articleNumber')}
-                            onChange={(e) =>
-                              setSupplierRows((prev) =>
-                                prev.map((r) => (r.key === row.key ? { ...r, article_number: e.target.value } : r)),
-                              )
-                            }
-                          />
-                        </td>
-                        {sizes.map((size) => (
-                          <td key={size.key} className="px-2 py-1.5 min-w-[6rem]">
-                            <div className="flex items-center gap-1">
-                              <span className="text-xs text-bambu-gray">{currency}</span>
+                    {supplierRows.map((row) => {
+                      const perCell = Object.entries(row.articles).filter(
+                        ([key, text]) => text.trim() && cells.has(key),
+                      ).length;
+                      const open = articlesOpen.has(row.key);
+                      return (
+                        <Fragment key={row.key}>
+                          <tr className="border-t border-bambu-dark-tertiary">
+                            <td className="px-2 py-1.5">
                               <input
+                                type="radio"
+                                name="preferred-supplier"
+                                checked={row.preferred}
+                                onChange={() =>
+                                  setSupplierRows((prev) => prev.map((r) => ({ ...r, preferred: r.key === row.key })))
+                                }
+                                className="accent-bambu-green"
+                                aria-label={t('inventory.products.preferredHint')}
+                              />
+                            </td>
+                            <td className="px-2 py-1.5 min-w-[10rem]">
+                              <select
                                 className={smallInputClass}
-                                inputMode="decimal"
-                                value={row.prices[size.key] ?? ''}
-                                placeholder={size.price || '–'}
+                                value={row.supplier_id ?? ''}
                                 onChange={(e) =>
                                   setSupplierRows((prev) =>
                                     prev.map((r) =>
-                                      r.key === row.key ? { ...r, prices: { ...r.prices, [size.key]: e.target.value } } : r,
+                                      r.key === row.key ? { ...r, supplier_id: e.target.value ? Number(e.target.value) : null } : r,
                                     ),
                                   )
                                 }
-                                aria-label={`${t('inventory.products.pricePerSpool')} ${size.label_weight} g`}
-                              />
-                            </div>
-                          </td>
-                        ))}
-                        <td className="px-2 py-1.5 text-right">
-                          <button
-                            onClick={() =>
-                              setSupplierRows((prev) => {
-                                const rest = prev.filter((r) => r.key !== row.key);
-                                // Keep one usual supplier when the usual one goes.
-                                if (row.preferred && rest.length > 0 && !rest.some((r) => r.preferred)) {
-                                  rest[0] = { ...rest[0], preferred: true };
+                              >
+                                <option value="">{t('inventory.products.choose')}</option>
+                                {allSuppliers
+                                  .filter(
+                                    (s) => s.id === row.supplier_id || !supplierRows.some((r) => r.supplier_id === s.id),
+                                  )
+                                  .map((s) => (
+                                    <option key={s.id} value={s.id}>
+                                      {s.name}
+                                    </option>
+                                  ))}
+                              </select>
+                            </td>
+                            <td className="px-2 py-1.5 min-w-[8rem]">
+                              <input
+                                className={smallInputClass}
+                                value={row.article_number}
+                                maxLength={100}
+                                placeholder={t('inventory.products.articleNumber')}
+                                onChange={(e) =>
+                                  setSupplierRows((prev) =>
+                                    prev.map((r) => (r.key === row.key ? { ...r, article_number: e.target.value } : r)),
+                                  )
                                 }
-                                return rest;
-                              })
-                            }
-                            className="p-1 rounded text-red-500 hover:bg-red-500/10"
-                            aria-label={t('common.delete')}
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                              />
+                            </td>
+                            {sizes.map((size) => (
+                              <td key={size.key} className="px-2 py-1.5 min-w-[6rem]">
+                                <div className="flex items-center gap-1">
+                                  <span className="text-xs text-bambu-gray">{currency}</span>
+                                  <input
+                                    className={smallInputClass}
+                                    inputMode="decimal"
+                                    value={row.prices[size.key] ?? ''}
+                                    placeholder={size.price || '–'}
+                                    onChange={(e) =>
+                                      setSupplierRows((prev) =>
+                                        prev.map((r) =>
+                                          r.key === row.key ? { ...r, prices: { ...r.prices, [size.key]: e.target.value } } : r,
+                                        ),
+                                      )
+                                    }
+                                    aria-label={`${t('inventory.products.pricePerSpool')} ${size.label_weight} g`}
+                                  />
+                                </div>
+                              </td>
+                            ))}
+                            <td className="px-2 py-1.5 text-right whitespace-nowrap">
+                              <button
+                                onClick={() => toggleArticles(row.key)}
+                                aria-expanded={open}
+                                title={t('inventory.products.articleNumbersPerCombination')}
+                                aria-label={t('inventory.products.articleNumbersPerCombination')}
+                                className={`relative p-1 rounded hover:bg-bambu-dark-tertiary ${
+                                  open || perCell > 0 ? 'text-white' : 'text-bambu-gray hover:text-white'
+                                }`}
+                              >
+                                <Hash className="w-4 h-4" />
+                                {perCell > 0 && (
+                                  <span className="absolute -top-1 -right-1 min-w-[0.9rem] h-[0.9rem] px-0.5 rounded-full bg-bambu-green text-white text-[9px] leading-[0.9rem] text-center">
+                                    {perCell}
+                                  </span>
+                                )}
+                              </button>
+                              <button
+                                onClick={() =>
+                                  setSupplierRows((prev) => {
+                                    const rest = prev.filter((r) => r.key !== row.key);
+                                    // Keep one usual supplier when the usual one goes.
+                                    if (row.preferred && rest.length > 0 && !rest.some((r) => r.preferred)) {
+                                      rest[0] = { ...rest[0], preferred: true };
+                                    }
+                                    return rest;
+                                  })
+                                }
+                                className="p-1 rounded text-red-500 hover:bg-red-500/10"
+                                aria-label={t('common.delete')}
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </td>
+                          </tr>
+                          {open && (
+                            <tr className="bg-bambu-dark/40">
+                              <td colSpan={4 + sizes.length} className="px-3 py-2">
+                                <p className="text-xs text-bambu-gray mb-1.5">{t('inventory.products.articleNumbersHint')}</p>
+                                {colors.length === 0 || sizes.length === 0 ? (
+                                  <p className="text-xs text-bambu-gray">{t('inventory.products.noVariants')}</p>
+                                ) : (
+                                  <table className="text-xs">
+                                    <thead>
+                                      <tr className="text-bambu-gray">
+                                        <th className="pr-3 py-1 text-left font-medium">{t('inventory.products.color')}</th>
+                                        {sizes.map((size) => (
+                                          <th key={size.key} className="px-1 py-1 text-left font-medium whitespace-nowrap">
+                                            {toInt(size.label_weight) ? formatWeight(toInt(size.label_weight) ?? 0) : '?'}
+                                          </th>
+                                        ))}
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {colors.map((color) => (
+                                        <tr key={color.key}>
+                                          <td className="pr-3 py-0.5">
+                                            <div className="flex items-center gap-1.5 whitespace-nowrap">
+                                              <FilamentSwatch
+                                                rgba={color.hex ? `${color.hex}${color.alpha}` : null}
+                                                effectSize="table"
+                                                className="w-3.5 h-3.5"
+                                              />
+                                              <span className="text-white">
+                                                {color.color_name || (color.hex ? `#${color.hex}` : '?')}
+                                              </span>
+                                            </div>
+                                          </td>
+                                          {sizes.map((size) => {
+                                            const key = cellKey(color.key, size.key);
+                                            if (!cells.has(key)) {
+                                              return (
+                                                <td key={size.key} className="px-1 py-0.5 text-center text-bambu-gray/30">
+                                                  ·
+                                                </td>
+                                              );
+                                            }
+                                            return (
+                                              <td key={size.key} className="px-1 py-0.5">
+                                                <input
+                                                  className={`${smallInputClass} min-w-[7rem]`}
+                                                  value={row.articles[key] ?? ''}
+                                                  maxLength={100}
+                                                  placeholder={row.article_number || '–'}
+                                                  onChange={(e) => updateSupplierArticle(row.key, key, e.target.value)}
+                                                  aria-label={`${t('inventory.products.articleNumber')} ${color.color_name} ${size.label_weight} g`}
+                                                />
+                                              </td>
+                                            );
+                                          })}
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                )}
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
