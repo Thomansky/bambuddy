@@ -21,6 +21,8 @@ from backend.app.schemas.maintenance import (
     CurrentRun,
     DeletedMaintenanceTypeResponse,
     MaintenanceHistoryResponse,
+    MaintenanceLogbook,
+    MaintenanceLogbookEntry,
     MaintenanceRunResponse,
     MaintenanceStatus,
     MaintenanceTypeCreate,
@@ -575,6 +577,18 @@ async def _get_printer_maintenance_internal(
     for run in result.scalars().all():
         latest_runs.setdefault(run.printer_maintenance_id, run)
 
+    # Newest logbook entry per item, one query for the printer: when it was
+    # done, at how many hours, by whom and with what note.
+    result = await db.execute(
+        select(MaintenanceHistory)
+        .join(PrinterMaintenance, MaintenanceHistory.printer_maintenance_id == PrinterMaintenance.id)
+        .where(PrinterMaintenance.printer_id == printer_id)
+        .order_by(MaintenanceHistory.performed_at.desc(), MaintenanceHistory.id.desc())
+    )
+    latest_history: dict[int, MaintenanceHistory] = {}
+    for entry in result.scalars().all():
+        latest_history.setdefault(entry.printer_maintenance_id, entry)
+
     maintenance_items = []
     due_count = 0
     warning_count = 0
@@ -676,6 +690,7 @@ async def _get_printer_maintenance_internal(
                 is_due=due.is_due,
                 is_warning=due.is_warning,
                 last_performed_at=last_performed_at,
+                **_last_entry_fields(latest_history.get(item_id)),
                 action=maint_type.action,
                 action_options=maintenance_actions.response_action_options(maint_type.action, item.action_options),
                 action_available_options=(
@@ -711,6 +726,30 @@ async def _get_printer_maintenance_internal(
             if maintenance_actions.action_applies_to_printer(action, printer.model)
         ],
     )
+
+
+def _entry_notes(entry: MaintenanceHistory) -> str | None:
+    """An entry's note as the logbook shows it.
+
+    A completed calibration run writes a fixed English note; the entry's
+    source already says it was automatic, so that note is left out rather
+    than shown in every language as the same untranslated line.
+    """
+    if (entry.source or "manual") == "automatic" and entry.notes == maintenance_actions.AUTO_RUN_NOTES:
+        return None
+    return entry.notes
+
+
+def _last_entry_fields(entry: MaintenanceHistory | None) -> dict:
+    """The card's "last done" line, from the item's newest logbook entry."""
+    if entry is None:
+        return {}
+    return {
+        "last_performed_hours_at": entry.hours_at_maintenance,
+        "last_performed_by": entry.performed_by,
+        "last_performed_notes": _entry_notes(entry),
+        "last_performed_source": entry.source or "manual",
+    }
 
 
 @router.get("/printers/{printer_id}", response_model=PrinterMaintenanceOverview)
@@ -898,9 +937,13 @@ async def perform_maintenance(
     item_id: int,
     data: PerformMaintenanceRequest,
     db: AsyncSession = Depends(get_db),
-    _: User | None = RequirePermissionIfAuthEnabled(Permission.MAINTENANCE_UPDATE),
+    user: User | None = RequirePermissionIfAuthEnabled(Permission.MAINTENANCE_UPDATE),
 ):
-    """Mark maintenance as performed (reset the counter)."""
+    """Mark maintenance as performed (reset the counter).
+
+    Written to the logbook with the note and the user who marked it — by the
+    name they have now, so the entry reads the same after a rename.
+    """
     result = await db.execute(
         select(PrinterMaintenance)
         .where(PrinterMaintenance.id == item_id)
@@ -914,7 +957,9 @@ async def perform_maintenance(
     result = await db.execute(select(Printer).where(Printer.id == item.printer_id))
     printer = result.scalar_one()
 
-    history = await maintenance_actions.record_performed(db, item, data.notes)
+    history = await maintenance_actions.record_performed(
+        db, item, data.notes, performed_by=user.username if user is not None else None
+    )
     current_hours = history.hours_at_maintenance
 
     await db.commit()
@@ -1078,6 +1123,92 @@ async def cancel_maintenance_run(
     await db.commit()
     await maintenance_actions.notify_run_finished(db, run)
     return {"status": "cancelled", "id": run.id}
+
+
+@router.get("/logbook", response_model=MaintenanceLogbook)
+async def get_maintenance_logbook(
+    printer_id: int | None = Query(default=None),
+    maintenance_type_id: int | None = Query(default=None),
+    limit: int = Query(default=1000, ge=1, le=10000),
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.MAINTENANCE_READ),
+):
+    """The maintenance logbook, newest first.
+
+    Every maintenance marked done — by hand or by a calibration run that
+    completed — and every calibration run that failed or was cancelled. A run
+    that completed is its "done" entry; pending and running ones are on the
+    cards, not in the record yet.
+    """
+    history_query = (
+        select(MaintenanceHistory, PrinterMaintenance, MaintenanceType, Printer)
+        .join(PrinterMaintenance, MaintenanceHistory.printer_maintenance_id == PrinterMaintenance.id)
+        .join(MaintenanceType, PrinterMaintenance.maintenance_type_id == MaintenanceType.id)
+        .join(Printer, PrinterMaintenance.printer_id == Printer.id)
+    )
+    run_query = (
+        select(MaintenanceRun, PrinterMaintenance, MaintenanceType, Printer)
+        .join(PrinterMaintenance, MaintenanceRun.printer_maintenance_id == PrinterMaintenance.id)
+        .join(MaintenanceType, PrinterMaintenance.maintenance_type_id == MaintenanceType.id)
+        .join(Printer, MaintenanceRun.printer_id == Printer.id)
+        .where(MaintenanceRun.status.in_(("failed", "cancelled")))
+    )
+    if printer_id is not None:
+        history_query = history_query.where(PrinterMaintenance.printer_id == printer_id)
+        run_query = run_query.where(MaintenanceRun.printer_id == printer_id)
+    if maintenance_type_id is not None:
+        history_query = history_query.where(PrinterMaintenance.maintenance_type_id == maintenance_type_id)
+        run_query = run_query.where(PrinterMaintenance.maintenance_type_id == maintenance_type_id)
+
+    history_rows = (await db.execute(history_query)).all()
+    run_ids = {entry.run_id for entry, *_ in history_rows if entry.run_id is not None}
+    triggers: dict[int, str] = {}
+    if run_ids:
+        result = await db.execute(
+            select(MaintenanceRun.id, MaintenanceRun.source).where(MaintenanceRun.id.in_(run_ids))
+        )
+        triggers = dict(result.all())
+
+    entries: list[MaintenanceLogbookEntry] = []
+    for entry, _item, maint_type, printer in history_rows:
+        entries.append(
+            MaintenanceLogbookEntry(
+                kind="performed",
+                id=entry.id,
+                at=entry.performed_at,
+                printer_id=printer.id,
+                printer_name=printer.name,
+                maintenance_type_id=maint_type.id,
+                maintenance_type_name=maint_type.name,
+                maintenance_type_icon=maint_type.icon,
+                outcome="completed",
+                source=entry.source or "manual",
+                trigger=triggers.get(entry.run_id) if entry.run_id is not None else None,
+                hours=entry.hours_at_maintenance,
+                performed_by=entry.performed_by,
+                notes=_entry_notes(entry),
+                run_id=entry.run_id,
+            )
+        )
+    for run, _item, maint_type, printer in (await db.execute(run_query)).all():
+        entries.append(
+            MaintenanceLogbookEntry(
+                kind="run",
+                id=run.id,
+                at=run.completed_at or run.started_at or run.created_at,
+                printer_id=printer.id,
+                printer_name=printer.name,
+                maintenance_type_id=maint_type.id,
+                maintenance_type_name=maint_type.name,
+                maintenance_type_icon=maint_type.icon,
+                outcome=run.status,
+                source=run.source,
+                notes=run.error_message,
+                run_id=run.id,
+            )
+        )
+    entries.sort(key=lambda e: (e.at.timestamp() if e.at else 0.0, e.id), reverse=True)
+    return MaintenanceLogbook(entries=entries[:limit], total=len(entries))
 
 
 @router.get("/items/{item_id}/history", response_model=list[MaintenanceHistoryResponse])

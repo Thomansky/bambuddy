@@ -4535,6 +4535,11 @@ export interface MaintenanceStatus {
   is_due: boolean;
   is_warning: boolean;
   last_performed_at: string | null;
+  /** The newest logbook entry: the printer's hours then, who marked it and the note. */
+  last_performed_hours_at?: number | null;
+  last_performed_by?: string | null;
+  last_performed_notes?: string | null;
+  last_performed_source?: 'manual' | 'automatic' | null;
   // Actionable maintenance (#3127); null action = reminder only
   action: MaintenanceAction | null;
   action_options: CalibrationOptions | null;
@@ -4568,6 +4573,37 @@ export interface MaintenanceHistory {
   performed_at: string;
   hours_at_maintenance: number;
   notes: string | null;
+  performed_by?: string | null;
+  source?: 'manual' | 'automatic';
+  run_id?: number | null;
+}
+
+/** One line of the maintenance logbook: a maintenance marked done (by hand or
+ *  by a completed calibration run), or a calibration run that did not complete. */
+export interface MaintenanceLogbookEntry {
+  kind: 'performed' | 'run';
+  id: number;
+  at: string;
+  printer_id: number;
+  printer_name: string;
+  maintenance_type_id: number;
+  maintenance_type_name: string;
+  maintenance_type_icon: string | null;
+  outcome: 'completed' | 'failed' | 'cancelled';
+  /** manual / automatic for an entry done; for a run what started it (manual / due / schedule). */
+  source: string;
+  /** What started the calibration behind an automatic entry, when known. */
+  trigger: string | null;
+  hours: number | null;
+  performed_by: string | null;
+  /** The note, or the run's error. */
+  notes: string | null;
+  run_id: number | null;
+}
+
+export interface MaintenanceLogbook {
+  entries: MaintenanceLogbookEntry[];
+  total: number;
 }
 
 export interface MaintenanceSummary {
@@ -7674,6 +7710,13 @@ export const api = {
     }),
   getMaintenanceHistory: (itemId: number) =>
     request<MaintenanceHistory[]>(`/maintenance/items/${itemId}/history`),
+  getMaintenanceLogbook: (params: { printerId?: number | null; maintenanceTypeId?: number | null } = {}) => {
+    const query = new URLSearchParams();
+    if (params.printerId != null) query.set('printer_id', String(params.printerId));
+    if (params.maintenanceTypeId != null) query.set('maintenance_type_id', String(params.maintenanceTypeId));
+    const qs = query.toString();
+    return request<MaintenanceLogbook>(`/maintenance/logbook${qs ? `?${qs}` : ''}`);
+  },
   getMaintenanceSummary: () => request<MaintenanceSummary>('/maintenance/summary'),
   setPrinterHours: (printerId: number, totalHours: number) =>
     request<{ printer_id: number; total_hours: number; archive_hours: number; offset_hours: number }>(

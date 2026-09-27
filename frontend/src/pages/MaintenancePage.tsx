@@ -40,6 +40,8 @@ import {
   X,
   Bell,
   BellOff,
+  BookOpen,
+  MessageSquare,
 } from 'lucide-react';
 import { api } from '../api/client';
 import type {
@@ -63,7 +65,9 @@ import {
   isAutomatedMaintenance,
   maintenanceKind,
 } from '../utils/maintenanceKind';
-import { formatDate } from '../utils/date';
+import { formatDate, formatDateTime } from '../utils/date';
+import { MaintenanceLogbook } from '../components/maintenance/MaintenanceLogbook';
+import { PerformMaintenanceDialog } from '../components/maintenance/PerformMaintenanceDialog';
 import { Card, CardContent } from '../components/Card';
 import { Button } from '../components/Button';
 import { Toggle } from '../components/Toggle';
@@ -548,6 +552,7 @@ function MaintenanceCard({
 }) {
   const Icon = getIcon(item.maintenance_type_icon);
   const canUpdate = hasPermission('maintenance:update');
+  const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.getSettings });
   const notificationsLabel = t(item.notifications_enabled ? 'maintenance.notificationsOn' : 'maintenance.notificationsOff');
   const intervalType = item.interval_type || 'hours';
 
@@ -681,6 +686,28 @@ function MaintenanceCard({
             {!item.is_due && !item.is_warning && item.enabled && <Check className="w-3 h-3" />}
             {getStatusText()}
           </div>
+
+          {/* The logbook's newest entry: when, at how many hours, by whom */}
+          <div
+            className="mt-1 text-[11px] text-bambu-gray flex items-center gap-1 min-w-0"
+            title={item.last_performed_notes || undefined}
+          >
+            {item.last_performed_at ? (
+              <>
+                <span className="truncate">
+                  {t('maintenance.logbook.lastDone', {
+                    date: formatDateTime(item.last_performed_at, settings?.time_format),
+                    hours: Math.round(item.last_performed_hours_at ?? 0),
+                  })}
+                  {item.last_performed_by && ` · ${item.last_performed_by}`}
+                  {item.last_performed_source === 'automatic' && ` · ${t('maintenance.logbook.automatic')}`}
+                </span>
+                {item.last_performed_notes && <MessageSquare className="w-3 h-3 shrink-0" />}
+              </>
+            ) : (
+              <span className="text-bambu-gray/70">{t('maintenance.logbook.neverDone')}</span>
+            )}
+          </div>
         </div>
 
         {/* Actions */}
@@ -700,8 +727,8 @@ function MaintenanceCard({
             title={!hasPermission('maintenance:update') ? t('maintenance.noPermissionPerform') : undefined}
             className="!px-3"
           >
-            <RotateCcw className="w-3.5 h-3.5" />
-            {t('common.reset')}
+            <Check className="w-3.5 h-3.5" />
+            {t('maintenance.logbook.markDone')}
           </Button>
         </div>
       </div>
@@ -731,6 +758,7 @@ function PrinterSection({
   onRun,
   onCancelRun,
   onSetHours,
+  onOpenLogbook,
   hasPermission,
   language,
   t,
@@ -743,6 +771,7 @@ function PrinterSection({
   onRun: (id: number) => void;
   onCancelRun: (runId: number) => void;
   onSetHours: (printerId: number, hours: number) => void;
+  onOpenLogbook: (printerId: number) => void;
   hasPermission: (permission: Permission) => boolean;
   language: string;
   t: TFunction;
@@ -826,13 +855,22 @@ function PrinterSection({
               )}
             </div>
           </div>
-          <button
-            onClick={() => setExpanded(!expanded)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-bambu-gray hover:text-white hover:bg-bambu-dark rounded-lg transition-colors"
-          >
-            {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-            {expanded ? t('common.collapse') : t('common.expand')}
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => onOpenLogbook(overview.printer_id)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-bambu-gray hover:text-white hover:bg-bambu-dark rounded-lg transition-colors"
+            >
+              <BookOpen className="w-4 h-4" />
+              {t('maintenance.logbook.tab')}
+            </button>
+            <button
+              onClick={() => setExpanded(!expanded)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-bambu-gray hover:text-white hover:bg-bambu-dark rounded-lg transition-colors"
+            >
+              {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+              {expanded ? t('common.collapse') : t('common.expand')}
+            </button>
+          </div>
         </div>
 
         {/* Quick stats row */}
@@ -1846,7 +1884,7 @@ function SettingsSection({
   );
 }
 
-type TabType = 'status' | 'settings';
+type TabType = 'status' | 'logbook' | 'settings';
 
 export function MaintenancePage() {
   const { t, i18n } = useTranslation();
@@ -1854,6 +1892,11 @@ export function MaintenancePage() {
   const { showToast } = useToast();
   const { hasPermission } = useAuth();
   const [activeTab, setActiveTab] = useState<TabType>('status');
+  // The logbook's printer filter; a printer's own "logbook" button sets it.
+  const [logbookPrinterId, setLogbookPrinterId] = useState<number | null>(null);
+  // The item being marked done, while its note is asked for.
+  const [performing, setPerforming] = useState<MaintenanceStatus | null>(null);
+  const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.getSettings });
   const { data: overview, isLoading } = useQuery({
     queryKey: ['maintenanceOverview'],
     queryFn: api.getMaintenanceOverview,
@@ -1880,6 +1923,8 @@ export function MaintenancePage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['maintenanceOverview'] });
       queryClient.invalidateQueries({ queryKey: ['maintenanceSummary'] });
+      queryClient.invalidateQueries({ queryKey: ['maintenanceLogbook'] });
+      setPerforming(null);
       showToast(t('maintenance.maintenanceComplete'));
     },
     onError: (error: Error) => {
@@ -2051,8 +2096,15 @@ export function MaintenancePage() {
     },
   });
 
+  // Marking done asks for a note first; the dialog then writes the entry.
   const handlePerform = (id: number) => {
-    performMutation.mutate({ id });
+    const item = overview?.flatMap((p) => p.maintenance_items).find((i) => i.id === id);
+    if (item) setPerforming(item);
+  };
+
+  const openLogbook = (printerId: number | null) => {
+    setLogbookPrinterId(printerId);
+    setActiveTab('logbook');
   };
 
   const handleToggle = (id: number, enabled: boolean) => {
@@ -2091,7 +2143,7 @@ export function MaintenancePage() {
           {t('maintenance.title')}
         </h1>
         <p className="text-bambu-gray mt-1">
-          {activeTab === 'status' ? (
+          {activeTab !== 'settings' ? (
             <>
               {totalDue > 0 && <span className="text-red-700 dark:text-red-400">{t('maintenance.dueCount', { count: totalDue })}</span>}
               {totalDue > 0 && totalWarning > 0 && ' · '}
@@ -2115,6 +2167,17 @@ export function MaintenancePage() {
           }`}
         >
           {t('maintenance.statusTab')}
+        </button>
+        <button
+          onClick={() => setActiveTab('logbook')}
+          className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${
+            activeTab === 'logbook'
+              ? 'text-bambu-green border-bambu-green'
+              : 'text-bambu-gray border-transparent hover:text-white'
+          }`}
+        >
+          <BookOpen className="w-4 h-4" />
+          {t('maintenance.logbook.tab')}
         </button>
         <button
           onClick={() => setActiveTab('settings')}
@@ -2149,6 +2212,7 @@ export function MaintenancePage() {
                 onRun={(id) => runMutation.mutate(id)}
                 onCancelRun={(runId) => cancelRunMutation.mutate(runId)}
                 onSetHours={handleSetHours}
+                onOpenLogbook={openLogbook}
                 hasPermission={hasPermission}
                 language={i18n.language}
                 t={t}
@@ -2164,6 +2228,15 @@ export function MaintenancePage() {
             </Card>
           )}
         </div>
+      ) : activeTab === 'logbook' ? (
+        <MaintenanceLogbook
+          printers={(overview ?? [])
+            .map((p) => ({ id: p.printer_id, name: p.printer_name }))
+            .sort((a, b) => a.name.localeCompare(b.name))}
+          printerId={logbookPrinterId}
+          onPrinterChange={setLogbookPrinterId}
+          timeFormat={settings?.time_format}
+        />
       ) : (
         <SettingsSection
           overview={overview}
@@ -2190,6 +2263,15 @@ export function MaintenancePage() {
           onRemoveItem={(itemId) => removeItemMutation.mutate(itemId)}
           hasPermission={hasPermission}
           t={t}
+        />
+      )}
+
+      {performing && (
+        <PerformMaintenanceDialog
+          item={performing}
+          busy={performMutation.isPending}
+          onConfirm={(notes) => performMutation.mutate({ id: performing.id, notes: notes || undefined })}
+          onCancel={() => setPerforming(null)}
         />
       )}
     </div>

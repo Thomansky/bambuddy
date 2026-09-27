@@ -807,17 +807,25 @@ async def record_performed(
     notes: str | None,
     *,
     now: datetime | None = None,
+    performed_by: str | None = None,
+    source: str = "manual",
+    run_id: int | None = None,
 ) -> MaintenanceHistory:
     """Mark ``item`` performed now: history row plus counter reset.
 
     Shared by the "Reset" button and the automatic completion so the two
-    cannot drift. Flushed, not committed.
+    cannot drift. The row is the logbook entry: who marked it done, and
+    whether a person or a calibration run (``run_id``) did it. Flushed, not
+    committed.
     """
     current_hours = await get_printer_total_hours(db, item.printer_id)
     history = MaintenanceHistory(
         printer_maintenance_id=item.id,
         hours_at_maintenance=current_hours,
-        notes=notes,
+        notes=(notes or "").strip() or None,
+        performed_by=performed_by,
+        source=source,
+        run_id=run_id,
     )
     db.add(history)
     item.last_performed_at = now or utcnow_naive()
@@ -925,7 +933,7 @@ async def on_internal_job_finished(
         item = run.printer_maintenance
 
         if outcome == "completed":
-            await record_performed(db, item, AUTO_RUN_NOTES, now=now)
+            await record_performed(db, item, AUTO_RUN_NOTES, now=now, source="automatic", run_id=run.id)
             item.last_auto_run_at = now
         elif outcome == "failed":
             run.error_message = (
