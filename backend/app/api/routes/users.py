@@ -25,6 +25,8 @@ from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
 from backend.app.models.api_key import APIKey
 from backend.app.models.archive import PrintArchive
+from backend.app.models.auth_ephemeral import AuthEphemeralToken, TokenType
+from backend.app.models.connected_app import ConnectedApp, ConnectedAppGrant
 from backend.app.models.group import Group
 from backend.app.models.library import LibraryFile
 from backend.app.models.long_lived_token import LongLivedToken
@@ -498,6 +500,20 @@ async def delete_user(
     await db.execute(delete(UserTOTP).where(UserTOTP.user_id == user_id))
     await db.execute(delete(UserOTPCode).where(UserOTPCode.user_id == user_id))
     await db.execute(delete(LongLivedToken).where(LongLivedToken.user_id == user_id))
+
+    # Connected apps, same SQLite/FK pattern. A leftover consent row would
+    # skip the consent screen for whoever is next given this user id, and a
+    # code issued in the last minute is keyed by username, not id.
+    from sqlalchemy import update as _update
+
+    await db.execute(delete(ConnectedAppGrant).where(ConnectedAppGrant.user_id == user_id))
+    await db.execute(
+        delete(AuthEphemeralToken).where(
+            AuthEphemeralToken.token_type == TokenType.CONNECT_CODE,
+            func.lower(AuthEphemeralToken.username) == user.username.lower(),
+        )
+    )
+    await db.execute(_update(ConnectedApp).where(ConnectedApp.created_by_id == user_id).values(created_by_id=None))
 
     await db.delete(user)
     await db.commit()

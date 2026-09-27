@@ -1,6 +1,7 @@
 """Post-print outcome confirmation helpers (#1898)."""
 
 import logging
+from collections.abc import Mapping
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -15,6 +16,88 @@ logger = logging.getLogger(__name__)
 # reaction handler (#3046), which lives on its own branch — listed here so the
 # vocabulary is complete and the UI can label it the day that lands.
 VERDICT_SOURCES = ("dialog", "link", "plate_clear", "printer_card", "api", "reaction")
+
+# Link-preview unfurlers and mail-security scanners fetch every URL they find in
+# a message, unattended, within seconds of it being sent. Nothing they can do
+# with a GET records a verdict any more -- that is the POST route's job -- so
+# this list is the second layer: it decides whether the confirmation page
+# submits its own form, which is what keeps a human at one tap. A scanner that
+# runs JavaScript would otherwise press the button on the operator's behalf.
+# Matched as case-insensitive substrings of the User-Agent; the generic "bot"
+# token covers TelegramBot, Discordbot, Slackbot-LinkExpanding, Twitterbot and
+# LinkedInBot in one go.
+UNATTENDED_FETCH_AGENTS = (
+    "bot",
+    "crawler",
+    "spider",
+    "facebookexternalhit",
+    "whatsapp",
+    "skypeuripreview",
+    "bingpreview",
+    "safelinks",
+    "urldefense",
+    "proofpoint",
+    "mimecast",
+    "barracuda",
+    "forcepoint",
+)
+
+# Prefetch / preload hints. A finger on a notification button is never one.
+UNATTENDED_FETCH_HEADERS = {
+    "purpose": ("prefetch", "preview"),
+    "x-purpose": ("prefetch", "preview"),
+    "x-moz": ("prefetch",),
+    "sec-purpose": ("prefetch",),
+}
+
+
+def is_unattended_fetch(method: str, headers: Mapping[str, str]) -> bool:
+    """Whether a request for a one-tap verdict link came from a machine.
+
+    Decides whether the confirmation page submits itself. False positives are
+    deliberately cheap -- a browser mistaken for a bot gets the same page with
+    a button to press -- so the lists above err towards catching more.
+    """
+    if method.upper() != "GET":
+        # Anything that is not the page load is not a page load: only the GET
+        # route renders, and only a GET can be widened to HEAD by a future
+        # router change.
+        return True
+    for header, markers in UNATTENDED_FETCH_HEADERS.items():
+        value = (headers.get(header) or "").lower()
+        if value and any(marker in value for marker in markers):
+            return True
+    agent = (headers.get("user-agent") or "").lower()
+    return any(marker in agent for marker in UNATTENDED_FETCH_AGENTS)
+
+
+# The one-tap marker. The confirmation page submits its own form only when the
+# URL it was opened from carries this, and the marker is put on exactly one
+# thing: the Telegram inline keyboard's buttons -- an affordance no unfurler,
+# gateway or proxy reads, for the same reason the capability URLs themselves no
+# longer travel in message text.
+#
+# It is what closes the gap the User-Agent list above cannot: a mail-security
+# sandbox that renders HTML and runs JavaScript sends an ordinary Chrome string
+# (so does literal HeadlessChrome), and a verdict URL that reached it did so out
+# of the message BODY -- where the marker never appears. That fetch now gets the
+# page with a button on it and records nothing. The operator's tap on the
+# notification button still costs exactly one tap.
+ONE_TAP_PARAM = "tap"
+
+
+def one_tap_url(url: str) -> str:
+    """Mark a verdict URL as one a human is about to press.
+
+    Only for the affordances a person taps directly. A URL that goes into text
+    anybody's machine might follow is left unmarked on purpose.
+    """
+    return f"{url}{'&' if '?' in url else '?'}{ONE_TAP_PARAM}=1"
+
+
+def is_one_tap_request(query_params: Mapping[str, str]) -> bool:
+    """Whether this page load came from a button rather than from message text."""
+    return (query_params.get(ONE_TAP_PARAM) or "") == "1"
 
 
 def stamp_verdict(archive: PrintArchive, source: str) -> None:
@@ -43,63 +126,6 @@ def retire_confirm_token(archive: PrintArchive) -> None:
         archive.confirm_token_used_at = datetime.now(timezone.utc)
 
 
-VERDICTS = ("good", "reject")
-
-
-async def apply_outcome_verdict(
-    db: AsyncSession,
-    archive: PrintArchive,
-    verdict: str,
-    *,
-    source: str,
-    reason: str | None = None,
-) -> bool:
-    """Record a verdict on an archive that has not been answered yet.
-
-    The one place every unattended verdict path goes through — the one-tap
-    capability link, the plate-clear default and the Telegram reaction
-    poller (#3046) — so they agree on what a verdict entails: the archive's
-    user_verdict, the same value mirrored onto the latest PrintLogEntry
-    (verdict-aware statistics read the log, the #1444 mirror), and the
-    capability token retired so the push-notification links stop working.
-
-    First verdict wins. An archive that already carries one is left exactly
-    as it is and False is returned, so a late reaction or a second tap on an
-    old link cannot flip a decision somebody made in the meantime. The
-    Edit Archive modal's PATCH route is deliberately not routed through
-    here — it is the explicit way to change a verdict afterwards.
-
-    ``source`` says which path recorded it (#1898) and is stamped together
-    with the time the verdict landed; the capability token is spent rather
-    than deleted, so a later tap on the same link can be told what happened
-    instead of being called invalid.
-
-    ``reason`` is an optional failure_reason for a reject. Deliberately does
-    NOT commit — callers manage their own transaction.
-    """
-    if source not in VERDICT_SOURCES:
-        raise ValueError(f"Source must be one of {VERDICT_SOURCES}, got {source!r}")
-    if verdict not in VERDICTS:
-        raise ValueError(f"Verdict must be one of {VERDICTS}, got {verdict!r}")
-    if archive.user_verdict is not None:
-        return False
-
-    archive.user_verdict = verdict
-    stamp_verdict(archive, source)
-    retire_confirm_token(archive)
-    if reason is not None and verdict == "reject":
-        archive.failure_reason = reason
-
-    latest_entry = await db.scalar(
-        select(PrintLogEntry).where(PrintLogEntry.archive_id == archive.id).order_by(PrintLogEntry.id.desc()).limit(1)
-    )
-    if latest_entry is not None:
-        latest_entry.user_verdict = verdict
-        if reason is not None and verdict == "reject":
-            latest_entry.failure_reason = reason
-    return True
-
-
 async def resolve_pending_confirmation_as_good(db: AsyncSession, printer_id: int) -> int | None:
     """Mark the printer's latest pending-confirmation archive as good.
 
@@ -110,8 +136,10 @@ async def resolve_pending_confirmation_as_good(db: AsyncSession, printer_id: int
     plate release refers to the print that just came off the plate, not to
     older unanswered prompts.
 
-    Deliberately does NOT commit — both callers (the clear-plate route and the
-    queue dispatcher) manage their own transaction.
+    Mirrors the verdict onto the latest PrintLogEntry (the #1444 mirror) and
+    retires the one-tap capability token. Deliberately does NOT commit — both
+    callers (the clear-plate route and the queue dispatcher) manage their own
+    transaction.
 
     Returns the resolved archive id, or None when nothing was pending.
     """
@@ -129,7 +157,15 @@ async def resolve_pending_confirmation_as_good(db: AsyncSession, printer_id: int
     if archive is None:
         return None
 
-    await apply_outcome_verdict(db, archive, "good", source="plate_clear")
+    archive.user_verdict = "good"
+    stamp_verdict(archive, "plate_clear")
+    retire_confirm_token(archive)
+
+    latest_entry = await db.scalar(
+        select(PrintLogEntry).where(PrintLogEntry.archive_id == archive.id).order_by(PrintLogEntry.id.desc()).limit(1)
+    )
+    if latest_entry is not None:
+        latest_entry.user_verdict = "good"
 
     logger.info("[#1898] Plate clear defaulted archive %s to 'good' (printer %s)", archive.id, printer_id)
     return archive.id

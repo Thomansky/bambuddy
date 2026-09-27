@@ -24,6 +24,7 @@ from backend.app.models.notification import (
     TelegramPendingVerdict,
 )
 from backend.app.models.notification_template import NotificationTemplate
+from backend.app.services.print_confirmation import one_tap_url
 
 logger = logging.getLogger(__name__)
 
@@ -578,28 +579,14 @@ class NotificationService:
         message: str,
         image_data: bytes | None = None,
         buttons: list[dict] | None = None,
+        link_preview: bool = True,
     ) -> tuple[bool, str]:
         """Send notification via Telegram bot.
 
         ``buttons`` is one row of inline URL buttons (``{"text", "url"}``
         entries), used by the outcome-confirmation event (#1898) to put
-        one-tap Good/Reject under the message.
-        """
-        ok, status, _ = await self._send_telegram_message(config, message, image_data=image_data, buttons=buttons)
-        return ok, status
-
-    async def _send_telegram_message(
-        self,
-        config: dict,
-        message: str,
-        image_data: bytes | None = None,
-        buttons: list[dict] | None = None,
-    ) -> tuple[bool, str, dict | None]:
-        """Send via Telegram and also hand back the Bot API ``result`` (the sent Message).
-
-        The outcome confirmation in reaction mode (#3046) needs the
-        ``message_id`` from it to recognise the reaction later; every other
-        caller goes through ``_send_telegram`` and ignores it.
+        one-tap Good/Reject under the message. ``link_preview=False`` asks
+        Telegram not to fetch the first URL in the text for a preview card.
         """
         bot_token = config.get("bot_token", "").strip()
         chat_id = config.get("chat_id", "").strip()
@@ -646,6 +633,8 @@ class NotificationService:
                 "text": message,
                 "parse_mode": "Markdown",
             }
+            if not link_preview:
+                payload["disable_web_page_preview"] = True
             if message_thread_id is not None:
                 payload["message_thread_id"] = message_thread_id
             if with_buttons:
@@ -661,11 +650,6 @@ class NotificationService:
                 return None
             return f"Telegram error: {result.get('description', 'Unknown error')}"
 
-        def _sent_message(resp) -> dict | None:
-            """The message Telegram stored, so the reaction poller can find it again (#3046)."""
-            sent = resp.json().get("result")
-            return sent if isinstance(sent, dict) else None
-
         response = await _post(bool(buttons))
         failure = _failure(response)
         if failure and buttons:
@@ -679,63 +663,8 @@ class NotificationService:
             failure = _failure(response)
 
         if failure:
-            return False, failure, None
-        return True, "Message sent successfully", _sent_message(response)
-
-    async def _send_telegram_confirm_request(
-        self,
-        provider: NotificationProvider,
-        config: dict,
-        message: str,
-        db: AsyncSession | None,
-        image_data: bytes | None,
-        buttons: list[dict] | None,
-        archive_id: int | None,
-    ) -> tuple[bool, str]:
-        """Deliver the outcome prompt the way the provider's verdict mode asks (#3046).
-
-        "buttons" is the plain #1898 delivery. In "reactions" the inline
-        keyboard is dropped and the user answers with a thumbs-up/down on the
-        message itself; "both" keeps the keyboard as well. In either of those
-        the sent message is remembered in telegram_pending_verdicts so the
-        reaction poller can map the reaction back to the archive.
-        """
-        mode = provider.telegram_verdict_mode or "buttons"
-        if mode == "buttons":
-            return await self._send_telegram(config, message, image_data=image_data, buttons=buttons)
-
-        if mode == "reactions":
-            buttons = None
-        message = f"{message}\n\n{TELEGRAM_REACTION_HINT}"
-        ok, status, sent = await self._send_telegram_message(config, message, image_data=image_data, buttons=buttons)
-        if not ok:
-            return ok, status
-
-        message_id = (sent or {}).get("message_id")
-        if not isinstance(message_id, int) or message_id <= 0:
-            logger.warning("Telegram did not return a message_id for the outcome prompt; reactions cannot be matched")
-            return ok, status
-        if db is None or archive_id is None:
-            return ok, status
-
-        try:
-            db.add(
-                TelegramPendingVerdict(
-                    provider_id=provider.id,
-                    chat_id=str(((sent or {}).get("chat") or {}).get("id") or config.get("chat_id", "")).strip(),
-                    message_id=message_id,
-                    archive_id=archive_id,
-                    has_caption=image_data is not None,
-                    message_text=message,
-                )
-            )
-            await db.commit()
-        except Exception as e:
-            # The prompt went out; losing the reaction mapping is a degraded
-            # outcome, not a failed notification.
-            logger.warning("Failed to record the Telegram outcome prompt for reactions: %s", e)
-            await db.rollback()
-        return ok, status
+            return False, failure
+        return True, "Message sent successfully"
 
     async def _send_email(
         self,
@@ -935,6 +864,21 @@ class NotificationService:
         if payload_format == "slack":
             # Slack/Mattermost format - just text field
             data = {"text": f"*{title}*\n{message}"}
+            if event_type == "print_confirm_request":
+                # Slack and Mattermost fetch every URL in the text to build
+                # preview cards, and the outcome prompt (#1898) is the one
+                # message whose links are single-use capabilities — that fetch
+                # would be a machine answering the operator's question. Off
+                # here for the same reason Telegram's preview is.
+                #
+                # Only here: the slack payload never attaches image bytes (the
+                # base64 attach below is generic-format only), so unfurling is
+                # the only way a {finish_photo_url} in a print_complete body
+                # can render as a photo in the channel. Switching it off for
+                # every event would quietly take that away with no setting to
+                # get it back.
+                data["unfurl_links"] = False
+                data["unfurl_media"] = False
         else:
             # Generic format with custom field names
             custom_field_title = config.get("field_title", "title").strip() or "title"
@@ -1106,14 +1050,17 @@ class NotificationService:
                 return await self._send_callmebot(config, f"{title}\n{message}")
             elif provider.provider_type == "ntfy":
                 # Outcome confirmation (#1898): render the verdict capability
-                # links as one-tap buttons on the notification itself. http +
-                # GET so no browser needs to open; clear=true dismisses the
-                # notification once a button was tapped.
+                # links as one-tap buttons on the notification itself. http so
+                # no browser needs to open; POST because that is the method
+                # that records — a GET only opens the confirmation page, which
+                # is what keeps unfurlers from answering the prompt.
+                # clear=true dismisses the notification once a button was tapped.
                 ntfy_actions = None
                 good_url = (variables or {}).get("good_url")
                 reject_url = (variables or {}).get("reject_url")
                 # Buttons need absolute URLs; without a configured external_url
-                # the links are relative and the plain body text has to do.
+                # the links are relative, and the body's deep link into the
+                # archive has to do.
                 if (
                     event_type == "print_confirm_request"
                     and good_url
@@ -1122,8 +1069,8 @@ class NotificationService:
                     and reject_url.startswith("http")
                 ):
                     ntfy_actions = (
-                        f"http, Good, {good_url}, method=GET, clear=true; "
-                        f"http, Reject, {reject_url}, method=GET, clear=true"
+                        f"http, Good, {good_url}, method=POST, clear=true; "
+                        f"http, Reject, {reject_url}, method=POST, clear=true"
                     )
                 return await self._send_ntfy(
                     config, title, message, image_data=image_data, event_type=event_type, actions=ntfy_actions
@@ -1145,6 +1092,13 @@ class NotificationService:
                 # Outcome confirmation (#1898): inline URL buttons under the
                 # message — one tap records the verdict via the capability
                 # link. Same absolute-URL requirement as the ntfy actions.
+                # Telegram has no way to POST, so this is the one affordance
+                # that opens a browser, and it is the one that gets the one-tap
+                # marker: the page submits itself only for a URL that came off
+                # a button. Telegram does not fetch inline-keyboard URLs and
+                # nothing else can read them, so the marker never reaches a
+                # scanner — which is the difference between this and trusting
+                # the User-Agent.
                 tg_buttons = None
                 _tg_good = (variables or {}).get("good_url")
                 _tg_reject = (variables or {}).get("reject_url")
@@ -1156,22 +1110,23 @@ class NotificationService:
                     and _tg_reject.startswith("http")
                 ):
                     tg_buttons = [
-                        {"text": "\U0001f44d Good", "url": _tg_good},
-                        {"text": "\U0001f44e Reject", "url": _tg_reject},
+                        {"text": "\U0001f44d Good", "url": one_tap_url(_tg_good)},
+                        {"text": "\U0001f44e Reject", "url": one_tap_url(_tg_reject)},
                     ]
-                if event_type == "print_confirm_request":
-                    _archive_id = (variables or {}).get("archive_id")
-                    return await self._send_telegram_confirm_request(
-                        provider,
-                        config,
-                        f"*{title}*\n{message}",
-                        db,
-                        image_data,
-                        tg_buttons,
-                        _archive_id if isinstance(_archive_id, int) else None,
-                    )
+                # Telegram's servers GET the first URL in the text to build a
+                # preview card. An outcome prompt whose edited body still
+                # carries {good_url} would have that fetch answer the question
+                # before the operator saw it, so the preview is off for this
+                # event. Only for this one, for the same reason as the Slack
+                # unfurl in _send_webhook: when the finish photo is too large to attach,
+                # the preview is how a {finish_photo_url} in a print_complete
+                # body still shows up as a photo in the chat.
                 return await self._send_telegram(
-                    config, f"*{title}*\n{message}", image_data=image_data, buttons=tg_buttons
+                    config,
+                    f"*{title}*\n{message}",
+                    image_data=image_data,
+                    buttons=tg_buttons,
+                    link_preview=event_type != "print_confirm_request",
                 )
             elif provider.provider_type == "email":
                 # finish_photo_url is pulled from the rendered template variables
@@ -1347,6 +1302,30 @@ class NotificationService:
                     printer_id=printer_id,
                     printer_name=printer_name,
                 )
+
+    async def on_app_message(
+        self,
+        db: AsyncSession,
+        *,
+        sender: str,
+        title: str,
+        message: str,
+        url: str | None = None,
+    ) -> int:
+        """A message another application sends through Bambuddy.
+
+        Goes to every enabled channel with "Messages from connected apps" on,
+        through the same path as Bambuddy's own events: quiet hours, the daily
+        digest and the log (whose event type names the sender). The text is
+        the app's own; a link, when given, is appended so every channel type
+        carries it. Returns how many channels it was handed to.
+        """
+        providers = await self._get_providers_for_event(db, "on_app_message")
+        if not providers:
+            return 0
+        body = f"{message}\n{url}" if url else message
+        await self._send_to_providers(providers, title, body, db, event_type=f"app:{sender}"[:50])
+        return len(providers)
 
     async def on_print_start(
         self,
@@ -1548,7 +1527,6 @@ class NotificationService:
         good_url: str | None = None,
         reject_url: str | None = None,
         confirm_url: str | None = None,
-        archive_id: int | None = None,
     ):
         """Ask for a post-print outcome verdict (#1898).
 
@@ -1556,8 +1534,7 @@ class NotificationService:
         provider-level toggle exists to mute a channel, not to enable the
         feature. good_url / reject_url are the one-tap capability links
         (rendered as ntfy action buttons), confirm_url deep-links into the
-        archive's confirmation dialog in the web UI. archive_id lets a Telegram
-        provider in reaction mode (#3046) tie the sent message to the archive.
+        archive's confirmation dialog in the web UI.
         """
         providers = await self._get_providers_for_event(db, "on_print_confirm_request", printer_id)
         if not providers:
@@ -1576,8 +1553,6 @@ class NotificationService:
             variables["reject_url"] = reject_url
         if confirm_url:
             variables["confirm_url"] = confirm_url
-        if archive_id is not None:
-            variables["archive_id"] = archive_id
 
         image_data = None
         if archive_data:

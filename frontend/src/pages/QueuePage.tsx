@@ -1505,11 +1505,18 @@ export function QueuePage() {
   // History tab renders unconditionally so this no longer drives the UI.
   // Tabbed page structure: Active queue stays as the main view; History
   // and Timeline split off. Persists per-user via localStorage.
+  // /queue?batch=<id>: a link to one batch (e.g. from Bambuddy Orders), read once.
+  const [focusBatchId] = useState<number | null>(() => {
+    const id = Number(new URLSearchParams(window.location.search).get('batch'));
+    return Number.isInteger(id) && id > 0 ? id : null;
+  });
   const [activeTab, setActiveTab] = useState<'queue' | 'batches' | 'history' | 'timeline' | 'pipelines'>(() => {
     // URL deep-link wins so the legacy /pipelines/runs redirect lands on the
     // right tab. localStorage holds the per-user last-selected fallback.
     const search = new URLSearchParams(window.location.search);
     const url = search.get('tab');
+    // A link to one batch (/queue?batch=<id>) opens the tab that shows it.
+    if (search.get('batch')) return 'batches';
     if (url === 'pipelines' || url === 'history' || url === 'timeline' || url === 'queue' || url === 'batches') {
       return url;
     }
@@ -2613,7 +2620,7 @@ export function QueuePage() {
       {activeTab === 'pipelines' ? (
         <PipelineRunsView />
       ) : activeTab === 'batches' ? (
-        <BatchOrdersView hasPermission={hasPermission} t={t} />
+        <BatchOrdersView hasPermission={hasPermission} t={t} focusBatchId={focusBatchId} />
       ) : isLoading ? (
         <div className="text-center py-12 text-bambu-gray">{t('common.loading')}</div>
       ) : queue?.length === 0 ? (

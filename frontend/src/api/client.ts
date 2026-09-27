@@ -368,6 +368,25 @@ export interface LongLivedCameraToken {
   token: string | null;
 }
 
+// An external application that signs users in with their Bambuddy account.
+// `client_secret` is present only in the create / rotate responses.
+export interface ConnectedApp {
+  id: number;
+  name: string;
+  client_id: string;
+  redirect_uri: string;
+  enabled: boolean;
+  created_at: string;
+  last_used_at: string | null;
+  client_secret?: string;
+}
+
+export interface ConnectAuthorizeInfo {
+  app_name: string;
+  username: string;
+  already_granted: boolean;
+}
+
 // One row of the token-authenticated Cam Wall feed (#2531). Deliberately
 // smaller than PrinterStatus: no serial, no IP, no print filename — a kiosk URL
 // is not a secret, so the payload behind it must not be either.
@@ -391,6 +410,7 @@ export interface CamWallPrinter {
 export interface OverlayStatus {
   id: number;
   name: string;
+  model: string | null;
   camera_rotation: number;
   connected: boolean;
   state: string | null;
@@ -1424,6 +1444,7 @@ export interface APIKey {
   can_manage_projects: boolean;
   can_access_cloud: boolean;
   can_update_energy_cost: boolean;
+  can_send_notifications: boolean;
   printer_ids: number[] | null;
   enabled: boolean;
   last_used: string | null;
@@ -1443,6 +1464,7 @@ export interface APIKeyCreate {
   can_manage_projects?: boolean;
   can_access_cloud?: boolean;
   can_update_energy_cost?: boolean;
+  can_send_notifications?: boolean;
   printer_ids?: number[] | null;
   expires_at?: string | null;
 }
@@ -1463,6 +1485,7 @@ export interface APIKeyUpdate {
   can_manage_projects?: boolean;
   can_access_cloud?: boolean;
   can_update_energy_cost?: boolean;
+  can_send_notifications?: boolean;
   printer_ids?: number[] | null;
   enabled?: boolean;
   expires_at?: string | null;
@@ -2927,6 +2950,9 @@ export interface PrintBatch {
   project_id: number | null;
   due_date: string | null;
   notes: string | null;
+  /** Set when an integration (e.g. a shop connector) created the batch. */
+  external_source: string | null;
+  external_ref: string | null;
   pending_count: number;
   printing_count: number;
   completed_count: number;
@@ -3240,13 +3266,13 @@ export interface NotificationProvider {
   on_plate_clear_required: boolean;
   // Post-print outcome confirmation (#1898)
   on_print_confirm_request: boolean;
-  telegram_verdict_mode: TelegramVerdictMode;
   // Bed cooled
   on_bed_cooled: boolean;
   on_ha_sensor_alert: boolean;
   on_location_ha_sensor_alert: boolean;
   // First layer complete
   on_first_layer_complete: boolean;
+  on_app_message: boolean;
   // Inventory stock alerts
   on_stock_reorder_alert: boolean;
   on_stock_break_alert: boolean;
@@ -3309,13 +3335,13 @@ export interface NotificationProviderCreate {
   on_plate_clear_required?: boolean;
   // Post-print outcome confirmation (#1898)
   on_print_confirm_request?: boolean;
-  telegram_verdict_mode?: TelegramVerdictMode;
   // Bed cooled
   on_bed_cooled?: boolean;
   on_ha_sensor_alert?: boolean;
   on_location_ha_sensor_alert?: boolean;
   // First layer complete
   on_first_layer_complete?: boolean;
+  on_app_message?: boolean;
   // Inventory stock alerts
   on_stock_reorder_alert?: boolean;
   on_stock_break_alert?: boolean;
@@ -3371,13 +3397,13 @@ export interface NotificationProviderUpdate {
   on_plate_clear_required?: boolean;
   // Post-print outcome confirmation (#1898)
   on_print_confirm_request?: boolean;
-  telegram_verdict_mode?: TelegramVerdictMode;
   // Bed cooled
   on_bed_cooled?: boolean;
   on_ha_sensor_alert?: boolean;
   on_location_ha_sensor_alert?: boolean;
   // First layer complete
   on_first_layer_complete?: boolean;
+  on_app_message?: boolean;
   // Inventory stock alerts
   on_stock_reorder_alert?: boolean;
   on_stock_break_alert?: boolean;
@@ -7442,6 +7468,30 @@ export const api = {
   // WebSocket handshake, so the token rides in the ?token= query param.
   getWebSocketToken: () =>
     request<{ token: string }>('/auth/ws-token', { method: 'POST' }),
+
+  // Connected apps: sign-in to external applications with Bambuddy
+  listConnectedApps: () => request<ConnectedApp[]>('/connect/apps'),
+  createConnectedApp: (payload: { name: string; redirect_uri: string }) =>
+    request<ConnectedApp>('/connect/apps', { method: 'POST', body: JSON.stringify(payload) }),
+  updateConnectedApp: (id: number, payload: { name?: string; redirect_uri?: string; enabled?: boolean }) =>
+    request<ConnectedApp>(`/connect/apps/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  rotateConnectedAppSecret: (id: number) =>
+    request<ConnectedApp>(`/connect/apps/${id}/rotate-secret`, { method: 'POST' }),
+  deleteConnectedApp: (id: number) => request<void>(`/connect/apps/${id}`, { method: 'DELETE' }),
+  getConnectAuthorizeInfo: (clientId: string, redirectUri: string) =>
+    request<ConnectAuthorizeInfo>(
+      `/connect/authorize/info?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}`,
+    ),
+  connectAuthorize: (payload: {
+    client_id: string;
+    redirect_uri: string;
+    code_challenge: string;
+    code_challenge_method: 'S256';
+  }) =>
+    request<{ code: string; redirect_uri: string }>('/connect/authorize', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 
   // Long-lived camera tokens (#1108, #2531)
   createLongLivedCameraToken: (payload: {

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.auth import (
     RequirePermissionIfAuthEnabled,
+    ScopedCaller,
     caller_is_api_key,
     require_auth_if_enabled,
     require_energy_cost_update,
@@ -471,7 +472,7 @@ class ElectricityPriceUpdate(BaseModel):
 async def update_electricity_price(
     payload: ElectricityPriceUpdate,
     db: AsyncSession = Depends(get_db),
-    _: User | None = Depends(require_energy_cost_update()),
+    _: ScopedCaller = Depends(require_energy_cost_update()),
     _is_api_key: bool = Depends(caller_is_api_key),
 ):
     """Update the per-kWh electricity cost used by the energy-tracking pipeline.

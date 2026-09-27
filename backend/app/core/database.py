@@ -293,6 +293,7 @@ async def init_db():
         auth_ephemeral,
         bug_report,
         color_catalog,
+        connected_app,
         external_link,
         filament,
         filament_sku_settings,
@@ -1706,6 +1707,31 @@ _LEGACY_FAILURE_REASON_LABELS: dict[str, str] = {
 }
 
 
+async def _table_has_column(conn, table: str, column: str) -> bool:
+    """Whether ``table`` has ``column``, on either dialect.
+
+    ``table`` is interpolated into the SQLite PRAGMA (it cannot be bound), so
+    callers pass literals only.
+    """
+    from sqlalchemy import text
+
+    if is_sqlite():
+        result = await conn.execute(text(f"PRAGMA table_info({table})"))
+        return any(row[1] == column for row in result)
+    result = await conn.execute(
+        text("SELECT 1 FROM information_schema.columns WHERE table_name = :table AND column_name = :col"),
+        {"table": table, "col": column},
+    )
+    return result.first() is not None
+
+
+async def _sqlite_table_exists(conn, name: str) -> bool:
+    from sqlalchemy import text
+
+    result = await conn.execute(text("SELECT 1 FROM sqlite_master WHERE name = :name"), {"name": name})
+    return result.first() is not None
+
+
 async def _migrate_failure_reason_vocabulary(conn):
     """Fold historical failure-reason labels onto the canonical keys (#2974).
 
@@ -1738,6 +1764,8 @@ async def _migrate_failure_reason_vocabulary(conn):
         if label != key:
             by_key[key].append(label)
 
+    all_labels = [label for labels in by_key.values() for label in labels]
+
     total = 0
     async with conn.begin_nested():
         # nosec B608 — the only interpolated fragment is `table`, which the loop
@@ -1745,6 +1773,30 @@ async def _migrate_failure_reason_vocabulary(conn):
         # Both the key and the label list are bound parameters. A table name
         # cannot be expressed as one, which is why it is interpolated at all.
         for table in ("print_archives", "print_log_entries"):
+            # A database older than #1378 has no print_log_entries.failure_reason
+            # yet (a later ALTER in run_migrations adds it). Such a table cannot
+            # hold a legacy label, and querying it crashed startup with "no such
+            # column: failure_reason".
+            if not await _table_has_column(conn, table, "failure_reason"):
+                continue
+            has_work = (
+                await conn.execute(
+                    text(
+                        f"SELECT 1 FROM {table} WHERE failure_reason IN :labels LIMIT 1"  # noqa: S608  # nosec B608
+                    ).bindparams(bindparam("labels", expanding=True)),
+                    {"labels": all_labels},
+                )
+            ).first() is not None
+            if not has_work:
+                continue
+            if table == "print_archives" and is_sqlite() and await _sqlite_table_exists(conn, "archive_fts"):
+                # Same trap as the plate_id backfill further down: archives
+                # created before the external-content FTS index existed were
+                # never indexed, and the AFTER UPDATE trigger's FTS 'delete' on
+                # such a row fails with "database disk image is malformed".
+                # Rebuild first so every row is present. Only when there is
+                # work, since a rebuild re-reads every archive.
+                await conn.execute(text("INSERT INTO archive_fts(archive_fts) VALUES('rebuild')"))
             for key, labels in by_key.items():
                 result = await conn.execute(
                     text(
@@ -5271,45 +5323,19 @@ async def run_migrations(conn):
     await _safe_execute(
         conn, "ALTER TABLE notification_providers ADD COLUMN on_print_confirm_request BOOLEAN DEFAULT TRUE"
     )
-
-    # Migration: Telegram verdict-by-reaction (#3046). Per-provider mode plus
-    # the table of delivered prompts the reaction poller matches updates
-    # against. create_all covers fresh installs; this covers upgrades.
-    await _safe_execute(
-        conn, "ALTER TABLE notification_providers ADD COLUMN telegram_verdict_mode VARCHAR(16) DEFAULT 'buttons'"
-    )
+    # The one-tap verdict route looks archives up by this token and runs with no
+    # authentication, so an upgraded install needs the index too — without it
+    # every tap, and every unauthenticated request carrying a bogus token, is a
+    # sequential scan of print_archives.
     await _safe_execute(
         conn,
-        """
-        CREATE TABLE IF NOT EXISTS telegram_pending_verdicts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            provider_id INTEGER NOT NULL REFERENCES notification_providers(id) ON DELETE CASCADE,
-            chat_id VARCHAR(64) NOT NULL,
-            message_id INTEGER NOT NULL,
-            archive_id INTEGER NOT NULL REFERENCES print_archives(id) ON DELETE CASCADE,
-            has_caption BOOLEAN DEFAULT FALSE,
-            message_text TEXT,
-            created_at DATETIME
-        )
-        """
-        if is_sqlite()
-        else """
-        CREATE TABLE IF NOT EXISTS telegram_pending_verdicts (
-            id SERIAL PRIMARY KEY,
-            provider_id INTEGER NOT NULL REFERENCES notification_providers(id) ON DELETE CASCADE,
-            chat_id VARCHAR(64) NOT NULL,
-            message_id INTEGER NOT NULL,
-            archive_id INTEGER NOT NULL REFERENCES print_archives(id) ON DELETE CASCADE,
-            has_caption BOOLEAN DEFAULT FALSE,
-            message_text TEXT,
-            created_at TIMESTAMP
-        )
-        """,
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_print_archives_confirm_token ON print_archives (confirm_token)",
     )
-    await _safe_execute(
-        conn,
-        "CREATE INDEX IF NOT EXISTS ix_telegram_pending_verdicts_created_at ON telegram_pending_verdicts (created_at)",
-    )
+    # Migration: take the capability URLs out of the outcome prompt's body
+    # (#1898). Seeding only ever inserts a template that is missing, so an
+    # install that already ran an earlier build of this feature would keep
+    # sending the verdict links as body text for every channel.
+    await _migrate_confirm_prompt_body_template(conn)
 
     # Migration: rename the ha_sensor_alert template (#2824). "Home Assistant
     # Sensor Alert" was fine as a name while it was the only such template;
@@ -5443,6 +5469,60 @@ async def run_migrations(conn):
     # Migration: drop the AMS slot markers an older Bambuddy wrote into
     # Spoolman and the location sync then imported as storage locations.
     await _migrate_drop_ams_slot_locations(conn)
+
+    # Migration: link a batch to the external record that asked for it (a shop
+    # order an integration turned into prints). The unique index is what makes
+    # a retried create safe; both columns are new, so no row can violate it.
+    await _safe_execute(conn, "ALTER TABLE print_batches ADD COLUMN external_source VARCHAR(32)")
+    await _safe_execute(conn, "ALTER TABLE print_batches ADD COLUMN external_ref VARCHAR(255)")
+    await _safe_execute(
+        conn,
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_print_batches_external ON print_batches (external_source, external_ref)",
+    )
+
+    # Migration: messages from other applications through the notification
+    # channels. Both flags default off, so no channel starts delivering them and
+    # no existing API key gains the right to send them on upgrade. BOOLEAN
+    # DEFAULT FALSE is accepted by SQLite and PostgreSQL alike. The backfill
+    # covers a table create_all() already gave the column (the ALTER is then
+    # swallowed as a duplicate and existing rows keep NULL; see the stock alert
+    # flags above).
+    await _safe_execute(conn, "ALTER TABLE notification_providers ADD COLUMN on_app_message BOOLEAN DEFAULT FALSE")
+    await _safe_execute(conn, "ALTER TABLE api_keys ADD COLUMN can_send_notifications BOOLEAN DEFAULT FALSE")
+    async with conn.begin_nested():
+        await conn.execute(
+            text("UPDATE notification_providers SET on_app_message = :off WHERE on_app_message IS NULL"), {"off": False}
+        )
+        await conn.execute(
+            text("UPDATE api_keys SET can_send_notifications = :off WHERE can_send_notifications IS NULL"),
+            {"off": False},
+        )
+
+
+async def _migrate_confirm_prompt_body_template(conn) -> None:
+    """Replace the one-tap verdict URLs in the outcome prompt's body (#1898).
+
+    The first shape of this template put ``{good_url}`` and ``{reject_url}``
+    into the message body, where a link unfurler, a mail gateway or a proxy
+    reaches them and spends the single-use token before the operator has read
+    the question. The body now carries ``{confirm_url}``, which only opens the
+    archive in Bambuddy; the capability links travel in the ntfy action buttons
+    and the Telegram inline keyboard instead.
+
+    Rewrites only a body that is still the old default verbatim — an admin who
+    edited the template keeps their own text. Same shape as the two template
+    renames below.
+    """
+    from sqlalchemy import text
+
+    await conn.execute(
+        text("UPDATE notification_templates SET body_template = :new WHERE event_type = :et AND body_template = :old"),
+        {
+            "new": "{printer}: {filename}\nConfirm: {confirm_url}",
+            "et": "print_confirm_request",
+            "old": "{printer}: {filename}\nGood: {good_url}\nReject: {reject_url}",
+        },
+    )
 
 
 async def _migrate_create_supplier_tables(conn) -> None:

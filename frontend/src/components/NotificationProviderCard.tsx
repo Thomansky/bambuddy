@@ -129,12 +129,6 @@ export function NotificationProviderCard({ provider, onEdit }: NotificationProvi
             {provider.on_print_confirm_request && (
               <span className="px-2 py-0.5 bg-teal-100 dark:bg-teal-500/20 text-teal-700 dark:text-teal-400 text-xs rounded">{t('notifications.printConfirmRequest')}</span>
             )}
-            {provider.provider_type === 'telegram' && provider.on_print_confirm_request && provider.telegram_verdict_mode === 'reactions' && (
-              <span className="px-2 py-0.5 bg-sky-100 dark:bg-sky-500/20 text-sky-700 dark:text-sky-400 text-xs rounded">{t('notifications.telegramVerdictBadgeReactions')}</span>
-            )}
-            {provider.provider_type === 'telegram' && provider.on_print_confirm_request && provider.telegram_verdict_mode === 'both' && (
-              <span className="px-2 py-0.5 bg-sky-100 dark:bg-sky-500/20 text-sky-700 dark:text-sky-400 text-xs rounded">{t('notifications.telegramVerdictBadgeBoth')}</span>
-            )}
             {provider.on_print_failed && (
               <span className="px-2 py-0.5 bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-400 text-xs rounded">{t('notifications.failed')}</span>
             )}
@@ -194,6 +188,9 @@ export function NotificationProviderCard({ provider, onEdit }: NotificationProvi
             )}
             {provider.on_first_layer_complete && (
               <span className="px-2 py-0.5 bg-emerald-100 dark:bg-emerald-600/20 text-emerald-700 dark:text-emerald-300 text-xs rounded">{t('notifications.firstLayer')}</span>
+            )}
+            {provider.on_app_message && (
+              <span className="px-2 py-0.5 bg-sky-100 dark:bg-sky-500/20 text-sky-700 dark:text-sky-400 text-xs rounded">{t('notifications.appMessagesBadge')}</span>
             )}
             {provider.on_print_missing_spool_assignment && (
               <span className="px-2 py-0.5 bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 text-xs rounded">{t('notifications.missingSpoolAssignmentLabel')}</span>
@@ -677,6 +674,17 @@ export function NotificationProviderCard({ provider, onEdit }: NotificationProvi
                   <Toggle
                     checked={provider.on_queue_completed ?? false}
                     onChange={(checked) => updateMutation.mutate({ on_queue_completed: checked })}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-white">{t('notifications.appMessages')}</p>
+                    <p className="text-xs text-bambu-gray">{t('notifications.appMessagesDescription')}</p>
+                  </div>
+                  <Toggle
+                    checked={provider.on_app_message ?? false}
+                    onChange={(checked) => updateMutation.mutate({ on_app_message: checked })}
                   />
                 </div>
               </div>

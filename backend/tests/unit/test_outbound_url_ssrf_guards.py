@@ -615,6 +615,7 @@ NOT_A_FETCH_TARGET = {
     ("SystemConfigRequest", "backend_url"),
     ("ExternalLinkCreate", "url"),  # sidebar link, rendered in the UI, never requested
     ("ExternalLinkUpdate", "url"),
+    ("AppMessage", "url"),  # an app's link, appended to the notification text; never requested
     ("FileUpdate", "external_url"),  # library file link (#3077), rendered in the UI, never fetched
     ("MaintenanceTypeCreate", "wiki_url"),  # documentation link surfaced in the UI/notifications
     ("MaintenanceTypeUpdate", "wiki_url"),

@@ -40,7 +40,12 @@ from backend.app.services.archive import ArchiveService
 from backend.app.services.bambu_ftp import ftps_handshake_blocked, list_files_result_async
 from backend.app.services.design_settings import overrides_from_config
 from backend.app.services.filament_requirements import annotate_rack_groups
-from backend.app.services.print_confirmation import retire_confirm_token, stamp_verdict
+from backend.app.services.print_confirmation import (
+    is_one_tap_request,
+    is_unattended_fetch,
+    retire_confirm_token,
+    stamp_verdict,
+)
 from backend.app.services.print_storage import (
     REASON_FTP_TRANSFER_FAILED,
     REASON_FTPS_COOLOFF,
@@ -374,7 +379,9 @@ def archive_to_response(
         "user_verdict": archive.user_verdict,
         "user_verdict_source": archive.user_verdict_source,
         "user_verdict_at": archive.user_verdict_at,
-        "confirm_requested": archive.confirm_requested,
+        # bool() because the column is nullable to match the migration; the
+        # response contract stays a strict bool either way.
+        "confirm_requested": bool(archive.confirm_requested),
         "quantity": archive.quantity,
         "energy_kwh": archive.energy_kwh,
         "energy_cost": archive.energy_cost,
@@ -3497,7 +3504,120 @@ async def _render_already_answered_page(db: AsyncSession, archive: PrintArchive)
     )
 
 
+def _render_confirm_prompt_page(request: Request, archive: PrintArchive, verdict: str) -> str:
+    """The page a one-tap verdict link opens. It has recorded nothing yet.
+
+    GET is where link unfurlers, mail-security scanners and browser prefetchers
+    arrive, uninvited and within seconds of the message being sent, so GET
+    writes nothing at all -- the verdict is recorded by the form below, over
+    POST, which none of them issue.
+
+    The form submits itself only for a page opened from a notification button,
+    which is what keeps the operator at one tap. The marker for that
+    (``?tap=1``) is put on the Telegram inline keyboard's URLs and nowhere else
+    -- never on a URL that travels in message text -- so a mail-security
+    sandbox that renders HTML and runs JavaScript cannot press the button for
+    the operator: it only ever sees the unmarked URL out of the body. The
+    User-Agent heuristic still runs on top of that, but it is no longer the
+    only thing between a scanner and the write; it cannot be, because such a
+    sandbox sends an ordinary Chrome string.
+
+    Every other arrival -- an unmarked link somebody typed or mailed, a browser
+    with JavaScript off -- gets the same page and presses the button.
+    """
+    name = html_escape(archive.print_name or archive.filename or "")
+    label = _VERDICT_LABELS.get(verdict, verdict)
+    # No action attribute: the form posts back to the URL the page was loaded
+    # from, so it works behind a reverse proxy and on a host external_url does
+    # not name.
+    form = (
+        "<form method='post' id='confirm-form'>"
+        "<button type='submit' style='font: inherit; font-size:1.1rem; padding:0.9rem 2rem;"
+        " border:0; border-radius:0.5rem; background:#00ae42; color:#fff'>Yes, record it</button>"
+        "</form>"
+    )
+    # The SPA's CSP allows inline scripts only with the per-request nonce the
+    # security-headers middleware mints (main.py). Without one -- no middleware,
+    # an unmarked URL, or an unattended-looking caller -- the page simply waits
+    # for the button.
+    nonce = getattr(request.state, "csp_nonce", None)
+    script = ""
+    if nonce and is_one_tap_request(request.query_params) and not is_unattended_fetch(request.method, request.headers):
+        script = (
+            f"<script nonce='{html_escape(nonce, quote=True)}'>"
+            "document.getElementById('confirm-form').submit();</script>"
+        )
+    return _confirm_page(
+        "&#63;",
+        "Confirm this outcome",
+        f"<p style='color:#9ca3af'>{name}</p>"
+        f"<p style='color:#9ca3af'>Record this print as <strong>{label}</strong>?</p>"
+        f"{form}{script}",
+    )
+
+
+def _confirm_response(html: str):
+    """The one-tap pages, never cached.
+
+    A proxy holding on to "Saved" or to the prompt would answer a later tap
+    from its cache, and the prompt page is a capability URL either way.
+    """
+    from fastapi.responses import HTMLResponse
+
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+
+async def _load_confirmable_archive(db: AsyncSession, token: str, verdict: str) -> PrintArchive:
+    """Resolve a one-tap capability token, or raise the route's 400/404."""
+    if verdict not in ("good", "reject"):
+        raise HTTPException(400, "Verdict must be 'good' or 'reject'")
+
+    result = await db.execute(
+        select(PrintArchive).where(PrintArchive.confirm_token == token, PrintArchive.confirm_token.isnot(None))
+    )
+    archive = result.scalar_one_or_none()
+    if not archive:
+        raise HTTPException(404, "Confirmation link is invalid or was already used")
+    return archive
+
+
 @router.get("/confirm/{token}/{verdict}")
+async def confirm_outcome_page(
+    request: Request,
+    token: str,
+    verdict: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Open a one-tap verdict link. Reads only — the verdict is recorded by POST.
+
+    This used to be the route that recorded, and that was the defect: a GET
+    that changes state is answered by everything that walks a URL. Telegram
+    and Slack fetch the links in a message body to build a preview card, mail
+    gateways detonate them before delivery, browsers prefetch them — any one
+    of those spent the single-use token and settled the outcome before the
+    operator had read the question, always in the "good" direction because
+    good_url came first. Suppressing previews per channel does not cover the
+    proxies and scanners in between; only removing the write from GET does.
+
+    So GET now hands back the prompt page and nothing else. The page's form
+    POSTs to this same URL, and :func:`confirm_outcome_by_token` records it.
+    The human cost is zero for the path the feature is built around: a URL
+    opened from a notification button carries ``?tap=1`` and the page submits
+    itself, so that tap is still the only tap. Nothing else gets that script,
+    including a scanner that runs JavaScript -- the marker is on the buttons,
+    not in the message text a scanner reads.
+    """
+    archive = await _load_confirmable_archive(db, token, verdict)
+
+    if archive.confirm_token_used_at is not None:
+        # Answered already — by hand, by the other link, by the plate-clear
+        # default or by a reaction. Report what is on file and change nothing.
+        return _confirm_response(await _render_already_answered_page(db, archive))
+
+    return _confirm_response(_render_confirm_prompt_page(request, archive, verdict))
+
+
+@router.post("/confirm/{token}/{verdict}")
 async def confirm_outcome_by_token(
     token: str,
     verdict: str,
@@ -3510,35 +3630,38 @@ async def confirm_outcome_by_token(
     only ever grants writing good/reject on that one archive, exactly once.
     "Exactly once" is enforced by ``confirm_token_used_at`` rather than by
     dropping the token value, so a link for a print that was already answered
-    can be recognised and explained instead of looking broken. GET rather than
-    POST so it works as a plain link in every notification channel and as an
-    ntfy action button. Returns a small HTML page for the phone browser.
+    can be recognised and explained instead of looking broken.
+
+    POST is what keeps the capability the operator's: unfurlers, scanners and
+    prefetchers issue GET, and the GET route above writes nothing. The two
+    callers that reach here are the prompt page's form and the ntfy action
+    button, which performs its own request from the phone and is configured
+    with ``method=POST``. Returns a small HTML page for the phone browser.
     """
-    from fastapi.responses import HTMLResponse
-
-    if verdict not in ("good", "reject"):
-        raise HTTPException(400, "Verdict must be 'good' or 'reject'")
-
-    result = await db.execute(
-        select(PrintArchive).where(PrintArchive.confirm_token == token, PrintArchive.confirm_token.isnot(None))
-    )
-    archive = result.scalar_one_or_none()
-    if not archive:
-        raise HTTPException(404, "Confirmation link is invalid or was already used")
-
-    from backend.app.services.print_confirmation import apply_outcome_verdict
+    archive = await _load_confirmable_archive(db, token, verdict)
 
     if archive.confirm_token_used_at is not None:
-        # Answered already — by hand, by the other link, by the plate-clear
-        # default or by a reaction. Report what is on file and change nothing.
-        return HTMLResponse(await _render_already_answered_page(db, archive))
+        return _confirm_response(await _render_already_answered_page(db, archive))
 
-    await apply_outcome_verdict(db, archive, verdict, source="link")
+    archive.user_verdict = verdict
+    stamp_verdict(archive, "link")
+    retire_confirm_token(archive)
+
+    # Same mirror as the PATCH route (#1444): verdict-aware statistics read
+    # print_log_entries, so the latest run must carry the verdict too.
+    from backend.app.models.print_log import PrintLogEntry
+
+    latest_entry = await db.scalar(
+        select(PrintLogEntry).where(PrintLogEntry.archive_id == archive.id).order_by(PrintLogEntry.id.desc()).limit(1)
+    )
+    if latest_entry is not None:
+        latest_entry.user_verdict = verdict
+
     await db.commit()
 
     label = "Good part" if verdict == "good" else "Rejected"
     name = archive.print_name or archive.filename
-    return HTMLResponse(
+    return _confirm_response(
         _confirm_page(
             "&#10003;" if verdict == "good" else "&#10007;",
             label,

@@ -49,16 +49,13 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
   // Post-print outcome confirmation (#1898). Defaults ON — it only fires for
   // prints that opted in per-job, so the toggle exists to mute a channel.
   const [onPrintConfirmRequest, setOnPrintConfirmRequest] = useState(provider?.on_print_confirm_request ?? true);
-  // Telegram only (#3046): inline link buttons, a thumbs reaction, or both.
-  const [telegramVerdictMode, setTelegramVerdictMode] = useState<TelegramVerdictMode>(
-    provider?.telegram_verdict_mode ?? 'buttons'
-  );
   const [onBedCooled, setOnBedCooled] = useState(provider?.on_bed_cooled ?? false);
   const [onHaSensorAlert, setOnHaSensorAlert] = useState(provider?.on_ha_sensor_alert ?? false);
   const [onLocationHaSensorAlert, setOnLocationHaSensorAlert] = useState(
     provider?.on_location_ha_sensor_alert ?? false
   );
   const [onFirstLayerComplete, setOnFirstLayerComplete] = useState(provider?.on_first_layer_complete ?? false);
+  const [onAppMessage, setOnAppMessage] = useState(provider?.on_app_message ?? false);
 
   // Provider-specific config (scalar fields only — event_priorities is split out
   // into its own state because it's an object, not a string).
@@ -215,11 +212,11 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
       on_stock_break_alert: onStockBreakAlert,
       on_plate_clear_required: onPlateClearRequired,
       on_print_confirm_request: onPrintConfirmRequest,
-      telegram_verdict_mode: providerType === 'telegram' ? telegramVerdictMode : 'buttons',
       on_bed_cooled: onBedCooled,
       on_ha_sensor_alert: onHaSensorAlert,
       on_location_ha_sensor_alert: onLocationHaSensorAlert,
       on_first_layer_complete: onFirstLayerComplete,
+      on_app_message: onAppMessage,
     };
 
     if (isEditing) {
@@ -744,6 +741,18 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
                   </div>
                   <Toggle checked={onStockBreakAlert} onChange={setOnStockBreakAlert} />
                 </div>
+              </div>
+            </div>
+
+            {/* Messages other applications send (POST /notifications/app-message) */}
+            <div className="space-y-2 p-3 bg-bambu-dark rounded-lg">
+              <p className="text-xs text-bambu-gray uppercase tracking-wide mb-2">{t('notifications.connectedApps')}</p>
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-sm text-white">{t('notifications.appMessages')}</span>
+                  <span className="text-xs text-bambu-gray ml-1">{t('notifications.appMessagesDescription')}</span>
+                </div>
+                <Toggle checked={onAppMessage} onChange={setOnAppMessage} />
               </div>
             </div>
 
