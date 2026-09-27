@@ -272,9 +272,45 @@ class MaintenanceHistoryResponse(MaintenanceHistoryBase):
     printer_maintenance_id: int
     performed_at: datetime
     hours_at_maintenance: float
+    performed_by: str | None = None
+    source: str = "manual"
+    run_id: int | None = None
 
     class Config:
         from_attributes = True
+
+
+class MaintenanceLogbookEntry(BaseModel):
+    """One line of the maintenance logbook.
+
+    ``kind`` "performed" is a maintenance marked done — by a person, or by a
+    calibration run that completed; "run" is a calibration that failed or was
+    cancelled, which reset nothing but belongs in the record all the same.
+    """
+
+    kind: str  # performed / run
+    id: int
+    at: UTCDatetime
+    printer_id: int
+    printer_name: str
+    maintenance_type_id: int
+    maintenance_type_name: str
+    maintenance_type_icon: str | None = None
+    outcome: str  # completed / failed / cancelled
+    # manual / automatic for an entry done; for a run, what started it
+    # (manual / due / schedule)
+    source: str
+    # What started the calibration behind an automatic entry, when known
+    trigger: str | None = None
+    hours: float | None = None  # the printer's hours at the time
+    performed_by: str | None = None
+    notes: str | None = None  # the note, or the run's error
+    run_id: int | None = None
+
+
+class MaintenanceLogbook(BaseModel):
+    entries: list[MaintenanceLogbookEntry]
+    total: int
 
 
 # Combined status response for frontend
@@ -305,6 +341,12 @@ class MaintenanceStatus(BaseModel):
     is_due: bool  # hours_until_due <= 0 OR days_until_due <= 0
     is_warning: bool  # within 10% of interval
     last_performed_at: datetime | None
+    # The newest logbook entry: the printer's hours then, who marked it done
+    # and their note, so the card can say when, at what and by whom.
+    last_performed_hours_at: float | None = None
+    last_performed_by: str | None = None
+    last_performed_notes: str | None = None
+    last_performed_source: str | None = None
     # Automatic action (#3127); action is None for reminder-only types and the
     # rest is then not meaningful
     action: str | None = None

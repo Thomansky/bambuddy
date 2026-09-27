@@ -5205,6 +5205,19 @@ async def run_migrations(conn):
     # A vision encoder run asks for its plate before it goes out (#3127 field
     # report): the moment it asked, so a release after it counts as the go-ahead.
     await _safe_execute(conn, "ALTER TABLE maintenance_runs ADD COLUMN plate_requested_at TIMESTAMP")
+    # The maintenance logbook: who marked an entry done, and whether a person
+    # or a calibration run did it. Entries written by a finished run before
+    # this existed carry the run's note, which is how they are recognised.
+    await _safe_execute(conn, "ALTER TABLE maintenance_history ADD COLUMN performed_by VARCHAR(150)")
+    await _safe_execute(conn, "ALTER TABLE maintenance_history ADD COLUMN source VARCHAR(16) DEFAULT 'manual'")
+    await _safe_execute(conn, "ALTER TABLE maintenance_history ADD COLUMN run_id INTEGER")
+    await conn.execute(
+        text(
+            "UPDATE maintenance_history SET source = 'automatic' "
+            "WHERE notes = 'Automatic calibration' AND (source IS NULL OR source = 'manual')"
+        )
+    )
+    await conn.execute(text("UPDATE maintenance_history SET source = 'manual' WHERE source IS NULL"))
     # Per-item notification mute (#3127). Defaults on so the due reminders
     # existing items send keep coming. TRUE is the spelling both dialects
     # apply (see the on_ha_sensor_alert note above).

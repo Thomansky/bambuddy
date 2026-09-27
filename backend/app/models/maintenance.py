@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, String, Text, func, text
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.core.database import Base
@@ -103,6 +103,13 @@ class MaintenanceHistory(Base):
     performed_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     hours_at_maintenance: Mapped[float] = mapped_column(Float, default=0.0)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The logbook's who and how: the user who marked it done (their name as it
+    # was then, so the entry survives a rename or a removed account), and
+    # whether a person did it or a calibration run finished it — that run's id
+    # when there was one.
+    performed_by: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    source: Mapped[str] = mapped_column(String(16), default="manual", server_default="manual")
+    run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Relationships
     printer_maintenance: Mapped["PrinterMaintenance"] = relationship(back_populates="history")
