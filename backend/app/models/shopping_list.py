@@ -20,4 +20,9 @@ class ShoppingListItem(Base):
     note: Mapped[str | None] = mapped_column(String(500))
     status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | purchased | received
     purchased_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Set when the line came from the product master data's reorder list
+    # (#3165): the variant it restocks and the supplier it is bought from.
+    # Goods-in of that variant ticks the line off.
+    variant_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    supplier_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     added_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

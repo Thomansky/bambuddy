@@ -5447,6 +5447,14 @@ async def run_migrations(conn):
     # nullable plain-integer reference, the same shape as filament_group_id.
     await _safe_execute(conn, "ALTER TABLE spool ADD COLUMN variant_id INTEGER")
     await _safe_execute(conn, "CREATE INDEX IF NOT EXISTS ix_spool_variant_id ON spool (variant_id)")
+    # Target stock per variant, and shopping-list lines that know which
+    # variant they restock and where it is bought (#3165).
+    await _safe_execute(conn, "ALTER TABLE filament_variants ADD COLUMN min_stock INTEGER")
+    await _safe_execute(conn, "ALTER TABLE filament_shopping_list ADD COLUMN variant_id INTEGER")
+    await _safe_execute(conn, "ALTER TABLE filament_shopping_list ADD COLUMN supplier_id INTEGER")
+    await _safe_execute(
+        conn, "CREATE INDEX IF NOT EXISTS ix_filament_shopping_list_variant_id ON filament_shopping_list (variant_id)"
+    )
 
 
 async def _migrate_create_supplier_tables(conn) -> None:

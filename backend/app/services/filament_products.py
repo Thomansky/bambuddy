@@ -7,6 +7,10 @@ read path (AMS mapping, the print dialog, statistics, Spoolman sync) reads the
 spool; edits here write through into that copy. The price is the exception:
 it is copied onto a spool when the spool is created and from then on stays
 what that spool cost, so a dearer next order never reprices the shelf.
+
+A variant can carry a target stock. The reorder list compares it with the
+spools that still count as stock and what the shopping list already waits
+for, and goods-in ticks the shopping list off again.
 """
 
 from __future__ import annotations
@@ -23,10 +27,12 @@ from backend.app.models.filament_product import (
     FilamentProductColor,
     FilamentProductSize,
     FilamentProductSupplier,
+    FilamentProductSupplierArticle,
     FilamentProductSupplierPrice,
     FilamentVariant,
     FilamentVariantCode,
 )
+from backend.app.models.shopping_list import ShoppingListItem
 from backend.app.models.spool import Spool
 from backend.app.models.supplier import Supplier
 from backend.app.services.supplier_links import apply_supplier_inheritance
@@ -49,6 +55,10 @@ COLOR_SPOOL_FIELDS = ("color_name", "rgba", "extra_colors", "effect_type")
 SIZE_SPOOL_FIELDS = ("label_weight", "core_weight", "core_weight_catalog_id")
 
 MAX_INTAKE_QUANTITY = 100
+# Shopping-list lines that are still coming: not yet bought, or bought and
+# not yet booked in.
+OPEN_ORDER_STATUSES = ("pending", "purchased")
+DEFAULT_LOW_STOCK_THRESHOLD = 20.0
 
 
 class ProductError(ValueError):
@@ -167,21 +177,71 @@ async def load_product(db: AsyncSession, product_id: int) -> FilamentProduct | N
     return result.scalars().unique().one_or_none()
 
 
-async def variant_stock(db: AsyncSession, variant_ids: list[int] | None = None) -> dict[int, tuple[int, float]]:
-    """Active spool count and remaining grams per variant."""
-    query = (
-        select(
-            Spool.variant_id,
-            func.count(Spool.id),
-            func.coalesce(func.sum(Spool.label_weight - Spool.weight_used), 0),
-        )
-        .where(Spool.variant_id.is_not(None), Spool.archived_at.is_(None))
-        .group_by(Spool.variant_id)
+@dataclass
+class VariantStock:
+    spools: int = 0
+    remaining_g: float = 0.0
+    # Spools above the low-stock threshold — what counts against the target.
+    # A roll that is nearly used up is on the shelf but no longer stock.
+    in_stock: int = 0
+
+
+async def low_stock_threshold(db: AsyncSession) -> float:
+    """The inventory's low-stock threshold in percent, as the spool list uses it."""
+    from backend.app.api.routes.settings import get_setting
+
+    value = await get_setting(db, "low_stock_threshold")
+    try:
+        return float(value) if value not in (None, "") else DEFAULT_LOW_STOCK_THRESHOLD
+    except ValueError:
+        return DEFAULT_LOW_STOCK_THRESHOLD
+
+
+def counts_as_stock(label_weight: int | None, weight_used: float | None, threshold_pct: float) -> bool:
+    """A spool counts as stock while its remainder is not below the threshold —
+    the same rule that marks spools low in the inventory."""
+    if not label_weight or label_weight <= 0:
+        return False
+    remaining = max(0.0, label_weight - (weight_used or 0))
+    return remaining / label_weight * 100 >= threshold_pct
+
+
+async def variant_stock(db: AsyncSession, variant_ids: list[int] | None = None) -> dict[int, VariantStock]:
+    """Active spools, remaining grams and spools that still count as stock,
+    per variant."""
+    threshold = await low_stock_threshold(db)
+    query = select(Spool.variant_id, Spool.label_weight, Spool.weight_used, Spool.low_stock_threshold_pct).where(
+        Spool.variant_id.is_not(None), Spool.archived_at.is_(None)
     )
     if variant_ids is not None:
         query = query.where(Spool.variant_id.in_(variant_ids))
-    rows = (await db.execute(query)).all()
-    return {row[0]: (int(row[1]), max(float(row[2]), 0.0)) for row in rows}
+    stock: dict[int, VariantStock] = defaultdict(VariantStock)
+    for variant_id, label_weight, weight_used, own_threshold in (await db.execute(query)).all():
+        entry = stock[variant_id]
+        entry.spools += 1
+        entry.remaining_g += max(0.0, (label_weight or 0) - (weight_used or 0))
+        if counts_as_stock(label_weight, weight_used, own_threshold if own_threshold is not None else threshold):
+            entry.in_stock += 1
+    return dict(stock)
+
+
+async def variant_on_order(db: AsyncSession, variant_ids: list[int] | None = None) -> dict[int, int]:
+    """Spools per variant on the shopping list and not booked in yet."""
+    query = (
+        select(ShoppingListItem.variant_id, func.coalesce(func.sum(ShoppingListItem.quantity_spools), 0))
+        .where(ShoppingListItem.variant_id.is_not(None), ShoppingListItem.status.in_(OPEN_ORDER_STATUSES))
+        .group_by(ShoppingListItem.variant_id)
+    )
+    if variant_ids is not None:
+        query = query.where(ShoppingListItem.variant_id.in_(variant_ids))
+    return {row[0]: int(row[1]) for row in (await db.execute(query)).all()}
+
+
+def shortfall(min_stock: int | None, in_stock: int, on_order: int) -> int:
+    """How many spools to order so the shelf reaches its target again."""
+    if not min_stock:
+        return 0
+    return max(0, min_stock - in_stock - on_order)
 
 
 # ---------------------------------------------------------------- saving
@@ -254,6 +314,9 @@ async def save_product(db: AsyncSession, product: FilamentProduct | None, data) 
     for row in supplier_rows:
         if any(key not in size_keys for key in (row.prices or {})):
             raise ProductError("A supplier price refers to a size that is not in the product")
+        for cell in getattr(row, "article_numbers", None) or {}:
+            if tuple(cell.split("|", 1)) not in pairs:
+                raise ProductError("A supplier article number refers to a combination that is not in the product")
     if supplier_ids:
         known = set((await db.execute(select(Supplier.id).where(Supplier.id.in_(supplier_ids)))).scalars().all())
         if known != set(supplier_ids):
@@ -338,6 +401,8 @@ async def save_product(db: AsyncSession, product: FilamentProduct | None, data) 
             await db.delete(row)
         await db.flush()
     preferred_taken = False
+    # Article numbers per combination wait until every combination has an id.
+    supplier_articles: list[tuple[FilamentProductSupplier, dict]] = []
     for incoming in supplier_rows:
         preferred = bool(incoming.preferred) and not preferred_taken
         preferred_taken = preferred_taken or preferred
@@ -349,6 +414,7 @@ async def save_product(db: AsyncSession, product: FilamentProduct | None, data) 
         )
         db.add(row)
         await db.flush()
+        supplier_articles.append((row, getattr(incoming, "article_numbers", None) or {}))
         for size_ref, price in (incoming.prices or {}).items():
             if price is not None:
                 db.add(
@@ -360,7 +426,7 @@ async def save_product(db: AsyncSession, product: FilamentProduct | None, data) 
 
     kept_size_ids = {row.id for row in size_by_key.values()}
     kept_color_ids = {row.id for row in color_by_key.values()}
-    wanted = {(color_by_key[v.color_key].id, size_by_key[v.size_key].id): v.price_override for v in data.variants}
+    wanted = {(color_by_key[v.color_key].id, size_by_key[v.size_key].id): v for v in data.variants}
 
     # --- variants that go away: refuse while active spools point at them
     doomed = [variant for pair, variant in existing_variants.items() if pair not in wanted]
@@ -379,18 +445,30 @@ async def save_product(db: AsyncSession, product: FilamentProduct | None, data) 
             .values(variant_id=None)
             .execution_options(synchronize_session=False)
         )
+        await _forget_orders(db, doomed_ids)
         for variant in doomed:
             await db.delete(variant)
         await db.flush()
 
-    for pair, price_override in wanted.items():
+    variant_by_pair: dict[tuple[int, int], FilamentVariant] = {}
+    for pair, incoming in wanted.items():
+        min_stock = getattr(incoming, "min_stock", None) or None
         variant = existing_variants.get(pair)
         if variant is None:
-            db.add(
-                FilamentVariant(product_id=product.id, color_id=pair[0], size_id=pair[1], price_override=price_override)
+            variant = FilamentVariant(
+                product_id=product.id,
+                color_id=pair[0],
+                size_id=pair[1],
+                price_override=incoming.price_override,
+                min_stock=min_stock,
             )
-        elif variant.price_override != price_override:
-            variant.price_override = price_override
+            db.add(variant)
+        else:
+            if variant.price_override != incoming.price_override:
+                variant.price_override = incoming.price_override
+            if variant.min_stock != min_stock:
+                variant.min_stock = min_stock
+        variant_by_pair[pair] = variant
 
     for size_id, row in existing_sizes.items():
         if size_id not in kept_size_ids:
@@ -398,6 +476,19 @@ async def save_product(db: AsyncSession, product: FilamentProduct | None, data) 
     for color_id, row in existing_colors.items():
         if color_id not in kept_color_ids:
             await db.delete(row)
+    await db.flush()
+
+    # --- the suppliers' article numbers per combination
+    for row, numbers in supplier_articles:
+        for cell, number in numbers.items():
+            number = _clean(number)
+            if not number:
+                continue
+            color_ref, size_ref = cell.split("|", 1)
+            variant = variant_by_pair[(color_by_key[color_ref].id, size_by_key[size_ref].id)]
+            db.add(
+                FilamentProductSupplierArticle(product_supplier_id=row.id, variant_id=variant.id, article_number=number)
+            )
     await db.flush()
 
     # --- write the changes through to the spools
@@ -414,6 +505,18 @@ async def save_product(db: AsyncSession, product: FilamentProduct | None, data) 
     return product, written
 
 
+async def _forget_orders(db: AsyncSession, variant_ids: list[int]) -> None:
+    """Shopping-list lines of combinations that go away stay on the list as
+    plain lines — somebody may have ordered them already."""
+    if variant_ids:
+        await db.execute(
+            update(ShoppingListItem)
+            .where(ShoppingListItem.variant_id.in_(variant_ids))
+            .values(variant_id=None)
+            .execution_options(synchronize_session=False)
+        )
+
+
 async def delete_product(db: AsyncSession, product: FilamentProduct) -> int:
     """Delete a product; its spools stay and simply lose the reference."""
     variant_ids = [variant.id for variant in product.variants]
@@ -426,6 +529,7 @@ async def delete_product(db: AsyncSession, product: FilamentProduct) -> int:
             .execution_options(synchronize_session=False)
         )
         unlinked = result.rowcount or 0
+        await _forget_orders(db, variant_ids)
     await db.delete(product)
     await db.flush()
     return unlinked
@@ -479,6 +583,8 @@ async def assign_code(db: AsyncSession, variant: FilamentVariant, code: str) -> 
 class IntakeResult:
     spool_ids: list[int]
     cost_per_kg: float | None
+    # Spools of it the shopping list was waiting for, now ticked off.
+    orders_settled: int = 0
 
 
 async def intake(
@@ -490,13 +596,16 @@ async def intake(
     price_vat_included: bool,
     location_id: int | None = None,
     note: str | None = None,
+    settle_orders: bool = True,
 ) -> IntakeResult:
     """Create ``quantity`` full spools of a variant, filled in completely.
 
     The price is the one confirmed at intake — normally the variant's, but a
     sale or another supplier can override it for this delivery — and is
     copied onto the spools as cost per kg. It is not linked: a later price
-    change reaches only spools created after it. The caller commits.
+    change reaches only spools created after it. With ``settle_orders`` the
+    delivery also ticks off what the shopping list was waiting for of this
+    variant. The caller commits.
     """
     if not 1 <= quantity <= MAX_INTAKE_QUANTITY:
         raise ProductError(f"Quantity must be between 1 and {MAX_INTAKE_QUANTITY}")
@@ -521,8 +630,194 @@ async def intake(
     await db.flush()
     for spool in spools:
         await apply_supplier_inheritance(db, spool)
+    settled = await settle_orders_for(db, variant.id, quantity) if settle_orders else 0
     logger.info("Intake: %d spool(s) of variant %d at %s/kg", quantity, variant.id, cost)
-    return IntakeResult(spool_ids=[spool.id for spool in spools], cost_per_kg=cost)
+    return IntakeResult(spool_ids=[spool.id for spool in spools], cost_per_kg=cost, orders_settled=settled)
+
+
+async def settle_orders_for(db: AsyncSession, variant_id: int, quantity: int) -> int:
+    """Tick a delivery off the shopping list: lines already bought first,
+    then the oldest. A line that is fully delivered leaves the list, the way
+    booking in from the list removes it; a partial delivery lowers it."""
+    rows = list(
+        (
+            await db.execute(
+                select(ShoppingListItem).where(
+                    ShoppingListItem.variant_id == variant_id, ShoppingListItem.status.in_(OPEN_ORDER_STATUSES)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    rows.sort(key=lambda row: (row.status != "purchased", row.id))
+    left = quantity
+    settled = 0
+    for row in rows:
+        if left <= 0:
+            break
+        take = min(left, row.quantity_spools or 0)
+        row.quantity_spools = (row.quantity_spools or 0) - take
+        left -= take
+        settled += take
+        if row.quantity_spools <= 0:
+            await db.delete(row)
+    if settled:
+        await db.flush()
+    return settled
+
+
+# ---------------------------------------------------------------- reorder
+
+
+def supplier_article_number(row: FilamentProductSupplier, variant_id: int) -> str | None:
+    """The supplier's number for one combination, else its product number."""
+    for article in row.articles:
+        if article.variant_id == variant_id:
+            return article.article_number
+    return row.article_number
+
+
+def _color_text(color: FilamentProductColor) -> str | None:
+    return color.color_name or (f"#{color.rgba[:6]}" if color.rgba else None)
+
+
+async def reorder_lines(db: AsyncSession) -> list[dict]:
+    """Every combination below its target, with what is missing and where it
+    can be bought — the usual supplier first."""
+    products = await load_products(db)
+    stock = await variant_stock(db)
+    ordered = await variant_on_order(db)
+    lines: list[dict] = []
+    for position, product in enumerate(products):
+        sizes = {size.id: size for size in product.sizes}
+        colors = {color.id: color for color in product.colors}
+        for variant in product.variants:
+            size = sizes.get(variant.size_id)
+            color = colors.get(variant.color_id)
+            if not variant.min_stock or size is None or color is None:
+                continue
+            here = stock.get(variant.id, VariantStock())
+            on_order = ordered.get(variant.id, 0)
+            missing = shortfall(variant.min_stock, here.in_stock, on_order)
+            if missing <= 0:
+                continue
+            lines.append(
+                {
+                    "variant_id": variant.id,
+                    "product_id": product.id,
+                    "product_label": product_label(product),
+                    "material_number": product.material_number,
+                    "color_name": color.color_name,
+                    "rgba": color.rgba,
+                    "extra_colors": color.extra_colors,
+                    "effect_type": color.effect_type,
+                    "label_weight": size.label_weight,
+                    "min_stock": variant.min_stock,
+                    "spools": here.spools,
+                    "in_stock": here.in_stock,
+                    "on_order": on_order,
+                    "shortfall": missing,
+                    "list_price": effective_price(variant, size),
+                    "price_vat_included": size.price_vat_included,
+                    "suppliers": [
+                        {
+                            "supplier_id": row.supplier_id,
+                            "supplier_name": row.supplier.name if row.supplier else "",
+                            "preferred": row.preferred,
+                            "article_number": supplier_article_number(row, variant.id),
+                            "price": intake_price(product, variant, size, row.supplier_id),
+                        }
+                        for row in product.suppliers
+                    ],
+                    "_order": (position, color.sort_order, color.id, size.label_weight),
+                }
+            )
+    lines.sort(key=lambda line: line["_order"])
+    for line in lines:
+        line.pop("_order")
+    return lines
+
+
+async def add_to_shopping_list(db: AsyncSession, items) -> dict:
+    """Put reorder lines on the shopping list.
+
+    Each line knows its variant and supplier, so goods-in can tick it off. A
+    line that is on the list already and not bought yet grows instead of
+    being listed twice. The caller commits.
+    """
+    added = merged = 0
+    for item in items:
+        if not 1 <= item.quantity <= MAX_INTAKE_QUANTITY:
+            raise ProductError(f"Quantity must be between 1 and {MAX_INTAKE_QUANTITY}")
+        variant = await find_variant(db, item.variant_id)
+        if variant is None:
+            raise ProductError(f"Unknown combination {item.variant_id}")
+        product = await load_product(db, variant.product_id)
+        supplier_row = None
+        if item.supplier_id is not None:
+            supplier_row = next((row for row in product.suppliers if row.supplier_id == item.supplier_id), None)
+            if supplier_row is None:
+                raise ProductError("The supplier does not carry this product")
+        existing = (
+            (
+                await db.execute(
+                    select(ShoppingListItem).where(
+                        ShoppingListItem.variant_id == variant.id,
+                        ShoppingListItem.supplier_id.is_(None)
+                        if item.supplier_id is None
+                        else ShoppingListItem.supplier_id == item.supplier_id,
+                        ShoppingListItem.status == "pending",
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if existing is not None:
+            existing.quantity_spools = (existing.quantity_spools or 0) + item.quantity
+            merged += 1
+            continue
+        note_parts = [format_weight(variant.size.label_weight)]
+        if supplier_row is not None:
+            note_parts.append(supplier_row.supplier.name if supplier_row.supplier else None)
+            note_parts.append(supplier_article_number(supplier_row, variant.id))
+        db.add(
+            ShoppingListItem(
+                material=product.material,
+                subtype=product.subtype,
+                brand=product.brand,
+                color_name=_color_text(variant.color),
+                quantity_spools=item.quantity,
+                note=" · ".join(part for part in note_parts if part),
+                status="pending",
+                variant_id=variant.id,
+                supplier_id=item.supplier_id,
+            )
+        )
+        added += 1
+    await db.flush()
+    return {"added": added, "merged": merged}
+
+
+async def receive_order(db: AsyncSession, item: ShoppingListItem) -> IntakeResult:
+    """Book a shopping-list line in as spools of its variant, priced from the
+    supplier it was bought at, and take it off the list. The caller commits."""
+    variant = await find_variant(db, item.variant_id) if item.variant_id else None
+    if variant is None:
+        raise ProductError("This line is not linked to a product combination")
+    product = await load_product(db, variant.product_id)
+    result = await intake(
+        db,
+        variant,
+        quantity=item.quantity_spools,
+        price_per_spool=intake_price(product, variant, variant.size, item.supplier_id),
+        price_vat_included=variant.size.price_vat_included,
+        settle_orders=False,
+    )
+    await db.delete(item)
+    await db.flush()
+    return result
 
 
 # ---------------------------------------------------------------- conversion

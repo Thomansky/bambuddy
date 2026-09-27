@@ -3928,6 +3928,14 @@ export interface FilamentVariant {
   /** Active spools and their remaining grams. */
   spool_count: number;
   remaining_g: number;
+  /** Spools that should be on the shelf; null = no target. */
+  min_stock: number | null;
+  /** Active spools above the low-stock threshold — what counts against the target. */
+  in_stock: number;
+  /** Spools on the shopping list and not booked in yet. */
+  on_order: number;
+  /** What the reorder list asks for. */
+  shortfall: number;
 }
 
 /** Where a product is bought: article number there, price per size there. */
@@ -3938,6 +3946,8 @@ export interface FilamentProductSupplier {
   /** The usual supplier — goods-in starts from it. */
   preferred: boolean;
   prices: { size_id: number; price: number }[];
+  /** The supplier's own number per colour × size; `article_number` covers the rest. */
+  articles: { variant_id: number; article_number: string }[];
 }
 
 export interface FilamentProduct {
@@ -3981,13 +3991,44 @@ export interface FilamentProductInput {
     price_vat_included: boolean;
   }[];
   colors: { id: number | null; key: string; color_name: string | null; rgba: string | null }[];
-  variants: { color_key: string; size_key: string; price_override: number | null }[];
-  /** Prices by the document's size key. */
+  variants: { color_key: string; size_key: string; price_override: number | null; min_stock?: number | null }[];
+  /** Prices by the document's size key; article numbers by "<colour key>|<size key>". */
   suppliers: {
     supplier_id: number;
     article_number: string | null;
     preferred: boolean;
     prices: Record<string, number | null>;
+    article_numbers?: Record<string, string | null>;
+  }[];
+}
+
+/** A combination below its target stock (#3165), and where to buy it. */
+export interface ProductReorderLine {
+  variant_id: number;
+  product_id: number;
+  product_label: string;
+  material_number: string | null;
+  color_name: string | null;
+  rgba: string | null;
+  extra_colors: string | null;
+  effect_type: string | null;
+  label_weight: number;
+  min_stock: number;
+  spools: number;
+  in_stock: number;
+  on_order: number;
+  shortfall: number;
+  /** The combination's own price, else its size's. */
+  list_price: number | null;
+  price_vat_included: boolean;
+  /** The usual supplier first. */
+  suppliers: {
+    supplier_id: number;
+    supplier_name: string;
+    preferred: boolean;
+    article_number: string | null;
+    /** What goods-in would propose at this supplier. */
+    price: number | null;
   }[];
 }
 
@@ -4281,6 +4322,9 @@ export interface ShoppingListItem {
   status: 'pending' | 'purchased' | 'received';
   purchased_at: string | null;
   added_at: string;
+  /** Set on lines from the product reorder list (#3165). */
+  variant_id?: number | null;
+  supplier_id?: number | null;
 }
 
 export interface ShoppingListItemCreate {
@@ -7305,9 +7349,23 @@ export const api = {
   deleteVariantCode: (codeId: number) =>
     request<{ status: string }>(`/inventory/products/codes/${codeId}`, { method: 'DELETE' }),
   intakeVariant: (variantId: number, data: ProductIntakeInput) =>
-    request<{ spool_ids: number[]; cost_per_kg: number | null }>(`/inventory/products/variants/${variantId}/intake`, {
+    request<{ spool_ids: number[]; cost_per_kg: number | null; orders_settled?: number }>(
+      `/inventory/products/variants/${variantId}/intake`,
+      {
+        method: 'POST',
+        body: JSON.stringify(data),
+      },
+    ),
+  getProductReorder: () =>
+    request<ProductReorderLine[]>('/inventory/products/reorder'),
+  addProductReorder: (items: { variant_id: number; quantity: number; supplier_id: number | null }[]) =>
+    request<{ added: number; merged: number }>('/inventory/products/reorder', {
       method: 'POST',
-      body: JSON.stringify(data),
+      body: JSON.stringify({ items }),
+    }),
+  receiveProductOrder: (itemId: number) =>
+    request<{ spool_ids: number[]; cost_per_kg: number | null }>(`/inventory/products/orders/${itemId}/receive`, {
+      method: 'POST',
     }),
   setSpoolSuppliers: (spoolId: number, links: SpoolSupplierLinkInput[]) =>
     request<SpoolSupplierLink[]>(`/inventory/spools/${spoolId}/suppliers`, {

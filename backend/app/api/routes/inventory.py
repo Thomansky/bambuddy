@@ -2977,6 +2977,9 @@ class ShoppingListItemResponse(BaseModel):
     status: str
     purchased_at: str | None
     added_at: str
+    # Lines from the product master data's reorder list (#3165).
+    variant_id: int | None = None
+    supplier_id: int | None = None
 
     class Config:
         from_attributes = True
@@ -3017,6 +3020,8 @@ async def get_shopping_list(
             status=i.status or "pending",
             purchased_at=i.purchased_at.isoformat() if i.purchased_at else None,
             added_at=i.added_at.isoformat() if i.added_at else "",
+            variant_id=i.variant_id,
+            supplier_id=i.supplier_id,
         )
         for i in items
     ]
