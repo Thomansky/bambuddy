@@ -6343,8 +6343,6 @@ export default {
     filamentCount_other: '{{count}} filamenten',
     eta: 'ETA {{minutes}} min',
     noPreview: 'Geen voorbeeld beschikbaar voor dit bestand',
-    fullscreen: 'Volledig scherm',
-    exitFullscreen: 'Volledig scherm afsluiten',
     pagination: {
       pageOf: 'Pagina {{current}} van {{total}}',
       prev: 'Vorige',

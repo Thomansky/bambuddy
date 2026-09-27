@@ -6331,8 +6331,6 @@ export default {
     filamentCount_other: "Філаментів: {{count}}",
     eta: "ETA {{minutes}} хв",
     noPreview: "Попередній перегляд цього файлу недоступний",
-    fullscreen: "Повний екран",
-    exitFullscreen: "Вийти з повноекранного режиму",
     pagination: {
       pageOf: "Сторінка {{current}} з {{total}}",
       prev: "Назад",

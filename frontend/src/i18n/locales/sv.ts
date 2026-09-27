@@ -3939,7 +3939,7 @@ errors: {
     linkToProjectOrArchive: 'Länka till projekt eller arkiv',
     generateThumbnail: 'Generera minibild',
     generateThumbnails: 'Generera minibilder',
-    generateThumbnailsForMissing: 'Generera minibilder för STL- och PDF-filer som saknar dem',
+    generateThumbnailsForMissing: 'Generera minibilder för STL- och PDF-filer utan förhandsvisning',
     gridView: 'Rutnätsvy',
     listView: 'Listvy',
     lowDiskSpaceWarning: 'Varning för lågt diskutrymme',
@@ -4049,9 +4049,9 @@ errors: {
     noPermissionDownload: 'Du har inte behörighet att ladda ner filer',
     noPermissionPreview: 'Du har inte behörighet att förhandsgranska filer',
     preview3d: '3D-förhandsgranskning',
-    // Dokumentförhandsgranskning i appen (#2976): PDF- och kalkylbladsfiler.
+    // Dokumentförhandsgranskning i appen (#2976): PDF- och kalkylarksfiler.
     preview: {
-      open: 'Förhandsgranska',
+      open: 'Förhandsgranskning',
       error: 'Den här filen kan inte förhandsgranskas.',
       tooLarge: 'Filen är för stor för att förhandsgranskas ({{size}}).',
       page: 'Sida {{current}} av {{total}}',
@@ -4059,6 +4059,9 @@ errors: {
       nextPage: 'Nästa sida',
       zoomIn: 'Zooma in',
       zoomOut: 'Zooma ut',
+      resetZoom: 'Återställ zoom',
+      fullscreen: 'Helskärm',
+      exitFullscreen: 'Avsluta helskärm',
       emptySheet: 'Det här bladet är tomt',
       truncatedRows: 'Visar de första {{shown}} av {{total}} raderna',
       truncatedCols: 'Visar de första {{shown}} av {{total}} kolumnerna',

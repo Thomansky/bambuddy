@@ -6276,8 +6276,6 @@ export default {
     filamentCount_other: '{{count}} filamentos',
     eta: 'ETA {{minutes}} min',
     noPreview: 'Pré-visualização não disponível para este arquivo',
-    fullscreen: 'Tela Cheia',
-    exitFullscreen: 'Sair da Tela Cheia',
     pagination: {
       pageOf: 'Página {{current}} de {{total}}',
       prev: 'Anterior',
