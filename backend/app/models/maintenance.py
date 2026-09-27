@@ -153,6 +153,10 @@ class MaintenanceRun(Base):
     # cleared together.
     waiting_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     waiting_detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # When a vision encoder run asked for its plate through the plate gate
+    # (naive UTC). A release given after this is the go-ahead for the run;
+    # cleared again when something else takes the printer in between.
+    plate_requested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

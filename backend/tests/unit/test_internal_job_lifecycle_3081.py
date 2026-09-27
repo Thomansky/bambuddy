@@ -1,9 +1,11 @@
 """The printer's own calibration run must not be handled as a print (#3081, #3127).
 
 Pins for ``on_print_start`` / ``on_print_complete`` / ``on_finish_photo_moment``
-in ``backend.app.main``: an internal job raises no plate-clear gate, captures
-and books no filament usage, creates no archive, sends no notification, and
-hands its result to the maintenance executor instead. Driven the way
+in ``backend.app.main``: an internal job captures and books no filament usage,
+creates no archive, sends no print notification, and hands its result to the
+maintenance executor instead. It does raise the plate-clear gate, like a print
+(#3127 field report: without it the queue sent a print 13 s after a vision
+encoder calibration) -- except the pressure-advance line that opens a print. Driven the way
 ``backend/tests/integration/test_print_lifecycle.py`` drives the callbacks.
 """
 
@@ -67,7 +69,7 @@ async def _cancel_new_tasks(before):
 
 class TestPrintCompleteForAnInternalJob:
     @pytest.mark.asyncio
-    async def test_completed_calibration_touches_nothing_but_the_executor(self):
+    async def test_completed_calibration_raises_the_gate_and_tells_the_executor(self):
         tasks_before = set(asyncio.all_tasks())
         with ExitStack() as stack:
             m = _complete_mocks(stack)
@@ -76,9 +78,9 @@ class TestPrintCompleteForAnInternalJob:
             await on_print_complete(1, {**CALIBRATION, "status": "completed", "raw_data": {"print_error": 0}})
             await _cancel_new_tasks(tasks_before)
 
-        # No plate-clear gate: a calibration leaves nothing on the plate.
-        gate_calls = [c for c in m["pm"].set_awaiting_plate_clear.call_args_list if c.args[1] is True]
-        assert gate_calls == []
+        # The plate-clear gate goes up: nothing starts before somebody has
+        # looked at the plate.
+        m["pm"].set_awaiting_plate_clear.assert_any_call(1, True)
         # No usage booking (#3081), no archive lookup, no queue reconciliation.
         m["usage"].assert_not_called()
         m["session"].assert_not_called()
@@ -107,8 +109,7 @@ class TestPrintCompleteForAnInternalJob:
             1, CALIBRATION["filename"], CALIBRATION["subtask_name"], "failed", 50348044
         )
         m["spawn"].assert_not_called()
-        gate_calls = [c for c in m["pm"].set_awaiting_plate_clear.call_args_list if c.args[1] is True]
-        assert gate_calls == []
+        m["pm"].set_awaiting_plate_clear.assert_any_call(1, True)
 
     @pytest.mark.asyncio
     async def test_failed_without_a_code_is_judged_after_the_cancel_echo_grace(self):
@@ -133,10 +134,46 @@ class TestPrintCompleteForAnInternalJob:
         assert isinstance(args[3], float)
         spawned = [c for c in m["spawn"].call_args_list if c.kwargs.get("name") == "maintenance-run-failed-1"]
         assert len(spawned) == 1
-        gate_calls = [c for c in m["pm"].set_awaiting_plate_clear.call_args_list if c.args[1] is True]
-        assert gate_calls == []
+        # A failed or cancelled calibration leaves the plate unconfirmed too.
+        m["pm"].set_awaiting_plate_clear.assert_any_call(1, True)
         m["usage"].assert_not_called()
         m["notif"].on_print_complete.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_the_vision_encoder_calibration_raises_the_gate(self):
+        """Its plate has to come out again before anything prints on the bed."""
+        tasks_before = set(asyncio.all_tasks())
+        motion = {
+            "filename": "/usr/etc/print/O1S/calibrate_motion_precision.gcode",
+            "subtask_name": "calibrate_motion_precision.gcode",
+        }
+        with ExitStack() as stack:
+            m = _complete_mocks(stack)
+            from backend.app.main import on_print_complete
+
+            await on_print_complete(1, {**motion, "status": "completed", "raw_data": {"print_error": 0}})
+            await _cancel_new_tasks(tasks_before)
+
+        m["pm"].set_awaiting_plate_clear.assert_any_call(1, True)
+        m["finished"].assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_the_pressure_advance_line_before_a_print_raises_no_gate(self):
+        """It opens a print that is still going; the print's end raises the gate.
+        Raising it here would put the release button and a phone notification
+        up in the middle of the print."""
+        tasks_before = set(asyncio.all_tasks())
+        with ExitStack() as stack:
+            m = _complete_mocks(stack)
+            from backend.app.main import on_print_complete
+
+            await on_print_complete(
+                1, {"filename": "", "subtask_name": "auto_pa_line_calib_mode", "status": "completed"}
+            )
+            await _cancel_new_tasks(tasks_before)
+
+        gate_calls = [c for c in m["pm"].set_awaiting_plate_clear.call_args_list if c.args[1] is True]
+        assert gate_calls == []
 
     @pytest.mark.asyncio
     async def test_a_stop_during_the_calibration_does_not_leak_into_the_next_print(self):

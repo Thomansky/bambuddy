@@ -5149,6 +5149,9 @@ async def run_migrations(conn):
     # measurement to show, on a table that may already exist from the
     # statement above.
     await _safe_execute(conn, "ALTER TABLE maintenance_runs ADD COLUMN waiting_detail JSON")
+    # A vision encoder run asks for its plate before it goes out (#3127 field
+    # report): the moment it asked, so a release after it counts as the go-ahead.
+    await _safe_execute(conn, "ALTER TABLE maintenance_runs ADD COLUMN plate_requested_at TIMESTAMP")
     # Per-item notification mute (#3127). Defaults on so the due reminders
     # existing items send keep coming. TRUE is the spelling both dialects
     # apply (see the on_ha_sensor_alert note above).

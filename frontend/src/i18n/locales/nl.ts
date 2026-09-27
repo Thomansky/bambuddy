@@ -1356,6 +1356,7 @@ export default {
         alreadyDrying: 'AMS-droging bezig',
         bedTooWarm: 'bed nog warm, {{temp}} °C',
         bedTempUnknown: 'bedtemperatuur onbekend',
+        visionPlate: 'vision-encoderplaat nodig',
       },
     },
     slicerAmsMapping: {
@@ -1995,6 +1996,7 @@ export default {
       waitingPrinterOffline: 'Wacht: printer offline',
       waitingPrinterBusy: 'Wacht: printer bezet',
       waitingPlateClear: 'Wacht: plaat nog niet vrijgegeven',
+      waitingVisionPlate: 'Wacht: leg de vision-encoderplaat erin en geef daarna de plaat vrij',
       waitingAlreadyDrying: 'Wacht: AMS-droging bezig',
       waitingBedTooWarm: 'Wacht: bed nog warm ({{temp}} °C)',
       waitingBedTempUnknown: 'Wacht: bedtemperatuur onbekend',

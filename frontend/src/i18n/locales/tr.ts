@@ -1346,6 +1346,7 @@ export default {
         alreadyDrying: 'AMS kurutma sürüyor',
         bedTooWarm: 'tabla hâlâ sıcak, {{temp}} °C',
         bedTempUnknown: 'tabla sıcaklığı bilinmiyor',
+        visionPlate: 'vision encoder plakası gerekli',
       },
     },
     slicerAmsMapping: {
@@ -1978,6 +1979,7 @@ export default {
       waitingPrinterOffline: 'Bekliyor: yazıcı çevrimdışı',
       waitingPrinterBusy: 'Bekliyor: yazıcı meşgul',
       waitingPlateClear: 'Bekliyor: plaka henüz boşaltılmadı',
+      waitingVisionPlate: 'Bekliyor: vision encoder plakasını yerleştirin, ardından tablayı serbest bırakın',
       waitingAlreadyDrying: 'Bekliyor: AMS kurutma sürüyor',
       waitingBedTooWarm: 'Bekliyor: tabla hâlâ sıcak ({{temp}} °C)',
       waitingBedTempUnknown: 'Bekliyor: tabla sıcaklığı bilinmiyor',

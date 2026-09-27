@@ -203,6 +203,7 @@ const WAITING_REASON_KEYS: Record<string, string> = {
   bed_too_warm: 'maintenance.calibration.waitingBedTooWarm',
   bed_temp_unknown: 'maintenance.calibration.waitingBedTempUnknown',
   after_other_run: 'maintenance.calibration.waitingAfterOtherRun',
+  vision_encoder_plate: 'maintenance.calibration.waitingVisionPlate',
 };
 
 // Start condition "only when the bed is below N °C" (#3127): the value the

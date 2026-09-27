@@ -111,6 +111,10 @@ WAIT_BED_TEMP_UNKNOWN = "bed_temp_unknown"
 # own -- then by start_after, then by id. Every run behind the head of that
 # line waits with this reason and the head's item name in waiting_detail.
 WAIT_AFTER_OTHER_RUN = "after_other_run"
+
+# A vision encoder run whose plate has been asked for: somebody has to put the
+# vision encoder plate in and release the plate before it can go out.
+WAIT_VISION_PLATE = "vision_encoder_plate"
 ACTION_PRIORITY: dict[str, int] = {ACTION_CALIBRATION: 0, ACTION_MOTION_PRECISION: 1}
 
 # The print queue keeps clear of a scheduled run (#3127): a job is only
@@ -136,6 +140,7 @@ QUEUE_HOLD_RUN_PHRASES: dict[str, str] = {
     "already_drying": "AMS drying in progress",
     WAIT_BED_TOO_WARM: "bed still warm",
     WAIT_BED_TEMP_UNKNOWN: "bed temperature unknown",
+    WAIT_VISION_PLATE: "vision encoder plate needed",
 }
 QUEUE_HOLD_RUN_QUEUED = "queued"
 QUEUE_HOLD_RUN_RUNNING = "running"

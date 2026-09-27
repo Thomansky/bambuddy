@@ -6614,10 +6614,27 @@ class PrintScheduler:
                 maintenance_actions.set_waiting(row, "printer_busy")
                 continue
 
-            if not self._is_printer_idle(printer_id, require_plate_clear):
-                if require_plate_clear and printer_manager.is_awaiting_plate_clear(printer_id):
-                    maintenance_actions.set_waiting(row, "awaiting_plate_clear")
+            action = row.printer_maintenance.maintenance_type.action
+            # The vision encoder calibration reads a pattern off its own plate,
+            # which a person has to put in: for it the plate gate counts
+            # whatever the setting says (#3127 field report).
+            needs_own_plate = action == maintenance_actions.ACTION_MOTION_PRECISION
+            honour_gate = require_plate_clear or needs_own_plate
+            if not self._is_printer_idle(printer_id, honour_gate):
+                if honour_gate and printer_manager.is_awaiting_plate_clear(printer_id):
+                    if needs_own_plate:
+                        # The release that is due now is the one this run
+                        # waits for -- ask for the plate by name, once.
+                        if row.plate_requested_at is None:
+                            row.plate_requested_at = now
+                        maintenance_actions.set_waiting(row, maintenance_actions.WAIT_VISION_PLATE)
+                    else:
+                        maintenance_actions.set_waiting(row, "awaiting_plate_clear")
                 else:
+                    if needs_own_plate:
+                        # Something else has the printer; a release given for
+                        # that job is no go-ahead for this one.
+                        row.plate_requested_at = None
                     maintenance_actions.set_waiting(row, "printer_busy")
                 continue
 
@@ -6632,7 +6649,21 @@ class PrintScheduler:
                 maintenance_actions.set_waiting(row, *bed_wait)
                 continue
 
-            action = row.printer_maintenance.maintenance_type.action
+            if needs_own_plate and row.plate_requested_at is None:
+                # Nobody has confirmed the vision encoder plate for this run:
+                # ask through the plate gate. The card shows the release
+                # button, the providers are told, and the run goes out on the
+                # first pass after the release.
+                row.plate_requested_at = now
+                printer_manager.set_awaiting_plate_clear(printer_id, True)
+                maintenance_actions.set_waiting(row, maintenance_actions.WAIT_VISION_PLATE)
+                logger.info(
+                    "Maintenance run %d: asking for the vision encoder plate on printer %d before it starts",
+                    row.id,
+                    printer_id,
+                )
+                continue
+
             if action == maintenance_actions.ACTION_MOTION_PRECISION:
                 path = maintenance_actions.motion_precision_gcode_path(
                     row.printer.model, getattr(state, "internal_gcode_dir", None)

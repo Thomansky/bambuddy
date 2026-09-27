@@ -1295,6 +1295,7 @@ export default {
         alreadyDrying: "идёт сушка AMS",
         bedTooWarm: "стол ещё тёплый, {{temp}} °C",
         bedTempUnknown: "температура стола неизвестна",
+        visionPlate: 'нужна пластина vision encoder',
       },
     },
     slicerAmsMapping: {
@@ -1889,6 +1890,7 @@ export default {
       waitingPrinterOffline: "Ожидание: принтер не в сети",
       waitingPrinterBusy: "Ожидание: принтер занят",
       waitingPlateClear: "Ожидание: стол ещё не освобождён",
+      waitingVisionPlate: 'Ожидание: установите пластину vision encoder, затем подтвердите освобождение стола',
       waitingAlreadyDrying: "Ожидание: идёт сушка AMS",
       waitingBedTooWarm: "Ожидание: стол ещё тёплый ({{temp}} °C)",
       waitingBedTempUnknown: "Ожидание: температура стола неизвестна",

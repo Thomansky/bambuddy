@@ -67,6 +67,11 @@ async def _make_run(db_session, item, **kwargs):
             else None
         ),
     }
+    if item.maintenance_type.action == "motion_precision":
+        # A vision encoder run asks for its plate before it goes out; these
+        # tests start from a run whose plate was asked for and released.
+        # The asking itself is pinned by the tests that pass None here.
+        defaults["plate_requested_at"] = _utcnow_naive() - timedelta(minutes=1)
     defaults.update(kwargs)
     run = MaintenanceRun(**defaults)
     db_session.add(run)
@@ -155,7 +160,7 @@ class TestTheLineOnOnePrinter:
         self, scheduler, db_session, printer_factory
     ):
         """The calibration has finished and heated the bed; the vision encoder
-        run, now at the head, waits for the bed and not for anybody."""
+        run, now at the head and with its plate released, waits for the bed."""
         pair = await _sunday_pair(db_session, printer_factory)
         pair.calibration_run.status = "completed"
         pair.calibration_run.completed_at = _utcnow_naive()
@@ -166,6 +171,7 @@ class TestTheLineOnOnePrinter:
         with patch("backend.app.services.print_scheduler.printer_manager") as mock_pm:
             mock_pm.get_status.return_value = _mock_state(bed=48.0)
             mock_pm.is_connected.return_value = True
+            mock_pm.is_awaiting_plate_clear.return_value = False
             await scheduler._check_maintenance_runs(db_session, False)
         mock_pm.start_internal_gcode_file.assert_not_called()
         await db_session.refresh(pair.motion_run)
@@ -180,6 +186,7 @@ class TestTheLineOnOnePrinter:
         with patch("backend.app.services.print_scheduler.printer_manager") as mock_pm:
             mock_pm.get_status.return_value = _mock_state()
             mock_pm.is_connected.return_value = True
+            mock_pm.is_awaiting_plate_clear.return_value = False
             mock_pm.start_internal_gcode_file.return_value = True
             mock_pm.await_internal_gcode_ack = AsyncMock(return_value=(True, ""))
             await scheduler._check_maintenance_runs(db_session, False)

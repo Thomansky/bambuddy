@@ -62,6 +62,7 @@ const RUN_STATE_KEYS: Record<string, string> = {
   'AMS drying in progress': 'alreadyDrying',
   'bed still warm': 'bedTooWarm',
   'bed temperature unknown': 'bedTempUnknown',
+  'vision encoder plate needed': 'visionPlate',
 };
 
 const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];

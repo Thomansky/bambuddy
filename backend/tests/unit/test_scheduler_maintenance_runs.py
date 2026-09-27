@@ -66,6 +66,11 @@ async def _make_run(db_session, item, **kwargs):
             else None
         ),
     }
+    if item.maintenance_type.action == "motion_precision":
+        # A vision encoder run asks for its plate before it goes out; these
+        # tests start from a run whose plate was asked for and released.
+        # The asking itself is pinned by the tests that pass None here.
+        defaults["plate_requested_at"] = _utcnow_naive() - timedelta(minutes=1)
     defaults.update(kwargs)
     run = MaintenanceRun(**defaults)
     db_session.add(run)
@@ -1335,3 +1340,107 @@ async def test_a_dispatched_or_waiting_run_reports_nothing(scheduler, db_session
         mock_pm.get_status.return_value = _mock_state(connected=False)
         await scheduler._check_maintenance_runs(db_session, True)
     notify.assert_not_awaited()
+
+
+# ============== The vision encoder plate (#3127 field report) ==============
+
+
+async def _vision_run(db_session, printer_factory, **kwargs):
+    item = await _make_item(db_session, printer_factory, action="motion_precision", model="H2S")
+    return item, await _make_run(db_session, item, **kwargs)
+
+
+def _vision_state(state="IDLE"):
+    mock = _mock_state(state)
+    mock.internal_gcode_dir = "O1S"
+    return mock
+
+
+@pytest.mark.asyncio
+async def test_a_vision_encoder_run_asks_for_its_plate_before_it_starts(scheduler, db_session, printer_factory):
+    """Idle printer, plate released: the run still does not go out on its own.
+    It raises the plate gate -- the release button, the notification -- and
+    says why on the card."""
+    item, run = await _vision_run(db_session, printer_factory, plate_requested_at=None)
+    mock_pm = await _run_idle_pass(scheduler, db_session, _vision_state())
+
+    mock_pm.start_internal_gcode_file.assert_not_called()
+    mock_pm.set_awaiting_plate_clear.assert_called_once_with(item.printer_id, True)
+    await db_session.refresh(run)
+    assert run.status == "pending"
+    assert run.waiting_reason == "vision_encoder_plate"
+    assert run.plate_requested_at is not None
+
+
+@pytest.mark.asyncio
+async def test_the_release_after_the_request_starts_it(scheduler, db_session, printer_factory):
+    item, run = await _vision_run(db_session, printer_factory, plate_requested_at=None)
+    await _run_idle_pass(scheduler, db_session, _vision_state())
+
+    # The operator puts the plate in and releases it: the printer is idle again.
+    mock_pm = await _run_idle_pass(scheduler, db_session, _vision_state())
+
+    mock_pm.start_internal_gcode_file.assert_called_once()
+    mock_pm.set_awaiting_plate_clear.assert_not_called()
+    await db_session.refresh(run)
+    assert run.status == "running"
+
+
+@pytest.mark.asyncio
+async def test_a_gate_that_is_already_up_is_the_request(scheduler, db_session, printer_factory):
+    """Straight after the levelling run the gate is up anyway: that release is
+    the one the vision encoder run waits for, so it is asked for once, by name."""
+    item, run = await _vision_run(db_session, printer_factory, plate_requested_at=None)
+    with patch("backend.app.services.print_scheduler.printer_manager") as mock_pm:
+        mock_pm.get_status.return_value = _vision_state("FINISH")
+        mock_pm.is_connected.return_value = True
+        mock_pm.is_awaiting_plate_clear.return_value = True
+        await scheduler._check_maintenance_runs(db_session, True)
+
+    mock_pm.start_internal_gcode_file.assert_not_called()
+    await db_session.refresh(run)
+    assert run.waiting_reason == "vision_encoder_plate"
+    assert run.plate_requested_at is not None
+
+
+@pytest.mark.asyncio
+async def test_the_plate_is_asked_for_with_the_plate_setting_off(scheduler, db_session, printer_factory):
+    """ "Require plate clear" governs prints; this plate has to go in whatever it says."""
+    item, run = await _vision_run(db_session, printer_factory, plate_requested_at=None)
+    with patch("backend.app.services.print_scheduler.printer_manager") as mock_pm:
+        mock_pm.get_status.return_value = _vision_state("FINISH")
+        mock_pm.is_connected.return_value = True
+        mock_pm.is_awaiting_plate_clear.return_value = True
+        await scheduler._check_maintenance_runs(db_session, False)
+
+    mock_pm.start_internal_gcode_file.assert_not_called()
+    await db_session.refresh(run)
+    assert run.waiting_reason == "vision_encoder_plate"
+
+
+@pytest.mark.asyncio
+async def test_another_job_on_the_printer_voids_the_request(scheduler, db_session, printer_factory):
+    """A release given for somebody else's job is no go-ahead for this run."""
+    item, run = await _vision_run(db_session, printer_factory)
+    with patch("backend.app.services.print_scheduler.printer_manager") as mock_pm:
+        mock_pm.get_status.return_value = _vision_state("RUNNING")
+        mock_pm.is_connected.return_value = True
+        mock_pm.is_awaiting_plate_clear.return_value = False
+        await scheduler._check_maintenance_runs(db_session, True)
+
+    await db_session.refresh(run)
+    assert run.waiting_reason == "printer_busy"
+    assert run.plate_requested_at is None
+
+
+@pytest.mark.asyncio
+async def test_a_levelling_run_does_not_ask_for_a_plate(scheduler, db_session, printer_factory):
+    """Bed levelling runs on the plate that is in; the gate as set is enough."""
+    item = await _make_item(db_session, printer_factory)
+    run = await _make_run(db_session, item)
+    mock_pm = await _run_idle_pass(scheduler, db_session, _mock_state())
+
+    mock_pm.start_calibration.assert_called_once()
+    await db_session.refresh(run)
+    assert run.status == "running"
+    assert run.plate_requested_at is None

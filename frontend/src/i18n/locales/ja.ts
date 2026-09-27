@@ -1341,6 +1341,7 @@ export default {
         alreadyDrying: 'AMS 乾燥中',
         bedTooWarm: 'ベッドがまだ温かい、{{temp}} °C',
         bedTempUnknown: 'ベッド温度が不明',
+        visionPlate: 'ビジョンエンコーダープレートが必要',
       },
     },
     slicerAmsMapping: {
@@ -1976,6 +1977,7 @@ export default {
       waitingPrinterOffline: '待機中: プリンターがオフライン',
       waitingPrinterBusy: '待機中: プリンターが使用中',
       waitingPlateClear: '待機中: プレートがまだ解放されていません',
+      waitingVisionPlate: '待機中：ビジョンエンコーダープレートを置いてから、プレートを解放してください',
       waitingAlreadyDrying: '待機中: AMS 乾燥中',
       waitingBedTooWarm: '待機中: ベッドがまだ温かい ({{temp}} °C)',
       waitingBedTempUnknown: '待機中: ベッド温度が不明',
