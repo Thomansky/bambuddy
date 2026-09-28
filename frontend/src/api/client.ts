@@ -3660,7 +3660,7 @@ export interface InventorySpool {
   low_stock_threshold_pct: number | null;
   // Internal material / article number (#2870) — the purchasing identifier
   // shared by all spools of the same product.
-  material_number?: string | null;
+  material_number: string | null;
   k_profiles?: SpoolKProfile[];
   storage_location?: string | null;
   location_id?: number | null;

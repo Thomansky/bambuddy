@@ -140,10 +140,12 @@ class SpoolBase(BaseModel):
     # shared by all spools of the same product. Free text, no uniqueness.
     material_number: str | None = Field(default=None, max_length=64)
 
-    @field_validator("material_number")
+    # mode="before": trim first, so a padded value is held to the 64
+    # characters it will store, not to the length it arrived with.
+    @field_validator("material_number", mode="before")
     @classmethod
-    def _validate_material_number(cls, v: str | None) -> str | None:
-        return normalize_material_number(v)
+    def _validate_material_number(cls, v):
+        return normalize_material_number(v) if isinstance(v, str) else v
 
     # Free-text storage location, distinct from `location` (AMS slot
     # assignment). Column has lived on the ORM since the inventory rework
@@ -201,10 +203,12 @@ class SpoolUpdate(BaseModel):
     # Internal material / article number (#2870).
     material_number: str | None = Field(default=None, max_length=64)
 
-    @field_validator("material_number")
+    # mode="before": trim first, so a padded value is held to the 64
+    # characters it will store, not to the length it arrived with.
+    @field_validator("material_number", mode="before")
     @classmethod
-    def _validate_material_number(cls, v: str | None) -> str | None:
-        return normalize_material_number(v)
+    def _validate_material_number(cls, v):
+        return normalize_material_number(v) if isinstance(v, str) else v
 
     storage_location: str | None = Field(default=None, max_length=255)
     location_id: int | None = Field(default=None, gt=0)

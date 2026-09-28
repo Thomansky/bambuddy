@@ -146,6 +146,32 @@ class TestMaterialNumberNormalisation:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    async def test_padding_does_not_count_against_the_length_cap(self, async_client: AsyncClient, spool_factory):
+        """The cap applies to what is stored: 63 characters with padding
+        around them fit, on every path that goes through the schema."""
+        padded = "  " + "x" * 63
+        created = await async_client.post(
+            "/api/v1/inventory/spools", json={"material": "PLA", "material_number": padded}
+        )
+        assert created.status_code == 200, created.text
+        assert created.json()["material_number"] == "x" * 63
+
+        spool = await spool_factory()
+        patched = await async_client.patch(f"/api/v1/inventory/spools/{spool.id}", json={"material_number": padded})
+        assert patched.status_code == 200, patched.text
+        assert patched.json()["material_number"] == "x" * 63
+
+        bulk = await async_client.post(
+            "/api/v1/inventory/spools/bulk-update",
+            json={"ids": [spool.id], "update": {"material_number": " " + "y" * 64 + " "}},
+        )
+        assert bulk.status_code == 200, bulk.text
+
+        too_long = await async_client.patch(f"/api/v1/inventory/spools/{spool.id}", json={"material_number": "x" * 65})
+        assert too_long.status_code == 422
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_a_padded_duplicate_does_not_become_a_second_group(self, async_client: AsyncClient, spool_factory):
         await async_client.post("/api/v1/inventory/spools", json={"material": "PLA", "material_number": "15"})
         await async_client.post("/api/v1/inventory/spools", json={"material": "PLA", "material_number": "15 "})
