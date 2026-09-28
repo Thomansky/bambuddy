@@ -106,6 +106,14 @@ function isStepType(fileType: string): boolean {
   return fileType === 'step' || fileType === 'stp';
 }
 
+// Types the server renders a thumbnail for on request, STL through trimesh
+// and PDF through PDFium (#2976), so the per-file "Generate thumbnail" action
+// applies to them. Mirrors the file types batch_generate_stl_thumbnails in
+// routes/library.py selects.
+function hasServerThumbnail(fileType: string): boolean {
+  return fileType === 'stl' || fileType === 'pdf';
+}
+
 // New Folder Modal
 interface NewFolderModalProps {
   parentId: number | null;
@@ -892,7 +900,7 @@ function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, o
       onClick: () => window.open(file.external_url!, '_blank', 'noopener,noreferrer'),
     });
   }
-  if (onGenerateThumbnail && file.file_type === 'stl') {
+  if (onGenerateThumbnail && hasServerThumbnail(file.file_type)) {
     menuItems.push({
       label: t('fileManager.generateThumbnail'),
       icon: <Image className="w-4 h-4" />,
@@ -2886,7 +2894,7 @@ export function FileManagerPage() {
                       >
                         <Pencil className="w-4 h-4" />
                       </button>
-                      {file.file_type === 'stl' && (
+                      {hasServerThumbnail(file.file_type) && (
                         <button
                           onClick={() => canModify('library', 'update', file.created_by_id) && singleThumbnailMutation.mutate(file.id)}
                           className={`p-1.5 rounded transition-colors ${
