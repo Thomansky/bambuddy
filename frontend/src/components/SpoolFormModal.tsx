@@ -76,6 +76,11 @@ export function SpoolFormModal({
   const [errors, setErrors] = useState<Partial<Record<keyof SpoolFormData, string>>>({});
   const [activeTab, setActiveTab] = useState<TabId>('filament');
   const [weightTouched, setWeightTouched] = useState(false);
+  // Keyed on core_weight, not core_weight_catalog_id: SpoolWeightPicker selects
+  // a catalogue entry by itself on mount when one matches the current weight,
+  // so the id changes on forms nobody has touched. Both real user actions go
+  // through core_weight.
+  const [coreWeightTouched, setCoreWeightTouched] = useState(false);
   const [locationIdTouched, setLocationIdTouched] = useState(false);
   // Supplier assignments (#2988). Held outside SpoolFormData — they are
   // relational and saved through their own replace-all endpoint. An untouched
@@ -214,9 +219,9 @@ export function SpoolFormModal({
         }
       };
       fetchData();
-      if (!spoolmanMode) {
-        api.getSpoolCatalog().then(setSpoolCatalog).catch(console.error);
-      }
+      // Fetched in Spoolman mode too: the empty spool weight picker is shown
+      // there now, and its catalogue is Bambuddy's own either way (#2908).
+      api.getSpoolCatalog().then(setSpoolCatalog).catch(console.error);
       api.getColorCatalog().then(setColorCatalog).catch(console.error);
       api.getLocalPresets().then(r => setLocalPresets(r.filament)).catch(console.error);
       api.getBuiltinFilaments().then(setBuiltinFilaments).catch(console.error);
@@ -263,16 +268,14 @@ export function SpoolFormModal({
         })();
       }
     }
-    // The effect intentionally depends only on `isOpen` (and the prop-side
-    // calibration count) — re-running on every spoolmanMode toggle would
-    // race the in-flight async fetches with unmount/teardown and emit
-    // "test environment was torn down" errors in vitest. spoolmanMode only
-    // gates a single fetch (getSpoolCatalog) which is cheap enough to skip
-    // when the modal opens in Spoolman mode.
+    // Depends only on `isOpen` (and the prop-side calibration count). It used
+    // to read spoolmanMode for the catalogue fetch and left it out of the deps
+    // on purpose -- re-running on every toggle raced the in-flight fetches with
+    // unmount and emitted "test environment was torn down" errors in vitest.
+    // It no longer reads it, so the deps are complete as written.
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, printersWithCalibrations.length]);
 
   // Build filament options: cloud → local → fallback
@@ -410,7 +413,8 @@ export function SpoolFormModal({
           extra_colors: spool.extra_colors || '',
           effect_type: spool.effect_type || '',
           label_weight: spool.label_weight || 1000,
-          core_weight: spool.core_weight || 250,
+          // ?? not ||: 0 g is a real tare (a spool-less coil) and must load as 0.
+          core_weight: spool.core_weight ?? 250,
           core_weight_catalog_id: spool.core_weight_catalog_id ?? null,
           weight_used: isCopying ? 0 : spool.weight_used || 0,
           slicer_filament: spool.slicer_filament || '',
@@ -483,6 +487,10 @@ export function SpoolFormModal({
       // save) A's per-model overrides on B. Refilled by the fetch below.
       setModelPresets(new Map());
       setWeightTouched(false);
+      // A copy of a Spoolman spool with its own tare carries that tare, as it
+      // would any other field shown in the form; one that inherits keeps
+      // inheriting. Only Spoolman spools report the flag (#2908).
+      setCoreWeightTouched(isCopying && spool?.core_weight_is_inherited === false);
       setLocationIdTouched(false);
       setSupplierLinksTouched(false);
     }
@@ -549,6 +557,7 @@ export function SpoolFormModal({
         : {}),
     }));
     if (key === 'weight_used') setWeightTouched(true);
+    if (key === 'core_weight') setCoreWeightTouched(true);
     if (key === 'location_id') setLocationIdTouched(true);
     if (errors[key]) {
       setErrors(prev => ({ ...prev, [key]: undefined }));
@@ -931,7 +940,16 @@ export function SpoolFormModal({
       extra_colors: formData.extra_colors || null,
       effect_type: formData.effect_type || null,
       label_weight: formData.label_weight,
-      ...(spoolmanMode ? {} : { core_weight: formData.core_weight, core_weight_catalog_id: formData.core_weight_catalog_id }),
+      // In Spoolman mode the picker opens on the tare the spool resolves to,
+      // which is the filament type's unless the spool has its own. Sending it
+      // untouched would copy that inherited value onto the spool and stop it
+      // following the filament, so only a value the user set goes out (#2908).
+      // The catalogue id has no field on the Spoolman side.
+      ...(spoolmanMode
+        ? coreWeightTouched
+          ? { core_weight: formData.core_weight }
+          : {}
+        : { core_weight: formData.core_weight, core_weight_catalog_id: formData.core_weight_catalog_id }),
       slicer_filament: formData.slicer_filament || null,
       slicer_filament_name: presetName,
       nozzle_temp_min: null,
@@ -1163,7 +1181,6 @@ export function SpoolFormModal({
                     }
                   }}
                   globalLowStockThreshold={globalLowStockThreshold}
-                  spoolmanMode={spoolmanMode}
                 />
               </div>
 

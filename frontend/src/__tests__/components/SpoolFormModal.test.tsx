@@ -1536,3 +1536,174 @@ describe('SpoolFormModal header spool ID (#1385)', () => {
     expect(screen.queryByText(/^#\d+$/)).not.toBeInTheDocument();
   });
 });
+
+describe('SpoolFormModal — per-spool tare in Spoolman mode (#2908)', () => {
+  // The mapped Spoolman spool carries the tare it resolves to: its own
+  // spool_weight if set, else the filament type's. The form opens on that value.
+  const spoolmanSpool = {
+    ...existingSpool,
+    id: 42,
+    core_weight: 250,
+    core_weight_catalog_id: null,
+    data_origin: 'spoolman',
+    tag_type: 'spoolman',
+  } as InventorySpool;
+
+  const catalog = [
+    { id: 7, name: 'Bambu Lab 250g', weight: 250 },
+    { id: 3, name: 'Standard 300g', weight: 300 },
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getSpoolCatalog).mockResolvedValue(catalog);
+  });
+
+  function weightPicker() {
+    const picker = screen
+      .getAllByPlaceholderText(/search/i)
+      .find((input) => input.getAttribute('placeholder')?.toLowerCase().includes('spool'));
+    expect(picker).toBeTruthy();
+    return picker!;
+  }
+
+  async function openEdit() {
+    render(
+      <SpoolFormModal
+        isOpen={true}
+        onClose={vi.fn()}
+        spool={spoolmanSpool}
+        mode="edit"
+        currencySymbol="$"
+        spoolmanMode={true}
+      />
+    );
+    await waitFor(() => {
+      expect(screen.getByText('Edit Spool')).toBeInTheDocument();
+    });
+    openColorAndCostTab();
+    await waitFor(() => {
+      expect(api.getSpoolCatalog).toHaveBeenCalled();
+    });
+  }
+
+  async function savedPayload() {
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+    await waitFor(() => {
+      expect(api.updateSpoolmanInventorySpool).toHaveBeenCalledTimes(1);
+    });
+    return vi.mocked(api.updateSpoolmanInventorySpool).mock.calls[0][1] as Record<string, unknown>;
+  }
+
+  it('shows the empty spool weight picker, which it used to replace with a notice', async () => {
+    await openEdit();
+
+    expect(weightPicker()).toBeInTheDocument();
+  });
+
+  it('does not send the tare when the user left it alone', async () => {
+    // An untouched edit must not copy the inherited value onto the spool:
+    // that would stop it following its filament type.
+    await openEdit();
+
+    const payload = await savedPayload();
+
+    expect(payload).not.toHaveProperty('core_weight');
+    expect(payload).not.toHaveProperty('core_weight_catalog_id');
+  });
+
+  it('does not count the picker selecting a catalogue entry by itself as a touch', async () => {
+    // One catalogue row matches the opening weight, so the picker selects it
+    // on mount. That changes core_weight_catalog_id without the user doing
+    // anything, which is why the touched flag keys on core_weight instead.
+    await openEdit();
+    await screen.findByDisplayValue('Bambu Lab 250g');
+
+    const payload = await savedPayload();
+
+    expect(payload).not.toHaveProperty('core_weight');
+  });
+
+  it('sends the tare the user picked, without the catalogue id', async () => {
+    await openEdit();
+    fireEvent.focus(weightPicker());
+    fireEvent.click(await screen.findByText('Standard 300g'));
+
+    const payload = await savedPayload();
+
+    expect(payload).toHaveProperty('core_weight', 300);
+    // No field for it on SpoolmanInventoryCreate / Update; it would be dropped.
+    expect(payload).not.toHaveProperty('core_weight_catalog_id');
+  });
+
+  it('does not send the form default on create either', async () => {
+    render(<SpoolFormModal isOpen={true} onClose={vi.fn()} currencySymbol="$" spoolmanMode={true} />);
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Add Spool' })).toBeInTheDocument();
+    });
+
+    const addButtons = screen.getAllByRole('button', { name: /add spool/i });
+    const submitButton = addButtons.find((btn) => btn.tagName === 'BUTTON' && btn.querySelector('svg.lucide-save'));
+    fireEvent.click(submitButton!);
+
+    await waitFor(() => {
+      expect(api.createSpoolmanInventorySpool).toHaveBeenCalledTimes(1);
+    });
+    const payload = vi.mocked(api.createSpoolmanInventorySpool).mock.calls[0][0] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty('core_weight');
+  });
+
+  it('loads a 0 g tare as 0, not the 250 fallback', async () => {
+    // A spool-less coil. `|| 250` read the real 0 as missing, so the form
+    // showed 250 and the measured-weight field subtracted it.
+    render(
+      <SpoolFormModal
+        isOpen={true}
+        onClose={vi.fn()}
+        spool={{ ...spoolmanSpool, core_weight: 0, core_weight_is_inherited: false }}
+        mode="edit"
+        currencySymbol="$"
+        spoolmanMode={true}
+      />
+    );
+    await waitFor(() => {
+      expect(screen.getByText('Edit Spool')).toBeInTheDocument();
+    });
+    openColorAndCostTab();
+
+    const tareInput = screen.getAllByRole('spinbutton').find((el) => el.getAttribute('max') === '2000');
+    expect(tareInput).toHaveValue(0);
+  });
+
+  async function copiedPayload(source: InventorySpool) {
+    render(
+      <SpoolFormModal isOpen={true} onClose={vi.fn()} spool={source} mode="copy" currencySymbol="$" spoolmanMode={true} />
+    );
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Copy Spool' })).toBeInTheDocument();
+    });
+    const submit = screen
+      .getAllByRole('button', { name: /copy spool/i })
+      .find((btn) => btn.tagName === 'BUTTON' && btn.querySelector('svg.lucide-save'));
+    fireEvent.click(submit!);
+    await waitFor(() => {
+      expect(api.createSpoolmanInventorySpool).toHaveBeenCalledTimes(1);
+    });
+    return vi.mocked(api.createSpoolmanInventorySpool).mock.calls[0][0] as Record<string, unknown>;
+  }
+
+  it('carries a spool\'s own tare onto its copy', async () => {
+    // The copy's form shows 180; left untouched it used to send nothing, and
+    // the copy came out inheriting the filament's 250.
+    const payload = await copiedPayload({ ...spoolmanSpool, core_weight: 180, core_weight_is_inherited: false });
+
+    expect(payload).toHaveProperty('core_weight', 180);
+    expect(payload).not.toHaveProperty('core_weight_catalog_id');
+  });
+
+  it('lets a copy of an inheriting spool keep inheriting', async () => {
+    const payload = await copiedPayload({ ...spoolmanSpool, core_weight: 250, core_weight_is_inherited: true });
+
+    expect(payload).not.toHaveProperty('core_weight');
+  });
+});
