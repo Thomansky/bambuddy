@@ -5366,6 +5366,7 @@ async def run_migrations(conn):
             chat_id VARCHAR(64) NOT NULL,
             message_id INTEGER NOT NULL,
             archive_id INTEGER NOT NULL REFERENCES print_archives(id) ON DELETE CASCADE,
+            confirm_token VARCHAR(64),
             has_caption BOOLEAN DEFAULT FALSE,
             message_text TEXT,
             created_at DATETIME
@@ -5379,6 +5380,7 @@ async def run_migrations(conn):
             chat_id VARCHAR(64) NOT NULL,
             message_id INTEGER NOT NULL,
             archive_id INTEGER NOT NULL REFERENCES print_archives(id) ON DELETE CASCADE,
+            confirm_token VARCHAR(64),
             has_caption BOOLEAN DEFAULT FALSE,
             message_text TEXT,
             created_at TIMESTAMP

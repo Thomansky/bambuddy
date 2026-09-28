@@ -6786,7 +6786,7 @@ export default {
     telegramVerdictModeButtons: 'Satır içi düğmeler (bağlantı)',
     telegramVerdictModeReactions: 'Tepki (👍 / 👎)',
     telegramVerdictModeBoth: 'Düğmeler ve tepki',
-    telegramVerdictModeHelp: 'Sonuç sorusunun nasıl yanıtlanacağı. Tepkiler gelen bağlantı veya harici URL gerektirmez; Bambuddy bunları bottan alır. Grupta tepkileri görebilmesi için botun yönetici olması gerekir.',
+    telegramVerdictModeHelp: 'Sonuç sorusunun nasıl yanıtlanacağı. Tepkiler gelen bağlantı veya harici URL gerektirmez; Bambuddy bunları bottan alır. Tepkiler için yalnızca Bambuddy\'nin kullandığı bir bot kullanın: aynı botu okuyan başka bir uygulama (örneğin Home Assistant) kendi mesajlarını artık alamaz ve düğmelere geri döndükten sonra da bu durum sürer. Grupta tepkileri görebilmesi için botun yönetici olması gerekir.',
     telegramVerdictBadgeReactions: 'Tepkiler',
     telegramVerdictBadgeBoth: 'Düğmeler + tepkiler',
     smtpServer: 'SMTP Sunucusu',

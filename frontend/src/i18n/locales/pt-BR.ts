@@ -6827,7 +6827,7 @@ export default {
     telegramVerdictModeButtons: 'Botões inline (link)',
     telegramVerdictModeReactions: 'Reação (👍 / 👎)',
     telegramVerdictModeBoth: 'Botões e reação',
-    telegramVerdictModeHelp: 'Como a pergunta sobre o resultado é respondida. Reações não precisam de conexão de entrada nem de URL externa — o Bambuddy as consulta no bot. Em um grupo, o bot precisa ser administrador para ver as reações.',
+    telegramVerdictModeHelp: 'Como a pergunta sobre o resultado é respondida. Reações não precisam de conexão de entrada nem de URL externa — o Bambuddy as consulta no bot. Para reações, use um bot usado só pelo Bambuddy: outro app que consulte o mesmo bot (o Home Assistant, por exemplo) deixa de receber suas mensagens, mesmo depois de voltar para os botões. Em um grupo, o bot precisa ser administrador para ver as reações.',
     telegramVerdictBadgeReactions: 'Reações',
     telegramVerdictBadgeBoth: 'Botões + reações',
     smtpServer: 'Servidor SMTP',

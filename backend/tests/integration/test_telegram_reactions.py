@@ -15,9 +15,10 @@ from httpx import AsyncClient
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from backend.app.models.archive import PrintArchive
 from backend.app.models.notification import TelegramPendingVerdict
 from backend.app.models.print_log import PrintLogEntry
-from backend.app.services.notification_service import TELEGRAM_REACTION_HINT, NotificationService
+from backend.app.services.notification_service import TELEGRAM_REACTION_HINT, NotificationService, notification_service
 from backend.app.services.print_confirmation import apply_outcome_verdict, one_tap_url
 from backend.app.services.telegram_reactions import (
     CONFLICT_COOLDOWN,
@@ -109,6 +110,13 @@ def telegram_provider(notification_provider_factory):
 @pytest.fixture
 def pending_factory(db_session):
     async def _create(provider_id: int, archive_id: int, message_id: int = 777, **kwargs):
+        # A prompt only goes out with a live confirm token (the dispatch mints
+        # one), and the send records it on the row: do the same here.
+        if "confirm_token" not in kwargs:
+            archive = await db_session.get(PrintArchive, archive_id)
+            if archive.confirm_token is None:
+                archive.confirm_token = f"tok-{archive_id}-{message_id}"
+            kwargs["confirm_token"] = archive.confirm_token
         defaults = {
             "provider_id": provider_id,
             "chat_id": CHAT_ID,
@@ -215,7 +223,7 @@ class TestSendingThePrompt:
         self, db_session, printer_factory, archive_factory, telegram_provider
     ):
         printer = await printer_factory()
-        archive = await archive_factory(printer.id, confirm_requested=True)
+        archive = await archive_factory(printer.id, confirm_requested=True, confirm_token="live-token")
         provider = await telegram_provider(telegram_verdict_mode="reactions")
 
         client = await self._send(provider, db_session, archive.id)
@@ -230,6 +238,7 @@ class TestSendingThePrompt:
         assert row.archive_id == archive.id
         assert row.message_id == 555
         assert row.chat_id == CHAT_ID
+        assert row.confirm_token == "live-token", "the token the prompt's links carry"
         assert row.has_caption is False
         assert row.message_text and TELEGRAM_REACTION_HINT in row.message_text
 
@@ -239,7 +248,7 @@ class TestSendingThePrompt:
         self, db_session, printer_factory, archive_factory, telegram_provider
     ):
         printer = await printer_factory()
-        archive = await archive_factory(printer.id, confirm_requested=True)
+        archive = await archive_factory(printer.id, confirm_requested=True, confirm_token="live-token")
         provider = await telegram_provider(telegram_verdict_mode="both")
 
         client = await self._send(provider, db_session, archive.id, image_data=b"\x89PNG")
@@ -269,6 +278,23 @@ class TestSendingThePrompt:
             ]
         }
         assert TELEGRAM_REACTION_HINT not in body["text"]
+        assert await _pending_count(db_session) == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_prompt_without_a_live_token_records_nothing(
+        self, db_session, printer_factory, archive_factory, telegram_provider
+    ):
+        """The prompt's links are dead without a live token, and a reaction
+        must not outlive them: nothing to remember."""
+        printer = await printer_factory()
+        archive = await archive_factory(
+            printer.id, confirm_requested=True, confirm_token="spent", confirm_token_used_at=utcnow_naive()
+        )
+        provider = await telegram_provider(telegram_verdict_mode="reactions")
+
+        await self._send(provider, db_session, archive.id)
+
         assert await _pending_count(db_session) == 0
 
     @pytest.mark.asyncio
@@ -341,6 +367,7 @@ class TestPoller:
         assert edit["text"].endswith("✅ marked as good")
         assert "Test\\_Print" in edit["text"], "stored body is re-escaped for Markdown"
         assert "reply_markup" not in edit
+        assert edit["disable_web_page_preview"] is True, "the edit keeps the preview off, like the send"
         # The getUpdates that follows confirms the update we handled.
         assert poller._offsets[BOT_TOKEN] == 10
 
@@ -465,6 +492,86 @@ class TestPoller:
 
         await db_session.refresh(archive)
         assert archive.user_verdict == "reject"
+        assert await _pending_count(db_session) == 0
+        assert poller._http_client.urls() == ["getUpdates"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_an_earlier_runs_prompt_cannot_answer_a_reprint(
+        self, poller, db_session, printer_factory, archive_factory, telegram_provider, monkeypatch
+    ):
+        """Printing an archive again resets its verdict and confirm token, so
+        run 1's links stop working. Run 1's unanswered message has to stop with
+        them: a thumbs on it while run 2 prints records nothing, and run 2
+        still asks its own question, which its own message then answers."""
+        from backend.app.main import dispatch_outcome_confirmation
+
+        printer = await printer_factory()
+        archive = await archive_factory(printer.id, confirm_requested=True)
+        provider = await telegram_provider()
+        _track(poller, provider)
+        pending_columns = select(TelegramPendingVerdict.message_id, TelegramPendingVerdict.confirm_token)
+
+        # Run 1 completes and asks; nobody answers.
+        monkeypatch.setattr(notification_service, "_http_client", _SendCapture(message_id=901))
+        assert await dispatch_outcome_confirmation(db_session, printer.id, printer.name, {}, archive.id, None)
+        run1_token = archive.confirm_token
+        assert (await db_session.execute(pending_columns)).one() == (901, run1_token)
+
+        # Run 2 starts: the reprint reset in main.py (the expected_archive_id path).
+        archive.status = "printing"
+        archive.user_verdict = None
+        archive.user_verdict_source = None
+        archive.user_verdict_at = None
+        archive.confirm_token = None
+        archive.confirm_token_used_at = None
+        await db_session.commit()
+
+        # A thumbs-up on run 1's message while run 2 is printing.
+        poller._http_client = _FakeBotApi([_updates(_reaction(30, 901, THUMBS_UP))])
+        await poller.poll_once(BOT_TOKEN)
+
+        await db_session.refresh(archive)
+        assert archive.user_verdict is None
+        assert poller._http_client.urls() == ["getUpdates"], "the stale message is not edited"
+        assert await _pending_count(db_session) == 0
+
+        # Run 2 completes and asks with a token of its own.
+        archive.status = "completed"
+        await db_session.commit()
+        monkeypatch.setattr(notification_service, "_http_client", _SendCapture(message_id=902))
+        assert await dispatch_outcome_confirmation(db_session, printer.id, printer.name, {}, archive.id, None)
+        assert archive.confirm_token not in (None, run1_token)
+        assert (await db_session.execute(pending_columns)).one() == (902, archive.confirm_token)
+
+        # Its own message answers it.
+        poller._http_client = _FakeBotApi([_updates(_reaction(31, 902, THUMBS_DOWN))])
+        await poller.poll_once(BOT_TOKEN)
+
+        await db_session.refresh(archive)
+        assert archive.user_verdict == "reject"
+        assert archive.user_verdict_source == "reaction"
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_prompt_whose_link_was_used_is_retired(
+        self, poller, db_session, printer_factory, archive_factory, telegram_provider, pending_factory
+    ):
+        """A reaction stops working exactly when a link would: once the token
+        is spent, or replaced by a newer prompt's, the message is done."""
+        printer = await printer_factory()
+        archive = await archive_factory(printer.id, confirm_requested=True, confirm_token="old")
+        provider = await telegram_provider()
+        _track(poller, provider)
+        await pending_factory(provider.id, archive.id, message_id=785)
+        archive.confirm_token = "newer"
+        await db_session.commit()
+        poller._http_client = _FakeBotApi([_updates(_reaction(32, 785, THUMBS_UP))])
+
+        await poller.poll_once(BOT_TOKEN)
+
+        await db_session.refresh(archive)
+        assert archive.user_verdict is None
         assert await _pending_count(db_session) == 0
         assert poller._http_client.urls() == ["getUpdates"]
 

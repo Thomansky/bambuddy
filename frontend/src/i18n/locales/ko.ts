@@ -6548,7 +6548,7 @@ export default {
     telegramVerdictModeButtons: '인라인 버튼(링크)',
     telegramVerdictModeReactions: '반응(👍 / 👎)',
     telegramVerdictModeBoth: '버튼과 반응',
-    telegramVerdictModeHelp: '결과 확인 요청에 답하는 방식입니다. 반응은 수신 연결이나 외부 URL이 필요 없으며 Bambuddy가 봇에서 가져옵니다. 그룹에서는 봇이 관리자여야 반응을 볼 수 있습니다.',
+    telegramVerdictModeHelp: '결과 확인 요청에 답하는 방식입니다. 반응은 수신 연결이나 외부 URL이 필요 없으며 Bambuddy가 봇에서 가져옵니다. 반응에는 Bambuddy만 사용하는 봇을 쓰세요. 같은 봇을 읽는 다른 앱(예: Home Assistant)은 자신의 메시지를 받지 못하게 되며, 버튼으로 되돌린 뒤에도 그대로입니다. 그룹에서는 봇이 관리자여야 반응을 볼 수 있습니다.',
     telegramVerdictBadgeReactions: '반응',
     telegramVerdictBadgeBoth: '버튼 + 반응',
     smtpServer: 'SMTP 서버',

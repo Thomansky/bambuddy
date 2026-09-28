@@ -6841,7 +6841,7 @@ export default {
     telegramVerdictModeButtons: 'インラインボタン（リンク）',
     telegramVerdictModeReactions: 'リアクション（👍 / 👎）',
     telegramVerdictModeBoth: 'ボタンとリアクション',
-    telegramVerdictModeHelp: '結果確認にどう答えるか。リアクションは外部からの接続や外部 URL を必要とせず、Bambuddy がボットから取得します。グループではリアクションを受け取るためにボットが管理者である必要があります。',
+    telegramVerdictModeHelp: '結果確認にどう答えるか。リアクションは外部からの接続や外部 URL を必要とせず、Bambuddy がボットから取得します。リアクションには Bambuddy 専用のボットを使ってください。同じボットを読み取る別のアプリ（Home Assistant など）は自分のメッセージを受け取れなくなり、ボタンに戻した後もその状態が続きます。グループではリアクションを受け取るためにボットが管理者である必要があります。',
     telegramVerdictBadgeReactions: 'リアクション',
     telegramVerdictBadgeBoth: 'ボタン + リアクション',
     smtpServer: 'SMTPサーバー',

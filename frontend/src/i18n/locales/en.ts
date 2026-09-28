@@ -7150,7 +7150,7 @@ export default {
     telegramVerdictModeButtons: 'Inline buttons (link)',
     telegramVerdictModeReactions: 'Reaction (👍 / 👎)',
     telegramVerdictModeBoth: 'Buttons and reaction',
-    telegramVerdictModeHelp: 'How the outcome prompt is answered. Reactions need no inbound connectivity or external URL — Bambuddy polls the bot for them. In a group the bot must be an admin to see reactions.',
+    telegramVerdictModeHelp: 'How the outcome prompt is answered. Reactions need no inbound connectivity or external URL — Bambuddy polls the bot for them. For reactions, use a bot only Bambuddy uses: another app polling the same bot (Home Assistant, for example) stops receiving its messages, and that stays so even after switching back to buttons. In a group the bot must be an admin to see reactions.',
     telegramVerdictBadgeReactions: 'Reactions',
     telegramVerdictBadgeBoth: 'Buttons + reactions',
     smtpServer: 'SMTP Server',

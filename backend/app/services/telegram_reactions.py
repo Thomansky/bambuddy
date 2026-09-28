@@ -78,6 +78,21 @@ def _bot_label(bot_token: str) -> str:
     return f"bot {bot_token.split(':', 1)[0]}"
 
 
+def prompt_is_live(pending: TelegramPendingVerdict, archive: PrintArchive) -> bool:
+    """Whether a reaction on this prompt may still record a verdict.
+
+    Exactly as long as the prompt's one-tap links would: the token the
+    message went out with is still the archive's token and nothing has spent
+    it. A reprint clears the token and the next completion mints a new one,
+    so a reaction on an earlier run's message never answers a later run.
+    """
+    return (
+        bool(pending.confirm_token)
+        and pending.confirm_token == archive.confirm_token
+        and archive.confirm_token_used_at is None
+    )
+
+
 class TelegramReactionPoller:
     def __init__(self):
         # Everything is keyed by bot token, not provider: update_ids are a
@@ -302,7 +317,12 @@ class TelegramReactionPoller:
                 return
 
             archive = await db.get(PrintArchive, pending.archive_id)
-            applied = archive is not None and await apply_outcome_verdict(db, archive, verdict, source="reaction")
+            if archive is None or not prompt_is_live(pending, archive):
+                ignored = "the prompt belongs to an earlier run or was answered elsewhere"
+            elif not await apply_outcome_verdict(db, archive, verdict, source="reaction"):
+                ignored = "verdict already recorded"
+            else:
+                ignored = None
             has_caption = bool(pending.has_caption)
             text = pending.message_text
             archive_id = pending.archive_id
@@ -310,8 +330,8 @@ class TelegramReactionPoller:
             await db.delete(pending)
             await db.commit()
 
-        if not applied:
-            logger.info("Telegram reaction on archive %s ignored: verdict already recorded", archive_id)
+        if ignored:
+            logger.info("Telegram reaction on archive %s ignored: %s", archive_id, ignored)
             return
         logger.info("[#3046] Telegram reaction marked archive %s as '%s'", archive_id, verdict)
         await self._confirm_on_message(bot_token, chat_id, message_id, has_caption, text, verdict)
@@ -322,22 +342,39 @@ class TelegramReactionPoller:
         """Append the verdict to the prompt so the chat shows it was taken.
 
         Editing also drops the inline keyboard in "both" mode — the links
-        are dead once a verdict landed. Best effort: a failed edit is logged,
-        the verdict itself is already committed.
+        are dead once a verdict landed. The link preview stays off, as on the
+        original send. Best effort: a failed edit is logged, the verdict
+        itself is already committed.
         """
         suffix = VERDICT_SUFFIX[verdict]
         client = await self._get_client()
         try:
-            if text:
-                body = telegram_markdown_escape(f"{text}\n\n{suffix}")
-                if has_caption:
-                    method, field = "editMessageCaption", "caption"
-                else:
-                    method, field = "editMessageText", "text"
-                payload = {"chat_id": chat_id, "message_id": message_id, field: body, "parse_mode": "Markdown"}
+            if text and has_caption:
+                # A photo's caption gets no link preview of its own.
+                method = "editMessageCaption"
+                payload = {
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "caption": telegram_markdown_escape(f"{text}\n\n{suffix}"),
+                    "parse_mode": "Markdown",
+                }
+            elif text:
+                method = "editMessageText"
+                payload = {
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "text": telegram_markdown_escape(f"{text}\n\n{suffix}"),
+                    "parse_mode": "Markdown",
+                    "disable_web_page_preview": True,
+                }
             else:
                 method = "sendMessage"
-                payload = {"chat_id": chat_id, "text": suffix, "reply_parameters": {"message_id": message_id}}
+                payload = {
+                    "chat_id": chat_id,
+                    "text": suffix,
+                    "reply_parameters": {"message_id": message_id},
+                    "disable_web_page_preview": True,
+                }
             response = await client.post(f"https://api.telegram.org/bot{bot_token}/{method}", json=payload)
             if response.status_code != 200 or not response.json().get("ok"):
                 logger.warning("Telegram %s failed after reaction verdict: HTTP %s", method, response.status_code)

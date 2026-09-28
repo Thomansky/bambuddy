@@ -6893,7 +6893,7 @@ export default {
     telegramVerdictModeButtons: 'Inline-knoppen (link)',
     telegramVerdictModeReactions: 'Reactie (👍 / 👎)',
     telegramVerdictModeBoth: 'Knoppen en reactie',
-    telegramVerdictModeHelp: 'Hoe de resultaatvraag wordt beantwoord. Reacties hebben geen inkomende verbinding of externe URL nodig — Bambuddy haalt ze bij de bot op. In een groep moet de bot beheerder zijn om reacties te zien.',
+    telegramVerdictModeHelp: 'Hoe de resultaatvraag wordt beantwoord. Reacties hebben geen inkomende verbinding of externe URL nodig — Bambuddy haalt ze bij de bot op. Gebruik voor reacties een bot die alleen Bambuddy gebruikt: een andere app die dezelfde bot uitleest (bijvoorbeeld Home Assistant) krijgt zijn berichten dan niet meer, ook niet nadat je terugschakelt naar knoppen. In een groep moet de bot beheerder zijn om reacties te zien.',
     telegramVerdictBadgeReactions: 'Reacties',
     telegramVerdictBadgeBoth: 'Knoppen + reacties',
     smtpServer: 'SMTP-server',
