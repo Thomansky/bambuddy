@@ -5080,6 +5080,12 @@ async def run_migrations(conn):
     # create_all() covers fresh installs; this covers upgrades.
     await _migrate_create_supplier_tables(conn)
 
+    # Migration: Add material_number to spool (#2870). Nullable free text —
+    # the internal purchasing/article number a business costs by, shared by
+    # all spools of the same product. VARCHAR(64) is spelled identically on
+    # SQLite and Postgres.
+    await _safe_execute(conn, "ALTER TABLE spool ADD COLUMN material_number VARCHAR(64)")
+
     # Migration: repair the tare of spools the RFID auto-add gave the wrong
     # Bambu spool row (#2909). Runs last so the spool catalogue it reads is
     # whatever this database actually holds.
