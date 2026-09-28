@@ -1669,6 +1669,16 @@ export default {
     printActivity: '印刷アクティビティ',
     filamentTypes: 'フィラメントタイプ',
     filamentTrends: 'フィラメントトレンド',
+    // Consumption/cost grouped by the internal material number (#2870).
+    materialNumbers: {
+      title: '資材番号別',
+      empty: 'まだ資材番号が割り当てられていません。在庫のスプールに資材番号を追加すると、ここで消費量とコストをまとめて確認できます。',
+      loadFailed: '資材番号の統計を読み込めませんでした。',
+      spools: 'スプール',
+      remaining: '残量',
+      consumed: '消費量',
+      cost: 'コスト',
+    },
     // Consumption/cost grouped by purchase-source supplier (#2988).
     suppliers: {
       title: 'サプライヤー別',
@@ -4825,6 +4835,11 @@ export default {
     storageLocationNone: '保管場所未設定',
     lowStockThresholdOverride: '在庫低下のしきい値（このスプール）',
     lowStockThresholdOverrideHelp: '空欄の場合、グローバル設定（{{global}}%）を使用します。',
+    // Internal material / article number (#2870)
+    materialNumber: '資材番号',
+    materialNumberPlaceholder: '例：15',
+    materialNumberHelp: '社内の購買番号です。同じ製品のすべてのスプールで共有され、同じ製品の新しいスプールに自動的に引き継がれます。',
+    materialNumberNone: '資材番号なし',
     // Suppliers (#2988): the master list and the per-spool assignments.
     suppliers: {
       label: 'サプライヤー',

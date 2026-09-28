@@ -1670,6 +1670,16 @@ export default {
     printActivity: '列印活動',
     filamentTypes: '耗材類型',
     filamentTrends: '耗材趨勢',
+    // Consumption/cost grouped by the internal material number (#2870).
+    materialNumbers: {
+      title: '依料號統計',
+      empty: '尚未指定任何料號。請在庫存中為料盤新增料號，即可在此依料號統整消耗量與成本。',
+      loadFailed: '無法載入料號統計資料。',
+      spools: '料盤',
+      remaining: '剩餘',
+      consumed: '已消耗',
+      cost: '成本',
+    },
     suppliers: {
       title: '依供應商',
       empty: '尚未記錄任何購買。在料盤上標記其購買來源的供應商，即可在此依供應商彙整消耗量與成本。',
@@ -4812,6 +4822,11 @@ export default {
     storageLocationNone: '未設定位置',
     lowStockThresholdOverride: '低庫存閾值（此料盤）',
     lowStockThresholdOverrideHelp: '留空以使用全域閾值（{{global}}%）。',
+    // Internal material / article number (#2870)
+    materialNumber: '料號',
+    materialNumberPlaceholder: '例如：15',
+    materialNumberHelp: '內部採購編號 — 同一產品的所有料盤共用。同一產品的新料盤會自動繼承。',
+    materialNumberNone: '無料號',
     suppliers: {
       label: '供應商',
       none: '無供應商',

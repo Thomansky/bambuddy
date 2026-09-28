@@ -1670,6 +1670,16 @@ export default {
     printActivity: 'Actividad de impresión',
     filamentTypes: 'Tipos de filamento',
     filamentTrends: 'Tendencias del filamento',
+    // Consumption/cost grouped by the internal material number (#2870).
+    materialNumbers: {
+      title: 'Por número de material',
+      empty: 'Aún no hay números de material asignados. Añádelos a las bobinas en el inventario para agrupar aquí el consumo y los costes.',
+      loadFailed: 'No se han podido cargar las estadísticas por número de material.',
+      spools: 'Bobinas',
+      remaining: 'Restante',
+      consumed: 'Consumido',
+      cost: 'Coste',
+    },
     // Consumption/cost grouped by purchase-source supplier (#2988).
     suppliers: {
       title: 'Por proveedor',
@@ -4828,6 +4838,11 @@ export default {
     storageLocationNone: 'Sin ubicación establecida',
     lowStockThresholdOverride: 'Umbral de existencias bajas (esta bobina)',
     lowStockThresholdOverrideHelp: 'Déjelo en blanco para usar el umbral global ({{global}}%).',
+    // Internal material / article number (#2870)
+    materialNumber: 'N.º de material',
+    materialNumberPlaceholder: 'p. ej. 15',
+    materialNumberHelp: 'Número interno de compras: compartido por todas las bobinas de este producto. Las bobinas nuevas del mismo producto lo heredan.',
+    materialNumberNone: 'Sin número de material',
     // Suppliers (#2988): the master list and the per-spool assignments.
     suppliers: {
       label: 'Proveedores',

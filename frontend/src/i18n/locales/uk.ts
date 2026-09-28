@@ -1686,6 +1686,16 @@ export default {
     printActivity: "Активність друку",
     filamentTypes: "Типи філаментів",
     filamentTrends: "Тенденції філаменту",
+    // Consumption/cost grouped by the internal material number (#2870).
+    materialNumbers: {
+      title: 'За номером матеріалу',
+      empty: 'Номери матеріалів ще не призначено. Додайте їх до котушок в інвентарі, щоб групувати тут споживання та витрати.',
+      loadFailed: 'Не вдалося завантажити статистику за номерами матеріалів.',
+      spools: 'Котушки',
+      remaining: 'Залишок',
+      consumed: 'Спожито',
+      cost: 'Вартість',
+    },
     suppliers: {
       title: "За постачальником",
       empty: "Покупок ще не зафіксовано. Позначте на котушці, у якого постачальника її придбано, щоб згрупувати тут споживання та витрати.",
@@ -4861,6 +4871,11 @@ export default {
     storageLocationNone: "Місцезнаходження не встановлено",
     lowStockThresholdOverride: "Поріг низького запасу (ця котушка)",
     lowStockThresholdOverrideHelp: "Залиште поле порожнім, щоб використовувати глобальне порогове значення ({{global}}%).",
+    // Internal material / article number (#2870)
+    materialNumber: 'Мат. №',
+    materialNumberPlaceholder: 'напр. 15',
+    materialNumberHelp: 'Внутрішній закупівельний номер — спільний для всіх котушок цього продукту. Нові котушки того самого продукту успадковують його.',
+    materialNumberNone: 'Без номера матеріалу',
     suppliers: {
       label: "Постачальники",
       none: "Без постачальника",

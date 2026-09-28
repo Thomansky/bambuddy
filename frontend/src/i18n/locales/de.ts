@@ -1670,6 +1670,16 @@ export default {
     printActivity: 'Druckaktivität',
     filamentTypes: 'Filamenttypen',
     filamentTrends: 'Filamenttrends',
+    // Consumption/cost grouped by the internal material number (#2870).
+    materialNumbers: {
+      title: 'Nach Materialnummer',
+      empty: 'Noch keine Materialnummern vergeben. Weise sie Spulen im Bestand zu, um Verbrauch und Kosten hier zu gruppieren.',
+      loadFailed: 'Die Materialnummern-Statistik konnte nicht geladen werden.',
+      spools: 'Spulen',
+      remaining: 'Verbleibend',
+      consumed: 'Verbraucht',
+      cost: 'Kosten',
+    },
     // Consumption/cost grouped by purchase-source supplier (#2988)
     suppliers: {
       title: 'Nach Lieferant',
@@ -4825,6 +4835,11 @@ export default {
     storageLocationNone: 'Kein Lagerort',
     lowStockThresholdOverride: 'Niedrigbestandsschwelle (diese Spule)',
     lowStockThresholdOverrideHelp: 'Leer lassen, um den globalen Schwellenwert ({{global}}%) zu verwenden.',
+    // Internal material / article number (#2870)
+    materialNumber: 'Material-Nr.',
+    materialNumberPlaceholder: 'z. B. 15',
+    materialNumberHelp: 'Interne Einkaufsnummer - wird von allen Spulen dieses Produkts geteilt. Neue Spulen desselben Produkts übernehmen sie.',
+    materialNumberNone: 'Keine Materialnummer',
     // Suppliers (#2988): the master list and the per-spool assignments.
     suppliers: {
       label: 'Lieferanten',
