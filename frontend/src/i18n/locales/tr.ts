@@ -4047,6 +4047,8 @@ export default {
       nextPage: 'Sonraki sayfa',
       zoomIn: 'Yakınlaştır',
       zoomOut: 'Uzaklaştır',
+      fullscreen: 'Tam ekran',
+      exitFullscreen: 'Tam ekrandan çık',
       emptySheet: 'Bu sayfa boş',
       truncatedRows: '{{total}} satırdan ilk {{shown}} tanesi gösteriliyor',
       truncatedCols: '{{total}} sütundan ilk {{shown}} tanesi gösteriliyor',

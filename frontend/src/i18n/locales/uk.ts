@@ -4080,6 +4080,8 @@ export default {
       nextPage: 'Наступна сторінка',
       zoomIn: 'Збільшити',
       zoomOut: 'Зменшити',
+      fullscreen: 'Повний екран',
+      exitFullscreen: 'Вийти з повноекранного режиму',
       emptySheet: 'Цей аркуш порожній',
       truncatedRows: 'Показано перші {{shown}} з {{total}} рядків',
       truncatedCols: 'Показано перші {{shown}} з {{total}} стовпців',

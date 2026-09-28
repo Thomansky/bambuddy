@@ -4082,6 +4082,8 @@ errors: {
       nextPage: 'Nästa sida',
       zoomIn: 'Zooma in',
       zoomOut: 'Zooma ut',
+      fullscreen: 'Helskärm',
+      exitFullscreen: 'Avsluta helskärm',
       emptySheet: 'Det här bladet är tomt',
       truncatedRows: 'Visar de första {{shown}} av {{total}} raderna',
       truncatedCols: 'Visar de första {{shown}} av {{total}} kolumnerna',

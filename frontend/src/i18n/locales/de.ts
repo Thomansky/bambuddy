@@ -4053,6 +4053,8 @@ export default {
       nextPage: 'Nächste Seite',
       zoomIn: 'Vergrößern',
       zoomOut: 'Verkleinern',
+      fullscreen: 'Vollbild',
+      exitFullscreen: 'Vollbild beenden',
       emptySheet: 'Dieses Tabellenblatt ist leer',
       truncatedRows: 'Die ersten {{shown}} von {{total}} Zeilen werden angezeigt',
       truncatedCols: 'Die ersten {{shown}} von {{total}} Spalten werden angezeigt',

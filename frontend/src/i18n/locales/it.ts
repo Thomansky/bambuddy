@@ -4040,6 +4040,8 @@ export default {
       nextPage: 'Pagina successiva',
       zoomIn: 'Ingrandisci',
       zoomOut: 'Riduci',
+      fullscreen: 'Schermo intero',
+      exitFullscreen: 'Esci da schermo intero',
       emptySheet: 'Questo foglio è vuoto',
       truncatedRows: 'Visualizzate le prime {{shown}} righe di {{total}}',
       truncatedCols: 'Visualizzate le prime {{shown}} colonne di {{total}}',

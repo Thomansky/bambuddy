@@ -4041,6 +4041,8 @@ export default {
       nextPage: 'Page suivante',
       zoomIn: 'Zoom avant',
       zoomOut: 'Zoom arrière',
+      fullscreen: 'Plein écran',
+      exitFullscreen: 'Quitter plein écran',
       emptySheet: 'Cette feuille est vide',
       truncatedRows: 'Affichage des {{shown}} premières lignes sur {{total}}',
       truncatedCols: 'Affichage des {{shown}} premières colonnes sur {{total}}',

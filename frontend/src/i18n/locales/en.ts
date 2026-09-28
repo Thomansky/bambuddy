@@ -4083,6 +4083,8 @@ export default {
       nextPage: 'Next page',
       zoomIn: 'Zoom in',
       zoomOut: 'Zoom out',
+      fullscreen: 'Fullscreen',
+      exitFullscreen: 'Exit fullscreen',
       emptySheet: 'This sheet is empty',
       truncatedRows: 'Showing the first {{shown}} of {{total}} rows',
       truncatedCols: 'Showing the first {{shown}} of {{total}} columns',

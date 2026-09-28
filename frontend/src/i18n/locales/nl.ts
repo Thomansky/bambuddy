@@ -4083,6 +4083,8 @@ export default {
       nextPage: 'Volgende pagina',
       zoomIn: 'Inzoomen',
       zoomOut: 'Uitzoomen',
+      fullscreen: 'Volledig scherm',
+      exitFullscreen: 'Volledig scherm afsluiten',
       emptySheet: 'Dit werkblad is leeg',
       truncatedRows: 'Eerste {{shown}} van {{total}} rijen worden getoond',
       truncatedCols: 'Eerste {{shown}} van {{total}} kolommen worden getoond',

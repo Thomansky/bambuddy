@@ -4040,6 +4040,8 @@ export default {
       nextPage: '下一页',
       zoomIn: '放大',
       zoomOut: '缩小',
+      fullscreen: '全屏',
+      exitFullscreen: '退出全屏',
       emptySheet: '此工作表为空',
       truncatedRows: '仅显示前 {{shown}} 行，共 {{total}} 行',
       truncatedCols: '仅显示前 {{shown}} 列，共 {{total}} 列',

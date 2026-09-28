@@ -3854,6 +3854,8 @@ export default {
       nextPage: 'Следующая страница',
       zoomIn: 'Увеличить',
       zoomOut: 'Уменьшить',
+      fullscreen: 'На весь экран',
+      exitFullscreen: 'Выйти из полноэкранного режима',
       emptySheet: 'Этот лист пуст',
       truncatedRows: 'Показаны первые {{shown}} из {{total}} строк',
       truncatedCols: 'Показаны первые {{shown}} из {{total}} столбцов',
