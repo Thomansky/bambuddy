@@ -195,6 +195,37 @@ class TestSupplierCrud:
         assert resp.status_code == 409
         assert (await async_client.get("/api/v1/inventory/suppliers")).json()[0]["spool_count"] == 1
 
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_list_reads_case_insensitively(self, async_client: AsyncClient, supplier_factory):
+        """Ordered on the folded name, so "extrudr" sits between "Bambu Store"
+        and "Zultrat" rather than after every capitalised name (#2988)."""
+        for name in ["Zultrat", "extrudr", "Bambu Store"]:
+            await supplier_factory(name=name)
+        listing = (await async_client.get("/api/v1/inventory/suppliers")).json()
+        assert [s["name"] for s in listing] == ["Bambu Store", "extrudr", "Zultrat"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_padded_name_at_the_cap_is_measured_after_trimming(
+        self, async_client: AsyncClient, supplier_factory
+    ):
+        """The length limit applies to the stored name, not to surrounding
+        whitespace that is stripped anyway (#2988)."""
+        name = "S" * 200
+        resp = await async_client.post("/api/v1/inventory/suppliers", json={"name": f"  {name}  "})
+        assert resp.status_code == 201
+        assert resp.json()["name"] == name
+
+        other = await supplier_factory(name="Other")
+        resp = await async_client.patch(f"/api/v1/inventory/suppliers/{other.id}", json={"name": f" {'T' * 200} "})
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "T" * 200
+
+        # A name that really is too long is still refused.
+        resp = await async_client.post("/api/v1/inventory/suppliers", json={"name": "U" * 201})
+        assert resp.status_code == 422
+
 
 class TestSupplierNameUniqueness:
     """Supplier names are the feature's key (#2988): CSV import resolves
@@ -691,6 +722,54 @@ class TestSupplierStats:
         # Stock is not windowed.
         assert windowed[0]["spool_count"] == 1
         assert windowed[0]["remaining_g"] == pytest.approx(700)
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_an_over_consumed_spool_counts_as_empty_not_negative(
+        self, async_client: AsyncClient, supplier_factory, spool_factory, db_session: AsyncSession
+    ):
+        """Each spool is clamped before the sum, as the inventory page shows it:
+        a full 1000 g spool next to one over-consumed by 200 g is 1000 g in
+        stock, not 800 g (#2988)."""
+        supplier = await supplier_factory(name="Supplier A")
+        full = await spool_factory(label_weight=1000, weight_used=0)
+        over = await spool_factory(label_weight=1000, weight_used=1200, color_name="Red")
+        db_session.add_all(
+            [
+                SpoolSupplier(spool_id=full.id, supplier_id=supplier.id, is_purchase_source=True),
+                SpoolSupplier(spool_id=over.id, supplier_id=supplier.id, is_purchase_source=True),
+            ]
+        )
+        await db_session.commit()
+
+        rows = (await async_client.get("/api/v1/inventory/stats/suppliers")).json()
+        assert rows[0]["spool_count"] == 2
+        assert rows[0]["remaining_g"] == pytest.approx(1000)
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_equal_consumption_falls_back_to_the_name(
+        self, async_client: AsyncClient, supplier_factory, spool_factory, db_session: AsyncSession
+    ):
+        """A narrow date range leaves most rows at 0 g; they read by name
+        instead of in whatever order the GROUP BY produced (#2988)."""
+        names = ["zultrat", "Extrudr", "Bambu Store"]
+        for name in names:
+            supplier = await supplier_factory(name=name)
+            spool = await spool_factory(color_name=name)
+            db_session.add(SpoolSupplier(spool_id=spool.id, supplier_id=supplier.id, is_purchase_source=True))
+        heavy = await supplier_factory(name="Yet Another")
+        heavy_spool = await spool_factory(color_name="Heavy")
+        db_session.add_all(
+            [
+                SpoolSupplier(spool_id=heavy_spool.id, supplier_id=heavy.id, is_purchase_source=True),
+                SpoolUsageHistory(spool_id=heavy_spool.id, weight_used=50, percent_used=5, status="completed"),
+            ]
+        )
+        await db_session.commit()
+
+        rows = (await async_client.get("/api/v1/inventory/stats/suppliers")).json()
+        assert [r["supplier_name"] for r in rows] == ["Yet Another", "Bambu Store", "Extrudr", "zultrat"]
 
 
 class TestSupplierCsv:
