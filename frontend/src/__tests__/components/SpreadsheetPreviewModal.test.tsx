@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as XLSX from 'xlsx';
 import { SpreadsheetPreviewModal } from '../../components/SpreadsheetPreviewModal';
@@ -163,6 +163,76 @@ describe('SpreadsheetPreviewModal', () => {
 
       await user.click(screen.getByRole('button', { name: 'Fullscreen' }));
       expect(requestFullscreen).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('grid thumbnail snapshot', () => {
+    // The snapshot is drawn into an offscreen canvas, which jsdom cannot
+    // back: both the 2D context and toBlob are stood in for.
+    function stubCanvas2d(blob: Blob | null = new Blob(['png'], { type: 'image/png' })) {
+      const context = {
+        fillStyle: '',
+        strokeStyle: '',
+        lineWidth: 0,
+        font: '',
+        textBaseline: '',
+        fillRect: vi.fn(),
+        beginPath: vi.fn(),
+        moveTo: vi.fn(),
+        lineTo: vi.fn(),
+        stroke: vi.fn(),
+        fillText: vi.fn(),
+      };
+      vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(
+        context as unknown as CanvasRenderingContext2D,
+      );
+      vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation((callback) => callback(blob));
+      return context;
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('hands the first sheet to onSnapshot as a PNG', async () => {
+      const context = stubCanvas2d();
+      stubFetchWith('Article,Qty\nM3 screw,12\n');
+      const onSnapshot = vi.fn();
+
+      renderModal({ onSnapshot });
+      await screen.findByText('M3 screw');
+
+      await waitFor(() => expect(onSnapshot).toHaveBeenCalledTimes(1));
+      expect((onSnapshot.mock.calls[0][0] as Blob).type).toBe('image/png');
+      // The mini table is what makes it recognisable in the grid.
+      expect(context.fillText).toHaveBeenCalledWith('M3 screw', expect.any(Number), expect.any(Number), expect.any(Number));
+    });
+
+    it('draws the first sheet that has rows, not an empty leading one', async () => {
+      stubCanvas2d();
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([]), 'Cover');
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Part', 'Qty'], ['Hinge', '2']]), 'Bom');
+      stubFetchWith(XLSX.write(workbook, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer);
+      const onSnapshot = vi.fn();
+
+      renderModal({ onSnapshot, filename: 'bom.xlsx', fileType: 'xlsx' });
+      // The empty Cover sheet opens first, so the tab strip is what says the
+      // workbook has parsed.
+      await screen.findByRole('button', { name: 'Bom' });
+
+      await waitFor(() => expect(onSnapshot).toHaveBeenCalledTimes(1));
+    });
+
+    it('stays quiet for a sheet with no rows at all', async () => {
+      stubCanvas2d();
+      stubFetchWith('');
+      const onSnapshot = vi.fn();
+
+      renderModal({ onSnapshot });
+      await screen.findByText('This sheet is empty');
+
+      expect(onSnapshot).not.toHaveBeenCalled();
     });
   });
 });
