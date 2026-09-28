@@ -882,7 +882,9 @@ async def list_suppliers(
     _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_READ),
 ):
     """List all suppliers with their spool-usage counts."""
-    result = await db.execute(select(Supplier).order_by(Supplier.name))
+    # name_key, not name: the list should read the way it looks, so "extrudr"
+    # sorts next to "Extrudr" rather than after "Zultrat".
+    result = await db.execute(select(Supplier).order_by(Supplier.name_key))
     suppliers = result.scalars().all()
     counts = await _supplier_reference_counts(db)
     responses = []
@@ -2794,7 +2796,7 @@ async def get_supplier_stats(
     ``is_purchase_source`` assignment), so "how much did we run through
     supplier X" reads directly. Stock comes from active spools; consumption
     and cost from the recorded usage history, archived spools included —
-    their consumption happened. Sorted by consumption, heaviest first.
+    their consumption happened. Sorted by consumption, heaviest first, then by name.
 
     ``date_from`` / ``date_to`` scope the usage half only, so the widget can
     honour the dashboard timeframe like every other one on that page. Stock is
@@ -2809,11 +2811,14 @@ async def get_supplier_stats(
     if date_to:
         usage_window.append(SpoolUsageHistory.created_at <= datetime.combine(date_to, time.max, tzinfo=timezone.utc))
 
+    remaining = Spool.label_weight - Spool.weight_used
     inventory_rows = await db.execute(
         select(
             SpoolSupplier.supplier_id,
             func.count(Spool.id),
-            func.sum(Spool.label_weight - Spool.weight_used),
+            # Clamp each spool before summing: an over-consumed spool counts as
+            # empty, not as negative stock that eats into its neighbours.
+            func.sum(case((remaining > 0, remaining), else_=0.0)),
         )
         .select_from(Spool)
         .join(SpoolSupplier, purchase_link)
@@ -2837,12 +2842,12 @@ async def get_supplier_stats(
     names = dict((await db.execute(select(Supplier.id, Supplier.name))).all())
 
     stats: dict[int, SupplierStats] = {}
-    for supplier_id, count, remaining in inventory_rows.all():
+    for supplier_id, count, remaining_g in inventory_rows.all():
         stats[supplier_id] = SupplierStats(
             supplier_id=supplier_id,
             supplier_name=names.get(supplier_id, f"#{supplier_id}"),
             spool_count=count,
-            remaining_g=max(0.0, float(remaining or 0)),
+            remaining_g=float(remaining_g or 0),
             consumed_g=0.0,
             cost=0.0,
         )
@@ -2861,7 +2866,9 @@ async def get_supplier_stats(
         entry.consumed_g = float(consumed or 0)
         entry.cost = float(cost or 0)
 
-    return sorted(stats.values(), key=lambda s: s.consumed_g, reverse=True)
+    # Name breaks ties: a narrow date range leaves most rows at 0 g consumed,
+    # and those would otherwise come back in GROUP BY order.
+    return sorted(stats.values(), key=lambda s: (-s.consumed_g, supplier_name_key(s.supplier_name)))
 
 
 @router.get("/usage", response_model=list[SpoolUsageHistoryResponse])

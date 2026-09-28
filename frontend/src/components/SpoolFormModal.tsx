@@ -27,6 +27,7 @@ import { normaliseFlow } from '../utils/nozzleFlow';
 import { SpoolUsageHistory } from './SpoolUsageHistory';
 import { ConfirmModal } from './ConfirmModal';
 import { SpoolGroupLinkModal } from './SpoolGroupLinkModal';
+import { AssignToAmsModal } from './spoolbuddy/AssignToAmsModal';
 import {
   invalidateInventoryLocations,
   invalidateSpoolAndLocationQueries,
@@ -78,6 +79,11 @@ export function SpoolFormModal({
   const [errors, setErrors] = useState<Partial<Record<keyof SpoolFormData, string>>>({});
   const [activeTab, setActiveTab] = useState<TabId>('filament');
   const [weightTouched, setWeightTouched] = useState(false);
+  // Keyed on core_weight, not core_weight_catalog_id: SpoolWeightPicker selects
+  // a catalogue entry by itself on mount when one matches the current weight,
+  // so the id changes on forms nobody has touched. Both real user actions go
+  // through core_weight.
+  const [coreWeightTouched, setCoreWeightTouched] = useState(false);
   const [locationIdTouched, setLocationIdTouched] = useState(false);
   // Supplier assignments (#2988). Held outside SpoolFormData — they are
   // relational and saved through their own replace-all endpoint. An untouched
@@ -92,6 +98,11 @@ export function SpoolFormModal({
   const [linkPickerOpen, setLinkPickerOpen] = useState(false);
   const [quickAdd, setQuickAdd] = useState(false);
   const [quantity, setQuantity] = useState(1);
+  const [showAssignModal, setShowAssignModal] = useState(false);
+
+  useEffect(() => {
+    setShowAssignModal(false);
+  }, [isOpen, spool?.id]);
 
   // Cloud presets
   const [cloudAuthenticated, setCloudAuthenticated] = useState(false);
@@ -220,9 +231,9 @@ export function SpoolFormModal({
         }
       };
       fetchData();
-      if (!spoolmanMode) {
-        api.getSpoolCatalog().then(setSpoolCatalog).catch(console.error);
-      }
+      // Fetched in Spoolman mode too: the empty spool weight picker is shown
+      // there now, and its catalogue is Bambuddy's own either way (#2908).
+      api.getSpoolCatalog().then(setSpoolCatalog).catch(console.error);
       api.getColorCatalog().then(setColorCatalog).catch(console.error);
       api.getLocalPresets().then(r => setLocalPresets(r.filament)).catch(console.error);
       api.getBuiltinFilaments().then(setBuiltinFilaments).catch(console.error);
@@ -269,16 +280,14 @@ export function SpoolFormModal({
         })();
       }
     }
-    // The effect intentionally depends only on `isOpen` (and the prop-side
-    // calibration count) — re-running on every spoolmanMode toggle would
-    // race the in-flight async fetches with unmount/teardown and emit
-    // "test environment was torn down" errors in vitest. spoolmanMode only
-    // gates a single fetch (getSpoolCatalog) which is cheap enough to skip
-    // when the modal opens in Spoolman mode.
+    // Depends only on `isOpen` (and the prop-side calibration count). It used
+    // to read spoolmanMode for the catalogue fetch and left it out of the deps
+    // on purpose -- re-running on every toggle raced the in-flight fetches with
+    // unmount and emitted "test environment was torn down" errors in vitest.
+    // It no longer reads it, so the deps are complete as written.
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, printersWithCalibrations.length]);
 
   // Build filament options: cloud → local → fallback
@@ -416,7 +425,8 @@ export function SpoolFormModal({
           extra_colors: spool.extra_colors || '',
           effect_type: spool.effect_type || '',
           label_weight: spool.label_weight || 1000,
-          core_weight: spool.core_weight || 250,
+          // ?? not ||: 0 g is a real tare (a spool-less coil) and must load as 0.
+          core_weight: spool.core_weight ?? 250,
           core_weight_catalog_id: spool.core_weight_catalog_id ?? null,
           weight_used: isCopying ? 0 : spool.weight_used || 0,
           slicer_filament: spool.slicer_filament || '',
@@ -491,6 +501,10 @@ export function SpoolFormModal({
       // save) A's per-model overrides on B. Refilled by the fetch below.
       setModelPresets(new Map());
       setWeightTouched(false);
+      // A copy of a Spoolman spool with its own tare carries that tare, as it
+      // would any other field shown in the form; one that inherits keeps
+      // inheriting. Only Spoolman spools report the flag (#2908).
+      setCoreWeightTouched(isCopying && spool?.core_weight_is_inherited === false);
       setLocationIdTouched(false);
       setSupplierLinksTouched(false);
     }
@@ -557,6 +571,7 @@ export function SpoolFormModal({
         : {}),
     }));
     if (key === 'weight_used') setWeightTouched(true);
+    if (key === 'core_weight') setCoreWeightTouched(true);
     if (key === 'location_id') setLocationIdTouched(true);
     if (errors[key]) {
       setErrors(prev => ({ ...prev, [key]: undefined }));
@@ -742,12 +757,12 @@ export function SpoolFormModal({
   // the slot assignment lives in the spoolman_slot_assignments table keyed by
   // spoolman_spool_id, not in the legacy spool_assignments table — #1336 was the
   // resulting "Unassign button is always disabled" report.
-  const { data: assignments } = useQuery({
+  const { data: assignments, isLoading: assignmentsLoading } = useQuery({
     queryKey: ['spool-assignments'],
     queryFn: () => api.getAssignments(),
     enabled: isOpen && isEditing && !spoolmanMode,
   });
-  const { data: spoolmanSlotAssignments } = useQuery({
+  const { data: spoolmanSlotAssignments, isLoading: spoolmanAssignmentsLoading } = useQuery({
     queryKey: ['spoolman-slot-assignments-all'],
     queryFn: () => api.getSpoolmanSlotAssignments(),
     enabled: isOpen && isEditing && spoolmanMode,
@@ -759,6 +774,7 @@ export function SpoolFormModal({
     }
     return assignments?.find(a => a.spool_id === spool.id);
   })();
+  const assignmentLoading = spoolmanMode ? spoolmanAssignmentsLoading : assignmentsLoading;
 
   // Read inventory + settings caches (already populated by InventoryPage) to
   // drive the category autocomplete and low-stock-threshold placeholder. #729
@@ -950,11 +966,14 @@ export function SpoolFormModal({
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      // The nested AMS assignment dialog owns Escape while it is open. Both
+      // listeners live on document, so propagation control in the child would
+      // not prevent this editor handler from running for the same key press.
+      if (e.key === 'Escape' && !showAssignModal) onClose();
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
+  }, [isOpen, onClose, showAssignModal]);
 
   // Product master data (#3165): the product this spool is a roll of.
   const variantId = isEditing && !spoolmanMode ? spool?.variant_id ?? null : null;
@@ -1014,7 +1033,16 @@ export function SpoolFormModal({
       extra_colors: formData.extra_colors || null,
       effect_type: formData.effect_type || null,
       label_weight: formData.label_weight,
-      ...(spoolmanMode ? {} : { core_weight: formData.core_weight, core_weight_catalog_id: formData.core_weight_catalog_id }),
+      // In Spoolman mode the picker opens on the tare the spool resolves to,
+      // which is the filament type's unless the spool has its own. Sending it
+      // untouched would copy that inherited value onto the spool and stop it
+      // following the filament, so only a value the user set goes out (#2908).
+      // The catalogue id has no field on the Spoolman side.
+      ...(spoolmanMode
+        ? coreWeightTouched
+          ? { core_weight: formData.core_weight }
+          : {}
+        : { core_weight: formData.core_weight, core_weight_catalog_id: formData.core_weight_catalog_id }),
       slicer_filament: formData.slicer_filament || null,
       slicer_filament_name: presetName,
       nozzle_temp_min: null,
@@ -1058,6 +1086,7 @@ export function SpoolFormModal({
   const isPending = createMutation.isPending || bulkCreateMutation.isPending || updateMutation.isPending || deleteTagMutation.isPending || unassignMutation.isPending || unlinkMutation.isPending;
 
   return (
+    <>
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div
         className="absolute inset-0 bg-black/60 backdrop-blur-sm"
@@ -1376,14 +1405,25 @@ export function SpoolFormModal({
                 <Tag className="w-4 h-4" />
                 {t('inventory.clearRfid', 'Clear RFID Tag')}
               </Button>
-              <Button
-                variant="secondary"
-                onClick={() => unassignMutation.mutate()}
-                disabled={isPending || !spoolAssignment}
-              >
-                <Unlink className="w-4 h-4" />
-                {t('inventory.unassignSpool', 'Unassign')}
-              </Button>
+              {spoolAssignment ? (
+                <Button
+                  variant="secondary"
+                  onClick={() => unassignMutation.mutate()}
+                  disabled={isPending || assignmentLoading}
+                >
+                  <Unlink className="w-4 h-4" />
+                  {t('inventory.unassignSpool', 'Unassign')}
+                </Button>
+              ) : (
+                <Button
+                  variant="secondary"
+                  onClick={() => setShowAssignModal(true)}
+                  disabled={isPending || assignmentLoading}
+                >
+                  <Link2 className="w-4 h-4" />
+                  {t('inventory.assignSpool', 'Assign Spool')}
+                </Button>
+              )}
             </div>
           )}
           <div className="flex gap-2 ml-auto">
@@ -1440,5 +1480,16 @@ export function SpoolFormModal({
         )}
       </div>
     </div>
+    {isEditing && spool && (
+      <AssignToAmsModal
+        isOpen={showAssignModal}
+        onClose={() => setShowAssignModal(false)}
+        spool={spool}
+        printerId={null}
+        variant="dialog"
+        spoolmanMode={spoolmanMode}
+      />
+    )}
+    </>
   );
 }

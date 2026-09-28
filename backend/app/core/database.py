@@ -5565,6 +5565,11 @@ async def run_migrations(conn):
         conn, "CREATE INDEX IF NOT EXISTS ix_filament_shopping_list_variant_id ON filament_shopping_list (variant_id)"
     )
 
+    # Migration: a code for why a scheduled drying failed, so the card can show
+    # the reason in the user's language. Nullable: rows that failed before this
+    # keep showing their English error_message.
+    await _safe_execute(conn, "ALTER TABLE scheduled_dryings ADD COLUMN error_code VARCHAR(32)")
+
 
 async def _migrate_confirm_prompt_body_template(conn) -> None:
     """Replace the one-tap verdict URLs in the outcome prompt's body (#1898).
@@ -5607,7 +5612,7 @@ async def _migrate_create_supplier_tables(conn) -> None:
             CREATE TABLE IF NOT EXISTS suppliers (
                 id INTEGER PRIMARY KEY,
                 name VARCHAR(200) NOT NULL,
-                name_key VARCHAR(200),
+                name_key VARCHAR(200) NOT NULL,
                 website VARCHAR(500),
                 customer_number VARCHAR(100),
                 note VARCHAR(500),
@@ -5646,7 +5651,7 @@ async def _migrate_create_supplier_tables(conn) -> None:
             CREATE TABLE IF NOT EXISTS suppliers (
                 id SERIAL PRIMARY KEY,
                 name VARCHAR(200) NOT NULL,
-                name_key VARCHAR(200),
+                name_key VARCHAR(200) NOT NULL,
                 website VARCHAR(500),
                 customer_number VARCHAR(100),
                 note VARCHAR(500),
@@ -5722,6 +5727,10 @@ async def _migrate_supplier_name_key(conn) -> None:
 
     from backend.app.models.supplier import supplier_name_key
 
+    # Only a table written by an earlier build of this branch lacks the column
+    # (the CREATE TABLE above declares it NOT NULL). ADD COLUMN cannot carry
+    # NOT NULL without a default, so it is added nullable, backfilled below and
+    # tightened afterwards where the database can do that in place.
     await _safe_execute(conn, "ALTER TABLE suppliers ADD COLUMN name_key VARCHAR(200)")
 
     async with conn.begin_nested():
@@ -5781,6 +5790,12 @@ async def _migrate_supplier_name_key(conn) -> None:
     # never enforced the rule for non-ASCII names in the first place.
     await _safe_execute(conn, "DROP INDEX IF EXISTS uq_suppliers_name_lower")
     await _safe_execute(conn, "CREATE UNIQUE INDEX IF NOT EXISTS ix_suppliers_name_key ON suppliers (name_key)")
+    # NULLs never collide in a unique index, so the guarantee belongs in the
+    # schema, as create_all() declares it on fresh installs. Every row has a
+    # key by now. SQLite cannot alter a column in place; there the ORM hook on
+    # Supplier.name is what writes it.
+    if not is_sqlite():
+        await _safe_execute(conn, "ALTER TABLE suppliers ALTER COLUMN name_key SET NOT NULL")
 
 
 async def _migrate_rename_ha_sensor_alert_template(conn) -> None:

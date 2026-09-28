@@ -464,7 +464,9 @@ export interface HMSError {
   code: string;
   attr: number;  // Attribute value for constructing wiki URL
   module: number;
-  severity: number;  // 1=fatal, 2=serious, 3=common, 4=info
+  // Bambu's alert level: 1 error (task stopped), 2 warning (task paused),
+  // 3 notification, 0 invalid (#2728).
+  severity: number;
   actions?: string[];  // List of user-facing action keys (e.g. "CHECK_FILAMENT")
   job_id?: string;  // Optional job ID for actions that require it (e.g. "CHECK_ASSISTANT")
   // Canonical hex identifier the firmware matches against — 8 chars for
@@ -472,11 +474,10 @@ export interface HMSError {
   // this back as HmsActionBody.print_error so we don't truncate the 64-bit
   // identifier into the silent-rejection short code (#1830).
   full_code?: string;
-  // The backend's resolved catalogue sentence for this fault (#2926). English
-  // only, and null when the catalogue does not cover the code. Resolved with the
-  // same lookup order this file's consumers use (full_code, then the G1_G4
-  // collapse), so it agrees with what HMSErrorModal renders — the modal still
-  // resolves its own text, and this is here for parity with the API.
+  // The backend's catalogue sentence for this fault (#2926), from the table
+  // generated out of Bambu Studio for this printer model (#2728). English only.
+  // Null when Bambu publishes no text for the code. The frontend has no table of
+  // its own: this field decides both the text and whether the fault counts.
   description?: string | null;
 }
 
@@ -515,6 +516,7 @@ export interface AMSUnit {
   serial_number: string;  // AMS unit serial number (from MQTT sn field)
   sw_ver: string;         // AMS firmware version (from get_version info.module ams/* entry)
   dry_time: number;       // Minutes remaining (0 = not drying, >0 = drying active)
+  dry_countdown_stalled?: boolean; // Timer set but countdown not ticking (never started or paused)
   dry_status: number;     // 0=Off, 1=Checking, 2=Drying, 3=Cooling, 4=Stopping, 5=Error
   dry_sub_status: number; // 0=Off, 1=Heating, 2=Dehumidify
   dry_sf_reason: number[]; // Cannot-dry reasons (1=InsufficientPower, 8=NeedPluginPower)
@@ -535,6 +537,9 @@ export interface ScheduledDrying {
   status: string;
   waiting_reason: string | null;
   error_message: string | null;
+  // Why a failed run failed (screen_only / unsupported / did_not_start); null on
+  // rows that failed before codes existed, which show error_message instead.
+  error_code?: string | null;
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
@@ -1584,6 +1589,7 @@ export interface AppSettings {
   queue_drying_enabled: boolean;  // Auto-dry AMS between queued prints
   queue_drying_block: boolean;  // Block queue until drying completes
   ambient_drying_enabled: boolean;  // Auto-dry idle printers based on humidity regardless of queue
+  ambient_drying_sustained_minutes: number;  // Minutes humidity must stay above threshold before ambient auto-dry starts (0 = instant)
   print_drying_enabled: boolean;  // Continue drying while a print is running on capable hardware
   drying_presets: string;  // JSON blob of drying presets per filament type
   ams_humidity_thresholds: string;  // JSON blob of per-filament humidity thresholds (#1605)
@@ -3877,6 +3883,9 @@ export interface InventorySpool {
   brand: string | null;
   label_weight: number;
   core_weight: number;
+  // Spoolman-backed inventory only: true when the spool has no tare of its
+  // own and core_weight is the filament type's. Absent for local spools (#2908).
+  core_weight_is_inherited?: boolean;
   core_weight_catalog_id: number | null;
   weight_used: number;
   // Anchor for the resettable "Total Consumed" display (#1390). The

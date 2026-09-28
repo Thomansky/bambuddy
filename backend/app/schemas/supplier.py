@@ -30,11 +30,14 @@ class SupplierBase(BaseModel):
 
 class SupplierCreate(SupplierBase):
     # Only on the write schemas: SupplierResponse inherits SupplierBase, and a
-    # row written before the rule existed must still be readable.
-    @field_validator("name")
+    # row written before the rule existed must still be readable. mode="before"
+    # so the name is trimmed before max_length sees it — a padded name at the
+    # cap is not too long once stripped. Non-strings pass through to the type
+    # check.
+    @field_validator("name", mode="before")
     @classmethod
-    def _normalize_name(cls, value: str) -> str:
-        return validate_supplier_name(value)
+    def _normalize_name(cls, value: object) -> object:
+        return validate_supplier_name(value) if isinstance(value, str) else value
 
 
 class SupplierUpdate(BaseModel):
@@ -45,12 +48,12 @@ class SupplierUpdate(BaseModel):
     customer_number: str | None = Field(default=None, max_length=100)
     note: str | None = Field(default=None, max_length=500)
 
-    @field_validator("name")
+    @field_validator("name", mode="before")
     @classmethod
-    def _normalize_name(cls, value: str | None) -> str:
+    def _normalize_name(cls, value: object) -> object:
         if value is None:
             raise ValueError("name must not be null")
-        return validate_supplier_name(value)
+        return validate_supplier_name(value) if isinstance(value, str) else value
 
 
 class SupplierResponse(SupplierBase):

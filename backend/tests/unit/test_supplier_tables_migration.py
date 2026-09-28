@@ -93,7 +93,7 @@ async def test_migration_creates_supplier_tables(engine_without_supplier_tables)
         await run_migrations(conn)
 
     async with engine_without_supplier_tables.begin() as conn:
-        await conn.execute(text("INSERT INTO suppliers (name) VALUES ('Supplier A')"))
+        await conn.execute(text("INSERT INTO suppliers (name, name_key) VALUES ('Supplier A', 'supplier a')"))
         await conn.execute(
             text(
                 """
@@ -133,7 +133,7 @@ async def test_migration_is_idempotent(engine_without_supplier_tables):
     async with engine_without_supplier_tables.begin() as conn:
         await run_migrations(conn)
     async with engine_without_supplier_tables.begin() as conn:
-        await conn.execute(text("INSERT INTO suppliers (name) VALUES ('Kept')"))
+        await conn.execute(text("INSERT INTO suppliers (name, name_key) VALUES ('Kept', 'kept')"))
     async with engine_without_supplier_tables.begin() as conn:
         await run_migrations(conn)
 
@@ -173,6 +173,24 @@ async def test_migration_enforces_case_insensitive_unique_names(engine_without_s
         with pytest.raises(IntegrityError):
             async with engine_without_supplier_tables.begin() as conn:
                 await _insert(conn, variant)
+
+
+async def test_upgraded_database_refuses_a_supplier_without_a_name_key(engine_without_supplier_tables):
+    """The upgrade path declares name_key NOT NULL, as create_all() does on a
+    fresh install (#2988). NULLs never collide in a unique index, so a row
+    without a key would slip past the case-insensitive uniqueness."""
+    from sqlalchemy.exc import IntegrityError
+
+    async with engine_without_supplier_tables.begin() as conn:
+        await run_migrations(conn)
+
+    async with engine_without_supplier_tables.connect() as conn:
+        columns = (await conn.execute(text("PRAGMA table_info(suppliers)"))).all()
+    assert {c.name: c.notnull for c in columns}["name_key"] == 1
+
+    with pytest.raises(IntegrityError):
+        async with engine_without_supplier_tables.begin() as conn:
+            await conn.execute(text("INSERT INTO suppliers (name) VALUES ('No Key')"))
 
 
 async def test_migration_collapses_duplicates_instead_of_aborting(engine_with_pre_fix_suppliers):

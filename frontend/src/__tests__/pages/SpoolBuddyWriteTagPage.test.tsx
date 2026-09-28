@@ -60,6 +60,8 @@ vi.mock('../../api/client', () => ({
 // the options object would hand React an object to render.
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
+    // The second argument is an options object on some calls (the full
+    // form's sections); only a string is a fallback.
     t: (key: string, fallback?: unknown) => (typeof fallback === 'string' ? fallback : key),
     i18n: { language: 'en', changeLanguage: vi.fn() },
   }),
@@ -354,5 +356,72 @@ describe('SpoolBuddyWriteTagPage', () => {
     const { container } = await openFullNewSpoolForm();
 
     expect(container.querySelector('#spool-material-number')).toBeNull();
+  });
+
+  describe('per-spool tare in Spoolman mode (#2908)', () => {
+    beforeEach(() => {
+      vi.mocked(mockedApi.getSpoolmanSettings).mockResolvedValue({
+        spoolman_enabled: 'true',
+        spoolman_url: 'http://spoolman.test',
+        spoolman_sync_mode: '',
+        spoolman_disable_weight_sync: '',
+        spoolman_report_partial_usage: '',
+      });
+      vi.mocked(mockedApi.getSpoolCatalog).mockResolvedValue([
+        { id: 3, name: 'Standard 300g', weight: 300 },
+      ] as never);
+    });
+
+    async function openNewSpoolForm() {
+      renderPage();
+      await waitFor(() => {
+        expect(vi.mocked(mockedApi.getSpoolmanInventorySpools)).toHaveBeenCalled();
+      });
+      fireEvent.click(screen.getByText('New Spool'));
+      await waitFor(() => screen.getByText('Create Spool'));
+      // The one field the simple view requires.
+      const material = screen.getAllByRole('combobox').find((el) => el.querySelector('option[value="PLA"]'));
+      fireEvent.change(material!, { target: { value: 'PLA' } });
+    }
+
+    async function createdPayload() {
+      fireEvent.click(screen.getAllByText('Create Spool').at(-1)!);
+      await waitFor(() => {
+        expect(vi.mocked(mockedApi.createSpoolmanInventorySpool)).toHaveBeenCalledTimes(1);
+      });
+      return vi.mocked(mockedApi.createSpoolmanInventorySpool).mock.calls[0][0] as unknown as Record<string, unknown>;
+    }
+
+    it('does not send the form default when the tare was left alone', async () => {
+      await openNewSpoolForm();
+
+      const payload = await createdPayload();
+
+      expect(payload).not.toHaveProperty('core_weight');
+      expect(payload).not.toHaveProperty('core_weight_catalog_id');
+    });
+
+    it('sends the tare the user picked, without the catalogue id', async () => {
+      await openNewSpoolForm();
+      fireEvent.click(screen.getByText('Full'));
+      const picker = await waitFor(() => {
+        const input = screen
+          .getAllByPlaceholderText(/search/i)
+          .find((el) => el.getAttribute('placeholder')?.toLowerCase().includes('spool'));
+        expect(input).toBeTruthy();
+        return input!;
+      });
+      fireEvent.focus(picker);
+      fireEvent.click(await screen.findByText('Standard 300g'));
+      // Back to the simple view to submit: it validates on material alone, and
+      // the form state, touched flag included, is shared by both views.
+      fireEvent.click(screen.getByText('Simple'));
+
+      const payload = await createdPayload();
+
+      expect(payload).toHaveProperty('core_weight', 300);
+      // No field for it on the Spoolman create schema; it would be dropped.
+      expect(payload).not.toHaveProperty('core_weight_catalog_id');
+    });
   });
 });

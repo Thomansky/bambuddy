@@ -9,6 +9,7 @@ import type { PrinterStatus, AMSTray, SpoolAssignment } from '../../api/client';
 import { getGlobalTrayId, getFillBarColor, getSpoolmanFillLevel, getFallbackSpoolTag, formatSlotLabel, isBambuLabSpool, resolveSlotNozzleDiameter } from '../../utils/amsHelpers';
 import { getSwatchStyle, resolveSpoolColorName } from '../../utils/colors';
 import { mapModelCode } from '../../utils/printer';
+import { spoolSwatchStyle } from '../../components/spoolbuddy/spoolPaint';
 
 /**
  * " - Candy Red", or nothing when the colour has no name we can show.
@@ -754,7 +755,7 @@ export function SpoolBuddyAmsPage() {
                       {assignment.spool.rgba && (
                         <span
                           className="w-3 h-3 rounded-full border border-black/20 flex-shrink-0"
-                          style={getSwatchStyle(assignment.spool.rgba)}
+                          style={spoolSwatchStyle(assignment.spool) ?? getSwatchStyle(assignment.spool.rgba)}
                         />
                       )}
                       <span className="text-sm text-white">
@@ -788,7 +789,7 @@ export function SpoolBuddyAmsPage() {
                       {spoolmanAssignedSpool.rgba && (
                         <span
                           className="w-3 h-3 rounded-full border border-black/20 flex-shrink-0"
-                          style={getSwatchStyle(spoolmanAssignedSpool.rgba)}
+                          style={spoolSwatchStyle(spoolmanAssignedSpool) ?? getSwatchStyle(spoolmanAssignedSpool.rgba)}
                         />
                       )}
                       <span className="text-sm text-white">

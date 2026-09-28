@@ -222,8 +222,9 @@ export interface AdditionalSectionProps extends SectionProps {
   globalLowStockThreshold: number;
   availableLocations?: { id: number; name: string }[];
   onCreateLocation?: (name: string) => Promise<{ id: number; name: string } | null>;
-  // When true the empty-spool weight is managed by Spoolman on the filament
-  // object, so SpoolWeightPicker is hidden and an info notice is shown instead.
+  // When true the material number input is hidden: in Spoolman mode the
+  // number is Spoolman's filament-level article_number, maintained in
+  // Spoolman itself and shown read-only in the list (#2870).
   spoolmanMode?: boolean;
   // The VAT distinction is opt-in (vat_enabled setting); the incl./excl.
   // selector behind the cost field only renders when it is on.

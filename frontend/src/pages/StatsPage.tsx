@@ -1093,10 +1093,13 @@ export function StatsPage() {
     queryFn: api.getUiFlags,
   });
 
-  // The material-number widget aggregates the internal spool table, which is
-  // empty in Spoolman mode — there the number is Spoolman's filament-level
-  // article_number and lives in Spoolman. Rather than show a permanently
-  // empty card next to an inventory that does display numbers, drop it (#2870).
+  // The supplier widget aggregates the internal spool table, which is empty
+  // in Spoolman mode — there the assignments live in the Spoolman twin table.
+  // Rather than show a permanently empty card next to an inventory that does
+  // display supplier chips, drop it (#2988).
+  // The material-number widget shares this gate for the same reason: in
+  // Spoolman mode the number is Spoolman's filament-level article_number and
+  // lives in Spoolman itself, not in the internal spool table (#2870).
   const { data: spoolmanSettings, isPending: spoolmanSettingsPending } = useQuery({
     queryKey: ['spoolman-settings'],
     queryFn: api.getSpoolmanSettings,
@@ -1108,7 +1111,6 @@ export function StatsPage() {
   const spoolmanModeReady = !spoolmanSettingsPending;
   const spoolmanMode =
     spoolmanSettings?.spoolman_enabled === 'true' && !!spoolmanSettings?.spoolman_url;
-
   // Slim listing (#1894): the filter only needs id + username, and gating it
   // on the admin-level users:read left the dropdown empty for exactly the
   // operators who were granted stats:filter_by_user.
@@ -1234,17 +1236,17 @@ export function StatsPage() {
       defaultSize: 4,
     },
     ...(!spoolmanModeReady || spoolmanMode ? [] : ([{
+      id: 'suppliers',
+      title: t('stats.suppliers.title'),
+      component: <SupplierStats currency={currency} dateFrom={effectiveDateRange.dateFrom} dateTo={effectiveDateRange.dateTo} />,
+      defaultSize: 2,
+    }] as DashboardWidget[])),
+    ...(!spoolmanModeReady || spoolmanMode ? [] : ([{
       id: 'material-numbers',
       title: t('stats.materialNumbers.title'),
       component: <MaterialNumberStats currency={currency} dateFrom={effectiveDateRange.dateFrom} dateTo={effectiveDateRange.dateTo} />,
       defaultSize: 2,
     }] as DashboardWidget[])),
-    {
-      id: 'suppliers',
-      title: t('stats.suppliers.title'),
-      component: <SupplierStats currency={currency} dateFrom={effectiveDateRange.dateFrom} dateTo={effectiveDateRange.dateTo} />,
-      defaultSize: 2,
-    },
   ];
 
   return (
