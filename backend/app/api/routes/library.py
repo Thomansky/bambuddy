@@ -17,7 +17,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from fastapi.responses import FileResponse as FastAPIFileResponse
-from sqlalchemy import distinct, func, select
+from sqlalchemy import distinct, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -813,11 +813,12 @@ def create_image_thumbnail(file_path: Path, thumbnails_dir: Path, max_size: int 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"}
 
 # File types whose thumbnails are rendered client-side and uploaded back
-# (#2976). The server has no renderer for these formats — STEP would need
-# OpenCascade, PDF a rasteriser — so the browser posts its first preview
-# render to POST /files/{id}/preview-thumbnail instead. Kept to exactly
-# these types so the endpoint can never overwrite a server-generated
-# STL/3MF/G-code/image thumbnail.
+# (#2976). The server has no renderer for STEP (that would need OpenCascade)
+# or the spreadsheet types, so the browser posts its first preview render to
+# POST /files/{id}/preview-thumbnail instead. PDF is rendered server-side with
+# PDFium when it lands and stays here for a PDF that renderer cannot read.
+# Kept to exactly these types so the endpoint can never overwrite a
+# server-generated STL/3MF/G-code/image thumbnail.
 CLIENT_THUMBNAIL_TYPES = {"step", "stp", "pdf", "csv", "xlsx", "ods"}
 
 # Photos of the printed result (#3077): same allowlist and naming as the
@@ -834,6 +835,15 @@ MAX_PHOTO_BYTES = 10 * 1024 * 1024
 # Upper bound for an uploaded client-rendered thumbnail. The FE sends a
 # 256px PNG (a few tens of KB); anything near this limit is not a thumbnail.
 MAX_CLIENT_THUMBNAIL_BYTES = 2 * 1024 * 1024
+
+# Upper bound on the *decoded* size, checked against the header before any
+# pixels are allocated: a few-KB PNG can declare 12000x7000 and still be under
+# PIL's own decompression-bomb limit, which would be ~340 MB of RGBA.
+MAX_CLIENT_THUMBNAIL_EDGE = 2048
+
+# What the endpoint stores. The grid renders at ~256px, so anything larger is
+# downscaled rather than kept.
+STORED_CLIENT_THUMBNAIL_EDGE = 512
 
 
 async def _backfill_external_stl_thumbnails(folder_ids: list[int]) -> None:
@@ -5421,9 +5431,11 @@ async def upload_preview_thumbnail(
 
     STEP, PDF and spreadsheet previews are rendered in the browser; the FE
     posts its first render here so the grid gets a thumbnail without the
-    server needing OpenCascade or a PDF rasteriser. Only file types in
-    ``CLIENT_THUMBNAIL_TYPES`` are accepted, and only while the file has no
-    thumbnail yet — a stored thumbnail is never replaced by this route.
+    server needing OpenCascade. A PDF normally has its PDFium thumbnail from
+    upload already, so for PDFs this only fills the gap for a file PDFium
+    could not read. Only file types in ``CLIENT_THUMBNAIL_TYPES`` are
+    accepted, and only while the file has no thumbnail yet — a stored
+    thumbnail is never replaced by this route.
     """
     user, can_modify_all = auth_result
 
@@ -5455,26 +5467,48 @@ async def upload_preview_thumbnail(
     from PIL import Image, UnidentifiedImageError
 
     try:
-        with Image.open(io.BytesIO(content)) as img:
-            img.load()
-            if img.format != "PNG":
+        # Image.open() reads the header only. Both checks below happen before
+        # load(), so a declared-but-never-delivered canvas is refused rather
+        # than allocated. DecompressionBombError derives straight from
+        # Exception, so it has to be named explicitly — open() itself raises
+        # it once the declared size passes PIL's own limit.
+        with Image.open(io.BytesIO(content)) as source:
+            if source.format != "PNG":
                 raise HTTPException(status_code=400, detail="Thumbnail must be a PNG image")
-            if img.mode not in ("RGB", "RGBA"):
-                img = img.convert("RGBA")
-            # The grid renders at ~256px; cap outliers instead of storing them.
-            if img.width > 512 or img.height > 512:
-                img.thumbnail((512, 512), Image.Resampling.LANCZOS)
-            thumbnails_dir = get_library_thumbnails_dir()
-            thumb_filename = f"{uuid.uuid4().hex}.png"
-            thumb_path = thumbnails_dir / thumb_filename  # SEC-PATH-OK: thumb_filename = uuid.uuid4().hex + ".png"
-            img.save(thumb_path, "PNG", optimize=True)
+            if max(source.size) > MAX_CLIENT_THUMBNAIL_EDGE:
+                raise HTTPException(status_code=400, detail="Thumbnail image dimensions too large")
+            source.load()
+            img = source.convert("RGBA") if source.mode not in ("RGB", "RGBA") else source.copy()
     except HTTPException:
         raise
-    except (UnidentifiedImageError, OSError, ValueError) as e:
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as e:
         raise HTTPException(status_code=400, detail="Invalid thumbnail image") from e
 
-    file.thumbnail_path = to_relative_path(thumb_path)
+    if max(img.size) > STORED_CLIENT_THUMBNAIL_EDGE:
+        img.thumbnail((STORED_CLIENT_THUMBNAIL_EDGE, STORED_CLIENT_THUMBNAIL_EDGE), Image.Resampling.LANCZOS)
+
+    thumbnails_dir = get_library_thumbnails_dir()
+    thumb_filename = f"{uuid.uuid4().hex}.png"
+    thumb_path = thumbnails_dir / thumb_filename  # SEC-PATH-OK: thumb_filename = uuid.uuid4().hex + ".png"
+    # Outside the decode guard on purpose: a full disk or an unwritable
+    # thumbnail directory is ours, not "Invalid thumbnail image".
+    try:
+        img.save(thumb_path, "PNG", optimize=True)
+    except OSError as e:
+        logger.error("Failed to store preview thumbnail for file %s: %s", file_id, e)
+        raise HTTPException(status_code=500, detail="Failed to store thumbnail") from e
+
+    # Two previews of the same file can reach this point together; the loser
+    # of the UPDATE takes its PNG back off disk instead of orphaning it.
+    result = await db.execute(
+        update(LibraryFile)
+        .where(LibraryFile.id == file_id, LibraryFile.thumbnail_path.is_(None))
+        .values(thumbnail_path=to_relative_path(thumb_path))
+    )
     await db.commit()
+    if result.rowcount == 0:
+        thumb_path.unlink(missing_ok=True)
+        return ClientThumbnailResponse(updated=False)
 
     return ClientThumbnailResponse(updated=True)
 
