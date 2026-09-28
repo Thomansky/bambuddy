@@ -97,6 +97,9 @@ const PdfPreviewModal = lazy(() =>
 const SpreadsheetPreviewModal = lazy(() =>
   import('../components/SpreadsheetPreviewModal').then((m) => ({ default: m.SpreadsheetPreviewModal }))
 );
+const ImagePreviewModal = lazy(() =>
+  import('../components/ImagePreviewModal').then((m) => ({ default: m.ImagePreviewModal }))
+);
 
 function isSpreadsheetType(fileType: string): boolean {
   return fileType === 'csv' || fileType === 'xlsx' || fileType === 'ods';
@@ -104,6 +107,35 @@ function isSpreadsheetType(fileType: string): boolean {
 
 function isStepType(fileType: string): boolean {
   return fileType === 'step' || fileType === 'stp';
+}
+
+// Mirrors IMAGE_EXTENSIONS in routes/library.py — the types the server both
+// stores and renders a thumbnail for, and so the ones that get an image icon.
+const IMAGE_TYPES = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tiff', 'tif']);
+
+// The subset ImagePreviewModal can actually show: it hands the bytes to an
+// <img>, and outside Safari no browser decodes TIFF. Offering the preview
+// would download up to 50 MB only to report "cannot be previewed", so TIFF
+// keeps its server-rendered thumbnail and no preview (#2976).
+const PREVIEWABLE_IMAGE_TYPES = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp']);
+
+function isImageType(fileType: string): boolean {
+  return IMAGE_TYPES.has(fileType.toLowerCase());
+}
+
+function isPreviewableImageType(fileType: string): boolean {
+  return PREVIEWABLE_IMAGE_TYPES.has(fileType.toLowerCase());
+}
+
+// The files that open in one of the document modals: PDF, spreadsheet, image.
+function isDocumentPreviewType(fileType: string): boolean {
+  return fileType === 'pdf' || isSpreadsheetType(fileType) || isPreviewableImageType(fileType);
+}
+
+function documentPreviewIcon(fileType: string) {
+  if (fileType === 'pdf') return <FileText className="w-4 h-4" />;
+  if (isSpreadsheetType(fileType)) return <FileSpreadsheet className="w-4 h-4" />;
+  return <Image className="w-4 h-4" />;
 }
 
 // Types the server renders a thumbnail for on request, STL through trimesh
@@ -857,10 +889,10 @@ function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, o
       title: !canPreview3d ? t('fileManager.noPermissionPreview') : undefined,
     });
   }
-  if (onPreviewDocument && (file.file_type === 'pdf' || isSpreadsheetType(file.file_type))) {
+  if (onPreviewDocument && isDocumentPreviewType(file.file_type)) {
     menuItems.push({
       label: t('fileManager.preview.open'),
-      icon: file.file_type === 'pdf' ? <FileText className="w-4 h-4" /> : <FileSpreadsheet className="w-4 h-4" />,
+      icon: documentPreviewIcon(file.file_type),
       onClick: () => onPreviewDocument(file),
       disabled: !canPreview3d,
       title: !canPreview3d ? t('fileManager.noPermissionPreview') : undefined,
@@ -939,6 +971,8 @@ function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, o
           <FileText className="w-12 h-12 text-bambu-gray/30" />
         ) : isSpreadsheetType(file.file_type) ? (
           <FileSpreadsheet className="w-12 h-12 text-bambu-gray/30" />
+        ) : isImageType(file.file_type) ? (
+          <Image className="w-12 h-12 text-bambu-gray/30" />
         ) : (
           <FileBox className="w-12 h-12 text-bambu-gray/30" />
         )}
@@ -1138,6 +1172,7 @@ export function FileManagerPage() {
   const [pdfPreviewFile, setPdfPreviewFile] = useState<LibraryFileListItem | null>(null);
   const [sheetPreviewFile, setSheetPreviewFile] = useState<LibraryFileListItem | null>(null);
   const [detailsFile, setDetailsFile] = useState<LibraryFileListItem | null>(null);
+  const [imagePreviewFile, setImagePreviewFile] = useState<LibraryFileListItem | null>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>(() => {
     return (localStorage.getItem('library-view-mode') as 'grid' | 'list') || 'grid';
   });
@@ -2585,7 +2620,8 @@ export function FileManagerPage() {
                     }}
                     onPreviewDocument={(f) => {
                       if (f.file_type === 'pdf') setPdfPreviewFile(f);
-                      else setSheetPreviewFile(f);
+                      else if (isSpreadsheetType(f.file_type)) setSheetPreviewFile(f);
+                      else setImagePreviewFile(f);
                     }}
                     onRename={(f) => setRenameItem({ type: 'file', id: f.id, name: f.filename })}
                     onDetails={setDetailsFile}
@@ -2657,6 +2693,8 @@ export function FileManagerPage() {
                                 <FileText className="w-5 h-5 text-bambu-gray/50" />
                               ) : isSpreadsheetType(file.file_type) ? (
                                 <FileSpreadsheet className="w-5 h-5 text-bambu-gray/50" />
+                              ) : isImageType(file.file_type) ? (
+                                <Image className="w-5 h-5 text-bambu-gray/50" />
                               ) : (
                                 <FileBox className="w-5 h-5 text-bambu-gray/50" />
                               )}
@@ -2840,12 +2878,13 @@ export function FileManagerPage() {
                           <Box className="w-4 h-4" />
                         </button>
                       )}
-                      {(file.file_type === 'pdf' || isSpreadsheetType(file.file_type)) && (
+                      {isDocumentPreviewType(file.file_type) && (
                         <button
                           onClick={() => {
                             if (!hasPermission('library:read')) return;
                             if (file.file_type === 'pdf') setPdfPreviewFile(file);
-                            else setSheetPreviewFile(file);
+                            else if (isSpreadsheetType(file.file_type)) setSheetPreviewFile(file);
+                            else setImagePreviewFile(file);
                           }}
                           className={`p-1.5 rounded transition-colors ${
                             hasPermission('library:read')
@@ -2855,7 +2894,7 @@ export function FileManagerPage() {
                           title={hasPermission('library:read') ? t('fileManager.preview.open') : t('fileManager.noPermissionPreview')}
                           disabled={!hasPermission('library:read')}
                         >
-                          {file.file_type === 'pdf' ? <FileText className="w-4 h-4" /> : <FileSpreadsheet className="w-4 h-4" />}
+                          {documentPreviewIcon(file.file_type)}
                         </button>
                       )}
                       <button
@@ -3095,7 +3134,7 @@ export function FileManagerPage() {
         />
       )}
 
-      {(pdfPreviewFile || sheetPreviewFile) && (
+      {(pdfPreviewFile || sheetPreviewFile || imagePreviewFile) && (
         <Suspense fallback={null}>
           {pdfPreviewFile && (
             <PdfPreviewModal
@@ -3114,6 +3153,14 @@ export function FileManagerPage() {
               fileSize={sheetPreviewFile.file_size}
               onClose={() => setSheetPreviewFile(null)}
               onSnapshot={previewSnapshotHandler(sheetPreviewFile)}
+            />
+          )}
+          {imagePreviewFile && (
+            <ImagePreviewModal
+              libraryFileId={imagePreviewFile.id}
+              filename={imagePreviewFile.print_name || imagePreviewFile.filename}
+              fileSize={imagePreviewFile.file_size}
+              onClose={() => setImagePreviewFile(null)}
             />
           )}
         </Suspense>

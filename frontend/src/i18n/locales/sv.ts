@@ -4082,6 +4082,7 @@ errors: {
       nextPage: 'Nästa sida',
       zoomIn: 'Zooma in',
       zoomOut: 'Zooma ut',
+      resetZoom: 'Återställ zoom',
       fullscreen: 'Helskärm',
       exitFullscreen: 'Avsluta helskärm',
       emptySheet: 'Det här bladet är tomt',

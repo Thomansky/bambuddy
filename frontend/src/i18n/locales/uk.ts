@@ -4080,6 +4080,7 @@ export default {
       nextPage: 'Наступна сторінка',
       zoomIn: 'Збільшити',
       zoomOut: 'Зменшити',
+      resetZoom: 'Скинути масштаб',
       fullscreen: 'Повний екран',
       exitFullscreen: 'Вийти з повноекранного режиму',
       emptySheet: 'Цей аркуш порожній',

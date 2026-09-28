@@ -3854,6 +3854,7 @@ export default {
       nextPage: 'Следующая страница',
       zoomIn: 'Увеличить',
       zoomOut: 'Уменьшить',
+      resetZoom: 'Сбросить масштаб',
       fullscreen: 'На весь экран',
       exitFullscreen: 'Выйти из полноэкранного режима',
       emptySheet: 'Этот лист пуст',

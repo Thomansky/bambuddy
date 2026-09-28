@@ -4040,6 +4040,7 @@ export default {
       nextPage: 'Próxima página',
       zoomIn: 'Aumentar zoom',
       zoomOut: 'Diminuir zoom',
+      resetZoom: 'Redefinir zoom',
       fullscreen: 'Tela Cheia',
       exitFullscreen: 'Sair da Tela Cheia',
       emptySheet: 'Esta planilha está vazia',

@@ -4053,6 +4053,7 @@ export default {
       nextPage: '次のページ',
       zoomIn: '拡大',
       zoomOut: '縮小',
+      resetZoom: 'ズームをリセット',
       fullscreen: 'フルスクリーン',
       exitFullscreen: 'フルスクリーンを終了',
       emptySheet: 'このシートは空です',

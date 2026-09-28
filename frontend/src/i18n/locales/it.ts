@@ -4040,6 +4040,7 @@ export default {
       nextPage: 'Pagina successiva',
       zoomIn: 'Ingrandisci',
       zoomOut: 'Riduci',
+      resetZoom: 'Reimposta zoom',
       fullscreen: 'Schermo intero',
       exitFullscreen: 'Esci da schermo intero',
       emptySheet: 'Questo foglio è vuoto',

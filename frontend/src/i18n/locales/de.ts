@@ -4053,6 +4053,7 @@ export default {
       nextPage: 'Nächste Seite',
       zoomIn: 'Vergrößern',
       zoomOut: 'Verkleinern',
+      resetZoom: 'Zoom zurücksetzen',
       fullscreen: 'Vollbild',
       exitFullscreen: 'Vollbild beenden',
       emptySheet: 'Dieses Tabellenblatt ist leer',

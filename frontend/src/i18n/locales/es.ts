@@ -4055,6 +4055,7 @@ export default {
       nextPage: 'Página siguiente',
       zoomIn: 'Acercar',
       zoomOut: 'Alejar',
+      resetZoom: 'Restablecer zoom',
       fullscreen: 'Pantalla completa',
       exitFullscreen: 'Salir de la pantalla completa',
       emptySheet: 'Esta hoja está vacía',
