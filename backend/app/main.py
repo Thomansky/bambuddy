@@ -9565,7 +9565,12 @@ async def lifespan(app: FastAPI):
 
     # Start the Telegram reaction pollers (#3046), one per bot token used by a
     # provider in reactions/both mode; the notification routes resync them.
-    await telegram_reaction_poller.start()
+    # Never fatal: a bad provider row or a DB hiccup here costs reactions
+    # until the next provider save, not the whole startup.
+    try:
+        await telegram_reaction_poller.start()
+    except Exception as e:
+        logging.warning("Telegram reaction poller did not start: %s", e)
 
     # Start the GitHub backup scheduler
     await github_backup_service.start_scheduler()

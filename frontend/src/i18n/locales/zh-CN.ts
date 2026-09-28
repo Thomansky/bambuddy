@@ -6363,7 +6363,7 @@ export default {
     telegramVerdictModeButtons: '内联按钮（链接）',
     telegramVerdictModeReactions: '表情回应（👍 / 👎）',
     telegramVerdictModeBoth: '按钮和表情回应',
-    telegramVerdictModeHelp: '如何回答结果确认提示。表情回应不需要入站连接或外部 URL，由 Bambuddy 从机器人拉取。在群组中，机器人必须是管理员才能看到表情回应。',
+    telegramVerdictModeHelp: '如何回答结果确认提示。表情回应不需要入站连接或外部 URL，由 Bambuddy 从机器人拉取。使用表情回应时，请使用仅供 Bambuddy 使用的机器人：读取同一机器人的其他应用（例如 Home Assistant）将收不到自己的消息，即使切换回按钮后也是如此。在群组中，机器人必须是管理员才能看到表情回应。',
     telegramVerdictBadgeReactions: '表情回应',
     telegramVerdictBadgeBoth: '按钮 + 表情回应',
     smtpServer: 'SMTP 服务器',

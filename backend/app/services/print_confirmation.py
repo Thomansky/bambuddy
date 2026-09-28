@@ -13,8 +13,8 @@ from backend.app.models.print_log import PrintLogEntry
 logger = logging.getLogger(__name__)
 
 # How a verdict reached the archive. 'reaction' is written by the Telegram
-# reaction handler (#3046), which lives on its own branch — listed here so the
-# vocabulary is complete and the UI can label it the day that lands.
+# reaction poller (#3046, services/telegram_reactions.py) through
+# apply_outcome_verdict below.
 VERDICT_SOURCES = ("dialog", "link", "plate_clear", "printer_card", "api", "reaction")
 
 # Link-preview unfurlers and mail-security scanners fetch every URL they find in

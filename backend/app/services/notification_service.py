@@ -17,6 +17,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.app.models.archive import PrintArchive
 from backend.app.models.notification import (
     NotificationDigestQueue,
     NotificationLog,
@@ -692,13 +693,15 @@ class NotificationService:
         "buttons" is the plain #1898 delivery. In "reactions" the inline
         keyboard is dropped and the user answers with a thumbs-up/down on the
         message itself; "both" keeps the keyboard as well. In either of those
-        the sent message is remembered in telegram_pending_verdicts so the
-        reaction poller can map the reaction back to the archive.
+        the sent message is remembered in telegram_pending_verdicts, together
+        with the confirm token its links carry, so the reaction poller can map
+        the reaction back to the archive for as long as that token is live.
         """
         mode = provider.telegram_verdict_mode or "buttons"
-        # Preview off for the prompt, as for every print_confirm_request: a
-        # preview fetch of a verdict URL in the body would answer the prompt
-        # before the operator saw it.
+        # Telegram's servers GET the first URL in the text to build a preview
+        # card. An outcome prompt whose edited body still carries {good_url}
+        # would have that fetch answer the question before the operator saw
+        # it, so the preview is off for the prompt in every mode.
         if mode == "buttons":
             return await self._send_telegram(
                 config, message, image_data=image_data, buttons=buttons, link_preview=False
@@ -721,12 +724,20 @@ class NotificationService:
             return ok, status
 
         try:
+            # dispatch_outcome_confirmation mints a live token right before
+            # sending. Without one the prompt's links are dead too, and a
+            # reaction must not outlive them, so there is nothing to remember.
+            archive = await db.get(PrintArchive, archive_id)
+            if archive is None or not archive.confirm_token or archive.confirm_token_used_at is not None:
+                logger.warning("Outcome prompt for archive %s went out without a live confirm token", archive_id)
+                return ok, status
             db.add(
                 TelegramPendingVerdict(
                     provider_id=provider.id,
                     chat_id=str(((sent or {}).get("chat") or {}).get("id") or config.get("chat_id", "")).strip(),
                     message_id=message_id,
                     archive_id=archive_id,
+                    confirm_token=archive.confirm_token,
                     has_caption=image_data is not None,
                     message_text=message,
                 )
@@ -1162,33 +1173,28 @@ class NotificationService:
                     config, title, message, image_data=image_data, url=supplement_url, url_title=supplement_url_title
                 )
             elif provider.provider_type == "telegram":
-                # Outcome confirmation (#1898): inline URL buttons under the
-                # message — one tap records the verdict via the capability
-                # link. Same absolute-URL requirement as the ntfy actions.
-                # Telegram has no way to POST, so this is the one affordance
-                # that opens a browser, and it is the one that gets the one-tap
-                # marker: the page submits itself only for a URL that came off
-                # a button. Telegram does not fetch inline-keyboard URLs and
-                # nothing else can read them, so the marker never reaches a
-                # scanner — which is the difference between this and trusting
-                # the User-Agent.
-                tg_buttons = None
-                _tg_good = (variables or {}).get("good_url")
-                _tg_reject = (variables or {}).get("reject_url")
-                if (
-                    event_type == "print_confirm_request"
-                    and _tg_good
-                    and _tg_reject
-                    and _tg_good.startswith("http")
-                    and _tg_reject.startswith("http")
-                ):
-                    tg_buttons = [
-                        {"text": "\U0001f44d Good", "url": one_tap_url(_tg_good)},
-                        {"text": "\U0001f44e Reject", "url": one_tap_url(_tg_reject)},
-                    ]
                 if event_type == "print_confirm_request":
+                    # Outcome confirmation (#1898): inline URL buttons under
+                    # the message — one tap records the verdict via the
+                    # capability link. Same absolute-URL requirement as the
+                    # ntfy actions. Telegram has no way to POST, so this is the
+                    # one affordance that opens a browser, and it is the one
+                    # that gets the one-tap marker: the page submits itself
+                    # only for a URL that came off a button. Telegram does not
+                    # fetch inline-keyboard URLs and nothing else can read
+                    # them, so the marker never reaches a scanner — which is
+                    # the difference between this and trusting the User-Agent.
+                    tg_buttons = None
+                    _tg_good = (variables or {}).get("good_url")
+                    _tg_reject = (variables or {}).get("reject_url")
+                    if _tg_good and _tg_reject and _tg_good.startswith("http") and _tg_reject.startswith("http"):
+                        tg_buttons = [
+                            {"text": "\U0001f44d Good", "url": one_tap_url(_tg_good)},
+                            {"text": "\U0001f44e Reject", "url": one_tap_url(_tg_reject)},
+                        ]
                     # Telegram verdict mode (#3046): buttons, a reaction on
-                    # the message, or both.
+                    # the message, or both. The link preview is off in all of
+                    # them (see _send_telegram_confirm_request).
                     _archive_id = (variables or {}).get("archive_id")
                     return await self._send_telegram_confirm_request(
                         provider,
@@ -1199,21 +1205,12 @@ class NotificationService:
                         tg_buttons,
                         _archive_id if isinstance(_archive_id, int) else None,
                     )
-                # Telegram's servers GET the first URL in the text to build a
-                # preview card. An outcome prompt whose edited body still
-                # carries {good_url} would have that fetch answer the question
-                # before the operator saw it, so the preview is off for this
-                # event. Only for this one, for the same reason as the Slack
-                # unfurl in _send_webhook: when the finish photo is too large to attach,
-                # the preview is how a {finish_photo_url} in a print_complete
-                # body still shows up as a photo in the chat.
-                return await self._send_telegram(
-                    config,
-                    f"*{title}*\n{message}",
-                    image_data=image_data,
-                    buttons=tg_buttons,
-                    link_preview=event_type != "print_confirm_request",
-                )
+                # Every other event keeps Telegram's link preview, for the same
+                # reason as the Slack unfurl in _send_webhook: when the finish
+                # photo is too large to attach, the preview is how a
+                # {finish_photo_url} in a print_complete body still shows up as
+                # a photo in the chat.
+                return await self._send_telegram(config, f"*{title}*\n{message}", image_data=image_data)
             elif provider.provider_type == "email":
                 # finish_photo_url is pulled from the rendered template variables
                 # so _send_email can detect whether the template referenced the

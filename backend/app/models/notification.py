@@ -178,6 +178,11 @@ class TelegramPendingVerdict(Base):
     chat_id = Column(String(64), nullable=False)
     message_id = Column(Integer, nullable=False)
     archive_id = Column(Integer, ForeignKey("print_archives.id", ondelete="CASCADE"), nullable=False)
+    # The archive's confirm_token when the prompt went out. A reaction counts
+    # only while that is still the archive's live token, i.e. exactly as long
+    # as the prompt's one-tap links would: a reprint clears the token, so an
+    # earlier run's message can no longer answer the new run.
+    confirm_token = Column(String(64), nullable=True)
     # sendPhoto messages carry the prompt as a caption, which is edited with a
     # different Bot API method than a plain text message.
     has_caption = Column(Boolean, default=False)

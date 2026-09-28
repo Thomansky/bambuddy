@@ -6426,7 +6426,7 @@ errors: {
     telegramVerdictModeButtons: 'Inline-knappar (länk)',
     telegramVerdictModeReactions: 'Reaktion (👍 / 👎)',
     telegramVerdictModeBoth: 'Knappar och reaktion',
-    telegramVerdictModeHelp: 'Hur resultatfrågan besvaras. Reaktioner kräver ingen inkommande anslutning och ingen extern URL — Bambuddy hämtar dem från boten. I en grupp måste boten vara admin för att se reaktioner.',
+    telegramVerdictModeHelp: 'Hur resultatfrågan besvaras. Reaktioner kräver ingen inkommande anslutning och ingen extern URL — Bambuddy hämtar dem från boten. Använd för reaktioner en bot som bara Bambuddy använder: en annan app som läser samma bot (till exempel Home Assistant) får annars inte längre sina meddelanden, inte heller efter att du bytt tillbaka till knappar. I en grupp måste boten vara admin för att se reaktioner.',
     telegramVerdictBadgeReactions: 'Reaktioner',
     telegramVerdictBadgeBoth: 'Knappar + reaktioner',
     smtpServer: 'SMTP-server',

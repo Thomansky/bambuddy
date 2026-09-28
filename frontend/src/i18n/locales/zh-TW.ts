@@ -6363,7 +6363,7 @@ export default {
     telegramVerdictModeButtons: '內嵌按鈕（連結）',
     telegramVerdictModeReactions: '表情回應（👍 / 👎）',
     telegramVerdictModeBoth: '按鈕和表情回應',
-    telegramVerdictModeHelp: '如何回答結果確認提示。表情回應不需要入站連線或外部 URL，由 Bambuddy 從機器人拉取。在群組中，機器人必須是管理員才能看到表情回應。',
+    telegramVerdictModeHelp: '如何回答結果確認提示。表情回應不需要入站連線或外部 URL，由 Bambuddy 從機器人拉取。使用表情回應時，請使用僅供 Bambuddy 使用的機器人：讀取同一機器人的其他應用程式（例如 Home Assistant）將收不到自己的訊息，即使切換回按鈕後也是如此。在群組中，機器人必須是管理員才能看到表情回應。',
     telegramVerdictBadgeReactions: '表情回應',
     telegramVerdictBadgeBoth: '按鈕 + 表情回應',
     smtpServer: 'SMTP 伺服器',
