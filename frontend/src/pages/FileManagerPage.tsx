@@ -5524,7 +5524,7 @@ export function FileManagerPage() {
                               href={file.external_url}
                               target="_blank"
                               rel="noopener noreferrer"
-                              onClick={(e) => e.stopPropagation()}
+                              {...stopRowActivation}
                               className="flex-shrink-0 text-bambu-gray hover:text-bambu-green"
                               title={t('fileManager.details.openLink')}
                               aria-label={t('fileManager.details.openLink')}

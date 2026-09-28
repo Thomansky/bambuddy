@@ -381,16 +381,17 @@ async def test_pdf_worker_asset_csp_allows_wasm_without_eval(async_client: Async
     drop out. JS eval stays blocked — unlike the STEP worker, pdf.js needs
     none.
     """
-    worker = await async_client.get("/assets/pdf.worker.min-Ck9aB12c.mjs")
+    worker = await async_client.get("/assets/pdf.worker.min-Ck9aB12c.js")
     tokens = _script_src_tokens(worker)
 
     assert "'wasm-unsafe-eval'" in tokens, f"pdf worker must be allowed to compile wasm: {tokens!r}"
     assert "'unsafe-eval'" not in tokens, f"pdf worker must not be allowed to eval JS: {tokens!r}"
 
-    # The extension is part of the match: a .js file of the same name is an
-    # ordinary asset and must not inherit the worker's policy.
-    lookalike = await async_client.get("/assets/pdf.worker.min-Ck9aB12c.js")
-    assert "'wasm-unsafe-eval'" not in _script_src_tokens(lookalike), "only the worker asset gets the relaxed policy"
+    # Only the worker: pdf.js's own chunk and the modal that loads it run on
+    # the page, whose policy stays wasm-free.
+    for path in ("/assets/pdf-Ck9aB12c.js", "/assets/PdfPreviewModal-Ck9aB12c.js"):
+        other = await async_client.get(path)
+        assert "'wasm-unsafe-eval'" not in _script_src_tokens(other), f"{path} must not get the worker's policy"
 
 
 # ─── #1460: HEAD on PWA bootstrap routes (manifest / sw / sw-register) ───

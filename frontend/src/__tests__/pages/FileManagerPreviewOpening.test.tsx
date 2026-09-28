@@ -34,6 +34,9 @@ vi.mock('../../components/SpreadsheetPreviewModal', () => ({
 vi.mock('../../components/ImagePreviewModal', () => ({
   ImagePreviewModal: ({ filename }: { filename: string }) => <div data-testid="image-preview-modal">{filename}</div>,
 }));
+vi.mock('../../components/LibraryFileDetailsModal', () => ({
+  LibraryFileDetailsModal: () => <div data-testid="details-modal" />,
+}));
 
 function libraryFile(overrides: Record<string, unknown>) {
   return {
@@ -55,7 +58,13 @@ const mockFiles = [
   libraryFile({ id: 2, filename: 'bracket.stl', file_type: 'stl' }),
   libraryFile({ id: 3, filename: 'drawing.pdf', file_type: 'pdf' }),
   libraryFile({ id: 4, filename: 'parts.csv', file_type: 'csv' }),
-  libraryFile({ id: 5, filename: 'photo.png', file_type: 'png', tags: [{ id: 21, name: 'reference', color: '#00ae42' }] }),
+  libraryFile({
+    id: 5,
+    filename: 'photo.png',
+    file_type: 'png',
+    tags: [{ id: 21, name: 'reference', color: '#00ae42' }],
+    has_notes: true,
+  }),
   libraryFile({ id: 6, filename: 'notes.md', file_type: 'md' }),
   libraryFile({ id: 7, filename: 'scan.tif', file_type: 'tif' }),
 ];
@@ -66,6 +75,17 @@ function card(name: string): HTMLElement {
 
 function row(name: string): HTMLElement {
   return screen.getByText(name).closest('div[class*="grid-cols-"]') as HTMLElement;
+}
+
+/**
+ * The preview modals load lazily, so one opened by mistake renders a moment
+ * after the event that opened it: a few hundred milliseconds for the first
+ * one in a run. Absence only counts once it has had findBy's full second to
+ * appear; checking straight away passed whenever no earlier test had loaded
+ * that modal yet.
+ */
+async function expectNoPreviewOpened() {
+  await expect(screen.findByTestId(/^(model-viewer|pdf-preview|sheet-preview|image-preview)-modal$/)).rejects.toThrow();
 }
 
 describe('FileManagerPage preview opening', () => {
@@ -132,10 +152,8 @@ describe('FileManagerPage preview opening', () => {
 
       await user.dblClick(card('notes.md'));
 
+      await expectNoPreviewOpened();
       expect(mockNavigate).not.toHaveBeenCalled();
-      expect(screen.queryByTestId('image-preview-modal')).not.toBeInTheDocument();
-      expect(screen.queryByTestId('pdf-preview-modal')).not.toBeInTheDocument();
-      expect(screen.queryByTestId('model-viewer-modal')).not.toBeInTheDocument();
     });
 
     // The card's own controls are not "the row": stopping their click is not
@@ -149,7 +167,7 @@ describe('FileManagerPage preview opening', () => {
       const kebab = imageCard.querySelector('.lucide-ellipsis-vertical')?.closest('button') as HTMLButtonElement;
       await user.dblClick(kebab);
 
-      expect(screen.queryByTestId('image-preview-modal')).not.toBeInTheDocument();
+      await expectNoPreviewOpened();
     });
 
     // The chip's own click toggles the tag filter and re-renders the list, so
@@ -161,7 +179,20 @@ describe('FileManagerPage preview opening', () => {
 
       fireEvent.doubleClick(within(card('photo.png')).getByTitle('reference'));
 
-      expect(screen.queryByTestId('image-preview-modal')).not.toBeInTheDocument();
+      await expectNoPreviewOpened();
+    });
+
+    // The notes and photos indicators open the file's details; a double-click
+    // on one must not open the preview on top of them.
+    it('ignores a double-click on the notes indicator', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await screen.findByText('photo.png');
+
+      await user.dblClick(within(card('photo.png')).getByTitle('Has notes'));
+
+      expect(await screen.findByTestId('details-modal')).toBeInTheDocument();
+      await expectNoPreviewOpened();
     });
   });
 
@@ -210,7 +241,7 @@ describe('FileManagerPage preview opening', () => {
       // An impatient double-tap on Rename must not also open the preview.
       await user.dblClick(within(row('photo.png')).getByTitle('Rename'));
 
-      expect(screen.queryByTestId('image-preview-modal')).not.toBeInTheDocument();
+      await expectNoPreviewOpened();
     });
 
     it('ignores a double-click on the row tag cell', async () => {
@@ -219,7 +250,7 @@ describe('FileManagerPage preview opening', () => {
 
       fireEvent.doubleClick(within(row('photo.png')).getByTitle('reference'));
 
-      expect(screen.queryByTestId('image-preview-modal')).not.toBeInTheDocument();
+      await expectNoPreviewOpened();
     });
   });
 
@@ -284,7 +315,7 @@ describe('FileManagerPage preview opening', () => {
 
       await user.dblClick(card('scan.tif'));
 
-      expect(screen.queryByTestId('image-preview-modal')).not.toBeInTheDocument();
+      await expectNoPreviewOpened();
       expect(mockNavigate).not.toHaveBeenCalled();
     });
   });

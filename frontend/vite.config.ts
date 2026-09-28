@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module'
 import { readdirSync, readFileSync } from 'node:fs'
-import { defineConfig, minify, transformWithOxc } from 'vite'
-import type { Plugin, ResolvedConfig } from 'vite'
+import { defineConfig } from 'vite'
+import type { Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 
@@ -16,43 +16,6 @@ const backendUrl = `http://localhost:${backendPort}`
 // PdfPreviewModal builds the matching URLs from its PDFJS_ASSET_BASE.
 const PDFJS_RUNTIME_DIRS = ['cmaps', 'iccs', 'standard_fonts', 'wasm']
 const PDFJS_RUNTIME_PREFIX = 'assets/pdfjs'
-
-/**
- * Lower emitted script *assets* to `build.target`.
- *
- * `build.target` only governs modules the bundler compiles. A file pulled in
- * with `?url` is copied through verbatim, which is how pdf.js's worker kept
- * its `static {}` blocks (Safari 16.4+) while the build reported a clean
- * baseline (#2976). pdf.js's own `legacy/` build ships them too, so the
- * lowering has to happen here.
- */
-function lowerEmittedScriptAssets(): Plugin {
-  let config: ResolvedConfig
-
-  return {
-    name: 'bambuddy:lower-emitted-script-assets',
-    apply: 'build',
-    configResolved(resolved) {
-      config = resolved
-    },
-    async generateBundle(_options, bundle) {
-      const target = config.build.target
-      if (!target) return
-      for (const [fileName, output] of Object.entries(bundle)) {
-        // pdf.js publishes its wasm fallbacks ready for our baseline; they are
-        // asm.js-shaped emscripten output that nothing here should rewrite.
-        if (output.type !== 'asset' || fileName.startsWith(`${PDFJS_RUNTIME_PREFIX}/`)) continue
-        if (!/\.[cm]?js$/.test(fileName)) continue
-        const source =
-          typeof output.source === 'string' ? output.source : Buffer.from(output.source).toString('utf8')
-        const lowered = await transformWithOxc(source, fileName, { target })
-        output.source = config.build.minify
-          ? (await minify(fileName, lowered.code, { module: !fileName.endsWith('.cjs') })).code
-          : lowered.code
-      }
-    },
-  }
-}
 
 /** Publish pdf.js's runtime data directories next to the bundle. */
 function pdfjsRuntimeAssets(): Plugin {
@@ -125,7 +88,7 @@ export default defineConfig({
   // fix for subpath reverse proxies (#1195, wontfix) is reverted — that
   // audience uses NPM + Cloudflare Tunnel at a real domain per the
   // documented workaround, which doesn't depend on this setting.
-  plugins: [react(), pdfjsRuntimeAssets(), lowerEmittedScriptAssets()],
+  plugins: [react(), pdfjsRuntimeAssets()],
   build: {
     outDir: '../static',
     emptyOutDir: true,

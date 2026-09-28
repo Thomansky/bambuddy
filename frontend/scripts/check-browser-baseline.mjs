@@ -34,14 +34,18 @@ import { fileURLToPath } from 'node:url';
 const ASSETS = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'static', 'assets');
 
 /**
- * Every extension the build can emit executable JavaScript under. `.mjs` is
- * not hypothetical: pdf.js's worker is pulled in with `?url` and lands as
- * `pdf.worker.min-<hash>.mjs`, so a `.js`-only filter scanned everything
- * except the one asset the bundler does not compile (#2976).
+ * Every extension the build can emit executable JavaScript under. `.mjs`
+ * because a dependency's file imported with `?url` is copied verbatim under
+ * its own extension and bypasses `build.target` - the pdf.js worker shipped a
+ * class static block that way (#2976).
  */
 const SCRIPT_EXTENSIONS = ['.js', '.mjs', '.cjs'];
 
-/** Every script under `dir`, recursively, as paths relative to ASSETS. */
+/**
+ * Every script under `dir`, recursively, as paths relative to ASSETS. The
+ * subdirectories matter: pdf.js's decoder fallbacks are published verbatim
+ * under assets/pdfjs/ (vite.config.ts) and run in its worker (#2976).
+ */
 function collectScripts(dir) {
   const found = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {

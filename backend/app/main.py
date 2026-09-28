@@ -10129,9 +10129,14 @@ def _frame_ancestors(default_value: str) -> str:
 # patterns are anchored on the exact emitted name so the relaxed policies
 # below can never apply to any other asset.
 #   src/workers/stepPreview.worker.ts -> /assets/stepPreview.worker-<hash>.js
-#   pdfjs-dist/build/pdf.worker.min.mjs -> /assets/pdf.worker.min-<hash>.mjs
+#   pdfjs-dist/legacy/build/pdf.worker.min.mjs?worker&url
+#                                     -> /assets/pdf.worker.min-<hash>.js
+# Vite also emits a one-line chunk under the second name that only exports the
+# worker's URL. The page imports it as a module, and a module script is run
+# under the importing document's policy, never its own response's, so it
+# matching as well changes nothing.
 _STEP_WORKER_ASSET_RE = re.compile(r"^/assets/stepPreview\.worker-[\w-]+\.js$")
-_PDF_WORKER_ASSET_RE = re.compile(r"^/assets/pdf\.worker\.min-[\w-]+\.mjs$")
+_PDF_WORKER_ASSET_RE = re.compile(r"^/assets/pdf\.worker\.min-[\w-]+\.js$")
 
 
 @app.middleware("http")

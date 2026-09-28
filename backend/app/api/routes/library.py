@@ -875,14 +875,13 @@ def create_image_thumbnail(file_path: Path, thumbnails_dir: Path, max_size: int 
 # Supported image extensions for thumbnails
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"}
 
-# File types whose thumbnails may be rendered client-side and uploaded back
-# (#2976). The server has no renderer for STEP (OpenCascade), spreadsheets or
-# Outlook messages, so the browser posts its first preview render to
-# POST /files/{id}/preview-thumbnail instead. PDF is rendered server-side on
-# upload (pypdfium2) and stays in this set only as the fallback for installs
-# where that renderer is unavailable. Kept to exactly these types so the
-# endpoint can never overwrite a server-generated STL/3MF/G-code/image
-# thumbnail.
+# File types whose thumbnails are rendered client-side and uploaded back
+# (#2976). The server has no renderer for STEP (that would need OpenCascade),
+# the spreadsheet types or Outlook messages, so the browser posts its first
+# preview render to POST /files/{id}/preview-thumbnail instead. PDF is rendered
+# server-side with PDFium when it lands and stays here for a PDF that renderer
+# cannot read. Kept to exactly these types so the endpoint can never overwrite a
+# server-generated STL/3MF/G-code/image thumbnail.
 CLIENT_THUMBNAIL_TYPES = {"step", "stp", "pdf", "csv", "xlsx", "ods", "msg"}
 
 # Photos of the printed result (#3077): same allowlist and naming as the
@@ -6299,10 +6298,11 @@ async def upload_preview_thumbnail(
 
     STEP, PDF, spreadsheet and Outlook-message previews are rendered in the
     browser; the FE posts its first render here so the grid gets a thumbnail
-    without the server needing OpenCascade. Only types in ``CLIENT_THUMBNAIL_TYPES``
+    without the server needing OpenCascade. A PDF normally has its PDFium
+    thumbnail from upload already, so for PDFs this only fills the gap for a
+    file PDFium could not read. Only file types in ``CLIENT_THUMBNAIL_TYPES``
     are accepted, and only while the file has no thumbnail yet — a stored
-    thumbnail is never replaced by this route, which is also what keeps the
-    server-rendered PDF thumbnail from upload authoritative.
+    thumbnail is never replaced by this route.
     """
     user, can_modify_all = auth_result
 
