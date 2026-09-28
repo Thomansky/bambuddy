@@ -5391,6 +5391,11 @@ async def run_migrations(conn):
         conn,
         "CREATE INDEX IF NOT EXISTS ix_telegram_pending_verdicts_created_at ON telegram_pending_verdicts (created_at)",
     )
+    # Fork only: this install ran the reaction mode before the prompt's confirm
+    # token was recorded (#3129 review), so its table predates the column.
+    # Rows without a token never answer a verdict, which is what an old prompt
+    # should do after the fix.
+    await _safe_execute(conn, "ALTER TABLE telegram_pending_verdicts ADD COLUMN confirm_token VARCHAR(64)")
 
     # Migration: rename the ha_sensor_alert template (#2824). "Home Assistant
     # Sensor Alert" was fine as a name while it was the only such template;
