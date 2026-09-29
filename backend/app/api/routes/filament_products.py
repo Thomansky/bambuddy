@@ -21,6 +21,7 @@ from backend.app.services.filament_products import (
     VariantStock,
     add_to_shopping_list,
     apply_conversion,
+    article_rows,
     assign_code,
     delete_product,
     effective_price,
@@ -40,7 +41,7 @@ from backend.app.services.filament_products import (
     variant_stock,
 )
 
-router = APIRouter(prefix="/inventory/products", tags=["inventory"])
+router = APIRouter(prefix="/inventory/products", tags=["filament-products"])
 
 
 class ProductSizeIn(BaseModel):
@@ -111,6 +112,37 @@ class IntakeIn(BaseModel):
     price_vat_included: bool = True
     location_id: int | None = None
     note: str | None = Field(default=None, max_length=500)
+
+
+class ArticleOut(BaseModel):
+    """One colour × size of a product that exists — an article — flat."""
+
+    variant_id: int
+    product_id: int
+    material_number: str | None = Field(description="The product's internal material number")
+    label: str = Field(description='Brand, material and type, e.g. "Bambu Lab PLA Matte"')
+    brand: str | None
+    material: str
+    subtype: str | None
+    color_name: str | None
+    rgba: str | None = Field(description="The colour as RRGGBBAA")
+    label_weight: int = Field(description="Filament on a full spool, in grams")
+    core_weight: int = Field(description="The empty spool, in grams")
+    price: float | None = Field(
+        description="What one spool costs: the combination's own price, else its size's (the manufacturer's)"
+    )
+    price_vat_included: bool
+    cost_per_kg: float | None
+    min_stock: int | None = Field(description="Target stock in spools; null means no target")
+    in_stock: int = Field(description="Active spools that still count as stock (above the low-stock threshold)")
+    spools: int = Field(description="Active spools")
+    remaining_g: int = Field(description="Filament left on the active spools, in grams")
+    on_order: int = Field(description="Spools on the shopping list and not booked in yet")
+    shortfall: int = Field(description="Spools to order to reach the target")
+    codes: list[str] = Field(description="Codes it is recognised by at goods-in (EAN, QR, …)")
+    slicer_filament: str | None
+    slicer_filament_name: str | None
+    suppliers: list[str] = Field(description="Where the product has been bought, the usual supplier first")
 
 
 class ReorderItemIn(BaseModel):
@@ -216,6 +248,10 @@ async def list_products(
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_READ),
 ):
+    """Every product with its sizes, colours and the combinations that exist
+    (price, cost per kg, stock, target, codes), its slicer preset per printer
+    model and where it has been bought. For one row per combination, see
+    `GET /inventory/products/articles`."""
     products = await load_products(db)
     stock = await variant_stock(db)
     on_order = await variant_on_order(db)
@@ -228,8 +264,8 @@ async def list_reorder(
     _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_READ),
 ):
     """Every combination below its target stock, with what is missing once
-    the spools already on the shopping list are counted, and where it can be
-    bought."""
+    the spools already on the shopping list are counted, and where it has
+    been bought."""
     return await reorder_lines(db)
 
 
@@ -259,7 +295,7 @@ async def receive_shopping_list_line(
     _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_UPDATE),
 ):
     """Book a shopping-list line in through the product: full spools of its
-    combination with all master data, priced from its supplier."""
+    combination with all master data, at the combination's price."""
     item = (await db.execute(select(ShoppingListItem).where(ShoppingListItem.id == item_id))).scalar_one_or_none()
     if item is None:
         raise HTTPException(404, "Item not found")
@@ -291,6 +327,23 @@ async def run_conversion(
     await db.commit()
     await ws_manager.broadcast({"type": "inventory_changed"})
     return summary
+
+
+@router.get("/articles", response_model=list[ArticleOut])
+async def list_articles(
+    product_id: int | None = None,
+    material_number: str | None = Query(default=None, max_length=64),
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_READ),
+):
+    """The product master, flat: one row per colour × size that exists, with
+    its product's master data, price, cost per kg, stock, target and codes.
+
+    Meant for other systems reading the product master: an ERP, a cost
+    calculator, a shop. Narrow it down with `product_id` or
+    `material_number`. An API key needs the "read status" permission.
+    """
+    return await article_rows(db, product_id=product_id, material_number=material_number)
 
 
 @router.get("/lookup")
@@ -326,6 +379,7 @@ async def get_product(
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_READ),
 ):
+    """One product, as in the list."""
     product = await load_product(db, product_id)
     if product is None:
         raise HTTPException(404, "Product not found")

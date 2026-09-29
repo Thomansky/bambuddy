@@ -627,6 +627,69 @@ async def settle_orders_for(db: AsyncSession, variant_id: int, quantity: int) ->
     return settled
 
 
+# ---------------------------------------------------------------- articles
+
+
+async def article_rows(
+    db: AsyncSession, *, product_id: int | None = None, material_number: str | None = None
+) -> list[dict]:
+    """Every colour × size that exists, one row each, with its product's
+    master data, price, stock and codes: the product master as another
+    system (an ERP, a cost calculator, a shop) reads it."""
+    products = await load_products(db)
+    stock = await variant_stock(db)
+    ordered = await variant_on_order(db)
+    number = (material_number or "").strip()
+    rows: list[dict] = []
+    for product in products:
+        if product_id is not None and product.id != product_id:
+            continue
+        if number and (product.material_number or "").strip() != number:
+            continue
+        sizes = {size.id: size for size in product.sizes}
+        colors = {color.id: color for color in product.colors}
+        # The usual supplier first, as the relationship orders them.
+        suppliers = [row.supplier.name for row in product.suppliers if row.supplier]
+        found: list[tuple[tuple, dict]] = []
+        for variant in product.variants:
+            size = sizes.get(variant.size_id)
+            color = colors.get(variant.color_id)
+            if size is None or color is None:
+                continue
+            here = stock.get(variant.id, VariantStock())
+            on_order = ordered.get(variant.id, 0)
+            price = effective_price(variant, size)
+            row = {
+                "variant_id": variant.id,
+                "product_id": product.id,
+                "material_number": product.material_number,
+                "label": product_label(product),
+                "brand": product.brand,
+                "material": product.material,
+                "subtype": product.subtype,
+                "color_name": color.color_name,
+                "rgba": color.rgba,
+                "label_weight": size.label_weight,
+                "core_weight": size.core_weight,
+                "price": price,
+                "price_vat_included": size.price_vat_included,
+                "cost_per_kg": price_to_cost_per_kg(price, size.label_weight),
+                "min_stock": variant.min_stock,
+                "in_stock": here.in_stock,
+                "spools": here.spools,
+                "remaining_g": round(here.remaining_g),
+                "on_order": on_order,
+                "shortfall": shortfall(variant.min_stock, here.in_stock, on_order),
+                "codes": [code.code for code in variant.codes],
+                "slicer_filament": product.slicer_filament,
+                "slicer_filament_name": product.slicer_filament_name,
+                "suppliers": suppliers,
+            }
+            found.append(((color.sort_order, color.id, size.label_weight), row))
+        rows.extend(row for _, row in sorted(found, key=lambda item: item[0]))
+    return rows
+
+
 # ---------------------------------------------------------------- reorder
 
 
