@@ -76,7 +76,6 @@ const DEFAULT_COLUMNS: ColumnConfig[] = [
   { id: 'colors', label: 'Colours', visible: true },
   { id: 'sizes', label: 'Sizes', visible: true },
   { id: 'supplier', label: 'Supplier', visible: true },
-  { id: 'article_number', label: 'Article no.', visible: false },
   { id: 'price', label: 'Price/spool', visible: false },
   { id: 'spool_type', label: 'Spool type', visible: false },
   { id: 'preset', label: 'Slicer preset', visible: false },
@@ -99,7 +98,6 @@ const columnHeaders: Record<string, (t: TFn) => string> = {
   colors: (t) => t('inventory.products.columns.colors'),
   sizes: (t) => t('inventory.products.columns.sizes'),
   supplier: (t) => t('inventory.products.columns.supplier'),
-  article_number: (t) => t('inventory.products.columns.articleNumber'),
   price: (t) => t('inventory.products.columns.price'),
   spool_type: (t) => t('inventory.products.columns.spoolType'),
   preset: (t) => t('inventory.products.columns.preset'),
@@ -169,10 +167,6 @@ const columnCells: Record<string, (ctx: CellCtx) => ReactNode> = {
         {others > 0 && <span className="text-xs text-bambu-gray ml-1">+{others}</span>}
       </span>
     );
-  },
-  article_number: ({ product }) => {
-    const number = usualSupplier(product)?.article_number;
-    return number ? <span className="text-sm font-mono text-bambu-gray">{number}</span> : EMPTY;
   },
   price: ({ product, currency }) => {
     const range = priceRange(product);
@@ -246,7 +240,6 @@ const columnSortValues: Record<
   colors: (p) => p.colors.length,
   sizes: (p) => (p.sizes.length ? Math.min(...p.sizes.map((s) => s.label_weight)) : 0),
   supplier: (p) => usualSupplier(p)?.supplier_name || '￿',
-  article_number: (p) => usualSupplier(p)?.article_number || '￿',
   price: (p) => priceRange(p)?.[0] ?? Number.MAX_VALUE,
   spool_type: (p, catalogMap) => spoolTypeNames(p, catalogMap) || '￿',
   preset: (p) => p.slicer_filament_name || p.slicer_filament || '￿',
@@ -900,7 +893,7 @@ function StockMatrix({ product, currency }: { product: FilamentProduct; currency
         <p className="text-xs text-bambu-gray">
           {t('inventory.products.suppliers')}:{' '}
           {product.suppliers
-            .map((s) => `${s.supplier_name}${s.article_number ? ` (${s.article_number})` : ''}${s.preferred ? ' ★' : ''}`)
+            .map((s) => `${s.supplier_name}${s.preferred ? ' ★' : ''}`)
             .join(' · ')}
         </p>
       )}

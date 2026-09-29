@@ -72,7 +72,7 @@ const PRODUCTS: FilamentProduct[] = [
       variant(12, 2, 10, { min_stock: 2, shortfall: 2 }),
     ],
     suppliers: [
-      { supplier_id: 7, supplier_name: 'Shop A', article_number: 'A-52', preferred: true, prices: [], articles: [] },
+      { supplier_id: 7, supplier_name: 'Shop A', preferred: true },
     ],
     spool_count: 2,
     remaining_g: 1800,
@@ -89,7 +89,7 @@ const PRODUCTS: FilamentProduct[] = [
     ],
     colors: [{ id: 3, color_name: 'Grey', rgba: '808080FF', extra_colors: null, effect_type: null }],
     variants: [variant(21, 3, 20), variant(22, 3, 21)],
-    suppliers: [{ supplier_id: 8, supplier_name: 'Shop B', article_number: null, preferred: true, prices: [], articles: [] }],
+    suppliers: [{ supplier_id: 8, supplier_name: 'Shop B', preferred: true }],
   }),
   product({
     id: 3,
@@ -174,12 +174,12 @@ describe('ProductsPanel', () => {
     expect(listedBrands()).toEqual(['Bambu Lab']);
   });
 
-  it('finds a product by its supplier article number', async () => {
+  it('finds a product by where it was bought', async () => {
     const user = userEvent.setup();
     renderPanel();
     await screen.findByRole('table');
 
-    await user.type(screen.getByPlaceholderText(/Search products/), 'A-52');
+    await user.type(screen.getByPlaceholderText(/Search products/), 'Shop A');
 
     expect(listedBrands()).toEqual(['Bambu Lab']);
   });
@@ -218,7 +218,7 @@ describe('ProductsPanel', () => {
 
     await user.click(screen.getByRole('button', { name: /Columns/ }));
 
-    const dialog = (await screen.findByText('Article no.')).closest('div.fixed') as HTMLElement;
+    const dialog = (await screen.findByText('Nozzle temp.')).closest('div.fixed') as HTMLElement;
     expect(within(dialog).getByText('Spool type')).toBeInTheDocument();
     expect(within(dialog).getByText('Manufacturer')).toBeInTheDocument();
   });

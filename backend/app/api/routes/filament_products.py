@@ -72,13 +72,8 @@ class ProductVariantIn(BaseModel):
 
 class ProductSupplierIn(BaseModel):
     supplier_id: int
-    article_number: str | None = Field(default=None, max_length=100)
+    # The usual supplier; the reorder list starts from it.
     preferred: bool = False
-    # Price per spool at this supplier, by the document's size key.
-    prices: dict[str, float | None] = {}
-    # The supplier's article number per combination, keyed
-    # "<colour key>|<size key>"; the product-level number covers the rest.
-    article_numbers: dict[str, str | None] = {}
 
 
 class ProductIn(BaseModel):
@@ -182,13 +177,7 @@ def _product_out(product: FilamentProduct, stock: dict[int, VariantStock], on_or
             {
                 "supplier_id": row.supplier_id,
                 "supplier_name": row.supplier.name if row.supplier else "",
-                "article_number": row.article_number,
                 "preferred": row.preferred,
-                "prices": [{"size_id": price.size_id, "price": price.price} for price in row.prices],
-                "articles": [
-                    {"variant_id": article.variant_id, "article_number": article.article_number}
-                    for article in row.articles
-                ],
             }
             for row in product.suppliers
         ],

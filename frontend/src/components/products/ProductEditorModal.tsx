@@ -1,7 +1,7 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Barcode, Boxes, Check, Hash, Loader2, Plus, Star, Store, Trash2, X } from 'lucide-react';
+import { Barcode, Boxes, Check, Loader2, Plus, Star, Store, Trash2, X } from 'lucide-react';
 import { api, ApiError } from '../../api/client';
 import type { FilamentProduct, FilamentProductInput, FilamentVariant } from '../../api/client';
 import { useToast } from '../../contexts/ToastContext';
@@ -30,15 +30,11 @@ interface SizeRow {
   price_vat_included: boolean;
 }
 
+/** A supplier the product has been bought from. */
 interface SupplierRow {
-  key: string;
-  supplier_id: number | null;
-  article_number: string;
+  supplier_id: number;
+  /** The usual supplier; the reorder list starts from it. */
   preferred: boolean;
-  /** Price text per size key. */
-  prices: Record<string, string>;
-  /** The supplier's article number per matrix cell; empty uses `article_number`. */
-  articles: Record<string, string>;
 }
 
 interface ColorRow {
@@ -95,22 +91,20 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
   const [tempMin, setTempMin] = useState(product?.nozzle_temp_min?.toString() ?? '');
   const [tempMax, setTempMax] = useState(product?.nozzle_temp_max?.toString() ?? '');
   const [note, setNote] = useState(product?.note ?? '');
-  // A size's price is what one spool costs at the usual supplier: with
-  // suppliers on the product it is entered in their table below and shown here,
-  // without them it is entered here. So every price has exactly one field.
-  const [sizes, setSizes] = useState<SizeRow[]>(() => {
-    const usual = product?.suppliers.find((row) => row.preferred) ?? product?.suppliers[0];
-    return sortSizes(
+  // A size's price is the manufacturer's price for one spool. What a delivery
+  // actually cost is confirmed at goods-in, so the suppliers carry no prices.
+  const [sizes, setSizes] = useState<SizeRow[]>(() =>
+    sortSizes(
       product?.sizes.map((s) => ({
         id: s.id,
         key: `s${s.id}`,
         label_weight: String(s.label_weight),
         core_weight: String(s.core_weight),
-        price: priceText(usual?.prices.find((p) => p.size_id === s.id)?.price ?? s.price),
+        price: priceText(s.price),
         price_vat_included: s.price_vat_included,
       })) ?? [],
-    );
-  });
+    ),
+  );
   const [colors, setColors] = useState<ColorRow[]>(
     () =>
       product?.colors.map((c) => ({
@@ -132,22 +126,11 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
   const [supplierRows, setSupplierRows] = useState<SupplierRow[]>(
     () =>
       product?.suppliers.map((row, index) => ({
-        key: newKey('p'),
         supplier_id: row.supplier_id,
-        article_number: row.article_number ?? '',
-        // One supplier is always the usual one: its prices are the sizes'.
+        // One of them is always the usual one.
         preferred: row.preferred || (index === 0 && !product.suppliers.some((r) => r.preferred)),
-        prices: Object.fromEntries(row.prices.map((p) => [`s${p.size_id}`, priceText(p.price)])),
-        articles: Object.fromEntries(
-          (row.articles ?? []).flatMap((article) => {
-            const variant = (product?.variants ?? []).find((v) => v.id === article.variant_id);
-            return variant ? [[cellKey(`c${variant.color_id}`, `s${variant.size_id}`), article.article_number]] : [];
-          }),
-        ),
       })) ?? [],
   );
-  // Supplier rows whose per-colour article numbers are unfolded.
-  const [articlesOpen, setArticlesOpen] = useState<Set<string>>(new Set());
   // Target stock per ticked cell (#3165): how many spools should be on the shelf.
   const [minStock, setMinStock] = useState<Map<string, string>>(
     () =>
@@ -166,7 +149,6 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
   const [suppliersOpen, setSuppliersOpen] = useState(false);
   const { options: presetOptions, loading: loadingPresets } = usePresetOptions();
   const selectedPreset = useMemo(() => findPresetOption(slicerFilament, presetOptions), [slicerFilament, presetOptions]);
-  const hasSuppliers = supplierRows.length > 0;
 
   // Existing variants by cell, for stock counts and the removal guard.
   const existingByCell = useMemo(() => {
@@ -274,48 +256,28 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
     });
   };
 
-  const toggleArticles = (rowKey: string) =>
-    setArticlesOpen((prev) => {
-      const next = new Set(prev);
-      if (next.has(rowKey)) next.delete(rowKey);
-      else next.add(rowKey);
-      return next;
+  // The product's own rows name their supplier before the master list is in.
+  const supplierName = (id: number) =>
+    allSuppliers.find((s) => s.id === id)?.name ??
+    product?.suppliers.find((s) => s.supplier_id === id)?.supplier_name ??
+    '?';
+  const addableSuppliers = allSuppliers.filter((s) => !supplierRows.some((r) => r.supplier_id === s.id));
+
+  const addSupplier = (id: number) =>
+    setSupplierRows((prev) =>
+      prev.some((r) => r.supplier_id === id) ? prev : [...prev, { supplier_id: id, preferred: prev.length === 0 }],
+    );
+
+  const makeUsual = (id: number) =>
+    setSupplierRows((prev) => prev.map((r) => ({ ...r, preferred: r.supplier_id === id })));
+
+  const removeSupplier = (id: number) =>
+    setSupplierRows((prev) => {
+      const rest = prev.filter((r) => r.supplier_id !== id);
+      // The usual supplier going hands the star to the first one left.
+      if (rest.length > 0 && !rest.some((r) => r.preferred)) rest[0] = { ...rest[0], preferred: true };
+      return rest;
     });
-
-  const updateSupplierArticle = (rowKey: string, cell: string, value: string) =>
-    setSupplierRows((prev) =>
-      prev.map((r) => (r.key === rowKey ? { ...r, articles: { ...r.articles, [cell]: value } } : r)),
-    );
-
-  // The usual supplier's prices live in the sizes. Starring another one hands
-  // them back to the old usual supplier as its own and brings the new one's in.
-  const makeUsual = (rowKey: string) => {
-    const current = supplierRows.find((r) => r.preferred);
-    const next = supplierRows.find((r) => r.key === rowKey);
-    if (!next || current?.key === rowKey) return;
-    const sizePrices = Object.fromEntries(sizes.map((size) => [size.key, size.price]));
-    setSupplierRows((prev) =>
-      prev.map((r) => {
-        if (r.key === rowKey) return { ...r, preferred: true };
-        if (r.key === current?.key) return { ...r, preferred: false, prices: sizePrices };
-        return { ...r, preferred: false };
-      }),
-    );
-    setSizes((prev) => prev.map((size) => ({ ...size, price: next.prices[size.key] ?? '' })));
-  };
-
-  const removeSupplierRow = (rowKey: string) => {
-    const removed = supplierRows.find((r) => r.key === rowKey);
-    const rest = supplierRows.filter((r) => r.key !== rowKey);
-    // Keep one usual supplier when the usual one goes; its prices take over.
-    // With no supplier left the sizes keep theirs and become editable again.
-    if (removed?.preferred && rest.length > 0 && !rest.some((r) => r.preferred)) {
-      rest[0] = { ...rest[0], preferred: true };
-      const incoming = rest[0].prices;
-      setSizes((prev) => prev.map((size) => ({ ...size, price: incoming[size.key] ?? '' })));
-    }
-    setSupplierRows(rest);
-  };
 
   const updateSize = (key: string, patch: Partial<SizeRow>) =>
     setSizes((prev) => prev.map((s) => (s.key === key ? { ...s, ...patch } : s)));
@@ -343,10 +305,6 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
     }
     const sizeKeys = new Set(sizes.map((s) => s.key));
     const colorKeys = new Set(colors.map((c) => c.key));
-    const isLiveCell = (key: string) => {
-      const [colorKey, sizeKey] = key.split('|');
-      return cells.has(key) && colorKeys.has(colorKey) && sizeKeys.has(sizeKey);
-    };
     const document: FilamentProductInput = {
       brand: brand.trim() || null,
       material: material.trim(),
@@ -382,25 +340,7 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
           };
         })
         .filter((v) => colorKeys.has(v.color_key) && sizeKeys.has(v.size_key)),
-      suppliers: supplierRows
-        .filter((row) => row.supplier_id !== null)
-        .map((row) => ({
-          supplier_id: row.supplier_id as number,
-          article_number: row.article_number.trim() || null,
-          preferred: row.preferred,
-          prices: row.preferred
-            ? Object.fromEntries(sizes.map((size) => [size.key, parsePrice(size.price)]))
-            : Object.fromEntries(
-                Object.entries(row.prices)
-                  .filter(([key]) => sizeKeys.has(key))
-                  .map(([key, text]) => [key, parsePrice(text)]),
-              ),
-          article_numbers: Object.fromEntries(
-            Object.entries(row.articles)
-              .filter(([key, text]) => isLiveCell(key) && text.trim())
-              .map(([key, text]) => [key, text.trim()]),
-          ),
-        })),
+      suppliers: supplierRows.map((row) => ({ supplier_id: row.supplier_id, preferred: row.preferred })),
     };
     setSaving(true);
     try {
@@ -600,9 +540,6 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
                   </button>
                 ))}
               </div>
-              {hasSuppliers && sizes.length > 0 && (
-                <p className="text-xs text-bambu-gray">{t('inventory.products.pricesAtSuppliers')}</p>
-              )}
               {sizes.length === 0 ? (
                 <p className="text-xs text-bambu-gray py-2">{t('inventory.products.noSizes')}</p>
               ) : (
@@ -612,7 +549,9 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
                     <tr className="text-xs text-bambu-gray">
                       <th className="text-left font-medium pb-1">{t('inventory.products.labelWeight')}</th>
                       <th className="text-left font-medium pb-1">{t('inventory.products.coreWeight')}</th>
-                      <th className="text-left font-medium pb-1">{t('inventory.products.pricePerSpool')}</th>
+                      <th className="text-left font-medium pb-1" title={t('inventory.products.listPriceHint')}>
+                        {t('inventory.products.listPrice')}
+                      </th>
                       <th className="text-left font-medium pb-1">{t('inventory.products.vat')}</th>
                       <th className="text-right font-medium pb-1">{t('inventory.products.perKg')}</th>
                       <th className="w-8" />
@@ -650,26 +589,17 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
                             </div>
                           </td>
                           <td className="pr-2 py-1">
-                            {hasSuppliers ? (
-                              <span
-                                className="block px-2 py-1.5 text-sm text-white whitespace-nowrap"
-                                title={t('inventory.products.priceAtUsualSupplier')}
-                              >
-                                {formatMoney(parsePrice(size.price), currency)}
-                              </span>
-                            ) : (
-                              <div className="flex items-center gap-1">
-                                <span className="text-xs text-bambu-gray">{currency}</span>
-                                <input
-                                  className={smallInputClass}
-                                  inputMode="decimal"
-                                  value={size.price}
-                                  placeholder="0.00"
-                                  onChange={(e) => updateSize(size.key, { price: e.target.value })}
-                                  aria-label={t('inventory.products.pricePerSpool')}
-                                />
-                              </div>
-                            )}
+                            <div className="flex items-center gap-1">
+                              <span className="text-xs text-bambu-gray">{currency}</span>
+                              <input
+                                className={smallInputClass}
+                                inputMode="decimal"
+                                value={size.price}
+                                placeholder="0.00"
+                                onChange={(e) => updateSize(size.key, { price: e.target.value })}
+                                aria-label={t('inventory.products.listPrice')}
+                              />
+                            </div>
                           </td>
                           <td className="pr-2 py-1">
                             <select
@@ -905,33 +835,14 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
             </section>
           )}
 
-          {/* Suppliers: on the product, not on every spool */}
+          {/* Suppliers: where the product has been bought — on the product,
+              not on every spool, and without prices or article numbers */}
           <section className="space-y-2">
             <div className="flex items-center justify-between gap-2">
               <div>
                 <h3 className="text-sm font-medium text-white">{t('inventory.products.suppliers')}</h3>
                 <p className="text-xs text-bambu-gray">{t('inventory.products.suppliersHint')}</p>
               </div>
-              <button
-                onClick={() =>
-                  setSupplierRows((prev) => [
-                    ...prev,
-                    {
-                      key: newKey('p'),
-                      supplier_id: null,
-                      article_number: '',
-                      preferred: prev.length === 0,
-                      prices: {},
-                      articles: {},
-                    },
-                  ])
-                }
-                disabled={allSuppliers.length === 0 || supplierRows.length >= allSuppliers.length}
-                className="px-2 py-1 text-xs bg-bambu-dark border border-bambu-dark-tertiary text-bambu-gray hover:text-white rounded flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                {t('inventory.products.addSupplier')}
-              </button>
               <button
                 onClick={() => setSuppliersOpen(true)}
                 className="px-2 py-1 text-xs bg-bambu-dark border border-bambu-dark-tertiary text-bambu-gray hover:text-white rounded flex items-center gap-1 shrink-0"
@@ -951,201 +862,57 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
                   {t('inventory.products.createSuppliers')}
                 </button>
               </div>
-            ) : supplierRows.length === 0 ? (
-              <p className="text-xs text-bambu-gray py-1">{t('inventory.products.noProductSuppliers')}</p>
             ) : (
-              <div className="overflow-x-auto border border-bambu-dark-tertiary rounded-lg">
-                <table className="text-sm min-w-full">
-                  <thead className="bg-bambu-dark">
-                    <tr className="text-xs text-bambu-gray">
-                      <th className="px-2 py-2 text-left font-medium" title={t('inventory.products.preferredHint')}>
-                        <Star className="w-3.5 h-3.5" />
-                      </th>
-                      <th className="px-2 py-2 text-left font-medium">{t('inventory.products.supplier')}</th>
-                      <th className="px-2 py-2 text-left font-medium">{t('inventory.products.articleNumber')}</th>
-                      {sizes.map((size) => (
-                        <th key={size.key} className="px-2 py-2 text-left font-medium whitespace-nowrap">
-                          {toInt(size.label_weight) ? formatWeight(toInt(size.label_weight) ?? 0) : '?'}
-                        </th>
-                      ))}
-                      <th className="w-8" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {supplierRows.map((row) => {
-                      const perCell = Object.entries(row.articles).filter(
-                        ([key, text]) => text.trim() && cells.has(key),
-                      ).length;
-                      const open = articlesOpen.has(row.key);
-                      return (
-                        <Fragment key={row.key}>
-                          <tr className="border-t border-bambu-dark-tertiary">
-                            <td className="px-2 py-1.5">
-                              <input
-                                type="radio"
-                                name="preferred-supplier"
-                                checked={row.preferred}
-                                onChange={() => makeUsual(row.key)}
-                                className="accent-bambu-green"
-                                aria-label={t('inventory.products.preferredHint')}
-                              />
-                            </td>
-                            <td className="px-2 py-1.5 min-w-[10rem]">
-                              <select
-                                className={smallInputClass}
-                                value={row.supplier_id ?? ''}
-                                onChange={(e) =>
-                                  setSupplierRows((prev) =>
-                                    prev.map((r) =>
-                                      r.key === row.key ? { ...r, supplier_id: e.target.value ? Number(e.target.value) : null } : r,
-                                    ),
-                                  )
-                                }
-                              >
-                                <option value="">{t('inventory.products.choose')}</option>
-                                {allSuppliers
-                                  .filter(
-                                    (s) => s.id === row.supplier_id || !supplierRows.some((r) => r.supplier_id === s.id),
-                                  )
-                                  .map((s) => (
-                                    <option key={s.id} value={s.id}>
-                                      {s.name}
-                                    </option>
-                                  ))}
-                              </select>
-                            </td>
-                            <td className="px-2 py-1.5 min-w-[8rem]">
-                              <input
-                                className={smallInputClass}
-                                value={row.article_number}
-                                maxLength={100}
-                                placeholder={t('inventory.products.articleNumber')}
-                                onChange={(e) =>
-                                  setSupplierRows((prev) =>
-                                    prev.map((r) => (r.key === row.key ? { ...r, article_number: e.target.value } : r)),
-                                  )
-                                }
-                              />
-                            </td>
-                            {sizes.map((size) => (
-                              <td key={size.key} className="px-2 py-1.5 min-w-[6rem]">
-                                <div className="flex items-center gap-1">
-                                  <span className="text-xs text-bambu-gray">{currency}</span>
-                                  <input
-                                    className={smallInputClass}
-                                    inputMode="decimal"
-                                    value={row.preferred ? size.price : (row.prices[size.key] ?? '')}
-                                    placeholder="–"
-                                    onChange={(e) =>
-                                      row.preferred
-                                        ? updateSize(size.key, { price: e.target.value })
-                                        : setSupplierRows((prev) =>
-                                            prev.map((r) =>
-                                              r.key === row.key
-                                                ? { ...r, prices: { ...r.prices, [size.key]: e.target.value } }
-                                                : r,
-                                            ),
-                                          )
-                                    }
-                                    aria-label={`${t('inventory.products.pricePerSpool')} ${size.label_weight} g`}
-                                  />
-                                </div>
-                              </td>
-                            ))}
-                            <td className="px-2 py-1.5 text-right whitespace-nowrap">
-                              <button
-                                onClick={() => toggleArticles(row.key)}
-                                aria-expanded={open}
-                                title={t('inventory.products.articleNumbersPerCombination')}
-                                aria-label={t('inventory.products.articleNumbersPerCombination')}
-                                className={`relative p-1 rounded hover:bg-bambu-dark-tertiary ${
-                                  open || perCell > 0 ? 'text-white' : 'text-bambu-gray hover:text-white'
-                                }`}
-                              >
-                                <Hash className="w-4 h-4" />
-                                {perCell > 0 && (
-                                  <span className="absolute -top-1 -right-1 min-w-[0.9rem] h-[0.9rem] px-0.5 rounded-full bg-bambu-green text-white text-[9px] leading-[0.9rem] text-center">
-                                    {perCell}
-                                  </span>
-                                )}
-                              </button>
-                              <button
-                                onClick={() => removeSupplierRow(row.key)}
-                                className="p-1 rounded text-red-500 hover:bg-red-500/10"
-                                aria-label={t('common.delete')}
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </td>
-                          </tr>
-                          {open && (
-                            <tr className="bg-bambu-dark/40">
-                              <td colSpan={4 + sizes.length} className="px-3 py-2">
-                                <p className="text-xs text-bambu-gray mb-1.5">{t('inventory.products.articleNumbersHint')}</p>
-                                {colors.length === 0 || sizes.length === 0 ? (
-                                  <p className="text-xs text-bambu-gray">{t('inventory.products.noVariants')}</p>
-                                ) : (
-                                  <table className="text-xs">
-                                    <thead>
-                                      <tr className="text-bambu-gray">
-                                        <th className="pr-3 py-1 text-left font-medium">{t('inventory.products.color')}</th>
-                                        {sizes.map((size) => (
-                                          <th key={size.key} className="px-1 py-1 text-left font-medium whitespace-nowrap">
-                                            {toInt(size.label_weight) ? formatWeight(toInt(size.label_weight) ?? 0) : '?'}
-                                          </th>
-                                        ))}
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {colors.map((color) => (
-                                        <tr key={color.key}>
-                                          <td className="pr-3 py-0.5">
-                                            <div className="flex items-center gap-1.5 whitespace-nowrap">
-                                              <FilamentSwatch
-                                                rgba={color.hex ? `${color.hex}${color.alpha}` : null}
-                                                effectSize="table"
-                                                className="w-3.5 h-3.5"
-                                              />
-                                              <span className="text-white">
-                                                {color.color_name || (color.hex ? `#${color.hex}` : '?')}
-                                              </span>
-                                            </div>
-                                          </td>
-                                          {sizes.map((size) => {
-                                            const key = cellKey(color.key, size.key);
-                                            if (!cells.has(key)) {
-                                              return (
-                                                <td key={size.key} className="px-1 py-0.5 text-center text-bambu-gray/30">
-                                                  ·
-                                                </td>
-                                              );
-                                            }
-                                            return (
-                                              <td key={size.key} className="px-1 py-0.5">
-                                                <input
-                                                  className={`${smallInputClass} min-w-[7rem]`}
-                                                  value={row.articles[key] ?? ''}
-                                                  maxLength={100}
-                                                  placeholder={row.article_number || '–'}
-                                                  onChange={(e) => updateSupplierArticle(row.key, key, e.target.value)}
-                                                  aria-label={`${t('inventory.products.articleNumber')} ${color.color_name} ${size.label_weight} g`}
-                                                />
-                                              </td>
-                                            );
-                                          })}
-                                        </tr>
-                                      ))}
-                                    </tbody>
-                                  </table>
-                                )}
-                              </td>
-                            </tr>
-                          )}
-                        </Fragment>
-                      );
-                    })}
-                  </tbody>
-                </table>
+              <div className="flex flex-wrap items-center gap-2">
+                {supplierRows.length === 0 && (
+                  <span className="text-xs text-bambu-gray">{t('inventory.products.noProductSuppliers')}</span>
+                )}
+                {supplierRows.map((row) => {
+                  const name = supplierName(row.supplier_id);
+                  return (
+                    <span
+                      key={row.supplier_id}
+                      className={`inline-flex items-center gap-1 pl-1 pr-1.5 py-0.5 text-sm rounded-full border ${
+                        row.preferred ? 'border-bambu-green/60 bg-bambu-green/10' : 'border-bambu-dark-tertiary bg-bambu-dark'
+                      }`}
+                    >
+                      <button
+                        onClick={() => makeUsual(row.supplier_id)}
+                        aria-pressed={row.preferred}
+                        title={t('inventory.products.preferredHint')}
+                        aria-label={t('inventory.products.makeUsual', { name })}
+                        className={`p-0.5 rounded-full ${row.preferred ? 'text-bambu-green' : 'text-bambu-gray hover:text-white'}`}
+                      >
+                        <Star className={`w-3.5 h-3.5 ${row.preferred ? 'fill-current' : ''}`} />
+                      </button>
+                      <span className="text-white">{name}</span>
+                      <button
+                        onClick={() => removeSupplier(row.supplier_id)}
+                        aria-label={t('inventory.products.removeSupplier', { name })}
+                        className="p-0.5 rounded-full text-bambu-gray hover:text-red-500"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </span>
+                  );
+                })}
+                {addableSuppliers.length > 0 && (
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      if (e.target.value) addSupplier(Number(e.target.value));
+                    }}
+                    aria-label={t('inventory.products.addSupplier')}
+                    className="px-2 py-1 text-xs bg-bambu-dark border border-dashed border-bambu-dark-tertiary rounded-full text-bambu-gray hover:text-white focus:border-bambu-green focus:outline-none"
+                  >
+                    <option value="">+ {t('inventory.products.addSupplier')}</option>
+                    {addableSuppliers.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
             )}
           </section>

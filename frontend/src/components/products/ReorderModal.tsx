@@ -7,7 +7,7 @@ import type { ProductReorderLine } from '../../api/client';
 import { useToast } from '../../contexts/ToastContext';
 import { FilamentSwatch } from '../FilamentSwatch';
 import { getCurrencySymbol } from '../../utils/currency';
-import { formatMoney, formatWeight, reorderPrice } from './productUtils';
+import { formatMoney, formatWeight } from './productUtils';
 
 interface ReorderModalProps {
   onClose: () => void;
@@ -100,8 +100,7 @@ export function ReorderModal({ onClose, onDone }: ReorderModalProps) {
     subset.reduce((sum, line) => {
       const choice = resolved.get(line.variant_id);
       if (!choice?.selected) return sum;
-      const price = reorderPrice(line, choice.supplierId);
-      return price === null ? sum : sum + price * quantityOf(choice);
+      return line.list_price === null ? sum : sum + line.list_price * quantityOf(choice);
     }, 0);
 
   const handleSubmit = async () => {
@@ -181,9 +180,6 @@ export function ReorderModal({ onClose, onDone }: ReorderModalProps) {
                           <th className="px-2 py-1.5 text-left font-medium">{t('inventory.products.product')}</th>
                           <th className="px-2 py-1.5 text-left font-medium">{t('inventory.products.reorder.quantity')}</th>
                           <th className="px-2 py-1.5 text-left font-medium">{t('inventory.products.supplier')}</th>
-                          <th className="px-2 py-1.5 text-left font-medium hidden md:table-cell">
-                            {t('inventory.products.articleNumber')}
-                          </th>
                           <th className="px-2 py-1.5 text-right font-medium">{t('inventory.products.reorder.unitPrice')}</th>
                           <th className="px-2 py-1.5 text-right font-medium hidden sm:table-cell">
                             {t('inventory.products.reorder.total')}
@@ -193,8 +189,7 @@ export function ReorderModal({ onClose, onDone }: ReorderModalProps) {
                       <tbody>
                         {group.lines.map((line) => {
                           const choice = resolved.get(line.variant_id) ?? defaultChoice(line);
-                          const supplier = line.suppliers.find((s) => s.supplier_id === choice.supplierId);
-                          const price = reorderPrice(line, choice.supplierId);
+                          const price = line.list_price;
                           const quantity = quantityOf(choice);
                           return (
                             <tr
@@ -261,9 +256,6 @@ export function ReorderModal({ onClose, onDone }: ReorderModalProps) {
                                   ))}
                                   <option value="">{t('inventory.products.reorder.noSupplier')}</option>
                                 </select>
-                              </td>
-                              <td className="px-2 py-1.5 font-mono text-xs text-bambu-gray hidden md:table-cell">
-                                {supplier?.article_number ?? '–'}
                               </td>
                               <td className="px-2 py-1.5 text-right text-bambu-gray whitespace-nowrap">
                                 {formatMoney(price, currency)}

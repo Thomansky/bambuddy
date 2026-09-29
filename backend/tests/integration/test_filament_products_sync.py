@@ -268,71 +268,43 @@ class TestSuppliersOnTheProduct:
         return response.json()["id"]
 
     @pytest.mark.asyncio
-    async def test_a_product_keeps_its_suppliers_and_their_prices(self, async_client: AsyncClient):
+    async def test_a_product_keeps_where_it_was_bought(self, async_client: AsyncClient):
         shop = await self._supplier(async_client, "Filament Shop")
+        other = await self._supplier(async_client, "Other Shop")
         product = await _product(
             async_client,
-            suppliers=[
-                {"supplier_id": shop, "article_number": "BL-PLA-M", "preferred": True, "prices": {"kg1": 18.5}},
-            ],
+            suppliers=[{"supplier_id": other}, {"supplier_id": shop, "preferred": True}],
         )
 
-        [row] = product["suppliers"]
-        assert row["supplier_name"] == "Filament Shop"
-        assert row["article_number"] == "BL-PLA-M"
-        assert row["preferred"] is True
-        kg1 = next(s["id"] for s in product["sizes"] if s["label_weight"] == 1000)
-        assert row["prices"] == [{"size_id": kg1, "price": 18.5}]
+        # The usual supplier first, and nothing but where it was bought.
+        assert product["suppliers"] == [
+            {"supplier_id": shop, "supplier_name": "Filament Shop", "preferred": True},
+            {"supplier_id": other, "supplier_name": "Other Shop", "preferred": False},
+        ]
 
     @pytest.mark.asyncio
-    async def test_the_usual_suppliers_price_costs_a_new_spool(self, async_client: AsyncClient):
+    async def test_a_new_spool_costs_the_manufacturers_price(self, async_client: AsyncClient):
         shop = await self._supplier(async_client, "Filament Shop")
-        await _product(
+        # What an editor from before still sends: a number and a price at the
+        # supplier. Accepted, and neither is kept.
+        product = await _product(
             async_client,
-            suppliers=[{"supplier_id": shop, "preferred": True, "prices": {"kg1": 18.5}}],
+            suppliers=[{"supplier_id": shop, "preferred": True, "article_number": "FS-1", "prices": {"kg1": 18.5}}],
         )
 
         spool = await _new_spool(async_client)
 
-        assert spool["cost_per_kg"] == 18.5
+        assert product["suppliers"] == [{"supplier_id": shop, "supplier_name": "Filament Shop", "preferred": True}]
+        assert spool["cost_per_kg"] == 20.0
 
     @pytest.mark.asyncio
     async def test_a_supplier_a_product_uses_cannot_be_deleted(self, async_client: AsyncClient):
         shop = await self._supplier(async_client, "Filament Shop")
-        await _product(async_client, suppliers=[{"supplier_id": shop, "prices": {}}])
+        await _product(async_client, suppliers=[{"supplier_id": shop}])
 
         response = await async_client.delete(f"/api/v1/inventory/suppliers/{shop}")
 
         assert response.status_code == 409
-
-    @pytest.mark.asyncio
-    async def test_dropping_a_size_drops_its_supplier_prices(self, async_client: AsyncClient):
-        shop = await self._supplier(async_client, "Filament Shop")
-        product = await _product(
-            async_client,
-            suppliers=[{"supplier_id": shop, "prices": {"kg1": 18.5, "g500": 11.0}}],
-        )
-        sizes = {s["label_weight"]: s["id"] for s in product["sizes"]}
-        colors = {c["color_name"]: c["id"] for c in product["colors"]}
-        document = {
-            "brand": "Bambu Lab",
-            "material": "PLA",
-            "subtype": "Matte",
-            "material_number": "52",
-            "sizes": [{"id": sizes[1000], "key": "kg1", "label_weight": 1000, "core_weight": 250, "price": 20.0}],
-            "colors": [
-                {"id": colors["Charcoal"], "key": "charcoal", "color_name": "Charcoal", "rgba": "000000FF"},
-                {"id": colors["Ivory White"], "key": "white", "color_name": "Ivory White", "rgba": "FFFFFFFF"},
-            ],
-            "variants": [{"color_key": "charcoal", "size_key": "kg1"}, {"color_key": "white", "size_key": "kg1"}],
-            "suppliers": [{"supplier_id": shop, "prices": {"kg1": 18.5}}],
-        }
-
-        response = await async_client.put(f"{API}/{product['id']}", json=document)
-
-        assert response.status_code == 200, response.text
-        [row] = response.json()["product"]["suppliers"]
-        assert row["prices"] == [{"size_id": sizes[1000], "price": 18.5}]
 
     @pytest.mark.asyncio
     async def test_the_same_supplier_twice_is_refused(self, async_client: AsyncClient):

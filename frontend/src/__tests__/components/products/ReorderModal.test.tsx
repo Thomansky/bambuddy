@@ -38,8 +38,8 @@ function reorderLine(overrides: Partial<ProductReorderLine>): ProductReorderLine
 const LINES: ProductReorderLine[] = [
   reorderLine({
     suppliers: [
-      { supplier_id: 7, supplier_name: 'Filament Shop', preferred: true, article_number: 'FS-BLK-1', price: 18.5 },
-      { supplier_id: 8, supplier_name: 'Other Shop', preferred: false, article_number: 'O-52', price: 20 },
+      { supplier_id: 7, supplier_name: 'Filament Shop', preferred: true },
+      { supplier_id: 8, supplier_name: 'Other Shop', preferred: false },
     ],
   }),
   reorderLine({ variant_id: 12, color_name: 'White', rgba: 'FFFFFFFF', min_stock: 1, shortfall: 1 }),
@@ -64,9 +64,9 @@ describe('ReorderModal', () => {
     render(<ReorderModal onClose={vi.fn()} onDone={vi.fn()} />);
 
     const shop = (await screen.findByRole('heading', { name: 'Filament Shop' })).closest('section') as HTMLElement;
-    expect(within(shop).getByText('FS-BLK-1')).toBeInTheDocument();
     expect(within(shop).getByRole('textbox', { name: /Spools .*Black/ })).toHaveValue('2');
-    expect(within(shop).getByText('Total: €37.00')).toBeInTheDocument();
+    // Two spools at the manufacturer's price, whichever shop they come from.
+    expect(within(shop).getByText('Total: €40.00')).toBeInTheDocument();
 
     const none = screen.getByRole('heading', { name: 'No supplier' }).closest('section') as HTMLElement;
     expect(within(none).getByRole('textbox', { name: /Spools .*White/ })).toHaveValue('1');

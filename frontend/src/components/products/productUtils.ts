@@ -4,7 +4,6 @@ import type {
   FilamentProductSize,
   FilamentProductSupplier,
   FilamentVariant,
-  ProductReorderLine,
 } from '../../api/client';
 import type { ColumnConfig } from '../ColumnConfigModal';
 
@@ -61,30 +60,6 @@ export function findVariant(product: FilamentProduct, colorId: number, sizeId: n
   return product.variants.find((v) => v.color_id === colorId && v.size_id === sizeId);
 }
 
-/** What one spool of a size costs at a supplier, if the product says. */
-export function supplierPrice(product: FilamentProduct, supplierId: number | null, sizeId: number): number | null {
-  if (supplierId === null) return null;
-  const row = product.suppliers.find((s) => s.supplier_id === supplierId);
-  return row?.prices.find((p) => p.size_id === sizeId)?.price ?? null;
-}
-
-/** The price goods-in proposes: a combination's own price wins, then the
- *  supplier's price for the size, then the size's list price. Mirrors
- *  intake_price on the backend. */
-export function intakePrice(
-  product: FilamentProduct,
-  variant: FilamentVariant,
-  size: FilamentProductSize,
-  supplierId: number | null,
-): number | null {
-  if (variant.price_override !== null) return variant.price_override;
-  return supplierPrice(product, supplierId, size.id) ?? size.price;
-}
-
-export function preferredSupplierId(product: FilamentProduct): number | null {
-  return product.suppliers.find((s) => s.preferred)?.supplier_id ?? null;
-}
-
 /** Price per spool → cost per kg, the unit spools and print costing use. */
 export function costPerKg(price: number | null, labelWeight: number): number | null {
   if (price === null || !labelWeight) return null;
@@ -101,13 +76,6 @@ export function parsePrice(text: string): number | null {
 
 export function priceText(value: number | null | undefined): string {
   return value === null || value === undefined ? '' : String(value);
-}
-
-/** What one spool of a reorder line costs at the chosen supplier — the list
- *  price without one, or where the supplier has none of its own. */
-export function reorderPrice(line: ProductReorderLine, supplierId: number | null): number | null {
-  if (supplierId === null) return line.list_price;
-  return line.suppliers.find((s) => s.supplier_id === supplierId)?.price ?? line.list_price;
 }
 
 /** The supplier a product is usually bought from: the starred one, else the first. */
@@ -158,7 +126,7 @@ export function productMatches(product: FilamentProduct, needle: string): boolea
     product.slicer_filament_name,
     product.note,
     ...product.colors.map((c) => c.color_name),
-    ...product.suppliers.flatMap((s) => [s.supplier_name, s.article_number, ...s.articles.map((a) => a.article_number)]),
+    ...product.suppliers.map((s) => s.supplier_name),
     ...product.variants.flatMap((v) => v.codes.map((c) => c.code)),
   ];
   return haystack.some((value) => (value ?? '').toLowerCase().includes(query));
