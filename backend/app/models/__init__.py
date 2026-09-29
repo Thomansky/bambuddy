@@ -8,6 +8,7 @@ from backend.app.models.filament import Filament
 from backend.app.models.filament_product import (
     FilamentProduct,
     FilamentProductColor,
+    FilamentProductPreset,
     FilamentProductSize,
     FilamentProductSupplier,
     FilamentVariant,
@@ -104,6 +105,7 @@ __all__ = [
     "SpoolLinkGroup",
     "FilamentProduct",
     "FilamentProductColor",
+    "FilamentProductPreset",
     "FilamentProductSize",
     "FilamentProductSupplier",
     "FilamentVariant",

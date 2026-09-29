@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.models.filament_product import (
     FilamentProduct,
     FilamentProductColor,
+    FilamentProductPreset,
     FilamentProductSize,
     FilamentProductSupplier,
     FilamentVariant,
@@ -277,6 +278,17 @@ async def save_product(db: AsyncSession, product: FilamentProduct | None, data) 
     for variant in data.variants:
         if variant.color_key not in color_keys or variant.size_key not in size_keys:
             raise ProductError("A combination refers to a colour or size that is not in the product")
+    # A row without a model or a preset is no row; a model named twice is.
+    preset_rows = getattr(data, "presets", None)
+    if preset_rows is not None:
+        preset_rows = [
+            (_clean(row.printer_model), _clean(row.slicer_filament), _clean(row.slicer_filament_name))
+            for row in preset_rows
+        ]
+        preset_rows = [row for row in preset_rows if row[0] and row[1]]
+        preset_models = [model for model, _, _ in preset_rows]
+        if len(set(preset_models)) != len(preset_models):
+            raise ProductError("A printer model has two presets")
     supplier_rows = list(getattr(data, "suppliers", None) or [])
     supplier_ids = [row.supplier_id for row in supplier_rows]
     if len(set(supplier_ids)) != len(supplier_ids):
@@ -357,6 +369,21 @@ async def save_product(db: AsyncSession, product: FilamentProduct | None, data) 
                 color_changes[row.id] = changed
         color_by_key[incoming.key] = row
     await db.flush()
+
+    # --- presets per printer model, when the document carries them. They are
+    # read where a spool's preset is resolved, so nothing is written through.
+    if preset_rows is not None:
+        if not creating:
+            for row in list(product.presets):
+                await db.delete(row)
+            await db.flush()
+        for model, code, name in preset_rows:
+            db.add(
+                FilamentProductPreset(
+                    product_id=product.id, printer_model=model, slicer_filament=code, slicer_filament_name=name
+                )
+            )
+        await db.flush()
 
     # --- suppliers: the document is the whole truth, so they are rebuilt.
     if not creating:

@@ -13,6 +13,8 @@ class FilamentProduct(Base):
 
     The product is the home of what every spool of it shares — brand,
     material, subtype, the internal material number, preset and temperatures.
+    Its preset per printer model is the exception to the copying below: it is
+    read where a spool's preset is resolved for a printer, not copied.
     Colours and sizes are declared once on the product; a variant is a
     colour × size combination that actually exists. Spools keep their own
     copy of all of it (every read path stays untouched) and point at their
@@ -48,6 +50,13 @@ class FilamentProduct(Base):
         order_by="[FilamentProductColor.sort_order, FilamentProductColor.id]",
     )
     variants: Mapped[list["FilamentVariant"]] = relationship(back_populates="product", cascade="all", lazy="selectin")
+    # The preset for each printer model its own preset is not for.
+    presets: Mapped[list["FilamentProductPreset"]] = relationship(
+        back_populates="product",
+        cascade="all",
+        lazy="selectin",
+        order_by="FilamentProductPreset.printer_model",
+    )
     # Where the product has been bought — on the product, not on every spool.
     suppliers: Mapped[list["FilamentProductSupplier"]] = relationship(
         back_populates="product",
@@ -55,6 +64,32 @@ class FilamentProduct(Base):
         lazy="selectin",
         order_by="[FilamentProductSupplier.preferred.desc(), FilamentProductSupplier.id]",
     )
+
+
+class FilamentProductPreset(Base):
+    """The slicer preset a product uses on one printer model.
+
+    A cloud or Orca preset is bound to a model ("@BBL H2S"), so the product's
+    own preset is only right on the model it names; a row here names the one
+    for another model. It is not copied onto the spools. Resolving a spool's
+    preset for a printer asks the spool's own per-model rows first, then this,
+    then the spool's own preset (``services.spool_filament_preset``), so an
+    edit here reaches every spool of the product at once, and a spool set up
+    by hand for a model keeps what it was given.
+    """
+
+    __tablename__ = "filament_product_presets"
+    __table_args__ = (UniqueConstraint("product_id", "printer_model", name="uq_filament_product_presets_model"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("filament_products.id", ondelete="CASCADE"), index=True)
+    # Matches ``printers.model`` ("H2S", "H2D", "X1C"), as SpoolFilamentPreset does.
+    printer_model: Mapped[str] = mapped_column(String(50))
+    # As wide as SpoolFilamentPreset's: the same ids end up in the same slot.
+    slicer_filament: Mapped[str] = mapped_column(String(128))
+    slicer_filament_name: Mapped[str | None] = mapped_column(String(255))
+
+    product: Mapped[FilamentProduct] = relationship(back_populates="presets")
 
 
 class FilamentProductSize(Base):

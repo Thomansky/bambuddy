@@ -15,10 +15,13 @@ Resolution order, most specific first:
     2. (printer_model, "")               -- a whole-model value; the form does
                                             not write these, but the API accepts
                                             them and they still resolve
-    3. ``Spool.slicer_filament``         -- what the spool carries today
+    3. the product's preset for the      -- product master data (#3165): one per
+       model                                model, read here rather than copied
+                                            onto every spool of the product
+    4. ``Spool.slicer_filament``         -- what the spool carries today
 
 Every step is a plain equality match on stored strings; nothing is inferred
-from preset names. A model with no row at all resolves to step 3, which is
+from preset names. A model with no row at all resolves to step 4, which is
 exactly the behaviour every install has now, so a spool nobody has configured
 per-model behaves identically before and after this feature.
 """
@@ -30,6 +33,8 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.app.models.filament_product import FilamentProductPreset, FilamentVariant
+from backend.app.models.spool import Spool
 from backend.app.models.spool_filament_preset import SpoolFilamentPreset, SpoolmanFilamentPreset
 
 logger = logging.getLogger(__name__)
@@ -108,7 +113,25 @@ async def resolve_spool_preset(
 ) -> PresetPair:
     """Cascade for an internal-inventory spool. See the module docstring."""
     result = await db.execute(select(SpoolFilamentPreset).where(SpoolFilamentPreset.spool_id == spool_id))
-    return _pick(list(result.scalars().all()), printer_model, nozzle_diameter, (fallback_filament, fallback_name))
+    fallback = await _product_preset(db, spool_id, printer_model) or (fallback_filament, fallback_name)
+    return _pick(list(result.scalars().all()), printer_model, nozzle_diameter, fallback)
+
+
+async def _product_preset(db: AsyncSession, spool_id: int, printer_model: str | None) -> PresetPair | None:
+    """Step 3: the preset the spool's product names for this printer model."""
+    # Only a real model name goes into the query; anything else has nothing to match.
+    model = printer_model.strip() if isinstance(printer_model, str) else ""
+    if not model:
+        return None
+    row = (
+        await db.execute(
+            select(FilamentProductPreset.slicer_filament, FilamentProductPreset.slicer_filament_name)
+            .join(FilamentVariant, FilamentVariant.product_id == FilamentProductPreset.product_id)
+            .join(Spool, Spool.variant_id == FilamentVariant.id)
+            .where(Spool.id == spool_id, FilamentProductPreset.printer_model == model)
+        )
+    ).first()
+    return (row[0], row[1]) if row else None
 
 
 async def resolve_spoolman_preset(

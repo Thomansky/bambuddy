@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.filament_product import FilamentProductColor
 from backend.app.models.spool import Spool
+from backend.app.models.spool_filament_preset import SpoolFilamentPreset
+from backend.app.services.spool_filament_preset import resolve_spool_preset
 from backend.app.services.spool_tag_matcher import create_spool_from_tray, find_matching_untagged_spool
 
 pytestmark = pytest.mark.integration
@@ -316,3 +318,99 @@ class TestSuppliersOnTheProduct:
         )
 
         assert response.status_code == 400
+
+
+class TestPresetPerPrinterModel:
+    """A cloud or Orca preset is bound to a printer model, so a product names
+    one per model. A spool's slot on that model gets it, unless the spool has
+    been set up by hand for that model."""
+
+    H2D = {"printer_model": "H2D", "slicer_filament": "GFSA01_02", "slicer_filament_name": "Bambu PLA Matte @BBL H2D"}
+
+    @staticmethod
+    def _document(product: dict, **overrides) -> dict:
+        fields = ("brand", "material", "subtype", "material_number", "slicer_filament", "slicer_filament_name")
+        document = {
+            **{key: product[key] for key in fields},
+            "sizes": [
+                {
+                    "id": s["id"],
+                    "key": f"s{s['id']}",
+                    "label_weight": s["label_weight"],
+                    "core_weight": s["core_weight"],
+                }
+                for s in product["sizes"]
+            ],
+            "colors": [
+                {"id": c["id"], "key": f"c{c['id']}", "color_name": c["color_name"], "rgba": c["rgba"]}
+                for c in product["colors"]
+            ],
+            "variants": [
+                {"color_key": f"c{v['color_id']}", "size_key": f"s{v['size_id']}"} for v in product["variants"]
+            ],
+        }
+        document.update(overrides)
+        return document
+
+    @pytest.mark.asyncio
+    async def test_a_product_keeps_one_per_model(self, async_client: AsyncClient):
+        product = await _product(async_client, presets=[self.H2D, {"printer_model": "X1C", "slicer_filament": " "}])
+
+        # A model without a preset is no row.
+        assert product["presets"] == [self.H2D]
+
+    @pytest.mark.asyncio
+    async def test_an_edit_without_them_keeps_them_and_an_empty_list_clears_them(self, async_client: AsyncClient):
+        product = await _product(async_client, presets=[self.H2D])
+
+        kept = await async_client.put(f"{API}/{product['id']}", json=self._document(product))
+        cleared = await async_client.put(f"{API}/{product['id']}", json=self._document(product, presets=[]))
+
+        assert kept.status_code == 200, kept.text
+        assert kept.json()["product"]["presets"] == [self.H2D]
+        assert cleared.json()["product"]["presets"] == []
+
+    @pytest.mark.asyncio
+    async def test_a_model_named_twice_is_refused(self, async_client: AsyncClient):
+        response = await async_client.post(API, json={"material": "PLA", "presets": [self.H2D, self.H2D]})
+
+        assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_a_spool_gets_its_products_preset_on_that_model(
+        self, async_client: AsyncClient, db_session: AsyncSession
+    ):
+        await _product(
+            async_client,
+            slicer_filament="GFA01",
+            slicer_filament_name="Bambu PLA Matte @BBL H2S",
+            presets=[self.H2D],
+        )
+        spool = await _fresh(db_session, (await _new_spool(async_client))["id"])
+
+        async def resolve(model: str) -> tuple:
+            return await resolve_spool_preset(
+                db_session,
+                spool_id=spool.id,
+                printer_model=model,
+                nozzle_diameter="0.4",
+                fallback_filament=spool.slicer_filament,
+                fallback_name=spool.slicer_filament_name,
+            )
+
+        assert await resolve("H2D") == ("GFSA01_02", "Bambu PLA Matte @BBL H2D")
+        # A model the product names nothing for keeps the spool's own preset.
+        assert await resolve("H2S") == ("GFA01", "Bambu PLA Matte @BBL H2S")
+
+        # A spool set up by hand for the model keeps what it was given.
+        db_session.add(
+            SpoolFilamentPreset(
+                spool_id=spool.id,
+                printer_model="H2D",
+                nozzle_diameter="0.4",
+                slicer_filament="PFUS0123",
+                slicer_filament_name="My PLA @BBL H2D",
+            )
+        )
+        await db_session.commit()
+        assert await resolve("H2D") == ("PFUS0123", "My PLA @BBL H2D")

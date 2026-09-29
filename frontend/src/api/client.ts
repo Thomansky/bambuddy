@@ -3938,6 +3938,15 @@ export interface FilamentVariant {
   shortfall: number;
 }
 
+/** The slicer preset a product uses on one printer model; its own preset
+ *  covers every model without one of these. */
+export interface FilamentProductPreset {
+  /** Matches a printer's `model` ("H2S", "H2D"). */
+  printer_model: string;
+  slicer_filament: string;
+  slicer_filament_name: string | null;
+}
+
 /** A supplier the product has been bought from. */
 export interface FilamentProductSupplier {
   supplier_id: number;
@@ -3955,6 +3964,7 @@ export interface FilamentProduct {
   material_number: string | null;
   slicer_filament: string | null;
   slicer_filament_name: string | null;
+  presets: FilamentProductPreset[];
   nozzle_temp_min: number | null;
   nozzle_temp_max: number | null;
   note: string | null;
@@ -3978,6 +3988,8 @@ export interface FilamentProductInput {
   nozzle_temp_min: number | null;
   nozzle_temp_max: number | null;
   note: string | null;
+  /** Left out, the product keeps the ones it has. */
+  presets?: { printer_model: string; slicer_filament: string; slicer_filament_name: string | null }[];
   sizes: {
     id: number | null;
     key: string;

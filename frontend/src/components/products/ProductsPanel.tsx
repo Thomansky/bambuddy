@@ -23,6 +23,7 @@ import type { FilamentProduct, SpoolCatalogEntry } from '../../api/client';
 import { ColumnConfigModal, type ColumnConfig } from '../ColumnConfigModal';
 import { FilamentSwatch } from '../FilamentSwatch';
 import { getCurrencySymbol } from '../../utils/currency';
+import { ModelBadge } from './ModelBadge';
 import {
   colorLabel,
   compareProducts,
@@ -32,6 +33,8 @@ import {
   formatStock,
   formatWeight,
   mergeColumnConfig,
+  presetModels,
+  presetStem,
   priceRange,
   productMatches,
   productTotals,
@@ -183,8 +186,18 @@ const columnCells: Record<string, (ctx: CellCtx) => ReactNode> = {
     return names ? <span className="text-sm text-bambu-gray">{names}</span> : EMPTY;
   },
   preset: ({ product }) => {
-    const preset = product.slicer_filament_name || product.slicer_filament;
-    return preset ? <span className="text-sm text-bambu-gray">{preset}</span> : EMPTY;
+    const own = product.slicer_filament_name || product.slicer_filament;
+    // The printer models it has a preset for, so a missing one stands out.
+    const models = presetModels(product);
+    if (!own && models.length === 0) return EMPTY;
+    return (
+      <span className="flex flex-wrap items-center gap-1">
+        {own && <span className="text-sm text-bambu-gray">{presetStem(own) || own}</span>}
+        {models.map((entry) => (
+          <ModelBadge key={entry.model} model={entry.model} title={entry.name} />
+        ))}
+      </span>
+    );
   },
   nozzle_temp: ({ product }) =>
     product.nozzle_temp_min && product.nozzle_temp_max ? (

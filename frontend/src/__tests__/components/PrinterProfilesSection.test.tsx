@@ -107,6 +107,7 @@ interface HarnessProps {
   onPresets?: (next: Map<string, PresetChoice>) => void;
   onProfiles?: (next: Map<string, CalibrationProfile>) => void;
   slicerFilament?: string;
+  productPresets?: { printer_model: string; slicer_filament: string; slicer_filament_name: string | null }[];
 }
 
 /**
@@ -120,6 +121,7 @@ function Harness({
   onPresets,
   onProfiles,
   slicerFilament = 'GFSA00',
+  productPresets,
 }: HarnessProps) {
   const [modelPresets, setModelPresets] = React.useState(presets);
   const [selectedProfiles, setSelectedProfiles] = React.useState(profiles);
@@ -144,6 +146,7 @@ function Harness({
       selectedGroupId={selectedGroupId}
       setSelectedGroupId={setSelectedGroupId}
       printerModels={PRINTER_MODELS}
+      productPresets={productPresets}
     />
   );
 }
@@ -341,6 +344,22 @@ describe('PrinterProfilesSection — filament preset', () => {
   it('refuses to offer a preset for a printer whose model is unknown', () => {
     render(<Harness printers={[printer(9, 'Mystery', null)]} />);
     expect(screen.getByText(/has not reported its model/i)).toBeInTheDocument();
+  });
+});
+
+describe("PrinterProfilesSection — the product's preset per model (#3165)", () => {
+  it("names the product's preset where a size is left inherited, and the spool's elsewhere", () => {
+    render(
+      <Harness
+        productPresets={[
+          { printer_model: 'H2C', slicer_filament: 'GFSA09', slicer_filament_name: 'Bambu PLA Basic @BBL H2C' },
+        ]}
+      />,
+    );
+
+    expect(presetPicker('H2C', '0.4')).toHaveTextContent('From the product: Bambu PLA Basic @BBL H2C');
+    fireEvent.click(modelRow('X1C'));
+    expect(presetPicker('X1C', '0.4')).toHaveTextContent("Use the spool's preset");
   });
 });
 

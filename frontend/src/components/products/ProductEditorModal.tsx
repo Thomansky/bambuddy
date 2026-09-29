@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Barcode, Boxes, Check, Loader2, Plus, Star, Store, Trash2, X } from 'lucide-react';
 import { api, ApiError } from '../../api/client';
 import type { FilamentProduct, FilamentProductInput, FilamentVariant } from '../../api/client';
+import type { FilamentOption } from '../spool-form/types';
 import { useToast } from '../../contexts/ToastContext';
 import { ConfirmModal } from '../ConfirmModal';
 import { FilamentSwatch } from '../FilamentSwatch';
@@ -11,8 +12,19 @@ import { SuppliersModal } from '../SuppliersModal';
 import { PresetPicker } from '../spool-form/PresetPicker';
 import { findPresetOption } from '../spool-form/utils';
 import { usePresetOptions } from './usePresetOptions';
+import { ModelBadge } from './ModelBadge';
 import { getCurrencySymbol } from '../../utils/currency';
-import { costPerKg, formatMoney, formatStock, formatWeight, parsePrice, priceText } from './productUtils';
+import { extractPresetModel, matchesPrinterModelSuffix } from '../../utils/slicerPrinterMatch';
+import {
+  costPerKg,
+  formatMoney,
+  formatStock,
+  formatWeight,
+  parsePrice,
+  presetModelOf,
+  presetStem,
+  priceText,
+} from './productUtils';
 
 interface ProductEditorModalProps {
   /** null = a new product. */
@@ -28,6 +40,14 @@ interface SizeRow {
   core_weight: string;
   price: string;
   price_vat_included: boolean;
+}
+
+/** The preset for one printer model; the product's own covers the rest. */
+interface ModelPresetRow {
+  printer_model: string;
+  /** Empty while the row waits for a preset; such a row is not saved. */
+  slicer_filament: string;
+  slicer_filament_name: string;
 }
 
 /** A supplier the product has been bought from. */
@@ -149,6 +169,39 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
   const [suppliersOpen, setSuppliersOpen] = useState(false);
   const { options: presetOptions, loading: loadingPresets } = usePresetOptions();
   const selectedPreset = useMemo(() => findPresetOption(slicerFilament, presetOptions), [slicerFilament, presetOptions]);
+  // A preset per printer model (#3165): a cloud or Orca preset is bound to a
+  // model, so the product's own is only right on the model it names.
+  const [modelPresets, setModelPresets] = useState<ModelPresetRow[]>(() =>
+    (product?.presets ?? []).map((row) => ({
+      printer_model: row.printer_model,
+      slicer_filament: row.slicer_filament,
+      slicer_filament_name: row.slicer_filament_name ?? '',
+    })),
+  );
+  const { data: printers = [] } = useQuery({ queryKey: ['printers'], queryFn: api.getPrinters });
+  // Reads the model out of a preset name; the same query the spool dialog uses.
+  const { data: printerModels } = useQuery({
+    queryKey: ['slicerPrinterModels'],
+    queryFn: api.getSlicerPrinterModels,
+    staleTime: Infinity,
+  });
+  // The model the product's own preset is for ("@BBL H2S"), if its name says.
+  const ownModel = useMemo(() => {
+    const name = selectedPreset?.name || slicerFilamentName;
+    return name ? presetModelOf(name, printerModels ?? {}) : null;
+  }, [selectedPreset, slicerFilamentName, printerModels]);
+  // The fleet's models that have no preset yet.
+  const addableModels = useMemo(
+    () =>
+      [...new Set(printers.map((p) => (p.model ?? '').trim()).filter(Boolean))]
+        .sort((a, b) => a.localeCompare(b))
+        .filter(
+          (model) =>
+            !modelPresets.some((row) => row.printer_model === model) &&
+            !(ownModel && matchesPrinterModelSuffix(ownModel, model)),
+        ),
+    [printers, modelPresets, ownModel],
+  );
 
   // Existing variants by cell, for stock counts and the removal guard.
   const existingByCell = useMemo(() => {
@@ -279,6 +332,52 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
       return rest;
     });
 
+  // A model is offered only the presets made for it, as in the spool dialog;
+  // one that names no model stays, and so does the one already chosen.
+  const optionsForModel = (model: string, selected: string): FilamentOption[] => {
+    const list = presetOptions.filter((option) => {
+      const presetModel = extractPresetModel(option.name, printerModels ?? {});
+      return !presetModel || matchesPrinterModelSuffix(presetModel, model);
+    });
+    const kept = selected ? findPresetOption(selected, presetOptions) : undefined;
+    return kept && !list.includes(kept) ? [kept, ...list] : list;
+  };
+
+  // A model added starts on the variant of the product's own preset made for
+  // it ("Bambu PLA Matte @BBL H2D" beside "… @BBL H2S"), when there is one.
+  const addModelPreset = (model: string) => {
+    const stem = presetStem(selectedPreset?.name || slicerFilamentName).toLowerCase();
+    const candidates = stem
+      ? presetOptions.filter((option) => {
+          const presetModel = extractPresetModel(option.name, printerModels ?? {});
+          return (
+            presetModel !== null &&
+            matchesPrinterModelSuffix(presetModel, model) &&
+            presetStem(option.name).toLowerCase() === stem
+          );
+        })
+      : [];
+    // Bambu names a preset for another nozzle size ("… 0.2 nozzle"); the
+    // plain one is the standard nozzle's.
+    const match = candidates.find((option) => !/\b[\d.]+\s*nozzle\b/i.test(option.name)) ?? candidates[0];
+    setModelPresets((prev) => [
+      ...prev,
+      { printer_model: model, slicer_filament: match?.code ?? '', slicer_filament_name: match?.name ?? '' },
+    ]);
+  };
+
+  const setModelPreset = (model: string, option: FilamentOption | null) =>
+    setModelPresets((prev) =>
+      prev.map((row) =>
+        row.printer_model === model
+          ? { ...row, slicer_filament: option?.code ?? '', slicer_filament_name: option?.name ?? '' }
+          : row,
+      ),
+    );
+
+  const removeModelPreset = (model: string) =>
+    setModelPresets((prev) => prev.filter((row) => row.printer_model !== model));
+
   const updateSize = (key: string, patch: Partial<SizeRow>) =>
     setSizes((prev) => prev.map((s) => (s.key === key ? { ...s, ...patch } : s)));
   const updateColor = (key: string, patch: Partial<ColorRow>) =>
@@ -312,6 +411,13 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
       material_number: materialNumber.trim() || null,
       slicer_filament: slicerFilament.trim() || null,
       slicer_filament_name: slicerFilamentName.trim() || null,
+      presets: modelPresets
+        .filter((row) => row.slicer_filament)
+        .map((row) => ({
+          printer_model: row.printer_model,
+          slicer_filament: row.slicer_filament,
+          slicer_filament_name: row.slicer_filament_name || null,
+        })),
       nozzle_temp_min: toInt(tempMin),
       nozzle_temp_max: toInt(tempMax),
       note: note.trim() || null,
@@ -459,31 +565,91 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
                   onChange={(e) => setMaterialNumber(e.target.value)}
                 />
               </label>
-              <div className="block sm:col-span-2">
+              <div className="block sm:col-span-2 space-y-1.5">
                 <span className="text-xs text-bambu-gray flex items-center gap-1">
-                  {t('inventory.products.slicerPreset')}
+                  {t('inventory.products.slicerPresets')}
                   {loadingPresets && <Loader2 className="w-3 h-3 animate-spin" />}
                 </span>
-                <PresetPicker
-                  value={selectedPreset?.code ?? ''}
-                  options={presetOptions}
-                  inheritLabel={
-                    // A preset the lists do not know (cloud not connected) is
-                    // still shown by its stored name rather than as none.
-                    !selectedPreset && slicerFilament
-                      ? `${slicerFilamentName || slicerFilament} (${slicerFilament})`
-                      : t('inventory.products.noPreset')
-                  }
-                  onChange={(option) => {
-                    setSlicerFilament(option?.code ?? '');
-                    setSlicerFilamentName(option?.displayName ?? '');
-                  }}
-                  ariaLabel={t('inventory.products.slicerPreset')}
-                />
-                {selectedPreset && (
-                  <span className="text-[11px] text-bambu-gray">
-                    {t('inventory.products.slicerPresetId')}: <span className="font-mono">{selectedPreset.code}</span>
-                  </span>
+                {/* The product's own preset: every model without one below uses it. */}
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 min-w-0">
+                    <PresetPicker
+                      value={selectedPreset?.code ?? ''}
+                      options={presetOptions}
+                      inheritLabel={
+                        // A preset the lists do not know (cloud not connected) is
+                        // still shown by its stored name rather than as none.
+                        !selectedPreset && slicerFilament
+                          ? `${slicerFilamentName || slicerFilament} (${slicerFilament})`
+                          : t('inventory.products.noPreset')
+                      }
+                      onChange={(option) => {
+                        setSlicerFilament(option?.code ?? '');
+                        setSlicerFilamentName(option?.displayName ?? '');
+                      }}
+                      ariaLabel={t('inventory.products.slicerPreset')}
+                    />
+                  </div>
+                  <ModelBadge
+                    model={ownModel ?? t('inventory.products.allModels')}
+                    muted={!ownModel}
+                    title={t('inventory.products.presetDefaultHint')}
+                  />
+                  {modelPresets.length > 0 && <span className="w-7 shrink-0" />}
+                </div>
+                {modelPresets.map((row) => {
+                  const known = findPresetOption(row.slicer_filament, presetOptions);
+                  return (
+                    <div key={row.printer_model} className="flex items-center gap-2">
+                      <div className="flex-1 min-w-0">
+                        <PresetPicker
+                          value={known?.code ?? ''}
+                          options={optionsForModel(row.printer_model, row.slicer_filament)}
+                          inheritLabel={
+                            !known && row.slicer_filament
+                              ? `${row.slicer_filament_name || row.slicer_filament} (${row.slicer_filament})`
+                              : t('inventory.products.choosePreset')
+                          }
+                          onChange={(option) => setModelPreset(row.printer_model, option)}
+                          ariaLabel={t('inventory.products.presetFor', { model: row.printer_model })}
+                        />
+                      </div>
+                      <ModelBadge model={row.printer_model} muted={!row.slicer_filament} />
+                      <button
+                        onClick={() => removeModelPreset(row.printer_model)}
+                        className="p-1 rounded text-red-500 hover:bg-red-500/10 shrink-0"
+                        aria-label={t('inventory.products.removePresetFor', { model: row.printer_model })}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  );
+                })}
+                {(addableModels.length > 0 || selectedPreset) && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    {addableModels.length > 0 && (
+                      <select
+                        value=""
+                        onChange={(e) => {
+                          if (e.target.value) addModelPreset(e.target.value);
+                        }}
+                        aria-label={t('inventory.products.addPresetForModel')}
+                        className="px-2 py-1 text-xs bg-bambu-dark border border-dashed border-bambu-dark-tertiary rounded-full text-bambu-gray hover:text-white focus:border-bambu-green focus:outline-none"
+                      >
+                        <option value="">+ {t('inventory.products.addPresetForModel')}</option>
+                        {addableModels.map((model) => (
+                          <option key={model} value={model}>
+                            {model}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    {selectedPreset && (
+                      <span className="text-[11px] text-bambu-gray">
+                        {t('inventory.products.slicerPresetId')}: <span className="font-mono">{selectedPreset.code}</span>
+                      </span>
+                    )}
+                  </div>
                 )}
               </div>
               <label className="block">

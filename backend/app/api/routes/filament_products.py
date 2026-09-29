@@ -70,6 +70,13 @@ class ProductVariantIn(BaseModel):
     min_stock: int | None = Field(default=None, ge=0, le=1000)
 
 
+class ProductPresetIn(BaseModel):
+    # Matches ``printers.model`` ("H2S", "H2D").
+    printer_model: str = Field(min_length=1, max_length=50)
+    slicer_filament: str | None = Field(default=None, max_length=128)
+    slicer_filament_name: str | None = Field(default=None, max_length=255)
+
+
 class ProductSupplierIn(BaseModel):
     supplier_id: int
     # The usual supplier; the reorder list starts from it.
@@ -86,6 +93,8 @@ class ProductIn(BaseModel):
     nozzle_temp_min: int | None = Field(default=None, ge=0, le=500)
     nozzle_temp_max: int | None = Field(default=None, ge=0, le=500)
     note: str | None = Field(default=None, max_length=500)
+    # The preset per printer model; left out, they stay as they are.
+    presets: list[ProductPresetIn] | None = None
     sizes: list[ProductSizeIn] = []
     colors: list[ProductColorIn] = []
     variants: list[ProductVariantIn] = []
@@ -148,6 +157,14 @@ def _product_out(product: FilamentProduct, stock: dict[int, VariantStock], on_or
         "material_number": product.material_number,
         "slicer_filament": product.slicer_filament,
         "slicer_filament_name": product.slicer_filament_name,
+        "presets": [
+            {
+                "printer_model": row.printer_model,
+                "slicer_filament": row.slicer_filament,
+                "slicer_filament_name": row.slicer_filament_name,
+            }
+            for row in product.presets
+        ],
         "nozzle_temp_min": product.nozzle_temp_min,
         "nozzle_temp_max": product.nozzle_temp_max,
         "note": product.note,

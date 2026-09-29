@@ -110,6 +110,7 @@ export function PrinterProfilesSection({
   selectedGroupId,
   setSelectedGroupId,
   printerModels,
+  productPresets,
   isLoading = false,
 }: PrinterProfilesSectionProps) {
   const { t } = useTranslation();
@@ -335,6 +336,15 @@ export function PrinterProfilesSection({
     );
   }
 
+  // What a nozzle left inherited gets: the product's preset for the model
+  // where its product names one (#3165), else the spool's own.
+  const inheritedPresetLabel = (model: string) => {
+    const fromProduct = productPresets?.find(p => p.printer_model === model);
+    return fromProduct
+      ? t('inventory.presetUseProductDefault', { name: fromProduct.slicer_filament_name || fromProduct.slicer_filament })
+      : t('inventory.presetUseSpoolDefault');
+  };
+
   const renderPresetRow = (model: string, diameter: string, inheritLabel: string) => {
     const key = presetKey(model, diameter);
     const chosen = modelPresets.get(key);
@@ -477,11 +487,7 @@ export function PrinterProfilesSection({
                         {diameter}mm
                       </span>
                       <div className="flex-1 min-w-0">
-                        {renderPresetRow(
-                          active.model,
-                          diameter,
-                          t('inventory.presetUseSpoolDefault'),
-                        )}
+                        {renderPresetRow(active.model, diameter, inheritedPresetLabel(active.model))}
                       </div>
                     </div>
                   ))}

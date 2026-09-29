@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { FilamentProduct } from '../../../api/client';
-import { costPerKg, parsePrice, productMatches, usualSupplier } from '../../../components/products/productUtils';
+import {
+  costPerKg,
+  parsePrice,
+  presetModels,
+  productMatches,
+  usualSupplier,
+} from '../../../components/products/productUtils';
 
 // Product master data (#3165): the small helpers the product views share.
 const product: FilamentProduct = {
@@ -12,6 +18,7 @@ const product: FilamentProduct = {
   material_number: '52',
   slicer_filament: null,
   slicer_filament_name: null,
+  presets: [],
   nozzle_temp_min: null,
   nozzle_temp_max: null,
   note: null,
@@ -37,6 +44,46 @@ describe('suppliers', () => {
   it('are found by the search', () => {
     expect(productMatches(product, 'shop b')).toBe(true);
     expect(productMatches(product, 'shop c')).toBe(false);
+  });
+});
+
+describe('presetModels', () => {
+  const h2d = { printer_model: 'H2D', slicer_filament: 'GFSA01_H2D', slicer_filament_name: 'Bambu PLA Matte @BBL H2D' };
+
+  it('names the model of the own preset, then each preset per model', () => {
+    const withPresets = {
+      ...product,
+      slicer_filament: 'GFSA01_H2S',
+      slicer_filament_name: 'Bambu PLA Matte @BBL H2S',
+      presets: [h2d],
+    };
+    expect(presetModels(withPresets)).toEqual([
+      { model: 'H2S', name: 'Bambu PLA Matte @BBL H2S' },
+      { model: 'H2D', name: 'Bambu PLA Matte @BBL H2D' },
+    ]);
+  });
+
+  it('lets a preset for the model win over the own one naming it', () => {
+    const both = {
+      ...product,
+      slicer_filament: 'GFSA01_H2D',
+      slicer_filament_name: 'Bambu PLA Matte @BBL H2D',
+      presets: [{ ...h2d, slicer_filament_name: 'My PLA @BBL H2D' }],
+    };
+    expect(presetModels(both)).toEqual([{ model: 'H2D', name: 'My PLA @BBL H2D' }]);
+  });
+
+  it('reads the model past the "(Custom)" a stored name ends in', () => {
+    const custom = {
+      ...product,
+      slicer_filament: 'PFUS0123',
+      slicer_filament_name: 'XIONEER HIPS VLX 90 @BBL H2D 0.4 nozzle (Custom)',
+    };
+    expect(presetModels(custom).map((entry) => entry.model)).toEqual(['H2D']);
+  });
+
+  it('gives an own preset that names no model no badge', () => {
+    expect(presetModels({ ...product, slicer_filament: 'GFL01', slicer_filament_name: 'Bambu PLA Matte' })).toEqual([]);
   });
 });
 

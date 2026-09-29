@@ -133,6 +133,10 @@ export interface PrinterProfilesSectionProps {
   // presets that belong to it. Undefined until the query resolves, which just
   // means no filtering yet rather than an empty list.
   printerModels?: Record<string, string>;
+  // Product master data (#3165): the spool's product can name a preset per
+  // printer model, which a nozzle left inherited resolves to before the
+  // spool's own preset.
+  productPresets?: { printer_model: string; slicer_filament: string; slicer_filament_name: string | null }[];
   // True while the printers are still being asked for their calibration
   // tables. Distinguishes "no printers" from "not answered yet": the fetch is
   // several MQTT round trips per machine, so the gap is seconds, not a frame.

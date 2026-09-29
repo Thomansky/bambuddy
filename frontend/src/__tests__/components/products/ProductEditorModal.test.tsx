@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { render } from '../../utils';
@@ -40,6 +40,7 @@ const PRODUCT: FilamentProduct = {
   material_number: '52',
   slicer_filament: null,
   slicer_filament_name: null,
+  presets: [],
   nozzle_temp_min: null,
   nozzle_temp_max: null,
   note: null,
@@ -227,5 +228,110 @@ describe("ProductEditorModal — the manufacturer's price, the suppliers and the
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
     expect(saved[0].slicer_filament).toBe('GFA00');
     expect(saved[0].slicer_filament_name).toBe('Bambu PLA Basic');
+  });
+});
+
+describe('ProductEditorModal — a preset per printer model', () => {
+  let saved: FilamentProductInput[];
+  const cloudPreset = (setting_id: string, name: string) => ({
+    setting_id,
+    name,
+    type: 'filament',
+    version: null,
+    user_id: null,
+    updated_time: null,
+    is_custom: false,
+  });
+  const onTheH2S: FilamentProduct = {
+    ...PRODUCT,
+    slicer_filament: 'GFSA01_H2S',
+    slicer_filament_name: 'Bambu PLA Matte @BBL H2S',
+  };
+
+  beforeEach(() => {
+    saved = [];
+    server.use(
+      http.get('/api/v1/settings/', () => HttpResponse.json({ currency: 'EUR' })),
+      http.get('/api/v1/inventory/suppliers', () => HttpResponse.json([])),
+      http.get('/api/v1/printers/', () =>
+        HttpResponse.json([
+          { id: 1, name: 'Links', model: 'H2S' },
+          { id: 2, name: 'Rechts', model: 'H2D' },
+        ]),
+      ),
+      http.get('/api/v1/slicer/printer-models', () => HttpResponse.json({})),
+      http.get('/api/v1/cloud/status', () => HttpResponse.json({ is_authenticated: true })),
+      http.get('/api/v1/cloud/filaments', () =>
+        HttpResponse.json([
+          cloudPreset('GFSA01_H2S', 'Bambu PLA Matte @BBL H2S'),
+          cloudPreset('GFSA01_H2D_02', 'Bambu PLA Matte @BBL H2D 0.2 nozzle'),
+          cloudPreset('GFSA01_H2D', 'Bambu PLA Matte @BBL H2D'),
+        ]),
+      ),
+      http.put('/api/v1/inventory/products/1', async ({ request }) => {
+        saved.push((await request.json()) as FilamentProductInput);
+        return HttpResponse.json({ product: PRODUCT, spools_updated: 0 });
+      }),
+    );
+  });
+
+  it("adds one for another printer, starting on the own preset's variant for it", async () => {
+    const onSaved = vi.fn();
+    const user = userEvent.setup();
+    render(<ProductEditorModal product={onTheH2S} onClose={vi.fn()} onSaved={onSaved} />);
+    // Wait for the preset lists: the own preset is shown by its option then.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Slicer preset' })).not.toHaveTextContent('(GFSA01_H2S)'),
+    );
+
+    // The own preset is the H2S's, so only the H2D is offered.
+    const add = await screen.findByRole('combobox', { name: 'Preset for a printer' });
+    expect(within(add).queryByRole('option', { name: 'H2S' })).not.toBeInTheDocument();
+    expect(screen.getByText('H2S')).toBeInTheDocument();
+    await user.selectOptions(add, 'H2D');
+
+    expect(screen.getByRole('button', { name: 'Preset for H2D' })).toBeInTheDocument();
+    expect(screen.getByText('H2D')).toBeInTheDocument();
+    // Every printer has a preset now.
+    expect(screen.queryByRole('combobox', { name: 'Preset for a printer' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    // The plain one, not the one for the 0.2 nozzle.
+    expect(saved[0].presets).toEqual([
+      { printer_model: 'H2D', slicer_filament: 'GFSA01_H2D', slicer_filament_name: 'Bambu PLA Matte @BBL H2D' },
+    ]);
+  });
+
+  it('keeps the ones it has, and a removed one goes', async () => {
+    const onSaved = vi.fn();
+    const user = userEvent.setup();
+    const product = {
+      ...onTheH2S,
+      presets: [{ printer_model: 'H2D', slicer_filament: 'GFSA01_H2D', slicer_filament_name: 'Bambu PLA Matte @BBL H2D' }],
+    };
+    render(<ProductEditorModal product={product} onClose={vi.fn()} onSaved={onSaved} />);
+
+    await user.click(screen.getByRole('button', { name: 'Remove the preset for H2D' }));
+    expect(await screen.findByRole('combobox', { name: 'Preset for a printer' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(saved[0].presets).toEqual([]);
+  });
+
+  it('does not save a printer left without a preset', async () => {
+    const onSaved = vi.fn();
+    const user = userEvent.setup();
+    // No own preset: it stands for every printer, and nothing is picked ahead.
+    render(<ProductEditorModal product={PRODUCT} onClose={vi.fn()} onSaved={onSaved} />);
+
+    expect(screen.getByText('All printers')).toBeInTheDocument();
+    await user.selectOptions(await screen.findByRole('combobox', { name: 'Preset for a printer' }), 'H2S');
+    expect(screen.getByRole('button', { name: 'Preset for H2S' })).toHaveTextContent('Choose a preset…');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(saved[0].presets).toEqual([]);
   });
 });

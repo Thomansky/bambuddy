@@ -6,6 +6,7 @@ import type {
   FilamentVariant,
 } from '../../api/client';
 import type { ColumnConfig } from '../ColumnConfigModal';
+import { extractPresetModel, matchesPrinterModelSuffix } from '../../utils/slicerPrinterMatch';
 
 /** Product master data (#3165) — small shared helpers for the views. */
 
@@ -76,6 +77,34 @@ export function parsePrice(text: string): number | null {
 
 export function priceText(value: number | null | undefined): string {
   return value === null || value === undefined ? '' : String(value);
+}
+
+/** "Bambu PLA Matte @BBL H2S" → "Bambu PLA Matte". */
+export function presetStem(name: string): string {
+  return name.split('@')[0].trim();
+}
+
+/** The printer model a preset name is for ("… @BBL H2D 0.4 nozzle" → "H2D"),
+ *  read past the "(Custom)" a stored display name ends in. */
+export function presetModelOf(name: string, printerModels: Record<string, string> = {}): string | null {
+  return extractPresetModel(name.replace(/\s*\([^()]*\)\s*$/, ''), printerModels);
+}
+
+/** The printer models a product has a slicer preset for: the one its own
+ *  preset names ("@BBL H2S"), then its presets per model, which win where
+ *  both name the same model. */
+export function presetModels(
+  product: FilamentProduct,
+  printerModels: Record<string, string> = {},
+): { model: string; name: string }[] {
+  const rows = (product.presets ?? []).map((row) => ({
+    model: row.printer_model,
+    name: row.slicer_filament_name || row.slicer_filament,
+  }));
+  const own = product.slicer_filament_name || product.slicer_filament;
+  const ownModel = own ? presetModelOf(own, printerModels) : null;
+  if (!own || !ownModel || rows.some((row) => matchesPrinterModelSuffix(ownModel, row.model))) return rows;
+  return [{ model: ownModel, name: own }, ...rows];
 }
 
 /** The supplier a product is usually bought from: the starred one, else the first. */

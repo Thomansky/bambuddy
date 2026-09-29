@@ -42,6 +42,7 @@ function product(patch: Partial<FilamentProduct>): FilamentProduct {
     material_number: null,
     slicer_filament: null,
     slicer_filament_name: null,
+    presets: [],
     nozzle_temp_min: null,
     nozzle_temp_max: null,
     note: null,
