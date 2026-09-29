@@ -343,6 +343,7 @@ export default {
     // Printer card
     readyToPrint: 'Pronta a stampare',
     external: 'Esterna',
+    ext: 'Esterno',
     extL: 'Ext-L',
     extR: 'Ext-R',
     deleteArchives: 'Elimina archivi stampa',
@@ -4050,6 +4051,9 @@ export default {
       nextPage: 'Pagina successiva',
       zoomIn: 'Ingrandisci',
       zoomOut: 'Riduci',
+      resetZoom: 'Reimposta zoom',
+      fullscreen: 'Schermo intero',
+      exitFullscreen: 'Esci da schermo intero',
       emptySheet: 'Questo foglio è vuoto',
       truncatedRows: 'Visualizzate le prime {{shown}} righe di {{total}}',
       truncatedCols: 'Visualizzate le prime {{shown}} colonne di {{total}}',

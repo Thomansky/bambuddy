@@ -343,6 +343,7 @@ export default {
     // Printer card
     readyToPrint: 'Redo att skriva ut',
     external: 'Extern',
+    ext: 'Extern',
     extL: 'Ext-V',
     extR: 'Ext-H',
     deleteArchives: 'Ta bort utskriftsarkiv',
@@ -4092,6 +4093,9 @@ errors: {
       nextPage: 'Nästa sida',
       zoomIn: 'Zooma in',
       zoomOut: 'Zooma ut',
+      resetZoom: 'Återställ zoom',
+      fullscreen: 'Helskärm',
+      exitFullscreen: 'Avsluta helskärm',
       emptySheet: 'Det här bladet är tomt',
       truncatedRows: 'Visar de första {{shown}} av {{total}} raderna',
       truncatedCols: 'Visar de första {{shown}} av {{total}} kolumnerna',

@@ -343,6 +343,7 @@ export default {
     // Printer card
     readyToPrint: 'Klaar om af te drukken',
     external: 'Extern',
+    ext: 'Extern',
     extL: 'Ext-L',
     extR: 'Ext-R',
     deleteArchives: 'Afdrukarchieven verwijderen',
@@ -4093,6 +4094,9 @@ export default {
       nextPage: 'Volgende pagina',
       zoomIn: 'Inzoomen',
       zoomOut: 'Uitzoomen',
+      resetZoom: 'Zoom herstellen',
+      fullscreen: 'Volledig scherm',
+      exitFullscreen: 'Volledig scherm afsluiten',
       emptySheet: 'Dit werkblad is leeg',
       truncatedRows: 'Eerste {{shown}} van {{total}} rijen worden getoond',
       truncatedCols: 'Eerste {{shown}} van {{total}} kolommen worden getoond',

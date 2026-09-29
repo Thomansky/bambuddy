@@ -343,6 +343,7 @@ export default {
     // Printer card
     readyToPrint: 'Druckbereit',
     external: 'Extern',
+    ext: 'Extern',
     extL: 'Ext-L',
     extR: 'Ext-R',
     deleteArchives: 'Druckarchive löschen',
@@ -4063,6 +4064,9 @@ export default {
       nextPage: 'Nächste Seite',
       zoomIn: 'Vergrößern',
       zoomOut: 'Verkleinern',
+      resetZoom: 'Zoom zurücksetzen',
+      fullscreen: 'Vollbild',
+      exitFullscreen: 'Vollbild beenden',
       emptySheet: 'Dieses Tabellenblatt ist leer',
       truncatedRows: 'Die ersten {{shown}} von {{total}} Zeilen werden angezeigt',
       truncatedCols: 'Die ersten {{shown}} von {{total}} Spalten werden angezeigt',

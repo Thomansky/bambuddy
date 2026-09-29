@@ -342,6 +342,7 @@ export default {
     // Printer card
     readyToPrint: '印刷可能',
     external: '外部',
+    ext: '外部',
     extL: 'Ext-L',
     extR: 'Ext-R',
     deleteArchives: '印刷アーカイブを削除',
@@ -4063,6 +4064,9 @@ export default {
       nextPage: '次のページ',
       zoomIn: '拡大',
       zoomOut: '縮小',
+      resetZoom: 'ズームをリセット',
+      fullscreen: 'フルスクリーン',
+      exitFullscreen: 'フルスクリーンを終了',
       emptySheet: 'このシートは空です',
       truncatedRows: '全{{total}}行のうち最初の{{shown}}行を表示しています',
       truncatedCols: '全{{total}}列のうち最初の{{shown}}列を表示しています',

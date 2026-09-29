@@ -343,6 +343,7 @@ export default {
     // Printer card
     readyToPrint: "Готовий до друку",
     external: "Зовнішній",
+    ext: "Зовнішня",
     extL: "Ext-L",
     extR: "Ext-R",
     deleteArchives: "Видалити архіви друку",
@@ -4090,6 +4091,9 @@ export default {
       nextPage: 'Наступна сторінка',
       zoomIn: 'Збільшити',
       zoomOut: 'Зменшити',
+      resetZoom: 'Скинути масштаб',
+      fullscreen: 'Повний екран',
+      exitFullscreen: 'Вийти з повноекранного режиму',
       emptySheet: 'Цей аркуш порожній',
       truncatedRows: 'Показано перші {{shown}} з {{total}} рядків',
       truncatedCols: 'Показано перші {{shown}} з {{total}} стовпців',

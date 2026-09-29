@@ -343,6 +343,7 @@ export default {
     // Yazıcı kartı
     readyToPrint: 'Baskıya hazır',
     external: 'Harici',
+    ext: 'Harici',
     extL: 'Ext-L',
     extR: 'Ext-R',
     deleteArchives: 'Baskı arşivlerini sil',
@@ -4057,6 +4058,9 @@ export default {
       nextPage: 'Sonraki sayfa',
       zoomIn: 'Yakınlaştır',
       zoomOut: 'Uzaklaştır',
+      resetZoom: 'Yakınlaştırmayı sıfırla',
+      fullscreen: 'Tam ekran',
+      exitFullscreen: 'Tam ekrandan çık',
       emptySheet: 'Bu sayfa boş',
       truncatedRows: '{{total}} satırdan ilk {{shown}} tanesi gösteriliyor',
       truncatedCols: '{{total}} sütundan ilk {{shown}} tanesi gösteriliyor',

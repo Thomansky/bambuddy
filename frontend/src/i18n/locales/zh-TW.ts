@@ -343,6 +343,7 @@ export default {
     // Printer card
     readyToPrint: '準備列印',
     external: '外部',
+    ext: '外接',
     extL: '外接左',
     extR: '外接右',
     deleteArchives: '刪除列印歸檔',
@@ -4050,6 +4051,9 @@ export default {
       nextPage: '下一頁',
       zoomIn: '放大',
       zoomOut: '縮小',
+      resetZoom: '重設縮放',
+      fullscreen: '全螢幕',
+      exitFullscreen: '離開全螢幕',
       emptySheet: '此工作表是空的',
       truncatedRows: '顯示前 {{shown}} 列，共 {{total}} 列',
       truncatedCols: '顯示前 {{shown}} 欄，共 {{total}} 欄',
