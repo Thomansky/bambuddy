@@ -254,6 +254,46 @@ describe('FileManagerPage preview opening', () => {
     });
   });
 
+  describe('the columns view (#3020)', () => {
+    beforeEach(() => {
+      (localStorage.getItem as ReturnType<typeof vi.fn>).mockImplementation((key: string) =>
+        key === 'library-view-mode' ? 'columns' : null,
+      );
+    });
+
+    const columnsRow = async (name: string) =>
+      (await within(screen.getByTestId('columns-files-pane')).findByText(name)).closest('[data-file-id]') as HTMLElement;
+
+    it('opens the document preview for a PDF on double-click', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+
+      await user.dblClick(await columnsRow('drawing.pdf'));
+
+      expect(await screen.findByTestId('pdf-preview-modal')).toHaveTextContent('drawing.pdf');
+    });
+
+    it('opens the focused file\'s preview on Enter', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+
+      await user.click(await columnsRow('parts.csv'));
+      await user.keyboard('{Enter}');
+
+      expect(await screen.findByTestId('sheet-preview-modal')).toHaveTextContent('parts.csv');
+    });
+
+    it('does nothing for a file with no preview', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+
+      await user.dblClick(await columnsRow('notes.md'));
+
+      await expectNoPreviewOpened();
+      expect(mockNavigate).not.toHaveBeenCalled();
+    });
+  });
+
   describe('the toolbar Preview button', () => {
     it('appears for a single previewable selection and opens the preview', async () => {
       const user = userEvent.setup();

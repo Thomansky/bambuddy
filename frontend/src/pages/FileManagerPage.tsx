@@ -132,6 +132,20 @@ function isPreviewableImageType(fileType: string): boolean {
   return PREVIEWABLE_IMAGE_TYPES.has(fileType.toLowerCase());
 }
 
+// The icon a file without a thumbnail shows. Shared by the grid card, the list
+// row and the columns view so the three never disagree about a type.
+function FileTypePlaceholderIcon({ fileType, className }: { fileType: string; className: string }) {
+  const Icon =
+    fileType === 'pdf'
+      ? FileText
+      : isSpreadsheetType(fileType)
+        ? FileSpreadsheet
+        : isImageType(fileType)
+          ? Image
+          : FileBox;
+  return <Icon className={className} />;
+}
+
 // Which files have a preview at all: what a double-click opens, and what the
 // toolbar's Preview button appears for (#2976). Sliced files go to the
 // full-page gcode viewer, everything else to a modal.
@@ -1124,14 +1138,8 @@ function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, o
             alt={file.filename}
             className="w-full h-full object-cover"
           />
-        ) : file.file_type === 'pdf' ? (
-          <FileText className="w-12 h-12 text-bambu-gray/30" />
-        ) : isSpreadsheetType(file.file_type) ? (
-          <FileSpreadsheet className="w-12 h-12 text-bambu-gray/30" />
-        ) : isImageType(file.file_type) ? (
-          <Image className="w-12 h-12 text-bambu-gray/30" />
         ) : (
-          <FileBox className="w-12 h-12 text-bambu-gray/30" />
+          <FileTypePlaceholderIcon fileType={file.file_type} className="w-12 h-12 text-bambu-gray/30" />
         )}
         {/* File type badge */}
         <div className={`absolute top-2 right-2 text-xs px-1.5 py-0.5 rounded font-medium ${
@@ -1507,7 +1515,7 @@ function ColumnFileRow({ file, isSelected, isFocused, showModified, thumbnailVer
             className="w-full h-full object-cover"
           />
         ) : (
-          <FileBox className="w-5 h-5 text-bambu-gray/50" />
+          <FileTypePlaceholderIcon fileType={file.file_type} className="w-5 h-5 text-bambu-gray/50" />
         )}
       </div>
       <div className="flex-1 min-w-0">
@@ -2395,19 +2403,13 @@ export function FileManagerPage() {
   // The list the arrow keys walk: the one that actually holds the focused
   // file, which may be an intermediate column rather than the selected
   // folder's pane.
-  const focusedFileList =
-    (columnsFocusedFileId !== null &&
-      columnFileLevels
-        .map((level) => columnFiles.get(level.key)?.files)
-        .find((list) => list?.some((f) => f.id === columnsFocusedFileId))) ||
-    filteredAndSortedFiles;
-
-  // Double-click / Enter on a file row: sliced output opens in the gcode
-  // viewer, model files in the 3D viewer, anything else has no preview.
-  const openColumnFile = (file: LibraryFileListItem) => {
-    if (isSlicedLibraryFile(file)) navigate(`/gcode-viewer?library_file=${file.id}`);
-    else if (file.file_type === '3mf' || file.file_type === 'stl') setViewerFile(file);
-  };
+  const focusedFileColumnList =
+    columnsFocusedFileId === null
+      ? undefined
+      : columnFileLevels
+          .map((level) => columnFiles.get(level.key)?.files)
+          .find((list) => list?.some((f) => f.id === columnsFocusedFileId));
+  const focusedFileList = focusedFileColumnList ?? filteredAndSortedFiles;
 
   // Focus the columns pane when the view opens so arrow keys work right away,
   // and drop the file focus whenever the folder (and with it the file list)
@@ -2419,6 +2421,12 @@ export function FileManagerPage() {
   useEffect(() => {
     setColumnsFocusedFileId(null);
   }, [selectedFolderId, viewMode]);
+  // A selection belongs to the folder it was made in. Every column can tick a
+  // file, so a selection that survived a folder change would leave Move and
+  // Delete pointing at rows that are no longer anywhere on screen (#3020).
+  useEffect(() => {
+    setSelectedFiles([]);
+  }, [selectedFolderId]);
   // Keep the keyboard-driven selection scrolled into view. Deliberately an
   // effect keyed on the ids, NOT per-render ref callbacks: those re-run on
   // every commit and would snap a manually scrolled column back to the
@@ -2508,6 +2516,11 @@ export function FileManagerPage() {
           const idx = focusedFileList.findIndex((f) => f.id === columnsFocusedFileId);
           const next = focusedFileList[idx + dir];
           if (next) setColumnsFocusedFileId(next.id);
+          else if (dir === -1 && idx === 0 && focusedFileColumnList) {
+            // Off the top of a column's files: back onto that same column's
+            // folders, which is where ArrowDown came from.
+            setColumnsFocusedFileId(null);
+          }
         } else if (selectedFolderId === null) {
           if (dir === 1 && folderColumns[0].items.length > 0) {
             setSelectedFolderId(folderColumns[0].items[0].id);
@@ -2517,6 +2530,13 @@ export function FileManagerPage() {
           const idx = col ? col.items.findIndex((f) => f.id === selectedFolderId) : -1;
           const next = idx === -1 ? undefined : col.items[idx + dir];
           if (next) setSelectedFolderId(next.id);
+          else if (dir === 1 && idx !== -1) {
+            // Past the last folder the column's own files continue the list,
+            // exactly as they read on screen: the only way a keyboard
+            // reaches an intermediate column's rows at all.
+            const colFiles = col ? columnFiles.get(col.key)?.files : undefined;
+            if (colFiles?.length) setColumnsFocusedFileId(colFiles[0].id);
+          }
         }
         break;
       }
@@ -2572,7 +2592,7 @@ export function FileManagerPage() {
           break;
         }
         const file = focusedFileList.find((f) => f.id === columnsFocusedFileId);
-        if (file) openColumnFile(file);
+        if (file) openPreview(file);
         break;
       }
       case ' ': {
@@ -3160,8 +3180,11 @@ export function FileManagerPage() {
             </div>
           )}
 
-          {/* Selection toolbar - sticky on mobile below search bar */}
-          {filteredAndSortedFiles.length > 0 && (
+          {/* Selection toolbar - sticky on mobile below search bar. It stays
+              while anything is selected, even with the selected folder's own
+              pane empty: a file ticked in an intermediate column of the
+              columns view still needs its count and actions (#3020). */}
+          {(filteredAndSortedFiles.length > 0 || selectedFiles.length > 0) && (
             <div className="flex flex-wrap items-center gap-2 mb-4 p-2 bg-bambu-dark-secondary rounded-lg border border-bambu-dark-tertiary sticky top-[52px] z-10 lg:static">
               {/* Select all / Deselect all */}
               {selectedFiles.length === filteredAndSortedFiles.length && selectedFiles.length > 0 ? (
@@ -3426,7 +3449,7 @@ export function FileManagerPage() {
                           setColumnsFocusedFileId(f.id);
                           handleFileSelect(f.id);
                         }}
-                        onOpen={openColumnFile}
+                        onOpen={openPreview}
                         actionProps={fileActionProps}
                         t={t}
                       />
@@ -3464,7 +3487,7 @@ export function FileManagerPage() {
                           setColumnsFocusedFileId(f.id);
                           handleFileSelect(f.id);
                         }}
-                        onOpen={openColumnFile}
+                        onOpen={openPreview}
                         actionProps={fileActionProps}
                         t={t}
                       />
@@ -3602,15 +3625,7 @@ export function FileManagerPage() {
                             />
                           ) : (
                             <div className="w-full h-full flex items-center justify-center">
-                              {file.file_type === 'pdf' ? (
-                                <FileText className="w-5 h-5 text-bambu-gray/50" />
-                              ) : isSpreadsheetType(file.file_type) ? (
-                                <FileSpreadsheet className="w-5 h-5 text-bambu-gray/50" />
-                              ) : isImageType(file.file_type) ? (
-                                <Image className="w-5 h-5 text-bambu-gray/50" />
-                              ) : (
-                                <FileBox className="w-5 h-5 text-bambu-gray/50" />
-                              )}
+                              <FileTypePlaceholderIcon fileType={file.file_type} className="w-5 h-5 text-bambu-gray/50" />
                             </div>
                           )}
                         </div>

@@ -930,6 +930,88 @@ describe('FileManagerPage', () => {
       // A leaf contributes no column of its own.
       expect(screen.queryByTestId('columns-level-folder-3')).not.toBeInTheDocument();
     });
+
+    it('walks from a column\'s last folder into that column\'s files and back', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await descendToBrackets(user);
+      const level = within(screen.getByTestId('columns-level-folder-1'));
+      await waitFor(() => expect(level.getByText('Spacer')).toBeInTheDocument());
+      screen.getByTestId('columns-view').focus();
+      const spacerRow = () => level.getByText('Spacer').closest('[data-file-id]') as HTMLElement;
+
+      // Brackets is the column's only folder, so the next row down is the
+      // column's first file: the only way a keyboard reaches it at all.
+      await user.keyboard('{ArrowDown}');
+      await waitFor(() => expect(spacerRow().className).toContain('ring-1'));
+
+      // Up steps back onto the folder, which stayed the selection throughout.
+      await user.keyboard('{ArrowUp}');
+      await waitFor(() => expect(spacerRow().className).not.toContain('ring-1'));
+      expect(level.getByText('Brackets').closest('[data-folder-id]')?.className).toContain('bg-bambu-green/20');
+    });
+
+    it('keeps the selection\'s count and actions while the selected folder\'s own pane is empty', async () => {
+      const user = userEvent.setup();
+      server.use(
+        http.get('/api/v1/library/files', ({ request }) =>
+          HttpResponse.json(new URL(request.url).searchParams.get('folder_id') === '2' ? [] : filesForRequest(request))
+        )
+      );
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await descendToBrackets(user);
+      const level = within(screen.getByTestId('columns-level-folder-1'));
+      await user.click(await level.findByText('Spacer'));
+
+      // Brackets lists nothing, yet a file ticked one column to the left still
+      // gets its count, its bulk actions and a way to clear it.
+      expect(await screen.findByText('1 selected')).toBeInTheDocument();
+      await user.click(screen.getByText('Clear'));
+      await waitFor(() => expect(screen.queryByText('1 selected')).not.toBeInTheDocument());
+    });
+
+    it('drops the selection when another folder is selected', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await descendToBrackets(user);
+      const level = within(screen.getByTestId('columns-level-folder-1'));
+      await user.click(await level.findByText('Spacer'));
+      expect(await screen.findByText('1 selected')).toBeInTheDocument();
+
+      // Move or Delete must never act on rows that have left the screen.
+      await user.click(within(screen.getByTestId('columns-level-root')).getByText('Art Projects'));
+      await waitFor(() => expect(screen.queryByText('1 selected')).not.toBeInTheDocument());
+    });
+
+    it('shows a document\'s type icon in place of a missing thumbnail', async () => {
+      const user = userEvent.setup();
+      server.use(
+        http.get('/api/v1/library/files', ({ request }) =>
+          HttpResponse.json(
+            new URL(request.url).searchParams.get('folder_id')
+              ? filesForRequest(request)
+              : [...mockFiles, { ...mockFiles[0], id: 99, filename: 'manual.pdf', file_type: 'pdf', print_name: null, thumbnail_path: null }]
+          )
+        )
+      );
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await user.click(screen.getByTitle('Column view'));
+      const pane = within(screen.getByTestId('columns-files-pane'));
+      const pdfRow = (await pane.findByText('manual.pdf')).closest('[data-file-id]') as HTMLElement;
+      // The thumbnail slot, not the action strip (whose preview button uses
+      // the same icon for a PDF).
+      const thumbnailSlot = pdfRow.querySelector('.w-10.h-10') as HTMLElement;
+      expect(thumbnailSlot.querySelector('.lucide-file-text')).not.toBeNull();
+      expect(thumbnailSlot.querySelector('.lucide-file-box')).toBeNull();
+    });
   });
 
   describe('search and filter', () => {
