@@ -4031,6 +4031,7 @@ errors: {
     generateThumbnailsForMissing: 'Generera minibilder för STL- och PDF-filer som saknar dem',
     gridView: 'Rutnätsvy',
     listView: 'Listvy',
+    columnsView: 'Kolumnvy',
     lowDiskSpaceWarning: 'Varning för lågt diskutrymme',
     lowDiskSpaceDetails: 'Endast {{free}} ledigt av {{total}} totalt. Tröskelvärdet är inställt på {{threshold}} GB i inställningar.',
     files: 'Filer',
