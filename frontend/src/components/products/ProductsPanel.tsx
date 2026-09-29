@@ -817,7 +817,8 @@ export function ProductsPanel({ onIntake, onEdit, onConvert, unassignedCount = 0
   );
 }
 
-/** Colours × sizes with the stock of each variant. */
+/** Colours × sizes with the stock of each variant. It says what its cells
+ *  are: without that, a table of zeros and a stray price reads as noise. */
 function StockMatrix({ product, currency }: { product: FilamentProduct; currency: string }) {
   const { t } = useTranslation();
   if (product.colors.length === 0 || product.sizes.length === 0) {
@@ -825,13 +826,17 @@ function StockMatrix({ product, currency }: { product: FilamentProduct; currency
   }
   return (
     <div className="space-y-2">
+      <p className="text-xs text-bambu-gray">{t('inventory.products.stockMatrixHint')}</p>
       <table className="text-sm">
         <thead>
           <tr className="text-xs text-bambu-gray">
-            <th className="pr-6 py-1 text-left font-medium">{t('inventory.products.color')}</th>
+            <th className="pr-6 py-1 text-left font-medium align-top">{t('inventory.products.color')}</th>
             {product.sizes.map((size) => (
               <th key={size.id} className="px-4 py-1 text-center font-medium whitespace-nowrap">
                 {formatWeight(size.label_weight)}
+                {size.price !== null && (
+                  <span className="block font-normal text-bambu-gray/70">{formatMoney(size.price, currency)}</span>
+                )}
               </th>
             ))}
           </tr>
@@ -872,13 +877,19 @@ function StockMatrix({ product, currency }: { product: FilamentProduct; currency
                         <span className="text-xs text-bambu-gray ml-1">({formatStock(variant.remaining_g)})</span>
                       </span>
                     ) : (
-                      <span className="text-bambu-gray">0</span>
+                      // Dimmer than stock, so the cells that hold spools stand out.
+                      <span className="text-bambu-gray/40">0</span>
                     )}
                     {variant.codes.length > 0 && (
                       <Barcode className="inline w-3 h-3 ml-1 text-bambu-gray" aria-label={t('inventory.products.codes')} />
                     )}
                     {variant.price_override !== null && (
-                      <span className="block text-[10px] text-amber-300">{formatMoney(variant.price_override, currency)}</span>
+                      <span
+                        className="block text-[10px] text-amber-300"
+                        title={t('inventory.products.colorPriceHint', { price: formatMoney(size.price, currency) })}
+                      >
+                        {formatMoney(variant.price_override, currency)}
+                      </span>
                     )}
                     {variant.min_stock !== null && (
                       <span

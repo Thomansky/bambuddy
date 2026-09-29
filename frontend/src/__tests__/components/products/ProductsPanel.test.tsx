@@ -70,7 +70,7 @@ const PRODUCTS: FilamentProduct[] = [
     ],
     variants: [
       variant(11, 1, 10, { spool_count: 2, remaining_g: 1800, in_stock: 2 }),
-      variant(12, 2, 10, { min_stock: 2, shortfall: 2 }),
+      variant(12, 2, 10, { min_stock: 2, shortfall: 2, price_override: 24 }),
     ],
     suppliers: [
       { supplier_id: 7, supplier_name: 'Shop A', preferred: true },
@@ -210,6 +210,9 @@ describe('ProductsPanel', () => {
 
     await waitFor(() => expect(screen.getByText('White')).toBeInTheDocument());
     expect(screen.getByText('Black')).toBeInTheDocument();
+    // It says what its cells are, and what a colour's own price is set against.
+    expect(screen.getByText(/Spools in stock per colour and size/)).toBeInTheDocument();
+    expect(screen.getByText('€24.00')).toHaveAttribute('title', "This colour’s own price; the size costs €20.00");
   });
 
   it('offers the columns in the same dialog as the spool list', async () => {

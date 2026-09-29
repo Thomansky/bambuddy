@@ -5016,6 +5016,8 @@ export default {
       priceOverrideHint: 'Price per spool for this combination only — empty uses the size price',
       cellStock_one: '{{count}} spool · {{stock}}',
       cellStock_other: '{{count}} spools · {{stock}}',
+      stockMatrixHint: 'Spools in stock per colour and size, with what is left on them in brackets. A price in a cell is that colour’s own price; the size’s is at the top.',
+      colorPriceHint: 'This colour’s own price; the size costs {{price}}',
       deleteProduct: 'Delete product',
       deleteConfirm: 'Delete “{{name}}”? Its {{count}} spools stay as they are, only the link to the product goes.',
       materialRequired: 'Material is required.',

@@ -4979,6 +4979,8 @@ export default {
       priceOverrideHint: 'Preis pro Spule nur für diese Kombination – leer = Preis der Größe',
       cellStock_one: '{{count}} Spule · {{stock}}',
       cellStock_other: '{{count}} Spulen · {{stock}}',
+      stockMatrixHint: 'Spulen im Bestand je Farbe und Größe, in Klammern das Restgewicht. Ein Preis in einer Zelle ist der eigene Preis dieser Farbe; der Preis der Größe steht oben.',
+      colorPriceHint: 'Eigener Preis dieser Farbe; die Größe kostet {{price}}',
       deleteProduct: 'Artikel löschen',
       deleteConfirm: '„{{name}}“ löschen? Die {{count}} Spulen bleiben, wie sie sind – nur die Zuordnung zum Artikel entfällt.',
       materialRequired: 'Material ist ein Pflichtfeld.',
