@@ -14,9 +14,7 @@ import {
   findVariant,
   formatMoney,
   formatWeight,
-  intakePrice,
   parsePrice,
-  preferredSupplierId,
   priceText,
   variantParts,
 } from './productUtils';
@@ -55,7 +53,6 @@ export function IntakeModal({ onClose, initialProductId = null }: IntakeModalPro
   const [quantity, setQuantity] = useState(1);
   const [price, setPrice] = useState('');
   const [vatIncluded, setVatIncluded] = useState(true);
-  const [supplierId, setSupplierId] = useState<number | null>(null);
   const [locationId, setLocationId] = useState<number | null>(null);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
@@ -87,9 +84,7 @@ export function IntakeModal({ onClose, initialProductId = null }: IntakeModalPro
     setVariantId(id);
     setColorId(found.color.id);
     setSizeId(found.size.id);
-    const usual = preferredSupplierId(target);
-    setSupplierId(usual);
-    setPrice(priceText(intakePrice(target, found.variant, found.size, usual)));
+    setPrice(priceText(found.variant.effective_price));
     setVatIncluded(found.size.price_vat_included);
     setQuantity(1);
     setStep('confirm');
@@ -194,8 +189,7 @@ export function IntakeModal({ onClose, initialProductId = null }: IntakeModalPro
       : [];
 
   const perKg = parts ? costPerKg(parsePrice(price), parts.size.label_weight) : null;
-  const listPrice = parts && product ? intakePrice(product, parts.variant, parts.size, supplierId) : null;
-  const chosenSupplier = product?.suppliers.find((s) => s.supplier_id === supplierId) ?? null;
+  const listPrice = parts ? parts.variant.effective_price : null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -453,33 +447,6 @@ export function IntakeModal({ onClose, initialProductId = null }: IntakeModalPro
                       ` · ${t('inventory.products.differsFromList', { price: formatMoney(listPrice, currency) })}`}
                   </span>
                 </label>
-                {product.suppliers.length > 0 && (
-                  <label className="block col-span-2">
-                    <span className="text-xs text-bambu-gray">{t('inventory.products.supplier')}</span>
-                    <select
-                      className={inputClass}
-                      value={supplierId ?? ''}
-                      onChange={(e) => {
-                        const next = e.target.value ? Number(e.target.value) : null;
-                        setSupplierId(next);
-                        setPrice(priceText(intakePrice(product, parts.variant, parts.size, next)));
-                      }}
-                    >
-                      <option value="">{t('inventory.products.noSupplier')}</option>
-                      {product.suppliers.map((s) => (
-                        <option key={s.supplier_id} value={s.supplier_id}>
-                          {s.supplier_name}
-                          {s.preferred ? ` (${t('inventory.products.usual')})` : ''}
-                        </option>
-                      ))}
-                    </select>
-                    {chosenSupplier?.article_number && (
-                      <span className="text-xs text-bambu-gray">
-                        {t('inventory.products.articleNumberAt', { number: chosenSupplier.article_number })}
-                      </span>
-                    )}
-                  </label>
-                )}
                 <label className="block">
                   <span className="text-xs text-bambu-gray">{t('inventory.products.location')}</span>
                   <select

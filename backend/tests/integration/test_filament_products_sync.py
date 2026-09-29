@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.filament_product import FilamentProductColor
 from backend.app.models.spool import Spool
+from backend.app.models.spool_filament_preset import SpoolFilamentPreset
+from backend.app.services.spool_filament_preset import resolve_spool_preset
 from backend.app.services.spool_tag_matcher import create_spool_from_tray, find_matching_untagged_spool
 
 pytestmark = pytest.mark.integration
@@ -268,71 +270,43 @@ class TestSuppliersOnTheProduct:
         return response.json()["id"]
 
     @pytest.mark.asyncio
-    async def test_a_product_keeps_its_suppliers_and_their_prices(self, async_client: AsyncClient):
+    async def test_a_product_keeps_where_it_was_bought(self, async_client: AsyncClient):
         shop = await self._supplier(async_client, "Filament Shop")
+        other = await self._supplier(async_client, "Other Shop")
         product = await _product(
             async_client,
-            suppliers=[
-                {"supplier_id": shop, "article_number": "BL-PLA-M", "preferred": True, "prices": {"kg1": 18.5}},
-            ],
+            suppliers=[{"supplier_id": other}, {"supplier_id": shop, "preferred": True}],
         )
 
-        [row] = product["suppliers"]
-        assert row["supplier_name"] == "Filament Shop"
-        assert row["article_number"] == "BL-PLA-M"
-        assert row["preferred"] is True
-        kg1 = next(s["id"] for s in product["sizes"] if s["label_weight"] == 1000)
-        assert row["prices"] == [{"size_id": kg1, "price": 18.5}]
+        # The usual supplier first, and nothing but where it was bought.
+        assert product["suppliers"] == [
+            {"supplier_id": shop, "supplier_name": "Filament Shop", "preferred": True},
+            {"supplier_id": other, "supplier_name": "Other Shop", "preferred": False},
+        ]
 
     @pytest.mark.asyncio
-    async def test_the_usual_suppliers_price_costs_a_new_spool(self, async_client: AsyncClient):
+    async def test_a_new_spool_costs_the_manufacturers_price(self, async_client: AsyncClient):
         shop = await self._supplier(async_client, "Filament Shop")
-        await _product(
+        # What an editor from before still sends: a number and a price at the
+        # supplier. Accepted, and neither is kept.
+        product = await _product(
             async_client,
-            suppliers=[{"supplier_id": shop, "preferred": True, "prices": {"kg1": 18.5}}],
+            suppliers=[{"supplier_id": shop, "preferred": True, "article_number": "FS-1", "prices": {"kg1": 18.5}}],
         )
 
         spool = await _new_spool(async_client)
 
-        assert spool["cost_per_kg"] == 18.5
+        assert product["suppliers"] == [{"supplier_id": shop, "supplier_name": "Filament Shop", "preferred": True}]
+        assert spool["cost_per_kg"] == 20.0
 
     @pytest.mark.asyncio
     async def test_a_supplier_a_product_uses_cannot_be_deleted(self, async_client: AsyncClient):
         shop = await self._supplier(async_client, "Filament Shop")
-        await _product(async_client, suppliers=[{"supplier_id": shop, "prices": {}}])
+        await _product(async_client, suppliers=[{"supplier_id": shop}])
 
         response = await async_client.delete(f"/api/v1/inventory/suppliers/{shop}")
 
         assert response.status_code == 409
-
-    @pytest.mark.asyncio
-    async def test_dropping_a_size_drops_its_supplier_prices(self, async_client: AsyncClient):
-        shop = await self._supplier(async_client, "Filament Shop")
-        product = await _product(
-            async_client,
-            suppliers=[{"supplier_id": shop, "prices": {"kg1": 18.5, "g500": 11.0}}],
-        )
-        sizes = {s["label_weight"]: s["id"] for s in product["sizes"]}
-        colors = {c["color_name"]: c["id"] for c in product["colors"]}
-        document = {
-            "brand": "Bambu Lab",
-            "material": "PLA",
-            "subtype": "Matte",
-            "material_number": "52",
-            "sizes": [{"id": sizes[1000], "key": "kg1", "label_weight": 1000, "core_weight": 250, "price": 20.0}],
-            "colors": [
-                {"id": colors["Charcoal"], "key": "charcoal", "color_name": "Charcoal", "rgba": "000000FF"},
-                {"id": colors["Ivory White"], "key": "white", "color_name": "Ivory White", "rgba": "FFFFFFFF"},
-            ],
-            "variants": [{"color_key": "charcoal", "size_key": "kg1"}, {"color_key": "white", "size_key": "kg1"}],
-            "suppliers": [{"supplier_id": shop, "prices": {"kg1": 18.5}}],
-        }
-
-        response = await async_client.put(f"{API}/{product['id']}", json=document)
-
-        assert response.status_code == 200, response.text
-        [row] = response.json()["product"]["suppliers"]
-        assert row["prices"] == [{"size_id": sizes[1000], "price": 18.5}]
 
     @pytest.mark.asyncio
     async def test_the_same_supplier_twice_is_refused(self, async_client: AsyncClient):
@@ -344,3 +318,99 @@ class TestSuppliersOnTheProduct:
         )
 
         assert response.status_code == 400
+
+
+class TestPresetPerPrinterModel:
+    """A cloud or Orca preset is bound to a printer model, so a product names
+    one per model. A spool's slot on that model gets it, unless the spool has
+    been set up by hand for that model."""
+
+    H2D = {"printer_model": "H2D", "slicer_filament": "GFSA01_02", "slicer_filament_name": "Bambu PLA Matte @BBL H2D"}
+
+    @staticmethod
+    def _document(product: dict, **overrides) -> dict:
+        fields = ("brand", "material", "subtype", "material_number", "slicer_filament", "slicer_filament_name")
+        document = {
+            **{key: product[key] for key in fields},
+            "sizes": [
+                {
+                    "id": s["id"],
+                    "key": f"s{s['id']}",
+                    "label_weight": s["label_weight"],
+                    "core_weight": s["core_weight"],
+                }
+                for s in product["sizes"]
+            ],
+            "colors": [
+                {"id": c["id"], "key": f"c{c['id']}", "color_name": c["color_name"], "rgba": c["rgba"]}
+                for c in product["colors"]
+            ],
+            "variants": [
+                {"color_key": f"c{v['color_id']}", "size_key": f"s{v['size_id']}"} for v in product["variants"]
+            ],
+        }
+        document.update(overrides)
+        return document
+
+    @pytest.mark.asyncio
+    async def test_a_product_keeps_one_per_model(self, async_client: AsyncClient):
+        product = await _product(async_client, presets=[self.H2D, {"printer_model": "X1C", "slicer_filament": " "}])
+
+        # A model without a preset is no row.
+        assert product["presets"] == [self.H2D]
+
+    @pytest.mark.asyncio
+    async def test_an_edit_without_them_keeps_them_and_an_empty_list_clears_them(self, async_client: AsyncClient):
+        product = await _product(async_client, presets=[self.H2D])
+
+        kept = await async_client.put(f"{API}/{product['id']}", json=self._document(product))
+        cleared = await async_client.put(f"{API}/{product['id']}", json=self._document(product, presets=[]))
+
+        assert kept.status_code == 200, kept.text
+        assert kept.json()["product"]["presets"] == [self.H2D]
+        assert cleared.json()["product"]["presets"] == []
+
+    @pytest.mark.asyncio
+    async def test_a_model_named_twice_is_refused(self, async_client: AsyncClient):
+        response = await async_client.post(API, json={"material": "PLA", "presets": [self.H2D, self.H2D]})
+
+        assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_a_spool_gets_its_products_preset_on_that_model(
+        self, async_client: AsyncClient, db_session: AsyncSession
+    ):
+        await _product(
+            async_client,
+            slicer_filament="GFA01",
+            slicer_filament_name="Bambu PLA Matte @BBL H2S",
+            presets=[self.H2D],
+        )
+        spool = await _fresh(db_session, (await _new_spool(async_client))["id"])
+
+        async def resolve(model: str) -> tuple:
+            return await resolve_spool_preset(
+                db_session,
+                spool_id=spool.id,
+                printer_model=model,
+                nozzle_diameter="0.4",
+                fallback_filament=spool.slicer_filament,
+                fallback_name=spool.slicer_filament_name,
+            )
+
+        assert await resolve("H2D") == ("GFSA01_02", "Bambu PLA Matte @BBL H2D")
+        # A model the product names nothing for keeps the spool's own preset.
+        assert await resolve("H2S") == ("GFA01", "Bambu PLA Matte @BBL H2S")
+
+        # A spool set up by hand for the model keeps what it was given.
+        db_session.add(
+            SpoolFilamentPreset(
+                spool_id=spool.id,
+                printer_model="H2D",
+                nozzle_diameter="0.4",
+                slicer_filament="PFUS0123",
+                slicer_filament_name="My PLA @BBL H2D",
+            )
+        )
+        await db_session.commit()
+        assert await resolve("H2D") == ("PFUS0123", "My PLA @BBL H2D")

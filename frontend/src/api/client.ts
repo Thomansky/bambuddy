@@ -3976,16 +3976,21 @@ export interface FilamentVariant {
   shortfall: number;
 }
 
-/** Where a product is bought: article number there, price per size there. */
+/** The slicer preset a product uses on one printer model; its own preset
+ *  covers every model without one of these. */
+export interface FilamentProductPreset {
+  /** Matches a printer's `model` ("H2S", "H2D"). */
+  printer_model: string;
+  slicer_filament: string;
+  slicer_filament_name: string | null;
+}
+
+/** A supplier the product has been bought from. */
 export interface FilamentProductSupplier {
   supplier_id: number;
   supplier_name: string;
-  article_number: string | null;
-  /** The usual supplier — goods-in starts from it. */
+  /** The usual supplier — the reorder list starts from it. */
   preferred: boolean;
-  prices: { size_id: number; price: number }[];
-  /** The supplier's own number per colour × size; `article_number` covers the rest. */
-  articles: { variant_id: number; article_number: string }[];
 }
 
 export interface FilamentProduct {
@@ -3997,6 +4002,7 @@ export interface FilamentProduct {
   material_number: string | null;
   slicer_filament: string | null;
   slicer_filament_name: string | null;
+  presets: FilamentProductPreset[];
   nozzle_temp_min: number | null;
   nozzle_temp_max: number | null;
   note: string | null;
@@ -4020,6 +4026,8 @@ export interface FilamentProductInput {
   nozzle_temp_min: number | null;
   nozzle_temp_max: number | null;
   note: string | null;
+  /** Left out, the product keeps the ones it has. */
+  presets?: { printer_model: string; slicer_filament: string; slicer_filament_name: string | null }[];
   sizes: {
     id: number | null;
     key: string;
@@ -4030,14 +4038,7 @@ export interface FilamentProductInput {
   }[];
   colors: { id: number | null; key: string; color_name: string | null; rgba: string | null }[];
   variants: { color_key: string; size_key: string; price_override: number | null; min_stock?: number | null }[];
-  /** Prices by the document's size key; article numbers by "<colour key>|<size key>". */
-  suppliers: {
-    supplier_id: number;
-    article_number: string | null;
-    preferred: boolean;
-    prices: Record<string, number | null>;
-    article_numbers?: Record<string, string | null>;
-  }[];
+  suppliers: { supplier_id: number; preferred: boolean }[];
 }
 
 /** A combination below its target stock (#3165), and where to buy it. */
@@ -4059,15 +4060,8 @@ export interface ProductReorderLine {
   /** The combination's own price, else its size's. */
   list_price: number | null;
   price_vat_included: boolean;
-  /** The usual supplier first. */
-  suppliers: {
-    supplier_id: number;
-    supplier_name: string;
-    preferred: boolean;
-    article_number: string | null;
-    /** What goods-in would propose at this supplier. */
-    price: number | null;
-  }[];
+  /** Where it has been bought, the usual supplier first. */
+  suppliers: FilamentProductSupplier[];
 }
 
 export interface ProductConversionPlan {

@@ -25,10 +25,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.models.filament_product import (
     FilamentProduct,
     FilamentProductColor,
+    FilamentProductPreset,
     FilamentProductSize,
     FilamentProductSupplier,
-    FilamentProductSupplierArticle,
-    FilamentProductSupplierPrice,
     FilamentVariant,
     FilamentVariantCode,
 )
@@ -117,32 +116,6 @@ def effective_price(variant: FilamentVariant, size: FilamentProductSize) -> floa
     """What one spool of this variant costs: its own price, else its size's."""
     if variant.price_override is not None:
         return variant.price_override
-    return size.price
-
-
-def supplier_price(product: FilamentProduct, supplier_id: int | None, size_id: int) -> float | None:
-    """What one spool of a size costs at a supplier, if the product says."""
-    if supplier_id is None:
-        return None
-    for row in product.suppliers:
-        if row.supplier_id == supplier_id:
-            for price in row.prices:
-                if price.size_id == size_id:
-                    return price.price
-    return None
-
-
-def intake_price(
-    product: FilamentProduct, variant: FilamentVariant, size: FilamentProductSize, supplier_id: int | None
-) -> float | None:
-    """The price goods-in proposes: a combination's own price wins (it is the
-    most specific thing known about that colour), then the supplier's price
-    for the size, then the size's list price."""
-    if variant.price_override is not None:
-        return variant.price_override
-    at_supplier = supplier_price(product, supplier_id, size.id)
-    if at_supplier is not None:
-        return at_supplier
     return size.price
 
 
@@ -302,21 +275,24 @@ async def save_product(db: AsyncSession, product: FilamentProduct | None, data) 
         if identity in color_names:
             raise ProductError(f"The colour {color.color_name or color.rgba!r} is listed twice")
         color_names.add(identity)
-    pairs: set[tuple[str, str]] = set()
     for variant in data.variants:
         if variant.color_key not in color_keys or variant.size_key not in size_keys:
             raise ProductError("A combination refers to a colour or size that is not in the product")
-        pairs.add((variant.color_key, variant.size_key))
+    # A row without a model or a preset is no row; a model named twice is.
+    preset_rows = getattr(data, "presets", None)
+    if preset_rows is not None:
+        preset_rows = [
+            (_clean(row.printer_model), _clean(row.slicer_filament), _clean(row.slicer_filament_name))
+            for row in preset_rows
+        ]
+        preset_rows = [row for row in preset_rows if row[0] and row[1]]
+        preset_models = [model for model, _, _ in preset_rows]
+        if len(set(preset_models)) != len(preset_models):
+            raise ProductError("A printer model has two presets")
     supplier_rows = list(getattr(data, "suppliers", None) or [])
     supplier_ids = [row.supplier_id for row in supplier_rows]
     if len(set(supplier_ids)) != len(supplier_ids):
         raise ProductError("A supplier is listed twice")
-    for row in supplier_rows:
-        if any(key not in size_keys for key in (row.prices or {})):
-            raise ProductError("A supplier price refers to a size that is not in the product")
-        for cell in getattr(row, "article_numbers", None) or {}:
-            if tuple(cell.split("|", 1)) not in pairs:
-                raise ProductError("A supplier article number refers to a combination that is not in the product")
     if supplier_ids:
         known = set((await db.execute(select(Supplier.id).where(Supplier.id.in_(supplier_ids)))).scalars().all())
         if known != set(supplier_ids):
@@ -394,34 +370,31 @@ async def save_product(db: AsyncSession, product: FilamentProduct | None, data) 
         color_by_key[incoming.key] = row
     await db.flush()
 
+    # --- presets per printer model, when the document carries them. They are
+    # read where a spool's preset is resolved, so nothing is written through.
+    if preset_rows is not None:
+        if not creating:
+            for row in list(product.presets):
+                await db.delete(row)
+            await db.flush()
+        for model, code, name in preset_rows:
+            db.add(
+                FilamentProductPreset(
+                    product_id=product.id, printer_model=model, slicer_filament=code, slicer_filament_name=name
+                )
+            )
+        await db.flush()
+
     # --- suppliers: the document is the whole truth, so they are rebuilt.
-    # Their prices point at sizes, so the old rows go before any size does.
     if not creating:
         for row in list(product.suppliers):
             await db.delete(row)
         await db.flush()
     preferred_taken = False
-    # Article numbers per combination wait until every combination has an id.
-    supplier_articles: list[tuple[FilamentProductSupplier, dict]] = []
     for incoming in supplier_rows:
         preferred = bool(incoming.preferred) and not preferred_taken
         preferred_taken = preferred_taken or preferred
-        row = FilamentProductSupplier(
-            product_id=product.id,
-            supplier_id=incoming.supplier_id,
-            article_number=_clean(incoming.article_number),
-            preferred=preferred,
-        )
-        db.add(row)
-        await db.flush()
-        supplier_articles.append((row, getattr(incoming, "article_numbers", None) or {}))
-        for size_ref, price in (incoming.prices or {}).items():
-            if price is not None:
-                db.add(
-                    FilamentProductSupplierPrice(
-                        product_supplier_id=row.id, size_id=size_by_key[size_ref].id, price=price
-                    )
-                )
+        db.add(FilamentProductSupplier(product_id=product.id, supplier_id=incoming.supplier_id, preferred=preferred))
     await db.flush()
 
     kept_size_ids = {row.id for row in size_by_key.values()}
@@ -476,19 +449,6 @@ async def save_product(db: AsyncSession, product: FilamentProduct | None, data) 
     for color_id, row in existing_colors.items():
         if color_id not in kept_color_ids:
             await db.delete(row)
-    await db.flush()
-
-    # --- the suppliers' article numbers per combination
-    for row, numbers in supplier_articles:
-        for cell, number in numbers.items():
-            number = _clean(number)
-            if not number:
-                continue
-            color_ref, size_ref = cell.split("|", 1)
-            variant = variant_by_pair[(color_by_key[color_ref].id, size_by_key[size_ref].id)]
-            db.add(
-                FilamentProductSupplierArticle(product_supplier_id=row.id, variant_id=variant.id, article_number=number)
-            )
     await db.flush()
 
     # --- write the changes through to the spools
@@ -667,15 +627,70 @@ async def settle_orders_for(db: AsyncSession, variant_id: int, quantity: int) ->
     return settled
 
 
+# ---------------------------------------------------------------- articles
+
+
+async def article_rows(
+    db: AsyncSession, *, product_id: int | None = None, material_number: str | None = None
+) -> list[dict]:
+    """Every colour × size that exists, one row each, with its product's
+    master data, price, stock and codes: the product master as another
+    system (an ERP, a cost calculator, a shop) reads it."""
+    products = await load_products(db)
+    stock = await variant_stock(db)
+    ordered = await variant_on_order(db)
+    number = (material_number or "").strip()
+    rows: list[dict] = []
+    for product in products:
+        if product_id is not None and product.id != product_id:
+            continue
+        if number and (product.material_number or "").strip() != number:
+            continue
+        sizes = {size.id: size for size in product.sizes}
+        colors = {color.id: color for color in product.colors}
+        # The usual supplier first, as the relationship orders them.
+        suppliers = [row.supplier.name for row in product.suppliers if row.supplier]
+        found: list[tuple[tuple, dict]] = []
+        for variant in product.variants:
+            size = sizes.get(variant.size_id)
+            color = colors.get(variant.color_id)
+            if size is None or color is None:
+                continue
+            here = stock.get(variant.id, VariantStock())
+            on_order = ordered.get(variant.id, 0)
+            price = effective_price(variant, size)
+            row = {
+                "variant_id": variant.id,
+                "product_id": product.id,
+                "material_number": product.material_number,
+                "label": product_label(product),
+                "brand": product.brand,
+                "material": product.material,
+                "subtype": product.subtype,
+                "color_name": color.color_name,
+                "rgba": color.rgba,
+                "label_weight": size.label_weight,
+                "core_weight": size.core_weight,
+                "price": price,
+                "price_vat_included": size.price_vat_included,
+                "cost_per_kg": price_to_cost_per_kg(price, size.label_weight),
+                "min_stock": variant.min_stock,
+                "in_stock": here.in_stock,
+                "spools": here.spools,
+                "remaining_g": round(here.remaining_g),
+                "on_order": on_order,
+                "shortfall": shortfall(variant.min_stock, here.in_stock, on_order),
+                "codes": [code.code for code in variant.codes],
+                "slicer_filament": product.slicer_filament,
+                "slicer_filament_name": product.slicer_filament_name,
+                "suppliers": suppliers,
+            }
+            found.append(((color.sort_order, color.id, size.label_weight), row))
+        rows.extend(row for _, row in sorted(found, key=lambda item: item[0]))
+    return rows
+
+
 # ---------------------------------------------------------------- reorder
-
-
-def supplier_article_number(row: FilamentProductSupplier, variant_id: int) -> str | None:
-    """The supplier's number for one combination, else its product number."""
-    for article in row.articles:
-        if article.variant_id == variant_id:
-            return article.article_number
-    return row.article_number
 
 
 def _color_text(color: FilamentProductColor) -> str | None:
@@ -684,7 +699,7 @@ def _color_text(color: FilamentProductColor) -> str | None:
 
 async def reorder_lines(db: AsyncSession) -> list[dict]:
     """Every combination below its target, with what is missing and where it
-    can be bought — the usual supplier first."""
+    has been bought — the usual supplier first."""
     products = await load_products(db)
     stock = await variant_stock(db)
     ordered = await variant_on_order(db)
@@ -725,8 +740,6 @@ async def reorder_lines(db: AsyncSession) -> list[dict]:
                             "supplier_id": row.supplier_id,
                             "supplier_name": row.supplier.name if row.supplier else "",
                             "preferred": row.preferred,
-                            "article_number": supplier_article_number(row, variant.id),
-                            "price": intake_price(product, variant, size, row.supplier_id),
                         }
                         for row in product.suppliers
                     ],
@@ -781,7 +794,6 @@ async def add_to_shopping_list(db: AsyncSession, items) -> dict:
         note_parts = [format_weight(variant.size.label_weight)]
         if supplier_row is not None:
             note_parts.append(supplier_row.supplier.name if supplier_row.supplier else None)
-            note_parts.append(supplier_article_number(supplier_row, variant.id))
         db.add(
             ShoppingListItem(
                 material=product.material,
@@ -801,17 +813,16 @@ async def add_to_shopping_list(db: AsyncSession, items) -> dict:
 
 
 async def receive_order(db: AsyncSession, item: ShoppingListItem) -> IntakeResult:
-    """Book a shopping-list line in as spools of its variant, priced from the
-    supplier it was bought at, and take it off the list. The caller commits."""
+    """Book a shopping-list line in as spools of its variant, at the
+    combination's price, and take it off the list. The caller commits."""
     variant = await find_variant(db, item.variant_id) if item.variant_id else None
     if variant is None:
         raise ProductError("This line is not linked to a product combination")
-    product = await load_product(db, variant.product_id)
     result = await intake(
         db,
         variant,
         quantity=item.quantity_spools,
-        price_per_spool=intake_price(product, variant, variant.size, item.supplier_id),
+        price_per_spool=effective_price(variant, variant.size),
         price_vat_included=variant.size.price_vat_included,
         settle_orders=False,
     )
@@ -1229,8 +1240,7 @@ def _fill_empty(spool: Spool, product: FilamentProduct, variant: FilamentVariant
         spool.nozzle_temp_min = product.nozzle_temp_min
         spool.nozzle_temp_max = product.nozzle_temp_max
     if spool.cost_per_kg is None:
-        preferred = next((row.supplier_id for row in product.suppliers if row.preferred), None)
-        cost = price_to_cost_per_kg(intake_price(product, variant, size, preferred), size.label_weight)
+        cost = price_to_cost_per_kg(effective_price(variant, size), size.label_weight)
         if cost is not None:
             spool.cost_per_kg = cost
             spool.cost_vat_included = size.price_vat_included

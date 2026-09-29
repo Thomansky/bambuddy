@@ -4,9 +4,9 @@ import type {
   FilamentProductSize,
   FilamentProductSupplier,
   FilamentVariant,
-  ProductReorderLine,
 } from '../../api/client';
 import type { ColumnConfig } from '../ColumnConfigModal';
+import { extractPresetModel, matchesPrinterModelSuffix } from '../../utils/slicerPrinterMatch';
 
 /** Product master data (#3165) — small shared helpers for the views. */
 
@@ -61,30 +61,6 @@ export function findVariant(product: FilamentProduct, colorId: number, sizeId: n
   return product.variants.find((v) => v.color_id === colorId && v.size_id === sizeId);
 }
 
-/** What one spool of a size costs at a supplier, if the product says. */
-export function supplierPrice(product: FilamentProduct, supplierId: number | null, sizeId: number): number | null {
-  if (supplierId === null) return null;
-  const row = product.suppliers.find((s) => s.supplier_id === supplierId);
-  return row?.prices.find((p) => p.size_id === sizeId)?.price ?? null;
-}
-
-/** The price goods-in proposes: a combination's own price wins, then the
- *  supplier's price for the size, then the size's list price. Mirrors
- *  intake_price on the backend. */
-export function intakePrice(
-  product: FilamentProduct,
-  variant: FilamentVariant,
-  size: FilamentProductSize,
-  supplierId: number | null,
-): number | null {
-  if (variant.price_override !== null) return variant.price_override;
-  return supplierPrice(product, supplierId, size.id) ?? size.price;
-}
-
-export function preferredSupplierId(product: FilamentProduct): number | null {
-  return product.suppliers.find((s) => s.preferred)?.supplier_id ?? null;
-}
-
 /** Price per spool → cost per kg, the unit spools and print costing use. */
 export function costPerKg(price: number | null, labelWeight: number): number | null {
   if (price === null || !labelWeight) return null;
@@ -103,11 +79,32 @@ export function priceText(value: number | null | undefined): string {
   return value === null || value === undefined ? '' : String(value);
 }
 
-/** What one spool of a reorder line costs at the chosen supplier — the list
- *  price without one, or where the supplier has none of its own. */
-export function reorderPrice(line: ProductReorderLine, supplierId: number | null): number | null {
-  if (supplierId === null) return line.list_price;
-  return line.suppliers.find((s) => s.supplier_id === supplierId)?.price ?? line.list_price;
+/** "Bambu PLA Matte @BBL H2S" → "Bambu PLA Matte". */
+export function presetStem(name: string): string {
+  return name.split('@')[0].trim();
+}
+
+/** The printer model a preset name is for ("… @BBL H2D 0.4 nozzle" → "H2D"),
+ *  read past the "(Custom)" a stored display name ends in. */
+export function presetModelOf(name: string, printerModels: Record<string, string> = {}): string | null {
+  return extractPresetModel(name.replace(/\s*\([^()]*\)\s*$/, ''), printerModels);
+}
+
+/** The printer models a product has a slicer preset for: the one its own
+ *  preset names ("@BBL H2S"), then its presets per model, which win where
+ *  both name the same model. */
+export function presetModels(
+  product: FilamentProduct,
+  printerModels: Record<string, string> = {},
+): { model: string; name: string }[] {
+  const rows = (product.presets ?? []).map((row) => ({
+    model: row.printer_model,
+    name: row.slicer_filament_name || row.slicer_filament,
+  }));
+  const own = product.slicer_filament_name || product.slicer_filament;
+  const ownModel = own ? presetModelOf(own, printerModels) : null;
+  if (!own || !ownModel || rows.some((row) => matchesPrinterModelSuffix(ownModel, row.model))) return rows;
+  return [{ model: ownModel, name: own }, ...rows];
 }
 
 /** The supplier a product is usually bought from: the starred one, else the first. */
@@ -158,7 +155,7 @@ export function productMatches(product: FilamentProduct, needle: string): boolea
     product.slicer_filament_name,
     product.note,
     ...product.colors.map((c) => c.color_name),
-    ...product.suppliers.flatMap((s) => [s.supplier_name, s.article_number, ...s.articles.map((a) => a.article_number)]),
+    ...product.suppliers.map((s) => s.supplier_name),
     ...product.variants.flatMap((v) => v.codes.map((c) => c.code)),
   ];
   return haystack.some((value) => (value ?? '').toLowerCase().includes(query));

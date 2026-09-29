@@ -4,9 +4,7 @@ Every combination can carry a target — how many spools of it should be on the
 shelf. A roll below the low-stock threshold is on the shelf but no longer
 stock. What is missing, less what the shopping list already waits for, is the
 reorder list; its lines go onto the shopping list tied to their combination
-and supplier, and goods-in of that combination ticks them off again. Shops
-number every colour separately, so a supplier's article number can be kept
-per combination, with the product-level number as the fallback.
+and supplier, and goods-in of that combination ticks them off again.
 """
 
 import pytest
@@ -64,9 +62,8 @@ def _variant(product: dict, color_name: str, label_weight: int) -> dict:
 
 def _document(product: dict, *, drop: tuple[str, int] | None = None) -> dict:
     """The editor's save document for a product as the API returned it —
-    targets, suppliers and their article numbers included."""
+    targets and suppliers included."""
     kept = [v for v in product["variants"] if drop is None or v["id"] != _variant(product, drop[0], drop[1])["id"]]
-    cell = {v["id"]: f"c{v['color_id']}|s{v['size_id']}" for v in product["variants"]}
     return {
         **{
             key: product[key]
@@ -107,18 +104,7 @@ def _document(product: dict, *, drop: tuple[str, int] | None = None) -> dict:
             for v in kept
         ],
         "suppliers": [
-            {
-                "supplier_id": row["supplier_id"],
-                "article_number": row["article_number"],
-                "preferred": row["preferred"],
-                "prices": {f"s{p['size_id']}": p["price"] for p in row["prices"]},
-                "article_numbers": {
-                    cell[a["variant_id"]]: a["article_number"]
-                    for a in row["articles"]
-                    if any(v["id"] == a["variant_id"] for v in kept)
-                },
-            }
-            for row in product["suppliers"]
+            {"supplier_id": row["supplier_id"], "preferred": row["preferred"]} for row in product["suppliers"]
         ],
     }
 
@@ -219,16 +205,7 @@ class TestReorderList:
         other = await _supplier(async_client, "Other Shop")
         await _product(
             async_client,
-            suppliers=[
-                {"supplier_id": other, "article_number": "O-52", "prices": {}},
-                {
-                    "supplier_id": shop,
-                    "article_number": "FS-PLA-M",
-                    "preferred": True,
-                    "prices": {"kg1": 18.5},
-                    "article_numbers": {"black|kg1": "FS-PLA-M-BLK-1"},
-                },
-            ],
+            suppliers=[{"supplier_id": other}, {"supplier_id": shop, "preferred": True}],
         )
 
         lines = await _reorder(async_client)
@@ -243,23 +220,9 @@ class TestReorderList:
         assert (black["min_stock"], black["in_stock"], black["on_order"]) == (2, 0, 0)
         assert black["list_price"] == 20.0
         assert black["suppliers"] == [
-            {
-                "supplier_id": shop,
-                "supplier_name": "Filament Shop",
-                "preferred": True,
-                "article_number": "FS-PLA-M-BLK-1",
-                "price": 18.5,
-            },
-            {
-                "supplier_id": other,
-                "supplier_name": "Other Shop",
-                "preferred": False,
-                "article_number": "O-52",
-                "price": 20.0,
-            },
+            {"supplier_id": shop, "supplier_name": "Filament Shop", "preferred": True},
+            {"supplier_id": other, "supplier_name": "Other Shop", "preferred": False},
         ]
-        # White has no number of its own at the shop: the product's applies.
-        assert lines[1]["suppliers"][0]["article_number"] == "FS-PLA-M"
 
     @pytest.mark.asyncio
     async def test_a_combination_at_its_target_is_not_listed(self, async_client: AsyncClient):
@@ -275,17 +238,7 @@ class TestShoppingList:
     @pytest.mark.asyncio
     async def test_lines_go_onto_the_shopping_list_tied_to_their_combination(self, async_client: AsyncClient):
         shop = await _supplier(async_client, "Filament Shop")
-        product = await _product(
-            async_client,
-            suppliers=[
-                {
-                    "supplier_id": shop,
-                    "preferred": True,
-                    "article_number": "FS-PLA-M",
-                    "article_numbers": {"black|kg1": "FS-PLA-M-BLK-1"},
-                }
-            ],
-        )
+        product = await _product(async_client, suppliers=[{"supplier_id": shop, "preferred": True}])
         black = _variant(product, "Black", 1000)
 
         response = await async_client.post(
@@ -300,7 +253,7 @@ class TestShoppingList:
         assert line["brand"] == "Bambu Lab"
         assert line["color_name"] == "Black"
         assert line["quantity_spools"] == 2
-        assert line["note"] == "1 kg · Filament Shop · FS-PLA-M-BLK-1"
+        assert line["note"] == "1 kg · Filament Shop"
         assert line["variant_id"] == black["id"]
         assert line["supplier_id"] == shop
 
@@ -392,9 +345,7 @@ class TestShoppingList:
         self, async_client: AsyncClient, db_session: AsyncSession
     ):
         shop = await _supplier(async_client, "Filament Shop")
-        product = await _product(
-            async_client, suppliers=[{"supplier_id": shop, "preferred": True, "prices": {"kg5": 80.0}}]
-        )
+        product = await _product(async_client, suppliers=[{"supplier_id": shop, "preferred": True}])
         big = _variant(product, "Black", 5000)
         await async_client.post(
             f"{API}/reorder", json={"items": [{"variant_id": big["id"], "quantity": 2, "supplier_id": shop}]}
@@ -411,7 +362,7 @@ class TestShoppingList:
             assert spool.variant_id == big["id"]
             assert (spool.label_weight, spool.core_weight) == (5000, 900)
             assert spool.material_number == "52"
-            assert spool.cost_per_kg == 16.0  # 80 per 5 kg spool at the shop
+            assert spool.cost_per_kg == 18.0  # the 5 kg spool's price, 90
         assert (await async_client.get(SHOPPING)).json() == []
 
     @pytest.mark.asyncio
@@ -438,76 +389,3 @@ class TestShoppingList:
         [line] = (await async_client.get(SHOPPING)).json()
         assert line["variant_id"] is None
         assert line["color_name"] == "White"
-
-
-class TestArticleNumbersPerCombination:
-    @pytest.mark.asyncio
-    async def test_they_survive_an_edit(self, async_client: AsyncClient):
-        shop = await _supplier(async_client, "Filament Shop")
-        product = await _product(
-            async_client,
-            suppliers=[
-                {
-                    "supplier_id": shop,
-                    "article_number": "FS-PLA-M",
-                    "article_numbers": {"black|kg1": "FS-BLK-1", "white|kg1": "FS-WHT-1", "black|kg5": " "},
-                }
-            ],
-        )
-        [row] = product["suppliers"]
-        black, white = _variant(product, "Black", 1000), _variant(product, "White", 1000)
-        assert sorted((a["variant_id"], a["article_number"]) for a in row["articles"]) == sorted(
-            [(black["id"], "FS-BLK-1"), (white["id"], "FS-WHT-1")]
-        )
-
-        response = await async_client.put(f"{API}/{product['id']}", json=_document(product))
-
-        assert response.status_code == 200, response.text
-        [row] = response.json()["product"]["suppliers"]
-        assert len(row["articles"]) == 2
-
-    @pytest.mark.asyncio
-    async def test_they_go_with_their_combination(self, async_client: AsyncClient):
-        shop = await _supplier(async_client, "Filament Shop")
-        product = await _product(
-            async_client,
-            suppliers=[{"supplier_id": shop, "article_numbers": {"black|kg1": "FS-BLK-1", "white|kg1": "FS-WHT-1"}}],
-        )
-
-        response = await async_client.put(f"{API}/{product['id']}", json=_document(product, drop=("White", 1000)))
-
-        assert response.status_code == 200, response.text
-        [row] = response.json()["product"]["suppliers"]
-        assert [a["article_number"] for a in row["articles"]] == ["FS-BLK-1"]
-
-    @pytest.mark.asyncio
-    async def test_one_for_a_combination_that_does_not_exist_is_refused(self, async_client: AsyncClient):
-        shop = await _supplier(async_client, "Filament Shop")
-
-        response = await async_client.post(
-            API,
-            json={
-                "material": "PLA",
-                "sizes": [{"key": "kg1", "label_weight": 1000}],
-                "colors": [{"key": "black", "color_name": "Black"}],
-                "variants": [],
-                "suppliers": [{"supplier_id": shop, "article_numbers": {"black|kg1": "FS-BLK-1"}}],
-            },
-        )
-
-        assert response.status_code == 400
-
-    @pytest.mark.asyncio
-    async def test_deleting_the_product_takes_them_along(self, async_client: AsyncClient, db_session: AsyncSession):
-        from backend.app.models.filament_product import FilamentProductSupplierArticle
-
-        shop = await _supplier(async_client, "Filament Shop")
-        product = await _product(
-            async_client, suppliers=[{"supplier_id": shop, "article_numbers": {"black|kg1": "FS-BLK-1"}}]
-        )
-
-        response = await async_client.delete(f"{API}/{product['id']}")
-
-        assert response.status_code == 200, response.text
-        left = (await db_session.execute(select(FilamentProductSupplierArticle))).scalars().all()
-        assert left == []

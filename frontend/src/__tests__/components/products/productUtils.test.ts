@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { FilamentProduct } from '../../../api/client';
-import { costPerKg, intakePrice, parsePrice, preferredSupplierId } from '../../../components/products/productUtils';
+import {
+  costPerKg,
+  parsePrice,
+  presetModels,
+  productMatches,
+  usualSupplier,
+} from '../../../components/products/productUtils';
 
-// Product master data (#3165): the price goods-in proposes.
+// Product master data (#3165): the small helpers the product views share.
 const product: FilamentProduct = {
   id: 1,
   label: 'Bambu Lab PLA Matte',
@@ -12,6 +18,7 @@ const product: FilamentProduct = {
   material_number: '52',
   slicer_filament: null,
   slicer_filament_name: null,
+  presets: [],
   nozzle_temp_min: null,
   nozzle_temp_max: null,
   note: null,
@@ -19,35 +26,68 @@ const product: FilamentProduct = {
   colors: [],
   variants: [],
   suppliers: [
-    { supplier_id: 7, supplier_name: 'Shop A', article_number: null, preferred: false, prices: [{ size_id: 10, price: 17.5 }] },
-    { supplier_id: 8, supplier_name: 'Shop B', article_number: 'X', preferred: true, prices: [] },
+    { supplier_id: 7, supplier_name: 'Shop A', preferred: false },
+    { supplier_id: 8, supplier_name: 'Shop B', preferred: true },
   ],
   spool_count: 0,
   remaining_g: 0,
 };
-const size = product.sizes[0];
-const plain = { id: 1, color_id: 1, size_id: 10, price_override: null, effective_price: 20, cost_per_kg: 20, codes: [], spool_count: 0, remaining_g: 0 };
 
-describe('intakePrice', () => {
-  it('takes the supplier price for the size when there is one', () => {
-    expect(intakePrice(product, plain, size, 7)).toBe(17.5);
+describe('suppliers', () => {
+  it('names the starred one as the usual supplier, else the first', () => {
+    expect(usualSupplier(product)?.supplier_id).toBe(8);
+    const unstarred = { ...product, suppliers: product.suppliers.map((s) => ({ ...s, preferred: false })) };
+    expect(usualSupplier(unstarred)?.supplier_id).toBe(7);
+    expect(usualSupplier({ ...product, suppliers: [] })).toBeUndefined();
   });
 
-  it('falls back to the list price when the supplier has none for the size', () => {
-    expect(intakePrice(product, plain, size, 8)).toBe(20);
-    expect(intakePrice(product, plain, size, null)).toBe(20);
+  it('are found by the search', () => {
+    expect(productMatches(product, 'shop b')).toBe(true);
+    expect(productMatches(product, 'shop c')).toBe(false);
+  });
+});
+
+describe('presetModels', () => {
+  const h2d = { printer_model: 'H2D', slicer_filament: 'GFSA01_H2D', slicer_filament_name: 'Bambu PLA Matte @BBL H2D' };
+
+  it('names the model of the own preset, then each preset per model', () => {
+    const withPresets = {
+      ...product,
+      slicer_filament: 'GFSA01_H2S',
+      slicer_filament_name: 'Bambu PLA Matte @BBL H2S',
+      presets: [h2d],
+    };
+    expect(presetModels(withPresets)).toEqual([
+      { model: 'H2S', name: 'Bambu PLA Matte @BBL H2S' },
+      { model: 'H2D', name: 'Bambu PLA Matte @BBL H2D' },
+    ]);
   });
 
-  it("lets a combination's own price win", () => {
-    expect(intakePrice(product, { ...plain, price_override: 26 }, size, 7)).toBe(26);
+  it('lets a preset for the model win over the own one naming it', () => {
+    const both = {
+      ...product,
+      slicer_filament: 'GFSA01_H2D',
+      slicer_filament_name: 'Bambu PLA Matte @BBL H2D',
+      presets: [{ ...h2d, slicer_filament_name: 'My PLA @BBL H2D' }],
+    };
+    expect(presetModels(both)).toEqual([{ model: 'H2D', name: 'My PLA @BBL H2D' }]);
+  });
+
+  it('reads the model past the "(Custom)" a stored name ends in', () => {
+    const custom = {
+      ...product,
+      slicer_filament: 'PFUS0123',
+      slicer_filament_name: 'XIONEER HIPS VLX 90 @BBL H2D 0.4 nozzle (Custom)',
+    };
+    expect(presetModels(custom).map((entry) => entry.model)).toEqual(['H2D']);
+  });
+
+  it('gives an own preset that names no model no badge', () => {
+    expect(presetModels({ ...product, slicer_filament: 'GFL01', slicer_filament_name: 'Bambu PLA Matte' })).toEqual([]);
   });
 });
 
 describe('small helpers', () => {
-  it('finds the usual supplier', () => {
-    expect(preferredSupplierId(product)).toBe(8);
-  });
-
   it('reads a decimal comma', () => {
     expect(parsePrice('11,50')).toBe(11.5);
     expect(parsePrice('')).toBeNull();

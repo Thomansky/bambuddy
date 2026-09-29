@@ -1,10 +1,11 @@
 /**
- * Product editor (#3165): the target stock per combination, and a supplier's
- * article number per colour × size, travel in the save document.
+ * Product editor (#3165): the target stock per combination, the manufacturer's
+ * price at the size and the suppliers — only where the product was bought —
+ * travel in the save document.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { render } from '../../utils';
@@ -39,6 +40,7 @@ const PRODUCT: FilamentProduct = {
   material_number: '52',
   slicer_filament: null,
   slicer_filament_name: null,
+  presets: [],
   nozzle_temp_min: null,
   nozzle_temp_max: null,
   note: null,
@@ -48,21 +50,12 @@ const PRODUCT: FilamentProduct = {
     { id: 2, color_name: 'White', rgba: 'FFFFFFFF', extra_colors: null, effect_type: null },
   ],
   variants: [variant(11, 1, 2), variant(12, 2, null)],
-  suppliers: [
-    {
-      supplier_id: 7,
-      supplier_name: 'Filament Shop',
-      article_number: 'FS-PLA-M',
-      preferred: true,
-      prices: [],
-      articles: [{ variant_id: 11, article_number: 'FS-BLK-1' }],
-    },
-  ],
+  suppliers: [{ supplier_id: 7, supplier_name: 'Filament Shop', preferred: true }],
   spool_count: 0,
   remaining_g: 0,
 };
 
-describe('ProductEditorModal — targets and article numbers', () => {
+describe('ProductEditorModal — targets', () => {
   let saved: FilamentProductInput[];
 
   beforeEach(() => {
@@ -95,22 +88,6 @@ describe('ProductEditorModal — targets and article numbers', () => {
       ['c1', 3],
       ['c2', 3],
     ]);
-  });
-
-  it("keeps the supplier's article number per colour", async () => {
-    const onSaved = vi.fn();
-    const user = userEvent.setup();
-    render(<ProductEditorModal product={PRODUCT} onClose={vi.fn()} onSaved={onSaved} />);
-
-    await user.click(await screen.findByRole('button', { name: 'Article numbers per colour' }));
-    expect(screen.getByRole('textbox', { name: 'Article no. Black 1000 g' })).toHaveValue('FS-BLK-1');
-    const white = screen.getByRole('textbox', { name: 'Article no. White 1000 g' });
-    expect(white).toHaveAttribute('placeholder', 'FS-PLA-M');
-    await user.type(white, 'FS-WHT-1');
-    await user.click(screen.getByRole('button', { name: 'Save' }));
-
-    await waitFor(() => expect(onSaved).toHaveBeenCalled());
-    expect(saved[0].suppliers[0].article_numbers).toEqual({ 'c1|s10': 'FS-BLK-1', 'c2|s10': 'FS-WHT-1' });
   });
 });
 
@@ -151,7 +128,7 @@ describe('ProductEditorModal — setting a product up', () => {
   });
 });
 
-describe('ProductEditorModal — one place per price, and the preset list', () => {
+describe("ProductEditorModal — the manufacturer's price, the suppliers and the preset", () => {
   let saved: FilamentProductInput[];
 
   const withSuppliers = (suppliers: FilamentProduct['suppliers']): FilamentProduct => ({
@@ -180,63 +157,63 @@ describe('ProductEditorModal — one place per price, and the preset list', () =
     );
   });
 
-  it("shows the usual supplier's price at the size and takes it from the supplier table", async () => {
+  it('takes the price at the size, whatever the suppliers', async () => {
     const onSaved = vi.fn();
     const user = userEvent.setup();
     render(
       <ProductEditorModal
-        product={withSuppliers([
-          { supplier_id: 7, supplier_name: 'Filament Shop', article_number: null, preferred: true, prices: [{ size_id: 10, price: 18.5 }], articles: [] },
-        ])}
+        product={withSuppliers([{ supplier_id: 7, supplier_name: 'Filament Shop', preferred: true }])}
         onClose={vi.fn()}
         onSaved={onSaved}
       />,
     );
 
-    // No price field at the size: it is the supplier's.
-    expect(screen.queryByRole('textbox', { name: 'Price per spool' })).not.toBeInTheDocument();
-    expect((await screen.findAllByText('€18.50')).length).toBeGreaterThan(0);
-    const atSupplier = screen.getByRole('textbox', { name: 'Price per spool 1000 g' });
-    expect(atSupplier).toHaveValue('18.5');
+    const price = screen.getByRole('textbox', { name: 'List price' });
+    expect(price).toHaveValue('20');
+    // A supplier is only where the product was bought: no price, no number.
+    expect(screen.queryByRole('textbox', { name: /1000 g/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: /Article/ })).not.toBeInTheDocument();
 
-    await user.clear(atSupplier);
-    await user.type(atSupplier, '17');
+    await user.clear(price);
+    await user.type(price, '22,5');
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
-    expect(saved[0].sizes[0].price).toBe(17);
-    expect(saved[0].suppliers[0].prices).toEqual({ s10: 17 });
+    expect(saved[0].sizes[0].price).toBe(22.5);
+    expect(saved[0].suppliers).toEqual([{ supplier_id: 7, preferred: true }]);
   });
 
-  it("brings the new usual supplier's prices in when the star moves", async () => {
+  it('adds a supplier, moves the star and hands it on when the usual one goes', async () => {
     const onSaved = vi.fn();
     const user = userEvent.setup();
     render(
       <ProductEditorModal
-        product={withSuppliers([
-          { supplier_id: 7, supplier_name: 'Filament Shop', article_number: null, preferred: true, prices: [{ size_id: 10, price: 18.5 }], articles: [] },
-          { supplier_id: 8, supplier_name: 'Other Shop', article_number: null, preferred: false, prices: [{ size_id: 10, price: 16 }], articles: [] },
-        ])}
+        product={withSuppliers([{ supplier_id: 7, supplier_name: 'Filament Shop', preferred: true }])}
         onClose={vi.fn()}
         onSaved={onSaved}
       />,
     );
 
-    await user.click(screen.getAllByRole('radio', { name: 'Usual supplier' })[1]);
-    expect((await screen.findAllByText('€16.00')).length).toBeGreaterThan(0);
+    await user.selectOptions(await screen.findByRole('combobox', { name: 'Add supplier' }), '8');
+    expect(screen.getByRole('button', { name: 'Make Other Shop the usual supplier' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+    // Every supplier is on the product now, so there is nothing left to add.
+    expect(screen.queryByRole('combobox', { name: 'Add supplier' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Make Other Shop the usual supplier' }));
     await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    expect(saved[0].suppliers).toEqual([
+      { supplier_id: 7, preferred: false },
+      { supplier_id: 8, preferred: true },
+    ]);
 
-    await waitFor(() => expect(onSaved).toHaveBeenCalled());
-    expect(saved[0].sizes[0].price).toBe(16);
-    const bySupplier = Object.fromEntries(saved[0].suppliers.map((row) => [row.supplier_id, row]));
-    expect(bySupplier[7]).toMatchObject({ preferred: false, prices: { s10: 18.5 } });
-    expect(bySupplier[8]).toMatchObject({ preferred: true, prices: { s10: 16 } });
-  });
-
-  it('asks for the price at the size while the product has no supplier', async () => {
-    render(<ProductEditorModal product={withSuppliers([])} onClose={vi.fn()} onSaved={vi.fn()} />);
-
-    expect(screen.getByRole('textbox', { name: 'Price per spool' })).toHaveValue('20');
+    await user.click(screen.getByRole('button', { name: 'Remove Other Shop' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(2));
+    expect(saved[1].suppliers).toEqual([{ supplier_id: 7, preferred: true }]);
   });
 
   it('picks the slicer preset from the list the spool dialog offers', async () => {
@@ -251,5 +228,110 @@ describe('ProductEditorModal — one place per price, and the preset list', () =
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
     expect(saved[0].slicer_filament).toBe('GFA00');
     expect(saved[0].slicer_filament_name).toBe('Bambu PLA Basic');
+  });
+});
+
+describe('ProductEditorModal — a preset per printer model', () => {
+  let saved: FilamentProductInput[];
+  const cloudPreset = (setting_id: string, name: string) => ({
+    setting_id,
+    name,
+    type: 'filament',
+    version: null,
+    user_id: null,
+    updated_time: null,
+    is_custom: false,
+  });
+  const onTheH2S: FilamentProduct = {
+    ...PRODUCT,
+    slicer_filament: 'GFSA01_H2S',
+    slicer_filament_name: 'Bambu PLA Matte @BBL H2S',
+  };
+
+  beforeEach(() => {
+    saved = [];
+    server.use(
+      http.get('/api/v1/settings/', () => HttpResponse.json({ currency: 'EUR' })),
+      http.get('/api/v1/inventory/suppliers', () => HttpResponse.json([])),
+      http.get('/api/v1/printers/', () =>
+        HttpResponse.json([
+          { id: 1, name: 'Links', model: 'H2S' },
+          { id: 2, name: 'Rechts', model: 'H2D' },
+        ]),
+      ),
+      http.get('/api/v1/slicer/printer-models', () => HttpResponse.json({})),
+      http.get('/api/v1/cloud/status', () => HttpResponse.json({ is_authenticated: true })),
+      http.get('/api/v1/cloud/filaments', () =>
+        HttpResponse.json([
+          cloudPreset('GFSA01_H2S', 'Bambu PLA Matte @BBL H2S'),
+          cloudPreset('GFSA01_H2D_02', 'Bambu PLA Matte @BBL H2D 0.2 nozzle'),
+          cloudPreset('GFSA01_H2D', 'Bambu PLA Matte @BBL H2D'),
+        ]),
+      ),
+      http.put('/api/v1/inventory/products/1', async ({ request }) => {
+        saved.push((await request.json()) as FilamentProductInput);
+        return HttpResponse.json({ product: PRODUCT, spools_updated: 0 });
+      }),
+    );
+  });
+
+  it("adds one for another printer, starting on the own preset's variant for it", async () => {
+    const onSaved = vi.fn();
+    const user = userEvent.setup();
+    render(<ProductEditorModal product={onTheH2S} onClose={vi.fn()} onSaved={onSaved} />);
+    // Wait for the preset lists: the own preset is shown by its option then.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Slicer preset' })).not.toHaveTextContent('(GFSA01_H2S)'),
+    );
+
+    // The own preset is the H2S's, so only the H2D is offered.
+    const add = await screen.findByRole('combobox', { name: 'Preset for a printer' });
+    expect(within(add).queryByRole('option', { name: 'H2S' })).not.toBeInTheDocument();
+    expect(screen.getByText('H2S')).toBeInTheDocument();
+    await user.selectOptions(add, 'H2D');
+
+    expect(screen.getByRole('button', { name: 'Preset for H2D' })).toBeInTheDocument();
+    expect(screen.getByText('H2D')).toBeInTheDocument();
+    // Every printer has a preset now.
+    expect(screen.queryByRole('combobox', { name: 'Preset for a printer' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    // The plain one, not the one for the 0.2 nozzle.
+    expect(saved[0].presets).toEqual([
+      { printer_model: 'H2D', slicer_filament: 'GFSA01_H2D', slicer_filament_name: 'Bambu PLA Matte @BBL H2D' },
+    ]);
+  });
+
+  it('keeps the ones it has, and a removed one goes', async () => {
+    const onSaved = vi.fn();
+    const user = userEvent.setup();
+    const product = {
+      ...onTheH2S,
+      presets: [{ printer_model: 'H2D', slicer_filament: 'GFSA01_H2D', slicer_filament_name: 'Bambu PLA Matte @BBL H2D' }],
+    };
+    render(<ProductEditorModal product={product} onClose={vi.fn()} onSaved={onSaved} />);
+
+    await user.click(screen.getByRole('button', { name: 'Remove the preset for H2D' }));
+    expect(await screen.findByRole('combobox', { name: 'Preset for a printer' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(saved[0].presets).toEqual([]);
+  });
+
+  it('does not save a printer left without a preset', async () => {
+    const onSaved = vi.fn();
+    const user = userEvent.setup();
+    // No own preset: it stands for every printer, and nothing is picked ahead.
+    render(<ProductEditorModal product={PRODUCT} onClose={vi.fn()} onSaved={onSaved} />);
+
+    expect(screen.getByText('All printers')).toBeInTheDocument();
+    await user.selectOptions(await screen.findByRole('combobox', { name: 'Preset for a printer' }), 'H2S');
+    expect(screen.getByRole('button', { name: 'Preset for H2S' })).toHaveTextContent('Choose a preset…');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(saved[0].presets).toEqual([]);
   });
 });

@@ -42,6 +42,7 @@ function product(patch: Partial<FilamentProduct>): FilamentProduct {
     material_number: null,
     slicer_filament: null,
     slicer_filament_name: null,
+    presets: [],
     nozzle_temp_min: null,
     nozzle_temp_max: null,
     note: null,
@@ -69,10 +70,10 @@ const PRODUCTS: FilamentProduct[] = [
     ],
     variants: [
       variant(11, 1, 10, { spool_count: 2, remaining_g: 1800, in_stock: 2 }),
-      variant(12, 2, 10, { min_stock: 2, shortfall: 2 }),
+      variant(12, 2, 10, { min_stock: 2, shortfall: 2, price_override: 24 }),
     ],
     suppliers: [
-      { supplier_id: 7, supplier_name: 'Shop A', article_number: 'A-52', preferred: true, prices: [], articles: [] },
+      { supplier_id: 7, supplier_name: 'Shop A', preferred: true },
     ],
     spool_count: 2,
     remaining_g: 1800,
@@ -89,7 +90,7 @@ const PRODUCTS: FilamentProduct[] = [
     ],
     colors: [{ id: 3, color_name: 'Grey', rgba: '808080FF', extra_colors: null, effect_type: null }],
     variants: [variant(21, 3, 20), variant(22, 3, 21)],
-    suppliers: [{ supplier_id: 8, supplier_name: 'Shop B', article_number: null, preferred: true, prices: [], articles: [] }],
+    suppliers: [{ supplier_id: 8, supplier_name: 'Shop B', preferred: true }],
   }),
   product({
     id: 3,
@@ -174,12 +175,12 @@ describe('ProductsPanel', () => {
     expect(listedBrands()).toEqual(['Bambu Lab']);
   });
 
-  it('finds a product by its supplier article number', async () => {
+  it('finds a product by where it was bought', async () => {
     const user = userEvent.setup();
     renderPanel();
     await screen.findByRole('table');
 
-    await user.type(screen.getByPlaceholderText(/Search products/), 'A-52');
+    await user.type(screen.getByPlaceholderText(/Search products/), 'Shop A');
 
     expect(listedBrands()).toEqual(['Bambu Lab']);
   });
@@ -209,6 +210,9 @@ describe('ProductsPanel', () => {
 
     await waitFor(() => expect(screen.getByText('White')).toBeInTheDocument());
     expect(screen.getByText('Black')).toBeInTheDocument();
+    // It says what its cells are, and what a colour's own price is set against.
+    expect(screen.getByText(/Spools in stock per colour and size/)).toBeInTheDocument();
+    expect(screen.getByText('€24.00')).toHaveAttribute('title', "This colour’s own price; the size costs €20.00");
   });
 
   it('offers the columns in the same dialog as the spool list', async () => {
@@ -218,7 +222,7 @@ describe('ProductsPanel', () => {
 
     await user.click(screen.getByRole('button', { name: /Columns/ }));
 
-    const dialog = (await screen.findByText('Article no.')).closest('div.fixed') as HTMLElement;
+    const dialog = (await screen.findByText('Nozzle temp.')).closest('div.fixed') as HTMLElement;
     expect(within(dialog).getByText('Spool type')).toBeInTheDocument();
     expect(within(dialog).getByText('Manufacturer')).toBeInTheDocument();
   });

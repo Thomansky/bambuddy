@@ -23,6 +23,7 @@ import type { FilamentProduct, SpoolCatalogEntry } from '../../api/client';
 import { ColumnConfigModal, type ColumnConfig } from '../ColumnConfigModal';
 import { FilamentSwatch } from '../FilamentSwatch';
 import { getCurrencySymbol } from '../../utils/currency';
+import { ModelBadge } from './ModelBadge';
 import {
   colorLabel,
   compareProducts,
@@ -32,6 +33,8 @@ import {
   formatStock,
   formatWeight,
   mergeColumnConfig,
+  presetModels,
+  presetStem,
   priceRange,
   productMatches,
   productTotals,
@@ -76,7 +79,6 @@ const DEFAULT_COLUMNS: ColumnConfig[] = [
   { id: 'colors', label: 'Colours', visible: true },
   { id: 'sizes', label: 'Sizes', visible: true },
   { id: 'supplier', label: 'Supplier', visible: true },
-  { id: 'article_number', label: 'Article no.', visible: false },
   { id: 'price', label: 'Price/spool', visible: false },
   { id: 'spool_type', label: 'Spool type', visible: false },
   { id: 'preset', label: 'Slicer preset', visible: false },
@@ -99,7 +101,6 @@ const columnHeaders: Record<string, (t: TFn) => string> = {
   colors: (t) => t('inventory.products.columns.colors'),
   sizes: (t) => t('inventory.products.columns.sizes'),
   supplier: (t) => t('inventory.products.columns.supplier'),
-  article_number: (t) => t('inventory.products.columns.articleNumber'),
   price: (t) => t('inventory.products.columns.price'),
   spool_type: (t) => t('inventory.products.columns.spoolType'),
   preset: (t) => t('inventory.products.columns.preset'),
@@ -170,10 +171,6 @@ const columnCells: Record<string, (ctx: CellCtx) => ReactNode> = {
       </span>
     );
   },
-  article_number: ({ product }) => {
-    const number = usualSupplier(product)?.article_number;
-    return number ? <span className="text-sm font-mono text-bambu-gray">{number}</span> : EMPTY;
-  },
   price: ({ product, currency }) => {
     const range = priceRange(product);
     if (!range) return EMPTY;
@@ -189,8 +186,18 @@ const columnCells: Record<string, (ctx: CellCtx) => ReactNode> = {
     return names ? <span className="text-sm text-bambu-gray">{names}</span> : EMPTY;
   },
   preset: ({ product }) => {
-    const preset = product.slicer_filament_name || product.slicer_filament;
-    return preset ? <span className="text-sm text-bambu-gray">{preset}</span> : EMPTY;
+    const own = product.slicer_filament_name || product.slicer_filament;
+    // The printer models it has a preset for, so a missing one stands out.
+    const models = presetModels(product);
+    if (!own && models.length === 0) return EMPTY;
+    return (
+      <span className="flex flex-wrap items-center gap-1">
+        {own && <span className="text-sm text-bambu-gray">{presetStem(own) || own}</span>}
+        {models.map((entry) => (
+          <ModelBadge key={entry.model} model={entry.model} title={entry.name} />
+        ))}
+      </span>
+    );
   },
   nozzle_temp: ({ product }) =>
     product.nozzle_temp_min && product.nozzle_temp_max ? (
@@ -246,7 +253,6 @@ const columnSortValues: Record<
   colors: (p) => p.colors.length,
   sizes: (p) => (p.sizes.length ? Math.min(...p.sizes.map((s) => s.label_weight)) : 0),
   supplier: (p) => usualSupplier(p)?.supplier_name || '￿',
-  article_number: (p) => usualSupplier(p)?.article_number || '￿',
   price: (p) => priceRange(p)?.[0] ?? Number.MAX_VALUE,
   spool_type: (p, catalogMap) => spoolTypeNames(p, catalogMap) || '￿',
   preset: (p) => p.slicer_filament_name || p.slicer_filament || '￿',
@@ -811,7 +817,8 @@ export function ProductsPanel({ onIntake, onEdit, onConvert, unassignedCount = 0
   );
 }
 
-/** Colours × sizes with the stock of each variant. */
+/** Colours × sizes with the stock of each variant. It says what its cells
+ *  are: without that, a table of zeros and a stray price reads as noise. */
 function StockMatrix({ product, currency }: { product: FilamentProduct; currency: string }) {
   const { t } = useTranslation();
   if (product.colors.length === 0 || product.sizes.length === 0) {
@@ -819,13 +826,17 @@ function StockMatrix({ product, currency }: { product: FilamentProduct; currency
   }
   return (
     <div className="space-y-2">
+      <p className="text-xs text-bambu-gray">{t('inventory.products.stockMatrixHint')}</p>
       <table className="text-sm">
         <thead>
           <tr className="text-xs text-bambu-gray">
-            <th className="pr-6 py-1 text-left font-medium">{t('inventory.products.color')}</th>
+            <th className="pr-6 py-1 text-left font-medium align-top">{t('inventory.products.color')}</th>
             {product.sizes.map((size) => (
               <th key={size.id} className="px-4 py-1 text-center font-medium whitespace-nowrap">
                 {formatWeight(size.label_weight)}
+                {size.price !== null && (
+                  <span className="block font-normal text-bambu-gray/70">{formatMoney(size.price, currency)}</span>
+                )}
               </th>
             ))}
           </tr>
@@ -866,13 +877,19 @@ function StockMatrix({ product, currency }: { product: FilamentProduct; currency
                         <span className="text-xs text-bambu-gray ml-1">({formatStock(variant.remaining_g)})</span>
                       </span>
                     ) : (
-                      <span className="text-bambu-gray">0</span>
+                      // Dimmer than stock, so the cells that hold spools stand out.
+                      <span className="text-bambu-gray/40">0</span>
                     )}
                     {variant.codes.length > 0 && (
                       <Barcode className="inline w-3 h-3 ml-1 text-bambu-gray" aria-label={t('inventory.products.codes')} />
                     )}
                     {variant.price_override !== null && (
-                      <span className="block text-[10px] text-amber-300">{formatMoney(variant.price_override, currency)}</span>
+                      <span
+                        className="block text-[10px] text-amber-300"
+                        title={t('inventory.products.colorPriceHint', { price: formatMoney(size.price, currency) })}
+                      >
+                        {formatMoney(variant.price_override, currency)}
+                      </span>
                     )}
                     {variant.min_stock !== null && (
                       <span
@@ -900,7 +917,7 @@ function StockMatrix({ product, currency }: { product: FilamentProduct; currency
         <p className="text-xs text-bambu-gray">
           {t('inventory.products.suppliers')}:{' '}
           {product.suppliers
-            .map((s) => `${s.supplier_name}${s.article_number ? ` (${s.article_number})` : ''}${s.preferred ? ' ★' : ''}`)
+            .map((s) => `${s.supplier_name}${s.preferred ? ' ★' : ''}`)
             .join(' · ')}
         </p>
       )}

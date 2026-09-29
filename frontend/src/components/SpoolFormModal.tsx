@@ -1381,6 +1381,7 @@ export function SpoolFormModal({
               selectedGroupId={selectedGroupId}
               setSelectedGroupId={setSelectedGroupId}
               printerModels={printerModelsData}
+              productPresets={ownProduct?.presets}
               isLoading={loadingCalibrations}
             />
           )}

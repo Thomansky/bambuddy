@@ -13,6 +13,8 @@ class FilamentProduct(Base):
 
     The product is the home of what every spool of it shares — brand,
     material, subtype, the internal material number, preset and temperatures.
+    Its preset per printer model is the exception to the copying below: it is
+    read where a spool's preset is resolved for a printer, not copied.
     Colours and sizes are declared once on the product; a variant is a
     colour × size combination that actually exists. Spools keep their own
     copy of all of it (every read path stays untouched) and point at their
@@ -48,13 +50,46 @@ class FilamentProduct(Base):
         order_by="[FilamentProductColor.sort_order, FilamentProductColor.id]",
     )
     variants: Mapped[list["FilamentVariant"]] = relationship(back_populates="product", cascade="all", lazy="selectin")
-    # Where the product is bought — on the product, not on every spool.
+    # The preset for each printer model its own preset is not for.
+    presets: Mapped[list["FilamentProductPreset"]] = relationship(
+        back_populates="product",
+        cascade="all",
+        lazy="selectin",
+        order_by="FilamentProductPreset.printer_model",
+    )
+    # Where the product has been bought — on the product, not on every spool.
     suppliers: Mapped[list["FilamentProductSupplier"]] = relationship(
         back_populates="product",
         cascade="all",
         lazy="selectin",
         order_by="[FilamentProductSupplier.preferred.desc(), FilamentProductSupplier.id]",
     )
+
+
+class FilamentProductPreset(Base):
+    """The slicer preset a product uses on one printer model.
+
+    A cloud or Orca preset is bound to a model ("@BBL H2S"), so the product's
+    own preset is only right on the model it names; a row here names the one
+    for another model. It is not copied onto the spools. Resolving a spool's
+    preset for a printer asks the spool's own per-model rows first, then this,
+    then the spool's own preset (``services.spool_filament_preset``), so an
+    edit here reaches every spool of the product at once, and a spool set up
+    by hand for a model keeps what it was given.
+    """
+
+    __tablename__ = "filament_product_presets"
+    __table_args__ = (UniqueConstraint("product_id", "printer_model", name="uq_filament_product_presets_model"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("filament_products.id", ondelete="CASCADE"), index=True)
+    # Matches ``printers.model`` ("H2S", "H2D", "X1C"), as SpoolFilamentPreset does.
+    printer_model: Mapped[str] = mapped_column(String(50))
+    # As wide as SpoolFilamentPreset's: the same ids end up in the same slot.
+    slicer_filament: Mapped[str] = mapped_column(String(128))
+    slicer_filament_name: Mapped[str | None] = mapped_column(String(255))
+
+    product: Mapped[FilamentProduct] = relationship(back_populates="presets")
 
 
 class FilamentProductSize(Base):
@@ -131,9 +166,10 @@ class FilamentVariantCode(Base):
 
 
 class FilamentProductSupplier(Base):
-    """Where a product can be bought: the supplier's own article number and,
-    per size, what one spool costs there. One supplier can be marked as the
-    usual one — goods-in starts from it."""
+    """A supplier the product has been bought from. One of them can be marked
+    as the usual one; the reorder list starts from it. Prices and article
+    numbers are deliberately not kept here: the price is the manufacturer's,
+    on the size, and what a delivery actually cost is confirmed at goods-in."""
 
     __tablename__ = "filament_product_suppliers"
     __table_args__ = (UniqueConstraint("product_id", "supplier_id", name="uq_filament_product_suppliers_pair"),)
@@ -141,52 +177,7 @@ class FilamentProductSupplier(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     product_id: Mapped[int] = mapped_column(ForeignKey("filament_products.id", ondelete="CASCADE"), index=True)
     supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id"), index=True)
-    article_number: Mapped[str | None] = mapped_column(String(100))
     preferred: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
 
     product: Mapped[FilamentProduct] = relationship(back_populates="suppliers")
     supplier: Mapped[Supplier] = relationship(lazy="selectin")
-    prices: Mapped[list["FilamentProductSupplierPrice"]] = relationship(
-        back_populates="product_supplier", cascade="all", lazy="selectin"
-    )
-    # Shops number every colour and size separately; the product-level
-    # article number above is what applies where no row says otherwise.
-    articles: Mapped[list["FilamentProductSupplierArticle"]] = relationship(
-        back_populates="product_supplier", cascade="all", lazy="selectin"
-    )
-
-
-class FilamentProductSupplierPrice(Base):
-    """What one spool of a size costs at one supplier."""
-
-    __tablename__ = "filament_product_supplier_prices"
-    __table_args__ = (
-        UniqueConstraint("product_supplier_id", "size_id", name="uq_filament_product_supplier_prices_size"),
-    )
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    product_supplier_id: Mapped[int] = mapped_column(
-        ForeignKey("filament_product_suppliers.id", ondelete="CASCADE"), index=True
-    )
-    size_id: Mapped[int] = mapped_column(ForeignKey("filament_product_sizes.id", ondelete="CASCADE"), index=True)
-    price: Mapped[float] = mapped_column(Float)
-
-    product_supplier: Mapped[FilamentProductSupplier] = relationship(back_populates="prices")
-
-
-class FilamentProductSupplierArticle(Base):
-    """A supplier's own article number for one colour × size."""
-
-    __tablename__ = "filament_product_supplier_articles"
-    __table_args__ = (
-        UniqueConstraint("product_supplier_id", "variant_id", name="uq_filament_product_supplier_articles_variant"),
-    )
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    product_supplier_id: Mapped[int] = mapped_column(
-        ForeignKey("filament_product_suppliers.id", ondelete="CASCADE"), index=True
-    )
-    variant_id: Mapped[int] = mapped_column(ForeignKey("filament_variants.id", ondelete="CASCADE"), index=True)
-    article_number: Mapped[str] = mapped_column(String(100))
-
-    product_supplier: Mapped[FilamentProductSupplier] = relationship(back_populates="articles")
