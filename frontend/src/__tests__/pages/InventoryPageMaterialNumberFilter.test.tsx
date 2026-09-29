@@ -8,7 +8,7 @@
  * cap, so no spool can collide with it.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { render } from '../utils';
 import InventoryPageRouter from '../../pages/InventoryPage';
@@ -92,6 +92,7 @@ function rowBrands(): string[] {
 describe('InventoryPage material-number filter', () => {
   beforeEach(() => {
     setupHandlers();
+    vi.mocked(localStorage.getItem).mockReturnValue(null);
   });
 
   it('filters for the literal value "__none__" rather than for unnumbered spools', async () => {
@@ -119,5 +120,22 @@ describe('InventoryPage material-number filter', () => {
     fireEvent.change(select, { target: { value: noneOption!.value } });
 
     await waitFor(() => expect(rowBrands()).toEqual(['BetaBrand']));
+  });
+
+  it('sorts the Material No. column numerically, "2" before "15"', async () => {
+    server.use(
+      http.get('/api/v1/inventory/spools', () =>
+        HttpResponse.json([
+          { ...BASE, id: 1, brand: 'AlphaBrand', material_number: '15' },
+          { ...BASE, id: 2, brand: 'BetaBrand', material_number: '2' },
+        ])
+      ),
+    );
+    vi.mocked(localStorage.getItem).mockImplementation((key) =>
+      key === 'bambuddy-inventory-sort' ? '{"column":"material_number","direction":"asc"}' : null,
+    );
+    render(<InventoryPageRouter />);
+
+    await waitFor(() => expect(rowBrands()).toEqual(['BetaBrand', 'AlphaBrand']));
   });
 });
