@@ -15,6 +15,7 @@ import {
 } from '../../api/client';
 import { getCurrencySymbol } from '../../utils/currency';
 import { getSwatchStyle, resolveSpoolColorName } from '../../utils/colors';
+import { spoolSwatchStyle } from '../../components/spoolbuddy/spoolPaint';
 import { useColorCatalogVersion } from '../../hooks/useColorCatalogVersion';
 
 /**
@@ -52,6 +53,7 @@ import {
   withCurrentValue,
 } from '../../components/spool-form/utils';
 import { MATERIALS } from '../../components/spool-form/constants';
+import { NumberInput } from '../../components/NumberInput';
 
 type Tab = 'existing' | 'new' | 'replace';
 type WriteStatus = 'idle' | 'selected' | 'writing' | 'success' | 'error';
@@ -412,7 +414,7 @@ function SpoolListItem({ spool, selected, showTag, onClick }: {
           a checkerboard instead of collapsing to solid black (#1545). */}
       <div
         className="w-8 h-8 rounded-full shrink-0 border border-white/10"
-        style={spool.rgba ? getSwatchStyle(spool.rgba) : { backgroundColor: '#666' }}
+        style={spoolSwatchStyle(spool) ?? (spool.rgba ? getSwatchStyle(spool.rgba) : { backgroundColor: '#666' })}
       />
 
       {/* Info */}
@@ -469,6 +471,10 @@ function NewSpoolTouchForm({ currencySymbol, onCreated, selectedSpool, spoolmanM
   const [viewMode, setViewMode] = useState<NewSpoolViewMode>('simple');
   const [activeSubTab, setActiveSubTab] = useState<NewSpoolSubTab>('filament');
   const [formData, setFormData] = useState<SpoolFormData>(defaultFormData);
+  // The empty spool weight picker is on screen in Spoolman mode too. Track
+  // whether the user reached for it, so an untouched form does not send its
+  // default (issue #2908).
+  const [coreWeightTouched, setCoreWeightTouched] = useState(false);
   const [errors, setErrors] = useState<Partial<Record<keyof SpoolFormData, string>>>({});
   const [quickAdd, setQuickAdd] = useState(false);
   const [quantity, setQuantity] = useState(1);
@@ -670,6 +676,9 @@ function NewSpoolTouchForm({ currencySymbol, onCreated, selectedSpool, spoolmanM
 
   const updateField = <K extends keyof SpoolFormData>(key: K, value: SpoolFormData[K]) => {
     setFormData(prev => ({ ...prev, [key]: value }));
+    if (key === 'core_weight') {
+      setCoreWeightTouched(true);
+    }
     if (errors[key]) {
       setErrors(prev => ({ ...prev, [key]: undefined }));
     }
@@ -735,7 +744,7 @@ function NewSpoolTouchForm({ currencySymbol, onCreated, selectedSpool, spoolmanM
     }
 
     const presetName = selectedPresetOption?.displayName || presetInputValue || null;
-    const payload = {
+    const payload: Record<string, unknown> = {
       material: formData.material,
       subtype: formData.subtype || null,
       brand: formData.brand || null,
@@ -744,8 +753,15 @@ function NewSpoolTouchForm({ currencySymbol, onCreated, selectedSpool, spoolmanM
       extra_colors: formData.extra_colors || null,
       effect_type: formData.effect_type || null,
       label_weight: formData.label_weight,
-      core_weight: formData.core_weight,
-      core_weight_catalog_id: formData.core_weight_catalog_id,
+      // Only send a per-spool tare in Spoolman mode when the user actually set
+      // one here; otherwise let it keep inheriting from the filament type.
+      // The catalogue id has no field on the Spoolman side, so a catalogue
+      // selection does not round-trip there; only the weight does.
+      ...(spoolmanMode
+        ? coreWeightTouched
+          ? { core_weight: formData.core_weight }
+          : {}
+        : { core_weight: formData.core_weight, core_weight_catalog_id: formData.core_weight_catalog_id }),
       weight_used: formData.weight_used,
       slicer_filament: formData.slicer_filament || null,
       slicer_filament_name: presetName,
@@ -764,6 +780,7 @@ function NewSpoolTouchForm({ currencySymbol, onCreated, selectedSpool, spoolmanM
       last_weighed_at: null,
       category: formData.category.trim() || null,
       low_stock_threshold_pct: formData.low_stock_threshold_pct,
+      material_number: formData.material_number.trim() || null,
     };
 
     setCreating(true);
@@ -773,8 +790,8 @@ function NewSpoolTouchForm({ currencySymbol, onCreated, selectedSpool, spoolmanM
         // internal bulk returns InventorySpool[]. Mirrors SpoolFormModal's
         // duck-typed handling so partial failures surface as a warning toast.
         const raw = spoolmanMode
-          ? await api.bulkCreateSpoolmanInventorySpools(payload, quantity)
-          : await api.bulkCreateSpools(payload, quantity);
+          ? await api.bulkCreateSpoolmanInventorySpools(payload as Parameters<typeof api.bulkCreateSpoolmanInventorySpools>[0], quantity)
+          : await api.bulkCreateSpools(payload as Parameters<typeof api.bulkCreateSpools>[0], quantity);
         const created: InventorySpool[] =
           spoolmanMode && raw && typeof raw === 'object' && 'created' in raw
             ? (raw as { created: InventorySpool[] }).created
@@ -785,8 +802,8 @@ function NewSpoolTouchForm({ currencySymbol, onCreated, selectedSpool, spoolmanM
         if (created.length > 0) onCreated(created[0]);
       } else {
         const created = spoolmanMode
-          ? await api.createSpoolmanInventorySpool(payload)
-          : await api.createSpool(payload);
+          ? await api.createSpoolmanInventorySpool(payload as Parameters<typeof api.createSpoolmanInventorySpool>[0])
+          : await api.createSpool(payload as Parameters<typeof api.createSpool>[0]);
         await saveKProfiles(created.id);
         onCreated(created);
       }
@@ -830,7 +847,7 @@ function NewSpoolTouchForm({ currencySymbol, onCreated, selectedSpool, spoolmanM
           <div className="flex flex-col items-center justify-center h-full p-6 text-center bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg">
             <div
               className="w-12 h-12 rounded-full mb-4 border border-white/10"
-              style={selectedSpool.rgba ? getSwatchStyle(selectedSpool.rgba) : { backgroundColor: '#666' }}
+              style={spoolSwatchStyle(selectedSpool, 'preview') ?? (selectedSpool.rgba ? getSwatchStyle(selectedSpool.rgba) : { backgroundColor: '#666' })}
             />
             <p className="text-white font-medium">
               {selectedSpool.brand ? `${selectedSpool.brand} ` : ''}{selectedSpool.material}
@@ -891,10 +908,10 @@ function NewSpoolTouchForm({ currencySymbol, onCreated, selectedSpool, spoolmanM
 
             <div>
               <label className="block text-xs text-zinc-400 mb-1">{t('spoolbuddy.writeTag.weight', 'Weight (g)')}</label>
-              <input
-                type="number"
+              <NumberInput
                 value={formData.label_weight}
-                onChange={(e) => updateField('label_weight', parseInt(e.target.value) || 0)}
+                onChange={(v) => updateField('label_weight', v)}
+                fallback={0}
                 min={0}
                 max={10000}
                 className="w-full px-3 py-2 bg-bambu-dark-tertiary border border-bambu-dark-tertiary rounded text-sm text-white focus:outline-none focus:border-bambu-green"
@@ -985,7 +1002,11 @@ function NewSpoolTouchForm({ currencySymbol, onCreated, selectedSpool, spoolmanM
               availableCategories={Array.from(new Set(
                 allSpoolsForForm.map((s) => s.category?.trim()).filter((c): c is string => !!c),
               )).sort((a, b) => a.localeCompare(b))}
+              availableMaterialNumbers={Array.from(new Set(
+                allSpoolsForForm.map((s) => s.material_number?.trim()).filter((n): n is string => !!n),
+              )).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))}
               globalLowStockThreshold={settingsForForm?.low_stock_threshold ?? 20}
+              spoolmanMode={spoolmanMode}
             />
           </div>
         ) : (
@@ -1023,7 +1044,7 @@ function NewSpoolTouchForm({ currencySymbol, onCreated, selectedSpool, spoolmanM
         <div className="flex flex-col items-center justify-center p-4 text-center bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg">
           <div
             className="w-12 h-12 rounded-full mb-4 border border-white/10"
-            style={selectedSpool.rgba ? getSwatchStyle(selectedSpool.rgba) : { backgroundColor: '#666' }}
+            style={spoolSwatchStyle(selectedSpool, 'preview') ?? (selectedSpool.rgba ? getSwatchStyle(selectedSpool.rgba) : { backgroundColor: '#666' })}
           />
           <p className="text-white font-medium">
             {selectedSpool.brand ? `${selectedSpool.brand} ` : ''}{selectedSpool.material}
@@ -1144,7 +1165,9 @@ function NfcStatusPanel({ writeStatus, writeMessage, selectedSpool, tagOnReader,
   // Spool selected — show summary + write button. Use getSwatchStyle so
   // transparent (Clear) spools render a checkerboard rather than collapsing
   // to solid black (#1545).
-  const spoolColorStyle = selectedSpool.rgba ? getSwatchStyle(selectedSpool.rgba) : { backgroundColor: '#666' };
+  const spoolColorStyle =
+    spoolSwatchStyle(selectedSpool, 'preview') ??
+    (selectedSpool.rgba ? getSwatchStyle(selectedSpool.rgba) : { backgroundColor: '#666' });
 
   return (
     <div className="flex flex-col items-center text-center space-y-4 w-full">

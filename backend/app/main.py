@@ -87,7 +87,7 @@ from backend.app.core.config import APP_VERSION, settings as app_settings
 from backend.app.core.database import async_session, engine, init_db
 from backend.app.core.tasks import spawn_background_task
 from backend.app.core.websocket import ws_manager
-from backend.app.services import print_dispatch_context
+from backend.app.services import print_dispatch_context, slot_unlink_grace
 from backend.app.services.archive import ArchiveService, peek_plate_index_in_3mf, swap_plate_suffix
 from backend.app.services.archive_purge import archive_purge_service
 from backend.app.services.bambu_ftp import (
@@ -514,7 +514,7 @@ _printer_offline_notify_tasks: dict[int, asyncio.Task] = {}
 _PRINTER_OFFLINE_NOTIFY_DEBOUNCE_SECONDS = 60.0
 
 
-# HMS short-code → human-readable failure reason. Used by _dispatch_archive_update
+# HMS short-code → failure_reason key. Used by _dispatch_archive_update
 # when status="failed" to label the print's failure_reason in archives.
 #
 # Earlier code matched on `module` alone (e.g. "any module 0x0C HMS → Layer shift"),
@@ -562,6 +562,35 @@ _HMS_FAILURE_REASONS: dict[str, str] = {
     "0701_8007": "cloggedNozzle",
     "0701_8013": "cloggedNozzle",
     "0702_8003": "cloggedNozzle",
+    # AI print monitoring — spaghetti / the model coming off the plate.
+    # `spaghettiDetached` is a key the archive editor already offers for this
+    # failure mode, not a new one, so a derived reason opens the dropdown on
+    # that option rather than blank — and survives the next save, which clears
+    # any value the editor does not recognise.
+    #
+    # A module-0x0C row is safe here despite the warning above: that warning is
+    # about matching on the module alone, and 0C00_8042 is a full short code
+    # with a documented meaning ("The AI print monitor has detected a spaghetti
+    # defect", hms_errors.py). The H2D cancel echo is 0C00_001B, so the two
+    # cannot collide.
+    #
+    # 0300_8003's own text ends "before continuing your print", but on an X2D
+    # it arrives with the print already paused, offering only
+    # RESUME_PRINTING_DEFECTS / STOP_PRINTING — a halt waiting on the user.
+    #
+    # Two neighbours are left out on purpose, so this does not get re-derived:
+    #   * 0C00_C004 "Possible spaghetti failure was detected." — "possible"
+    #     reads as a warning about a print that is still running, not a halt.
+    #   * 0300_800A is AI monitoring too, but it reports a filament pile-up in
+    #     the waste chute. That is not the print failing.
+    #
+    # That line is drawn from the text, not from `severity`, because severity
+    # cannot draw it: 0300_8003 reaches us through `print_error`, a bare
+    # module/error word with no level in it, and bambu_mqtt.py gives every
+    # print_error entry a flat severity=3. Matching on the short code alone is
+    # the right shape for derive_failure_reason, not an omission.
+    "0300_8003": "spaghettiDetached",
+    "0C00_8042": "spaghettiDetached",
 }
 
 
@@ -576,11 +605,13 @@ def _hms_short_code(attr: int, code: int | str) -> str:
 
 
 def derive_failure_reason(status: str, hms_errors: list[dict] | None) -> str | None:
-    """Derive a human-readable failure_reason for an archived print.
+    """Derive the failure_reason key for an archived print.
 
-    Returns "User cancelled" for cancelled/aborted prints; for failed prints,
-    returns the first matching reason from _HMS_FAILURE_REASONS, or None when
-    no HMS code matches (don't guess — null is honest).
+    Returns "userCancelled" for cancelled/aborted prints; for failed prints,
+    returns the first matching key from _HMS_FAILURE_REASONS, or None when
+    no HMS code matches (don't guess — null is honest). The keys are the
+    archive editor's vocabulary (_FAILURE_REASON_KEYS in print_log.py) and are
+    translated at render time.
     """
     if status in ("aborted", "cancelled"):
         return "userCancelled"
@@ -1305,9 +1336,11 @@ def _format_hms_error_summary(hms_errors: list[dict]) -> str | None:
     — since #2926 — the description the parser already resolved, which is preferred
     when present so the queue's failure reason reads the same as the status
     response. The short code still produces the bracketed label, and still
-    resolves the sentence for a caller whose entries predate the field. Falls back
-    to the bare short code when no description is on file. Returns None for an
-    empty list so callers can leave error_message unset.
+    resolves the sentence for a caller whose entries predate the field. An entry
+    with a 16-char ``full_code`` is labelled with it instead, since the short code
+    of an ``hms[]`` fault is not a code anyone can look up. Falls back to the bare
+    label when no description is on file. Returns None for an empty list so
+    callers can leave error_message unset.
     """
     if not hms_errors:
         return None
@@ -1325,7 +1358,12 @@ def _format_hms_error_summary(hms_errors: list[dict]) -> str | None:
         except (TypeError, ValueError):
             continue
         description = err.get("description") or get_error_description(short_code)
-        parts.append(f"[{short_code}] {description}" if description else f"[{short_code}]")
+        # An `hms[]` fault's short code ("0500_000E") drops the part and level
+        # groups and is not a code anyone can look up; its full code in the
+        # printer screen's four groups is (#2728).
+        full_code = str(err.get("full_code") or "")
+        label = "-".join(full_code[i : i + 4] for i in range(0, 16, 4)) if len(full_code) == 16 else short_code
+        parts.append(f"[{label}] {description}" if description else f"[{label}]")
     return "; ".join(parts) if parts else None
 
 
@@ -1407,6 +1445,65 @@ async def _maybe_notify_printer_offline(printer_id: int) -> None:
         logger.warning("Printer offline notification failed for printer %s: %s", printer_id, e)
     finally:
         _printer_offline_notify_tasks.pop(printer_id, None)
+
+
+def _hms_notify_key(error) -> str:
+    """What identifies a fault for notification de-duplication.
+
+    The full code, which is unique per fault. ``attr`` alone used to be the key:
+    unique for a ``print_error``, but for an ``hms[]`` fault it is only the
+    module and part, so two faults on one part (#1840's H2C held 0500-0600-0002-0005
+    and -0006 together) shared a key and only the first was ever notified. An
+    entry without a full code falls back to attr and code together.
+    """
+    full_code = getattr(error, "full_code", "") or ""
+    if full_code:
+        return full_code.upper()
+    return f"{error.attr:08X}:{error.code}"
+
+
+def _hms_fault_counts(error) -> bool:
+    """Whether a fault counts as a problem: the same rule the frontend's
+    ``filterKnownHMSErrors`` applies to the printer card, badge and camera wall.
+
+    It counts when Bambu publishes text for it or it offers action buttons, and
+    its level is a real one. An ``hms[]`` fault at level 3 (notification) with
+    no actions does not count: those are things like "the top cover is open" or
+    "the chamber is hot, fan speed increased", which a printer can hold through
+    a whole print. A ``print_error`` at the same level (0xCxxx) still counts, as
+    it always has; those are prompts such as "unable to start drying" (#2728).
+    """
+    if error.severity < 1:
+        return False
+    has_actions = bool(getattr(error, "actions", None))
+    is_hms_notice = len(getattr(error, "full_code", "") or "") == 16 and error.severity == 3
+    return has_actions or (bool(getattr(error, "description", None)) and not is_hms_notice)
+
+
+def _hms_errors_to_notify(errors: list, new_error_codes: set[str]) -> list:
+    """The new faults that count (see ``_hms_fault_counts``).
+
+    These go to the MQTT relay; the caller also needs a description before it
+    sends a notification. Level 0, Bambu's "invalid" level, never counts. This
+    used to read ``severity >= 2`` when severity held the part byte; on the real
+    level that would drop the task-stopping errors (#2728).
+    """
+    return [e for e in errors if _hms_notify_key(e) in new_error_codes and _hms_fault_counts(e)]
+
+
+def _take_new_hms_faults(printer_id: int, errors: list) -> list:
+    """The faults on this printer not notified yet, and record them as notified.
+
+    Tracking is updated before anything is sent, so concurrent status callbacks
+    cannot notify the same fault twice. The set is replaced, not extended: a
+    fault that clears and later returns is notified again, and the grace period
+    in the caller keeps a fault that flickers off for a moment from doing that.
+    """
+    current = {_hms_notify_key(e) for e in errors}
+    new = current - _notified_hms_errors.get(printer_id, set())
+    _notified_hms_errors[printer_id] = current
+    _hms_last_seen[printer_id] = time.time()
+    return _hms_errors_to_notify(errors, new)
 
 
 async def on_printer_status_change(printer_id: int, state: PrinterState):
@@ -1529,8 +1626,21 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
 
     # Include tray_now and vt_tray hash so external spool changes trigger broadcasts
     vt_tray_key = hash(str(state.raw_data.get("vt_tray", []))) if state.raw_data else 0
-    # Include AMS dry_time and tray state values so drying/slot changes trigger broadcasts
-    ams_dry_key = tuple(a.get("dry_time", 0) for a in (state.raw_data.get("ams") or [])) if state.raw_data else ()
+    # Include AMS dry_time and tray state values so drying/slot changes trigger broadcasts.
+    #
+    # dry_countdown_stalled rides along because it is the one drying signal the
+    # countdown itself cannot carry: the MQTT layer raises it precisely BECAUSE
+    # dry_time stopped moving, so on the frame that flips it every other member
+    # of this key is identical and the push would be deduplicated away. Mid-print
+    # a temperature would eventually break the tie, but a parked command on an
+    # idle machine changes nothing else at all — AMS temp and humidity are not in
+    # the key — so the badge could sit unreachable indefinitely. The flag flips at
+    # most once per drying cycle, so it costs no mid-print broadcast traffic.
+    ams_dry_key = (
+        tuple((a.get("dry_time", 0), bool(a.get("dry_countdown_stalled"))) for a in (state.raw_data.get("ams") or []))
+        if state.raw_data
+        else ()
+    )
     # Include tray states so load/unload transitions (state 11→10) trigger broadcasts (#784)
     #
     # The filament identity fields are here because Configure Slot writes
@@ -1765,22 +1875,9 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
     # Check for new HMS errors and send notifications
     current_hms_errors = getattr(state, "hms_errors", []) or []
     if current_hms_errors:
-        # Build set of current error codes (using attr for uniqueness)
-        current_error_codes = {f"{e.attr:08x}" for e in current_hms_errors}
-        previously_notified = _notified_hms_errors.get(printer_id, set())
+        new_errors = _take_new_hms_faults(printer_id, current_hms_errors)
 
-        # Find new errors that haven't been notified yet
-        new_error_codes = current_error_codes - previously_notified
-
-        # Update tracking immediately to prevent duplicate notifications from concurrent callbacks
-        _notified_hms_errors[printer_id] = current_error_codes
-        _hms_last_seen[printer_id] = time.time()
-
-        if new_error_codes:
-            # Get the actual new errors for the notification
-            # Filter to severity >= 2 (skip informational/status messages like H2D sends)
-            new_errors = [e for e in current_hms_errors if f"{e.attr:08x}" in new_error_codes and e.severity >= 2]
-
+        if new_errors:
             try:
                 from backend.app.models.printer import Printer
 
@@ -1818,10 +1915,10 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
                         error_code_masked = error_code_int & 0xFFFF
                         short_code = f"{(error.attr >> 16) & 0xFFFF:04X}_{error_code_masked:04X}"
 
-                        # Only notify for errors with known descriptions — printers
-                        # send many undocumented/phantom codes that aren't real errors.
-                        # Resolved at parse time (#2926); short_code is still needed
-                        # for the suppression set below.
+                        # Only notify for errors Bambu publishes text for — printers
+                        # send undocumented codes that aren't real errors, and Bambu
+                        # lists some with empty text. Resolved at parse time (#2926);
+                        # short_code is still needed for the suppression set below.
                         description = error.description
                         if not description or short_code in _HMS_NOTIFICATION_SUPPRESS:
                             continue
@@ -1839,7 +1936,8 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
                             f"[HMS] Sent notification for {sent_count} error(s) on printer {printer_id}"
                         )
 
-                # Also publish to MQTT relay (no DB).
+                # Also publish to MQTT relay (no DB): every new fault that
+                # counts, with or without text, the same set the UI counts.
                 printer_info = printer_manager.get_printer(printer_id)
                 if printer_info:
                     errors_data = [
@@ -1971,56 +2069,22 @@ async def on_fts_inlet_change(printer_id: int, ams_id: int, inlet: str):
         logger.warning("[Printer %s] Could not re-apply K-profiles after inlet move: %s", printer_id, e)
 
 
-async def on_ams_change(printer_id: int, ams_data: list):
-    """Handle AMS data changes - sync to Spoolman if enabled and auto mode."""
+async def _unlink_stale_assignments(printer_id: int, ams_data: list, printing_now: bool) -> None:
+    """Unlink built-in inventory assignments whose slot no longer holds their spool.
+
+    Runs from ``on_ams_change`` and, for removals held by ``slot_unlink_grace``,
+    from the delayed re-check -- which is why it takes the AMS data and print
+    state as arguments instead of reading them from the push (#3186).
+    """
     logger = logging.getLogger(__name__)
-
-    # Snapshot BEFORE any await: if a print is active, skip weight sync later.
-    # on_print_complete may pop _active_sessions during our awaits (#880).
-    from backend.app.services.usage_tracker import _active_sessions
-
-    _print_active = printer_id in _active_sessions
-
-    # A slot that reports empty while a print is running is a filament runout,
-    # not a spool swap: the spool is still physically in the AMS, just
-    # consumed. Dropping either inventory backend's slot link there loses the
-    # only record of which spool fed the print, so the completion path can't
-    # charge the runout segment to anything. Both cleanup passes below consult
-    # this; computed once, up front, so neither depends on the other having run.
-    _unlink_state = printer_manager.get_status(printer_id)
-    printing_now = (getattr(_unlink_state, "state", "") or "").upper() in ("RUNNING", "PAUSE")
-
-    # MQTT relay - publish AMS change
-    try:
-        printer_info = printer_manager.get_printer(printer_id)
-        if printer_info:
-            await mqtt_relay.on_ams_change(printer_id, printer_info.name, printer_info.serial_number, ams_data)
-    except Exception:
-        pass  # Don't fail AMS callback if MQTT fails
-
-    # Broadcast AMS change via WebSocket (bypasses status_key deduplication)
-    # This ensures frontend gets immediate updates when AMS slots are configured
-    try:
-        state = printer_manager.get_status(printer_id)
-        if state:
-            logger.info("[Printer %s] Broadcasting AMS change via WebSocket", printer_id)
-            await ws_manager.send_printer_status(
-                printer_id,
-                printer_state_to_dict(
-                    state,
-                    printer_id,
-                    printer_manager.get_model(printer_id),
-                    printer_manager.get_drying_targets(printer_id),
-                ),
-            )
-    except Exception as e:
-        logger.warning("Failed to broadcast AMS change for printer %s: %s", printer_id, e)
 
     from backend.app.utils.color_utils import colors_similar as _colors_similar
 
-    # Auto-unlink spool assignments with stale fingerprints
+    # Auto-unlink spool assignments with stale fingerprints. Under the
+    # per-printer assignment lock since #3186: the held-removal re-check runs
+    # this outside any MQTT push, so it can now overlap one.
     try:
-        async with async_session() as db:
+        async with _get_ams_assignment_lock(printer_id), async_session() as db:
             from sqlalchemy.orm import selectinload
 
             from backend.app.api.routes.inventory import _find_tray_in_ams_data
@@ -2046,6 +2110,8 @@ async def on_ams_change(printer_id: int, ams_data: list):
             # unlinking the spool that fed the print — the next idle-time pass
             # unlinks it if the user really did take it out.
             stale = []
+            # Removals this pass is holding rather than unlinking (#3186).
+            held: set[tuple] = set()
             for assignment in assignments:
                 # External spool assignments (ams_id=255) live in vt_tray, not AMS data
                 if assignment.ams_id == 255:
@@ -2069,6 +2135,20 @@ async def on_ams_change(printer_id: int, ams_data: list):
                             assignment.spool_id,
                             assignment.ams_id,
                             assignment.tray_id,
+                        )
+                        continue
+                    # A whole AMS unit can drop out of one push and come back in
+                    # the next; only a slot that stays gone is a removal (#3186).
+                    hold_key = ("inventory", assignment.ams_id, assignment.tray_id, assignment.spool_id)
+                    if not slot_unlink_grace.removal_confirmed(printer_id, hold_key):
+                        held.add(hold_key)
+                        logger.info(
+                            "Auto-unlink held: spool %d AMS%d-T%d — tray not found in AMS data; "
+                            "unlinking if it is still gone in %ds",
+                            assignment.spool_id,
+                            assignment.ams_id,
+                            assignment.tray_id,
+                            int(slot_unlink_grace.GRACE_SECONDS),
                         )
                         continue
                     logger.info(
@@ -2212,7 +2292,20 @@ async def on_ams_change(printer_id: int, ams_data: list):
                         # threw away the identity the user had supplied, which is
                         # the only place it existed (#3100). A slot the bit calls
                         # empty, or one that carries no bit at all, still unlinks.
-                        if spool_present(current_tray) is True and not cur_color.strip() and not cur_type.strip():
+                        #
+                        # Unless the slot was reported empty first: a removal
+                        # already held means a spool came out and another went
+                        # in, so the blank report keeps the hold running below
+                        # rather than cancelling it (#3186).
+                        if (
+                            spool_present(current_tray) is True
+                            and not cur_color.strip()
+                            and not cur_type.strip()
+                            and not slot_unlink_grace.is_held(
+                                printer_id,
+                                ("inventory", assignment.ams_id, assignment.tray_id, assignment.spool_id),
+                            )
+                        ):
                             logger.info(
                                 "Auto-unlink skipped: spool %d AMS%d-T%d — slot still occupied, "
                                 "tray reports no filament data yet",
@@ -2221,6 +2314,24 @@ async def on_ams_change(printer_id: int, ams_data: list):
                                 assignment.tray_id,
                             )
                             continue
+                        # A blank report the presence bit does not vouch for is
+                        # still only one push. An idle X1C cleared a whole AMS
+                        # unit's bits, colour and type for a moment and lost
+                        # four saved assignments that way (#3186); unlink only
+                        # if the slot is still blank after the grace period.
+                        if not cur_color.strip() and not cur_type.strip():
+                            hold_key = ("inventory", assignment.ams_id, assignment.tray_id, assignment.spool_id)
+                            if not slot_unlink_grace.removal_confirmed(printer_id, hold_key):
+                                held.add(hold_key)
+                                logger.info(
+                                    "Auto-unlink held: spool %d AMS%d-T%d — tray reports no filament data; "
+                                    "unlinking if it is still blank in %ds",
+                                    assignment.spool_id,
+                                    assignment.ams_id,
+                                    assignment.tray_id,
+                                    int(slot_unlink_grace.GRACE_SECONDS),
+                                )
+                                continue
                         # Fingerprint mismatch — but check if tray now matches the
                         # assigned spool (e.g. auto-configure changed the tray).
                         # Both sides are reduced to the type the slot can carry
@@ -2293,6 +2404,7 @@ async def on_ams_change(printer_id: int, ams_data: list):
                             spool.material if spool else "?",
                         )
                         stale.append(assignment)  # Spool changed
+            slot_unlink_grace.settle(printer_id, "inventory", held)
             # Snapshot slots before delete — ORM attribute access after the
             # commit would refresh against a deleted row.
             unlinked_slots = [(a.ams_id, a.tray_id) for a in stale]
@@ -2320,6 +2432,161 @@ async def on_ams_change(printer_id: int, ams_data: list):
     except Exception as e:
         logger.warning("Spool assignment cleanup failed: %s", e, exc_info=True)
 
+
+async def _expire_spoolman_empty_slots(printer_id: int, ams_data: list, printing_now: bool) -> None:
+    """Delete Spoolman slot rows whose held removal has run its grace period.
+
+    The Spoolman half of the #3186 re-check. The full sync in ``on_ams_change``
+    talks to Spoolman for every tray; this only needs the local rows, so it
+    repeats that pass's empty-slot decision -- a tray with no type or no colour
+    (``parse_ams_tray`` returns None for exactly those), not during a print, and
+    not in a slot the presence bit calls occupied -- and nothing else.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        async with async_session() as db:
+            from backend.app.api.routes.settings import get_setting
+            from backend.app.models.spoolman_slot_assignment import SpoolmanSlotAssignment
+            from backend.app.services.ams_slot_presence import spool_present
+
+            enabled = await get_setting(db, "spoolman_enabled")
+            if not enabled or enabled.lower() != "true":
+                return
+            sync_mode = await get_setting(db, "spoolman_sync_mode")
+            if sync_mode and sync_mode != "auto":
+                return
+
+            trays: dict[tuple[int, int], dict] = {}
+            for ams_unit in ams_data or []:
+                if not isinstance(ams_unit, dict):
+                    continue
+                for tray in ams_unit.get("tray", []):
+                    if isinstance(tray, dict):
+                        trays[(int(ams_unit.get("id", 0)), int(tray.get("id", 0)))] = tray
+
+            rows = (
+                (
+                    await db.execute(
+                        select(SpoolmanSlotAssignment).where(SpoolmanSlotAssignment.printer_id == printer_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            held: set[tuple] = set()
+            expired: list[tuple[int, int]] = []
+            for row in rows:
+                tray = trays.get((row.ams_id, row.tray_id))
+                if tray is None or printing_now:
+                    continue
+                if (tray.get("tray_type") or "").strip() and (tray.get("tray_color") or "").strip():
+                    continue
+                hold_key = ("spoolman", row.ams_id, row.tray_id, row.spoolman_spool_id)
+                if spool_present(tray) is True and not slot_unlink_grace.is_held(printer_id, hold_key):
+                    continue
+                if slot_unlink_grace.removal_confirmed(printer_id, hold_key):
+                    expired.append((row.ams_id, row.tray_id))
+                else:
+                    held.add(hold_key)
+            slot_unlink_grace.settle(printer_id, "spoolman", held)
+            if not expired:
+                return
+            # A statement rather than ORM deletes, like the sync pass: the two
+            # can overlap, and a row the other already removed must not fail
+            # this commit.
+            for ams_id, tray_id in expired:
+                await db.execute(
+                    delete(SpoolmanSlotAssignment).where(
+                        SpoolmanSlotAssignment.printer_id == printer_id,
+                        SpoolmanSlotAssignment.ams_id == ams_id,
+                        SpoolmanSlotAssignment.tray_id == tray_id,
+                    )
+                )
+            await db.commit()
+            logger.info("Unlinked %d Spoolman slot(s) that stayed empty for printer %d", len(expired), printer_id)
+            for ams_id, tray_id in expired:
+                await ws_manager.broadcast(
+                    {
+                        "type": "spool_assignment_changed",
+                        "printer_id": printer_id,
+                        "ams_id": ams_id,
+                        "tray_id": tray_id,
+                    }
+                )
+    except Exception as e:
+        logger.warning("Spoolman slot re-check failed for printer %s: %s", printer_id, e, exc_info=True)
+
+
+async def _recheck_held_unlinks(printer_id: int) -> None:
+    """Re-run just the slot cleanup against the printer's current AMS state.
+
+    Scheduled by ``slot_unlink_grace`` when it holds a removal. The unlink
+    passes otherwise run only when the AMS hash changes, and a slot that went
+    empty and stayed empty may never change it again.
+    """
+    status = printer_manager.get_status(printer_id)
+    # A disconnected printer's state is its last report, not a new one: acting
+    # on it would "confirm" a removal nobody has seen for the whole grace
+    # period. Leave the holds; the first push after reconnecting decides.
+    if status is None or not status.connected:
+        return
+    ams_raw = status.raw_data.get("ams")
+    ams_data = ams_raw.get("ams", []) if isinstance(ams_raw, dict) else ams_raw if isinstance(ams_raw, list) else []
+    printing_now = (getattr(status, "state", "") or "").upper() in ("RUNNING", "PAUSE")
+    await _unlink_stale_assignments(printer_id, ams_data, printing_now)
+    await _expire_spoolman_empty_slots(printer_id, ams_data, printing_now)
+
+
+slot_unlink_grace.set_recheck(_recheck_held_unlinks)
+
+
+async def on_ams_change(printer_id: int, ams_data: list):
+    """Handle AMS data changes - sync to Spoolman if enabled and auto mode."""
+    logger = logging.getLogger(__name__)
+
+    # Snapshot BEFORE any await: if a print is active, skip weight sync later.
+    # on_print_complete may pop _active_sessions during our awaits (#880).
+    from backend.app.services.usage_tracker import _active_sessions
+
+    _print_active = printer_id in _active_sessions
+
+    # A slot that reports empty while a print is running is a filament runout,
+    # not a spool swap: the spool is still physically in the AMS, just
+    # consumed. Dropping either inventory backend's slot link there loses the
+    # only record of which spool fed the print, so the completion path can't
+    # charge the runout segment to anything. Both cleanup passes below consult
+    # this; computed once, up front, so neither depends on the other having run.
+    _unlink_state = printer_manager.get_status(printer_id)
+    printing_now = (getattr(_unlink_state, "state", "") or "").upper() in ("RUNNING", "PAUSE")
+
+    # MQTT relay - publish AMS change
+    try:
+        printer_info = printer_manager.get_printer(printer_id)
+        if printer_info:
+            await mqtt_relay.on_ams_change(printer_id, printer_info.name, printer_info.serial_number, ams_data)
+    except Exception:
+        pass  # Don't fail AMS callback if MQTT fails
+
+    # Broadcast AMS change via WebSocket (bypasses status_key deduplication)
+    # This ensures frontend gets immediate updates when AMS slots are configured
+    try:
+        state = printer_manager.get_status(printer_id)
+        if state:
+            logger.info("[Printer %s] Broadcasting AMS change via WebSocket", printer_id)
+            await ws_manager.send_printer_status(
+                printer_id,
+                printer_state_to_dict(
+                    state,
+                    printer_id,
+                    printer_manager.get_model(printer_id),
+                    printer_manager.get_drying_targets(printer_id),
+                ),
+            )
+    except Exception as e:
+        logger.warning("Failed to broadcast AMS change for printer %s: %s", printer_id, e)
+
+    await _unlink_stale_assignments(printer_id, ams_data, printing_now)
+
     # Auto-manage inventory spools from AMS tray data (skip if Spoolman manages AMS).
     # Serialised per-printer via _ams_assignment_locks: MQTT bursts can deliver
     # two AMS pushes ~30 ms apart, and without the lock both callbacks read
@@ -2329,6 +2596,8 @@ async def on_ams_change(printer_id: int, ams_data: list):
     # bug stayed latent there. See _ams_assignment_locks comment for details.
     try:
         async with _get_ams_assignment_lock(printer_id), async_session() as db:
+            from sqlalchemy.orm import selectinload
+
             from backend.app.api.routes.settings import get_setting
             from backend.app.models.spool import Spool
             from backend.app.models.spool_assignment import SpoolAssignment as SA
@@ -2673,6 +2942,7 @@ async def on_ams_change(printer_id: int, ams_data: list):
             synced = 0
             slot_changes: list[tuple[int, int, int]] = []  # (ams_id, tray_id, spoolman_spool_id) to upsert
             empty_slots: list[tuple[int, int]] = []  # (ams_id, tray_id) whose tray is now empty
+            spoolman_held: set[tuple] = set()  # removals held for the grace period (#3186)
             for ams_unit in ams_data:
                 if not isinstance(ams_unit, dict):
                     continue
@@ -2705,8 +2975,27 @@ async def on_ams_change(printer_id: int, ams_data: list):
                         # the first idle push after it was inserted. Same
                         # deletion as the internal inventory's in #3100, same
                         # answer, so the two modes stay in step.
-                        if not printing_now and spool_present(tray_data) is not True:
-                            empty_slots.append((ams_id, tray_id_raw))
+                        #
+                        # And only once the slot has stayed empty for the grace
+                        # period -- the internal inventory's #3186 answer, for
+                        # the same one-push blank.
+                        linked_spool = spoolman_slot_map.get((ams_id, tray_id_raw))
+                        hold_key = ("spoolman", ams_id, tray_id_raw, linked_spool)
+                        if not printing_now and (
+                            spool_present(tray_data) is not True or slot_unlink_grace.is_held(printer_id, hold_key)
+                        ):
+                            if linked_spool is None or slot_unlink_grace.removal_confirmed(printer_id, hold_key):
+                                empty_slots.append((ams_id, tray_id_raw))
+                            else:
+                                spoolman_held.add(hold_key)
+                                logger.info(
+                                    "Spoolman slot unlink held: AMS%d-T%d (spool %d) reports empty; "
+                                    "unlinking if it is still empty in %ds",
+                                    ams_id,
+                                    tray_id_raw,
+                                    linked_spool,
+                                    int(slot_unlink_grace.GRACE_SECONDS),
+                                )
                         _clear_unknown_tag_dedup(printer_id, ams_id, tray_id_raw)
                         continue
 
@@ -2783,6 +3072,8 @@ async def on_ams_change(printer_id: int, ams_data: list):
                                 )
                     except Exception as e:
                         logger.error("Error syncing AMS %s tray %s: %s", ams_id, tray.tray_id, e)
+
+            slot_unlink_grace.settle(printer_id, "spoolman", spoolman_held)
 
             if synced > 0:
                 logger.info("Auto-synced %s AMS trays to Spoolman for printer %s", synced, printer_id)
@@ -9680,6 +9971,7 @@ async def lifespan(app: FastAPI):
 
     await stop_printer_download_cleanup()
     printer_manager.disconnect_all()
+    slot_unlink_grace.reset()
     await close_spoolman_client()
 
     # Stop all virtual printer services
@@ -9883,10 +10175,18 @@ def _frame_ancestors(default_value: str) -> str:
     return f"frame-ancestors {default_value};"
 
 
-# The Vite-emitted STEP preview worker chunk (#2976): src/workers/
-# stepPreview.worker.ts becomes /assets/stepPreview.worker-<hash>.js. Matched
-# exactly so the eval-relaxed CSP below can never apply to any other asset.
+# The two Vite-emitted worker assets that compile WebAssembly (#2976). Both
+# patterns are anchored on the exact emitted name so the relaxed policies
+# below can never apply to any other asset.
+#   src/workers/stepPreview.worker.ts -> /assets/stepPreview.worker-<hash>.js
+#   pdfjs-dist/legacy/build/pdf.worker.min.mjs?worker&url
+#                                     -> /assets/pdf.worker.min-<hash>.js
+# Vite also emits a one-line chunk under the second name that only exports the
+# worker's URL. The page imports it as a module, and a module script is run
+# under the importing document's policy, never its own response's, so it
+# matching as well changes nothing.
 _STEP_WORKER_ASSET_RE = re.compile(r"^/assets/stepPreview\.worker-[\w-]+\.js$")
+_PDF_WORKER_ASSET_RE = re.compile(r"^/assets/pdf\.worker\.min-[\w-]+\.js$")
 
 
 @app.middleware("http")
@@ -9956,6 +10256,20 @@ async def security_headers_middleware(request, call_next):
             "object-src 'none'; "
             "base-uri 'self'; " + _frame_ancestors("'none'")
         )
+    elif _PDF_WORKER_ASSET_RE.match(request.url.path):
+        # pdf.js decodes JPEG2000/JBIG2 images and ICC colour with WebAssembly
+        # and fetches those modules from /assets/pdfjs/wasm/ (#2976). Same CSP3
+        # rule as the STEP worker above: the policy that governs a dedicated
+        # worker is the one delivered with its own script, so the wasm compile
+        # has to be permitted here rather than on the document. Unlike the STEP
+        # worker this one needs no JS eval, so it gets 'wasm-unsafe-eval' only.
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'wasm-unsafe-eval'; "
+            "connect-src 'self'; "
+            "object-src 'none'; "
+            "base-uri 'self'; " + _frame_ancestors("'none'")
+        )
     else:
         # The streaming overlay is embedded same-origin by the URL builder's
         # preview in Settings (#1422), so this branch allows 'self'.
@@ -9977,14 +10291,14 @@ async def security_headers_middleware(request, call_next):
         # sidebar link's site included -- still cannot frame the consent
         # screen to bait a click.
         embeddable_same_origin = request.url.path.startswith("/overlay/") or request.url.path == "/connect/authorize"
-        # 'wasm-unsafe-eval' permits WebAssembly compilation ONLY — it does
-        # not allow eval()/Function() for JS, unlike 'unsafe-eval'. Needed by
-        # the STEP preview, which triangulates in the browser via OpenCascade
-        # compiled to WASM (#2976). Browsers that predate the keyword ignore
-        # it and simply keep blocking wasm, so this never widens JS execution.
+        # No 'wasm-unsafe-eval' here: nothing compiles WebAssembly on the main
+        # thread. Both wasm consumers — the STEP preview and pdf.js's image
+        # decoders (#2976) — run in dedicated workers, which CSP3 governs by
+        # the policy served with their own script, so each gets it in its own
+        # branch above and the document policy stays as strict as it was.
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            f"script-src 'self' 'wasm-unsafe-eval' 'nonce-{csp_nonce}'; "
+            f"script-src 'self' 'nonce-{csp_nonce}'; "
             "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data: blob:; "
             "media-src 'self' blob:; "

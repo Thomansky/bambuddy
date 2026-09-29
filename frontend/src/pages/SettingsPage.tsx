@@ -64,6 +64,7 @@ import { Gauge, Link2, Palette } from 'lucide-react';
 import { registerSettingsSearch, getSettingsSearchEntries } from '../lib/settingsSearch';
 import type { UsersSubTab } from '../lib/settingsSearch';
 import { availableEngines, hasEngineChoice, resolveEngine, type SliceEngineId } from '../lib/sliceEngines';
+import { NumberInput } from '../components/NumberInput';
 
 const validTabs = ['general', 'plugs', 'sensors', 'notifications', 'queue', 'filament', 'network', 'apikeys', 'virtual-printer', 'spoolbuddy', 'failure-detection', 'users', 'backup'] as const;
 type TabType = typeof validTabs[number];
@@ -219,6 +220,11 @@ export function SettingsPage() {
   // so intermediate values ("", "3", "5") are not eaten by the [5, 95] clamp
   // while the user is mid-typing.
   const [humidityDrafts, setHumidityDrafts] = useState<Record<string, string>>({});
+  // Same transient-draft treatment for the ambient-drying sustained-minutes
+  // input: committed (clamped 5..240) on blur, so clearing the field or typing
+  // an intermediate value ("", "2" on the way to "25") is not rewritten by the
+  // clamp mid-keystroke. Empty/non-numeric on blur reverts to the saved value.
+  const [sustainedDraft, setSustainedDraft] = useState<string | null>(null);
   const [showPlugModal, setShowPlugModal] = useState(false);
   const [editingPlug, setEditingPlug] = useState<SmartPlug | null>(null);
   const [showHASensorModal, setShowHASensorModal] = useState(false);
@@ -1161,6 +1167,7 @@ export function SettingsPage() {
       (baseline.queue_drying_enabled ?? false) !== (localSettings.queue_drying_enabled ?? false) ||
       (baseline.queue_drying_block ?? false) !== (localSettings.queue_drying_block ?? false) ||
       (baseline.ambient_drying_enabled ?? false) !== (localSettings.ambient_drying_enabled ?? false) ||
+      (baseline.ambient_drying_sustained_minutes ?? 0) !== (localSettings.ambient_drying_sustained_minutes ?? 0) ||
       (baseline.print_drying_enabled ?? false) !== (localSettings.print_drying_enabled ?? false) ||
       (baseline.drying_presets ?? '') !== (localSettings.drying_presets ?? '') ||
       (baseline.ams_humidity_thresholds ?? '') !== (localSettings.ams_humidity_thresholds ?? '') ||
@@ -1276,6 +1283,7 @@ export function SettingsPage() {
         queue_drying_enabled: localSettings.queue_drying_enabled,
         queue_drying_block: localSettings.queue_drying_block,
         ambient_drying_enabled: localSettings.ambient_drying_enabled,
+        ambient_drying_sustained_minutes: localSettings.ambient_drying_sustained_minutes,
         print_drying_enabled: localSettings.print_drying_enabled,
         drying_presets: localSettings.drying_presets,
         ams_humidity_thresholds: localSettings.ams_humidity_thresholds,
@@ -2408,14 +2416,13 @@ export function SettingsPage() {
                   <span className="absolute left-3 top-1/2 -translate-y-1/2 text-bambu-gray text-sm pointer-events-none">
                     {getCurrencySymbol(localSettings.currency)}
                   </span>
-                  <input
-                    type="number"
+                  <NumberInput
                     step="0.01"
-                    min="0"
+                    min={0}
                     value={localSettings.default_filament_cost}
-                    onChange={(e) =>
-                      updateSetting('default_filament_cost', parseFloat(e.target.value) || 0)
-                    }
+                    onChange={(v) => updateSetting('default_filament_cost', v)}
+                    integer={false}
+                    fallback={0}
                     style={{ paddingLeft: `${Math.max(2, getCurrencySymbol(localSettings.currency).length * 0.6 + 1)}rem` }}
                     className="w-full pr-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                   />
@@ -2429,14 +2436,13 @@ export function SettingsPage() {
                   <span className="absolute left-3 top-1/2 -translate-y-1/2 text-bambu-gray text-sm pointer-events-none">
                     {getCurrencySymbol(localSettings.currency)}
                   </span>
-                  <input
-                    type="number"
+                  <NumberInput
                     step="0.001"
-                    min="0"
+                    min={0}
                     value={localSettings.energy_cost_per_kwh}
-                    onChange={(e) =>
-                      updateSetting('energy_cost_per_kwh', parseFloat(e.target.value) || 0)
-                    }
+                    onChange={(v) => updateSetting('energy_cost_per_kwh', v)}
+                    integer={false}
+                    fallback={0}
                     style={{ paddingLeft: `${Math.max(2, getCurrencySymbol(localSettings.currency).length * 0.6 + 1)}rem` }}
                     className="w-full pr-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                   />
@@ -2642,13 +2648,14 @@ export function SettingsPage() {
                   {t('settings.lowDiskSpaceWarning')}
                 </label>
                 <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    min="0.5"
-                    max="100"
+                  <NumberInput
+                    min={0.5}
+                    max={100}
                     step="0.5"
                     value={localSettings.library_disk_warning_gb ?? 5}
-                    onChange={(e) => updateSetting('library_disk_warning_gb', parseFloat(e.target.value) || 5)}
+                    onChange={(v) => updateSetting('library_disk_warning_gb', v)}
+                    integer={false}
+                    fallback={5}
                     className="w-24 px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                   />
                   <span className="text-bambu-gray">GB</span>
@@ -3445,12 +3452,12 @@ export function SettingsPage() {
                       <label className="block text-sm text-bambu-gray mb-1">
                         {t('settings.port')}
                       </label>
-                      <input
-                        type="number"
-                        min="1"
-                        max="65535"
+                      <NumberInput
+                        min={1}
+                        max={65535}
                         value={localSettings.mqtt_port ?? 1883}
-                        onChange={(e) => updateSetting('mqtt_port', Math.min(65535, Math.max(1, parseInt(e.target.value) || 1883)))}
+                        onChange={(v) => updateSetting('mqtt_port', v)}
+                        fallback={1883}
                         className="w-24 px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                       />
                     </div>
@@ -5175,12 +5182,12 @@ export function SettingsPage() {
                   <label className="block text-xs text-bambu-gray mb-1">
                     {t('settings.staggerGroupSize', 'Group size')}
                   </label>
-                  <input
-                    type="number"
+                  <NumberInput
                     min={1}
                     max={50}
                     value={localSettings.stagger_group_size ?? 2}
-                    onChange={(e) => updateSetting('stagger_group_size', Math.max(1, Math.min(50, parseInt(e.target.value) || 1)))}
+                    onChange={(v) => updateSetting('stagger_group_size', v)}
+                    fallback={1}
                     className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:outline-none focus:border-bambu-green"
                   />
                   <p className="text-xs text-bambu-gray mt-1">
@@ -5191,12 +5198,12 @@ export function SettingsPage() {
                   <label className="block text-xs text-bambu-gray mb-1">
                     {t('settings.staggerInterval', 'Interval (minutes)')}
                   </label>
-                  <input
-                    type="number"
+                  <NumberInput
                     min={1}
                     max={60}
                     value={localSettings.stagger_interval_minutes ?? 5}
-                    onChange={(e) => updateSetting('stagger_interval_minutes', Math.max(1, Math.min(60, parseInt(e.target.value) || 1)))}
+                    onChange={(v) => updateSetting('stagger_interval_minutes', v)}
+                    fallback={1}
                     className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:outline-none focus:border-bambu-green"
                   />
                   <p className="text-xs text-bambu-gray mt-1">
@@ -5223,12 +5230,12 @@ export function SettingsPage() {
                 <label className="block text-xs text-bambu-gray mb-1">
                   {t('settings.concurrentUploadsLabel', 'Printers uploaded to at once')}
                 </label>
-                <input
-                  type="number"
+                <NumberInput
                   min={1}
                   max={16}
                   value={localSettings.queue_max_concurrent_uploads ?? 4}
-                  onChange={(e) => updateSetting('queue_max_concurrent_uploads', Math.max(1, Math.min(16, parseInt(e.target.value) || 1)))}
+                  onChange={(v) => updateSetting('queue_max_concurrent_uploads', v)}
+                  fallback={1}
                   className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:outline-none focus:border-bambu-green"
                 />
                 <p className="text-xs text-bambu-gray mt-1">
@@ -5274,12 +5281,12 @@ export function SettingsPage() {
                   <label className="block text-xs text-bambu-gray mb-1">
                     {t('settings.preheatMaxWait', 'Max wait (seconds)')}
                   </label>
-                  <input
-                    type="number"
+                  <NumberInput
                     min={60}
                     max={3600}
                     value={localSettings.preheat_max_wait_seconds ?? 900}
-                    onChange={(e) => updateSetting('preheat_max_wait_seconds', Math.max(60, Math.min(3600, parseInt(e.target.value) || 900)))}
+                    onChange={(v) => updateSetting('preheat_max_wait_seconds', v)}
+                    fallback={900}
                     className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:outline-none focus:border-bambu-green disabled:opacity-50"
                     disabled={!(localSettings.preheat_enabled ?? false)}
                   />
@@ -5291,12 +5298,12 @@ export function SettingsPage() {
                   <label className="block text-xs text-bambu-gray mb-1">
                     {t('settings.preheatSoak', 'Soak (seconds)')}
                   </label>
-                  <input
-                    type="number"
+                  <NumberInput
                     min={0}
                     max={1800}
                     value={localSettings.preheat_soak_seconds ?? 300}
-                    onChange={(e) => updateSetting('preheat_soak_seconds', Math.max(0, Math.min(1800, parseInt(e.target.value) || 0)))}
+                    onChange={(v) => updateSetting('preheat_soak_seconds', v)}
+                    fallback={0}
                     className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:outline-none focus:border-bambu-green disabled:opacity-50"
                     disabled={!(localSettings.preheat_enabled ?? false)}
                   />
@@ -5331,12 +5338,12 @@ export function SettingsPage() {
                   <label className="block text-xs text-bambu-gray mb-1">
                     {t('settings.keepWarmBedTemp', 'Keep-warm bed temperature (°C)')}
                   </label>
-                  <input
-                    type="number"
+                  <NumberInput
                     min={40}
                     max={110}
                     value={localSettings.queue_keep_warm_bed_temp ?? 90}
-                    onChange={(e) => updateSetting('queue_keep_warm_bed_temp', Math.max(40, Math.min(110, parseInt(e.target.value) || 90)))}
+                    onChange={(v) => updateSetting('queue_keep_warm_bed_temp', v)}
+                    fallback={90}
                     className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:outline-none focus:border-bambu-green disabled:opacity-50"
                     disabled={!(localSettings.preheat_enabled ?? false)}
                   />
@@ -5348,12 +5355,12 @@ export function SettingsPage() {
                   <label className="block text-xs text-bambu-gray mb-1">
                     {t('settings.keepWarmMaxMinutes', 'Stop keeping warm after (minutes)')}
                   </label>
-                  <input
-                    type="number"
+                  <NumberInput
                     min={5}
                     max={480}
                     value={localSettings.queue_keep_warm_max_minutes ?? 120}
-                    onChange={(e) => updateSetting('queue_keep_warm_max_minutes', Math.max(5, Math.min(480, parseInt(e.target.value) || 120)))}
+                    onChange={(v) => updateSetting('queue_keep_warm_max_minutes', v)}
+                    fallback={120}
                     className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:outline-none focus:border-bambu-green disabled:opacity-50"
                     disabled={!(localSettings.queue_keep_bed_warm ?? false) || !(localSettings.preheat_enabled ?? false) || !(localSettings.require_plate_clear ?? false)}
                   />
@@ -5690,12 +5697,66 @@ export function SettingsPage() {
                   <input
                     type="checkbox"
                     checked={localSettings.ambient_drying_enabled ?? false}
-                    onChange={(e) => updateSetting('ambient_drying_enabled', e.target.checked)}
+                    onChange={(e) => {
+                      setSustainedDraft(null);
+                      updateSetting('ambient_drying_enabled', e.target.checked);
+                    }}
                     className="sr-only peer"
                   />
                   <div className="w-11 h-6 bg-bambu-dark-tertiary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-bambu-green"></div>
                 </label>
               </div>
+              {localSettings.ambient_drying_enabled && (
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="block text-sm text-white">
+                      {t('settings.ambientDryingSustainedEnabled')}
+                    </label>
+                    <p className="text-xs text-bambu-gray mt-0.5">
+                      {t('settings.ambientDryingSustainedDescription')}
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={(localSettings.ambient_drying_sustained_minutes ?? 0) > 0}
+                      onChange={(e) => {
+                        setSustainedDraft(null);
+                        updateSetting('ambient_drying_sustained_minutes', e.target.checked ? 15 : 0);
+                      }}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-bambu-dark-tertiary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-bambu-green"></div>
+                  </label>
+                </div>
+              )}
+              {localSettings.ambient_drying_enabled && (localSettings.ambient_drying_sustained_minutes ?? 0) > 0 && (
+                <div>
+                  <label className="block text-sm text-bambu-gray mb-1">
+                    {t('settings.ambientDryingSustainedMinutes')}
+                  </label>
+                  <input
+                    type="number"
+                    min="5"
+                    max="240"
+                    value={sustainedDraft ?? String(localSettings.ambient_drying_sustained_minutes ?? 15)}
+                    onChange={(e) => setSustainedDraft(e.target.value)}
+                    onBlur={(e) => {
+                      const parsed = parseInt(e.target.value, 10);
+                      if (!Number.isNaN(parsed)) {
+                        updateSetting('ambient_drying_sustained_minutes', Math.max(5, Math.min(240, parsed)));
+                      }
+                      setSustainedDraft(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        (e.currentTarget as HTMLInputElement).blur();
+                      }
+                    }}
+                    className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+                  />
+                </div>
+              )}
               <div className="flex items-center justify-between">
                 <div>
                   <label className="block text-sm text-white">
@@ -5760,8 +5821,8 @@ export function SettingsPage() {
                             <td className="py-1.5 pr-2 text-white font-medium">{fil}</td>
                             <td className="py-1 px-1">
                               <div className="flex items-center justify-end gap-1">
-                                <input type="number" min={30} max={65} value={preset.n3f}
-                                  onChange={e => updatePreset(fil, 'n3f', Math.max(1, parseInt(e.target.value) || 0))}
+                                <NumberInput min={30} max={65} value={preset.n3f}
+                                  onChange={v => updatePreset(fil, 'n3f', v)}
                                   className="w-14 px-1.5 py-1 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-center text-xs focus:border-amber-500/50 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                 />
                                 <span className="text-bambu-gray">°C</span>
@@ -5769,8 +5830,8 @@ export function SettingsPage() {
                             </td>
                             <td className="py-1 px-1">
                               <div className="flex items-center gap-1">
-                                <input type="number" min={1} max={24} value={preset.n3f_hours}
-                                  onChange={e => updatePreset(fil, 'n3f_hours', Math.max(1, parseInt(e.target.value) || 0))}
+                                <NumberInput min={1} max={24} value={preset.n3f_hours}
+                                  onChange={v => updatePreset(fil, 'n3f_hours', v)}
                                   className="w-14 px-1.5 py-1 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-center text-xs focus:border-amber-500/50 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                 />
                                 <span className="text-bambu-gray">h</span>
@@ -5778,8 +5839,8 @@ export function SettingsPage() {
                             </td>
                             <td className="py-1 px-1">
                               <div className="flex items-center justify-end gap-1">
-                                <input type="number" min={30} max={85} value={preset.n3s}
-                                  onChange={e => updatePreset(fil, 'n3s', Math.max(1, parseInt(e.target.value) || 0))}
+                                <NumberInput min={30} max={85} value={preset.n3s}
+                                  onChange={v => updatePreset(fil, 'n3s', v)}
                                   className="w-14 px-1.5 py-1 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-center text-xs focus:border-amber-500/50 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                 />
                                 <span className="text-bambu-gray">°C</span>
@@ -5787,8 +5848,8 @@ export function SettingsPage() {
                             </td>
                             <td className="py-1 px-1">
                               <div className="flex items-center gap-1">
-                                <input type="number" min={1} max={24} value={preset.n3s_hours}
-                                  onChange={e => updatePreset(fil, 'n3s_hours', Math.max(1, parseInt(e.target.value) || 0))}
+                                <NumberInput min={1} max={24} value={preset.n3s_hours}
+                                  onChange={v => updatePreset(fil, 'n3s_hours', v)}
                                   className="w-14 px-1.5 py-1 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-center text-xs focus:border-amber-500/50 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                 />
                                 <span className="text-bambu-gray">h</span>
@@ -6117,12 +6178,12 @@ export function SettingsPage() {
                         {t('settings.goodGreen')} ≤
                       </label>
                       <div className="flex items-center gap-2">
-                        <input
-                          type="number"
-                          min="0"
-                          max="100"
+                        <NumberInput
+                          min={0}
+                          max={100}
                           value={localSettings.ams_humidity_good ?? 40}
-                          onChange={(e) => updateSetting('ams_humidity_good', parseInt(e.target.value) || 40)}
+                          onChange={(v) => updateSetting('ams_humidity_good', v)}
+                          fallback={40}
                           className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                         />
                         <span className="text-bambu-gray">%</span>
@@ -6133,12 +6194,12 @@ export function SettingsPage() {
                         {t('settings.fairOrange')} ≤
                       </label>
                       <div className="flex items-center gap-2">
-                        <input
-                          type="number"
-                          min="0"
-                          max="100"
+                        <NumberInput
+                          min={0}
+                          max={100}
                           value={localSettings.ams_humidity_fair ?? 60}
-                          onChange={(e) => updateSetting('ams_humidity_fair', parseInt(e.target.value) || 60)}
+                          onChange={(v) => updateSetting('ams_humidity_fair', v)}
+                          fallback={60}
                           className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                         />
                         <span className="text-bambu-gray">%</span>
@@ -6176,13 +6237,14 @@ export function SettingsPage() {
                         {t('settings.goodBlue')} ≤
                       </label>
                       <div className="flex items-center gap-2">
-                        <input
-                          type="number"
+                        <NumberInput
                           step="0.5"
-                          min="0"
-                          max="60"
+                          min={0}
+                          max={60}
                           value={localSettings.ams_temp_good ?? 28}
-                          onChange={(e) => updateSetting('ams_temp_good', parseFloat(e.target.value) || 28)}
+                          onChange={(v) => updateSetting('ams_temp_good', v)}
+                          integer={false}
+                          fallback={28}
                           className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                         />
                         <span className="text-bambu-gray">°C</span>
@@ -6193,13 +6255,14 @@ export function SettingsPage() {
                         {t('settings.fairOrange')} ≤
                       </label>
                       <div className="flex items-center gap-2">
-                        <input
-                          type="number"
+                        <NumberInput
                           step="0.5"
-                          min="0"
-                          max="60"
+                          min={0}
+                          max={60}
                           value={localSettings.ams_temp_fair ?? 35}
-                          onChange={(e) => updateSetting('ams_temp_fair', parseFloat(e.target.value) || 35)}
+                          onChange={(v) => updateSetting('ams_temp_fair', v)}
+                          integer={false}
+                          fallback={35}
                           className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                         />
                         <span className="text-bambu-gray">°C</span>
@@ -6263,12 +6326,12 @@ export function SettingsPage() {
                       {t('settings.keepSensorHistory')}
                     </label>
                     <div className="flex items-center gap-2">
-                      <input
-                        type="number"
-                        min="1"
-                        max="365"
+                      <NumberInput
+                        min={1}
+                        max={365}
                         value={localSettings.ams_history_retention_days ?? 30}
-                        onChange={(e) => updateSetting('ams_history_retention_days', parseInt(e.target.value) || 30)}
+                        onChange={(v) => updateSetting('ams_history_retention_days', v)}
+                        fallback={30}
                         className="w-24 px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                       />
                       <span className="text-bambu-gray">{t('common.days')}</span>
