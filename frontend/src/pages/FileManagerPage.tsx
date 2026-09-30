@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useMemo, useEffect, lazy, Suspense } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueries, useMutation, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
   FolderOpen,
@@ -149,6 +149,16 @@ function FileTypePlaceholderIcon({ fileType, className }: { fileType: string; cl
 // Which files have a preview at all: what a double-click opens, and what the
 // toolbar's Preview button appears for (#2976). Sliced files go to the
 // full-page gcode viewer, everything else to a modal.
+/**
+ * The columns view's per-level file queries, plus every file they hold — the
+ * files a tick in an earlier column can point at (#3020). Module-level, so its
+ * reference is stable and useQueries hands back the same value until a query
+ * actually changes.
+ */
+function combineColumnFileQueries(results: UseQueryResult<LibraryFileListItem[]>[]) {
+  return { results, files: results.flatMap((result) => result.data ?? []) };
+}
+
 function isPreviewableLibraryFile(file: LibraryFileListItem): boolean {
   const type = file.file_type;
   return (
@@ -1836,17 +1846,29 @@ export function FileManagerPage() {
     );
   }, []);
 
+  // While a search or tag filter is active the file list spans every matching
+  // descendant folder, so per-level folder columns would lie about scope —
+  // hide them and let the files pane take the full width.
+  const columnsFilterActive = searchQuery.trim().length > 0 || selectedTagIds.length > 0;
+
+  // In the columns view the pane beside the root column is that level's own
+  // list, the files in no folder, like every other column's. Grid and list keep
+  // "All Files", and so does a search or tag filter, whose results span every
+  // folder.
+  const paneRootOnly = viewMode === 'columns' && selectedFolderId === null && !columnsFilterActive;
+
   const { data: files, isLoading: filesLoading } = useQuery({
-    queryKey: ['library-files', selectedFolderId, topLevelView, searchExpandsSubfolders, tagFilterKey],
+    queryKey: ['library-files', selectedFolderId, topLevelView, searchExpandsSubfolders, tagFilterKey, paneRootOnly],
     // When a specific folder is selected we list its contents directly; when
     // no folder is selected the topLevelView pseudo-node decides whether the
     // server scopes the result to internal-managed-storage files or to the
-    // union of every external folder (#1621). include_root stays false so the
-    // listing still descends into subfolders (regression guard from #1499).
+    // union of every external folder (#1621). include_root is false outside
+    // the columns view's root level, so "All Files" still descends into
+    // subfolders (regression guard from #1499).
     queryFn: () =>
       api.getLibraryFiles(
         selectedFolderId,
-        false,
+        paneRootOnly,
         undefined,
         selectedFolderId === null ? topLevelView : undefined,
         searchExpandsSubfolders,
@@ -2122,58 +2144,6 @@ export function FileManagerPage() {
     }
   }, [hasPermission, navigate]);
 
-  // The toolbar's Preview button acts on one file, so it is offered only for
-  // a single previewable selection.
-  const previewSelection = useMemo(() => {
-    if (!files || selectedFiles.length !== 1) return null;
-    const file = files.find((f) => f.id === selectedFiles[0]);
-    return file && isPreviewableLibraryFile(file) ? file : null;
-  }, [files, selectedFiles]);
-
-  // Get sliced files from selection
-  const selectedSlicedFiles = useMemo(() => {
-    if (!files) return [];
-    return files.filter(f => selectedFiles.includes(f.id) && isSlicedLibraryFile(f));
-  }, [files, selectedFiles]);
-
-  // "Combine to 3MF" is offered only when every selected file is an STL, so
-  // the action never silently drops part of the selection.
-  const selectedStlFiles = useMemo(() => {
-    if (!files) return [];
-    const stls = files.filter(f => selectedFiles.includes(f.id) && f.filename.toLowerCase().endsWith('.stl'));
-    return stls.length === selectedFiles.length ? stls : [];
-  }, [files, selectedFiles]);
-
-  // The clicked file's variant group, so printing one member offers the rest
-  // without the user re-selecting them (#2570).
-  const { data: printFileGroup } = useQuery({
-    queryKey: ['variant-group', printFile?.variant_group_id],
-    queryFn: () => api.getVariantGroup(printFile!.variant_group_id!),
-    enabled: !!printFile?.variant_group_id,
-  });
-
-  // Candidates for a cross-model print (#671), or undefined for an ordinary one.
-  // An explicit multi-selection wins over the group: the user just said, in this
-  // action, which files they meant.
-  const printVariantFiles = useMemo(() => {
-    if (!printFile) return undefined;
-    if (selectedSlicedFiles.length > 1) {
-      return selectedSlicedFiles.map(f => ({
-        id: f.id,
-        filename: f.filename,
-        sliced_for_model: f.sliced_for_model,
-      }));
-    }
-    if (printFileGroup && printFileGroup.members.length > 1) {
-      return printFileGroup.members.map(m => ({
-        id: m.library_file_id,
-        filename: m.filename,
-        sliced_for_model: m.target_model,
-      }));
-    }
-    return undefined;
-  }, [printFile, selectedSlicedFiles, printFileGroup]);
-
   // Handlers
   const handleFileSelect = useCallback((id: number) => {
     // Always toggle selection (multi-select by default)
@@ -2182,11 +2152,18 @@ export function FileManagerPage() {
     });
   }, []);
 
+  // Select all adds the pane's files to what is ticked, so a file ticked in an
+  // earlier column of the columns view stays ticked (#3020).
   const handleSelectAll = useCallback(() => {
     if (filteredAndSortedFiles.length > 0) {
-      setSelectedFiles(filteredAndSortedFiles.map((f) => f.id));
+      setSelectedFiles((prev) => [...new Set([...prev, ...filteredAndSortedFiles.map((f) => f.id)])]);
     }
   }, [filteredAndSortedFiles]);
+
+  // "Deselect all" once every file of the pane is ticked. The pane's own ids,
+  // not a count: ticks in earlier columns count towards the selection too.
+  const allPaneFilesSelected =
+    filteredAndSortedFiles.length > 0 && filteredAndSortedFiles.every((f) => selectedFiles.includes(f.id));
 
   const handleDeselectAll = useCallback(() => {
     setSelectedFiles([]);
@@ -2259,10 +2236,6 @@ export function FileManagerPage() {
     setViewMode(mode);
     localStorage.setItem('library-view-mode', mode);
   };
-
-  // Sliced files (.gcode / .gcode.3mf) open the same full-page gcode viewer
-  // the archive card uses, so the two paths feel consistent. STL / source
-  // 3MF continue to use the in-app 3D model viewer modal.
 
   // Shared by the list row and the columns view (see FileActionStrip).
   const fileActionProps = {
@@ -2350,11 +2323,6 @@ export function FileManagerPage() {
     return cols;
   }, [sortedFolders, folderPath, currentBucketIsExternal]);
 
-  // While a search or tag filter is active the file list spans every matching
-  // descendant folder, so per-level folder columns would lie about scope —
-  // hide them and let the files pane take the full width.
-  const columnsFilterActive = searchQuery.trim().length > 0 || selectedTagIds.length > 0;
-
   // Every column lists its own level's files, not just the rightmost pane: a
   // folder that holds files and no subfolders used to look empty until it was
   // the selection. One query per rendered level, keyed on that level's folder
@@ -2378,6 +2346,7 @@ export function FileManagerPage() {
   }, [viewMode, columnsFilterActive, folderColumns, selectedFolderId, currentBucketIsExternal]);
 
   const columnFileQueries = useQueries({
+    combine: combineColumnFileQueries,
     queries: columnFileLevels.map((level) => ({
       queryKey: ['library-files', 'column', level.folderId, level.scope ?? null],
       // include_root only means anything for the root column, where "this
@@ -2393,12 +2362,78 @@ export function FileManagerPage() {
   // anyway.
   const columnFiles = new Map<string, { files: LibraryFileListItem[]; loading: boolean }>();
   columnFileLevels.forEach((level, i) => {
-    const query = columnFileQueries[i];
+    const query = columnFileQueries.results[i];
     columnFiles.set(level.key, {
       files: filterAndSortFiles(query?.data ?? [], { filterType, filterUsername, sortField, sortDirection }),
       loading: Boolean(query?.isPending),
     });
   });
+
+  // Every file a tick can point at: the pane plus the files of every column
+  // the view has loaded, since a file can be ticked in an earlier column
+  // (#3020). The toolbar's actions resolve the selection against this.
+  const selectableFiles = useMemo(() => {
+    const byId = new Map<number, LibraryFileListItem>();
+    for (const file of [...(files ?? []), ...columnFileQueries.files]) byId.set(file.id, file);
+    return byId;
+  }, [files, columnFileQueries.files]);
+
+  // The toolbar's Preview button acts on one file, so it is offered only for
+  // a single previewable selection.
+  const previewSelection = useMemo(() => {
+    if (selectedFiles.length !== 1) return null;
+    const file = selectableFiles.get(selectedFiles[0]);
+    return file && isPreviewableLibraryFile(file) ? file : null;
+  }, [selectableFiles, selectedFiles]);
+
+  // The sliced files among the selection, in the order they were ticked.
+  const selectedSlicedFiles = useMemo(
+    () =>
+      selectedFiles
+        .map((id) => selectableFiles.get(id))
+        .filter((f): f is LibraryFileListItem => !!f && isSlicedLibraryFile(f)),
+    [selectableFiles, selectedFiles],
+  );
+
+  // "Combine to 3MF" is offered only when every selected file is an STL, so
+  // the action never silently drops part of the selection. Resolved like the
+  // rest, so an STL ticked in an earlier column counts too.
+  const selectedStlFiles = useMemo(() => {
+    const stls = selectedFiles
+      .map((id) => selectableFiles.get(id))
+      .filter((f): f is LibraryFileListItem => !!f && f.filename.toLowerCase().endsWith('.stl'));
+    return stls.length === selectedFiles.length ? stls : [];
+  }, [selectableFiles, selectedFiles]);
+
+  // The clicked file's variant group, so printing one member offers the rest
+  // without the user re-selecting them (#2570).
+  const { data: printFileGroup } = useQuery({
+    queryKey: ['variant-group', printFile?.variant_group_id],
+    queryFn: () => api.getVariantGroup(printFile!.variant_group_id!),
+    enabled: !!printFile?.variant_group_id,
+  });
+
+  // Candidates for a cross-model print (#671), or undefined for an ordinary one.
+  // An explicit multi-selection wins over the group: the user just said, in this
+  // action, which files they meant.
+  const printVariantFiles = useMemo(() => {
+    if (!printFile) return undefined;
+    if (selectedSlicedFiles.length > 1) {
+      return selectedSlicedFiles.map(f => ({
+        id: f.id,
+        filename: f.filename,
+        sliced_for_model: f.sliced_for_model,
+      }));
+    }
+    if (printFileGroup && printFileGroup.members.length > 1) {
+      return printFileGroup.members.map(m => ({
+        id: m.library_file_id,
+        filename: m.filename,
+        sliced_for_model: m.target_model,
+      }));
+    }
+    return undefined;
+  }, [printFile, selectedSlicedFiles, printFileGroup]);
 
   // The list the arrow keys walk: the one that actually holds the focused
   // file, which may be an intermediate column rather than the selected
@@ -3187,7 +3222,7 @@ export function FileManagerPage() {
           {(filteredAndSortedFiles.length > 0 || selectedFiles.length > 0) && (
             <div className="flex flex-wrap items-center gap-2 mb-4 p-2 bg-bambu-dark-secondary rounded-lg border border-bambu-dark-tertiary sticky top-[52px] z-10 lg:static">
               {/* Select all / Deselect all */}
-              {selectedFiles.length === filteredAndSortedFiles.length && selectedFiles.length > 0 ? (
+              {allPaneFilesSelected ? (
                 <Button
                   variant="secondary"
                   size="sm"

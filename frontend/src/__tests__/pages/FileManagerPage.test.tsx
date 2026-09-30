@@ -193,11 +193,14 @@ const mockFolderFiles: Record<string, Record<string, unknown>[]> = {
   ],
 };
 
-// A request carrying folder_id wants that folder's own files; without one it
-// is the root level (columns view) or the whole library ("All Files").
+// A request carrying folder_id wants that folder's own files. Without one,
+// include_root decides as the server does: true is the root level (the files in
+// no folder), false the whole library ("All Files", every folder included).
 const filesForRequest = (request: Request) => {
-  const folderId = new URL(request.url).searchParams.get('folder_id');
-  return folderId ? (mockFolderFiles[folderId] ?? []) : mockFiles;
+  const params = new URL(request.url).searchParams;
+  const folderId = params.get('folder_id');
+  if (folderId) return mockFolderFiles[folderId] ?? [];
+  return params.get('include_root') === 'true' ? mockFiles : [...mockFiles, ...Object.values(mockFolderFiles).flat()];
 };
 
 const mockStats = {
@@ -987,6 +990,62 @@ describe('FileManagerPage', () => {
       // Move or Delete must never act on rows that have left the screen.
       await user.click(within(screen.getByTestId('columns-level-root')).getByText('Art Projects'));
       await waitFor(() => expect(screen.queryByText('1 selected')).not.toBeInTheDocument());
+    });
+
+    it('lists only the files in no folder beside the root column, like every other level', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      // Grid view at the root is "All Files", which descends into the folders.
+      await waitFor(() => expect(screen.getByText('Spacer')).toBeInTheDocument());
+
+      await user.click(screen.getByTitle('Column view'));
+
+      // The root level's own files, the same ones its column lists once a
+      // folder is selected — nothing from inside a folder.
+      const pane = within(await screen.findByTestId('columns-files-pane'));
+      await waitFor(() => expect(pane.getByText('Benchy')).toBeInTheDocument());
+      expect(pane.queryByText('Spacer')).not.toBeInTheDocument();
+      expect(pane.queryByText('Vase')).not.toBeInTheDocument();
+    });
+
+    it('offers the toolbar actions for files ticked in an earlier column', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await descendToBrackets(user);
+      const root = within(screen.getByTestId('columns-level-root'));
+      await user.click(await root.findByText('Benchy'));
+
+      // One sliced file ticked in the root column, while the pane lists
+      // Brackets: it can still be previewed and printed.
+      const toolbar = () => screen.getByText(/\d selected/).closest('div') as HTMLElement;
+      expect(await screen.findByText('1 selected')).toBeInTheDocument();
+      expect(within(toolbar()).getByRole('button', { name: 'Preview' })).toBeInTheDocument();
+      expect(within(toolbar()).getByRole('button', { name: 'Print' })).toBeInTheDocument();
+
+      // A second one makes it one job for either file.
+      await user.click(root.getByText('Cube'));
+      expect(await within(toolbar()).findByRole('button', { name: 'Print (2 alternatives)' })).toBeInTheDocument();
+    });
+
+    it('offers Select All until every file of the pane is ticked, and keeps other ticks', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await descendToBrackets(user);
+      await user.click(await within(screen.getByTestId('columns-level-folder-1')).findByText('Spacer'));
+      await user.click(await within(screen.getByTestId('columns-files-pane')).findByText('clamp.stl'));
+
+      // Two ticked, but only one of the pane's two files.
+      expect(await screen.findByText('2 selected')).toBeInTheDocument();
+      expect(screen.getByText('Select All')).toBeInTheDocument();
+
+      await user.click(screen.getByText('Select All'));
+
+      expect(await screen.findByText('3 selected')).toBeInTheDocument();
+      expect(screen.getByText('Deselect All')).toBeInTheDocument();
     });
 
     it('shows a document\'s type icon in place of a missing thumbnail', async () => {
