@@ -317,6 +317,9 @@ async def save_product(db: AsyncSession, product: FilamentProduct | None, data) 
             setattr(product, name, new)
             if not creating and name in PRODUCT_SPOOL_FIELDS:
                 changed_product[name] = new
+    # The prices' date stays on the product; a document without it keeps it.
+    if creating or "price_date" in getattr(data, "model_fields_set", ()):
+        product.price_date = getattr(data, "price_date", None)
     await db.flush()
 
     # --- sizes and colours: update, create, and note what goes away
@@ -684,6 +687,7 @@ async def article_rows(
                 "slicer_filament": product.slicer_filament,
                 "slicer_filament_name": product.slicer_filament_name,
                 "suppliers": suppliers,
+                "price_date": product.price_date,
             }
             found.append(((color.sort_order, color.id, size.label_weight), row))
         rows.extend(row for _, row in sorted(found, key=lambda item: item[0]))

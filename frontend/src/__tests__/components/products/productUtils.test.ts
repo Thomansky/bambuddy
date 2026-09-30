@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { FilamentProduct } from '../../../api/client';
 import {
   costPerKg,
+  formatPriceDate,
   parsePrice,
   presetModels,
   productMatches,
@@ -22,6 +23,7 @@ const product: FilamentProduct = {
   nozzle_temp_min: null,
   nozzle_temp_max: null,
   note: null,
+  price_date: null,
   sizes: [{ id: 10, label_weight: 1000, core_weight: 250, core_weight_catalog_id: null, price: 20, price_vat_included: true }],
   colors: [],
   variants: [],
@@ -92,6 +94,17 @@ describe('small helpers', () => {
     expect(parsePrice('11,50')).toBe(11.5);
     expect(parsePrice('')).toBeNull();
     expect(parsePrice('abc')).toBeNull();
+  });
+
+  it('shows a price date as a local date, and nothing for none', () => {
+    const expected = new Date(2026, 8, 29).toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    expect(formatPriceDate('2026-09-29')).toBe(expected);
+    expect(formatPriceDate(null)).toBe('');
+    expect(formatPriceDate('29.09.2026')).toBe('');
   });
 
   it('turns a spool price into cost per kg', () => {

@@ -30,6 +30,7 @@ import {
   compareSortValues,
   findVariant,
   formatMoney,
+  formatPriceDate,
   formatStock,
   formatWeight,
   mergeColumnConfig,
@@ -80,6 +81,7 @@ const DEFAULT_COLUMNS: ColumnConfig[] = [
   { id: 'sizes', label: 'Sizes', visible: true },
   { id: 'supplier', label: 'Supplier', visible: true },
   { id: 'price', label: 'Price/spool', visible: false },
+  { id: 'price_date', label: 'Prices as of', visible: false },
   { id: 'spool_type', label: 'Spool type', visible: false },
   { id: 'preset', label: 'Slicer preset', visible: false },
   { id: 'nozzle_temp', label: 'Nozzle temp.', visible: false },
@@ -102,6 +104,7 @@ const columnHeaders: Record<string, (t: TFn) => string> = {
   sizes: (t) => t('inventory.products.columns.sizes'),
   supplier: (t) => t('inventory.products.columns.supplier'),
   price: (t) => t('inventory.products.columns.price'),
+  price_date: (t) => t('inventory.products.columns.priceDate'),
   spool_type: (t) => t('inventory.products.columns.spoolType'),
   preset: (t) => t('inventory.products.columns.preset'),
   nozzle_temp: (t) => t('inventory.products.columns.nozzleTemp'),
@@ -181,6 +184,12 @@ const columnCells: Record<string, (ctx: CellCtx) => ReactNode> = {
       </span>
     );
   },
+  price_date: ({ product }) =>
+    product.price_date ? (
+      <span className="text-sm text-bambu-gray whitespace-nowrap">{formatPriceDate(product.price_date)}</span>
+    ) : (
+      EMPTY
+    ),
   spool_type: ({ product, catalogMap }) => {
     const names = spoolTypeNames(product, catalogMap);
     return names ? <span className="text-sm text-bambu-gray">{names}</span> : EMPTY;
@@ -254,6 +263,8 @@ const columnSortValues: Record<
   sizes: (p) => (p.sizes.length ? Math.min(...p.sizes.map((s) => s.label_weight)) : 0),
   supplier: (p) => usualSupplier(p)?.supplier_name || '￿',
   price: (p) => priceRange(p)?.[0] ?? Number.MAX_VALUE,
+  // Oldest first, so prices due for a check come up; none sorts last.
+  price_date: (p) => p.price_date || '\uffff',
   spool_type: (p, catalogMap) => spoolTypeNames(p, catalogMap) || '￿',
   preset: (p) => p.slicer_filament_name || p.slicer_filament || '￿',
   nozzle_temp: (p) => p.nozzle_temp_min ?? Number.MAX_VALUE,
@@ -826,7 +837,11 @@ function StockMatrix({ product, currency }: { product: FilamentProduct; currency
   }
   return (
     <div className="space-y-2">
-      <p className="text-xs text-bambu-gray">{t('inventory.products.stockMatrixHint')}</p>
+      <p className="text-xs text-bambu-gray">
+        {t('inventory.products.stockMatrixHint')}
+        {product.price_date &&
+          ` ${t('inventory.products.stockMatrixPriceDate', { date: formatPriceDate(product.price_date) })}`}
+      </p>
       <table className="text-sm">
         <thead>
           <tr className="text-xs text-bambu-gray">

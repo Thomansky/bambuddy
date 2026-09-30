@@ -14,6 +14,7 @@ import { findPresetOption } from '../spool-form/utils';
 import { usePresetOptions } from './usePresetOptions';
 import { ModelBadge } from './ModelBadge';
 import { getCurrencySymbol } from '../../utils/currency';
+import { localDateKey } from '../../utils/date';
 import { extractPresetModel, matchesPrinterModelSuffix } from '../../utils/slicerPrinterMatch';
 import {
   costPerKg,
@@ -111,6 +112,9 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
   const [tempMin, setTempMin] = useState(product?.nozzle_temp_min?.toString() ?? '');
   const [tempMax, setTempMax] = useState(product?.nozzle_temp_max?.toString() ?? '');
   const [note, setNote] = useState(product?.note ?? '');
+  // When the prices were last checked: the standard prices at the sizes and
+  // the special prices in the matrix alike. YYYY-MM-DD, or '' for none.
+  const [priceDate, setPriceDate] = useState(product?.price_date ?? '');
   // A size's price is the manufacturer's price for one spool. What a delivery
   // actually cost is confirmed at goods-in, so the suppliers carry no prices.
   const [sizes, setSizes] = useState<SizeRow[]>(() =>
@@ -421,6 +425,7 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
       nozzle_temp_min: toInt(tempMin),
       nozzle_temp_max: toInt(tempMax),
       note: note.trim() || null,
+      price_date: priceDate || null,
       sizes: sizes.map((s) => ({
         id: s.id,
         key: s.key,
@@ -685,8 +690,28 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
           <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] gap-6">
             {/* Sizes */}
             <section className="space-y-2">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
                 <h3 className="text-sm font-medium text-white">{t('inventory.products.sizes')}</h3>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <label
+                    className="flex items-center gap-1.5 text-xs text-bambu-gray"
+                    title={t('inventory.products.priceDateHint')}
+                  >
+                    {t('inventory.products.priceDate')}
+                    <input
+                      type="date"
+                      value={priceDate}
+                      onChange={(e) => setPriceDate(e.target.value)}
+                      className="px-2 py-1 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-xs focus:border-bambu-green focus:outline-none [color-scheme:dark]"
+                      aria-label={t('inventory.products.priceDate')}
+                    />
+                  </label>
+                  <button
+                    onClick={() => setPriceDate(localDateKey(new Date()))}
+                    className="px-2 py-1 text-xs bg-bambu-dark border border-bambu-dark-tertiary text-bambu-gray hover:text-white rounded"
+                  >
+                    {t('inventory.products.priceDateToday')}
+                  </button>
                 <button
                   onClick={() => addSize()}
                   className="px-2 py-1 text-xs bg-bambu-dark border border-bambu-dark-tertiary text-bambu-gray hover:text-white rounded flex items-center gap-1"
@@ -694,6 +719,7 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
                   <Plus className="w-3.5 h-3.5" />
                   {t('inventory.products.addSize')}
                 </button>
+                </div>
               </div>
               <div className="flex flex-wrap gap-1">
                 {QUICK_SIZES.filter((g) => !sizes.some((s) => toInt(s.label_weight) === g)).map((grams) => (

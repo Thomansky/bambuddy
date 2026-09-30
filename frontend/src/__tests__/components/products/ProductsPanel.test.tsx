@@ -11,6 +11,7 @@ import { http, HttpResponse } from 'msw';
 import { render } from '../../utils';
 import { server } from '../../mocks/server';
 import { ProductsPanel } from '../../../components/products/ProductsPanel';
+import { formatPriceDate } from '../../../components/products/productUtils';
 import type { FilamentProduct, FilamentVariant } from '../../../api/client';
 
 function variant(id: number, colorId: number, sizeId: number, patch: Partial<FilamentVariant> = {}): FilamentVariant {
@@ -46,6 +47,7 @@ function product(patch: Partial<FilamentProduct>): FilamentProduct {
     nozzle_temp_min: null,
     nozzle_temp_max: null,
     note: null,
+    price_date: null,
     sizes: [],
     colors: [],
     variants: [],
@@ -63,6 +65,7 @@ const PRODUCTS: FilamentProduct[] = [
     brand: 'Bambu Lab',
     subtype: 'Matte',
     material_number: '52',
+    price_date: '2026-09-29',
     sizes: [{ id: 10, label_weight: 1000, core_weight: 250, core_weight_catalog_id: 1, price: 20, price_vat_included: true }],
     colors: [
       { id: 1, color_name: 'Black', rgba: '000000FF', extra_colors: null, effect_type: null },
@@ -212,7 +215,10 @@ describe('ProductsPanel', () => {
     expect(screen.getByText('Black')).toBeInTheDocument();
     // It says what its cells are, and what a colour's own price is set against.
     expect(screen.getByText(/Spools in stock per colour and size/)).toBeInTheDocument();
-    expect(screen.getByText('€24.00')).toHaveAttribute('title', "This colour’s own price; the size costs €20.00");
+    expect(screen.getByText('€24.00')).toHaveAttribute('title', "Special price for this colour; the size’s standard price is €20.00");
+    // And when those prices were last checked.
+    const asOf = `Prices as of ${formatPriceDate('2026-09-29')}.`;
+    expect(screen.getByText((content) => content.includes(asOf))).toBeInTheDocument();
   });
 
   it('offers the columns in the same dialog as the spool list', async () => {

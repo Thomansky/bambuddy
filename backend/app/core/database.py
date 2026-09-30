@@ -5450,6 +5450,8 @@ async def run_migrations(conn):
     # Target stock per variant, and shopping-list lines that know which
     # variant they restock and where it is bought (#3165).
     await _safe_execute(conn, "ALTER TABLE filament_variants ADD COLUMN min_stock INTEGER")
+    # When a product's prices were last checked (#3165).
+    await _safe_execute(conn, "ALTER TABLE filament_products ADD COLUMN price_date DATE")
     await _safe_execute(conn, "ALTER TABLE filament_shopping_list ADD COLUMN variant_id INTEGER")
     await _safe_execute(conn, "ALTER TABLE filament_shopping_list ADD COLUMN supplier_id INTEGER")
     await _safe_execute(

@@ -3968,6 +3968,8 @@ export interface FilamentProduct {
   nozzle_temp_min: number | null;
   nozzle_temp_max: number | null;
   note: string | null;
+  /** When the prices were last checked, YYYY-MM-DD. */
+  price_date: string | null;
   sizes: FilamentProductSize[];
   colors: FilamentProductColor[];
   variants: FilamentVariant[];
@@ -3988,6 +3990,8 @@ export interface FilamentProductInput {
   nozzle_temp_min: number | null;
   nozzle_temp_max: number | null;
   note: string | null;
+  /** Left out, the product keeps its date. */
+  price_date?: string | null;
   /** Left out, the product keeps the ones it has. */
   presets?: { printer_model: string; slicer_filament: string; slicer_filament_name: string | null }[];
   sizes: {

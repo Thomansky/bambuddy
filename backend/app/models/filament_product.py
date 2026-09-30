@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.core.database import Base
@@ -34,6 +34,9 @@ class FilamentProduct(Base):
     nozzle_temp_min: Mapped[int | None] = mapped_column(Integer)
     nozzle_temp_max: Mapped[int | None] = mapped_column(Integer)
     note: Mapped[str | None] = mapped_column(String(500))
+    # When the prices were last checked — the standard prices at the sizes and
+    # the special prices of single combinations alike.
+    price_date: Mapped[date | None] = mapped_column(Date)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 

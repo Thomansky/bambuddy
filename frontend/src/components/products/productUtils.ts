@@ -79,6 +79,17 @@ export function priceText(value: number | null | undefined): string {
   return value === null || value === undefined ? '' : String(value);
 }
 
+/** A product's "prices as of" date (YYYY-MM-DD) the way the user reads dates. */
+export function formatPriceDate(iso: string | null | undefined): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso ?? '');
+  if (!match) return '';
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])).toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+}
+
 /** "Bambu PLA Matte @BBL H2S" → "Bambu PLA Matte". */
 export function presetStem(name: string): string {
   return name.split('@')[0].trim();

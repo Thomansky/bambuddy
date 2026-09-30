@@ -155,3 +155,62 @@ class TestApiKeys:
         response = await async_client.get(f"{API}/articles")
 
         assert response.status_code == 401
+
+
+def _document(product: dict, **overrides) -> dict:
+    """The editor's save document for a product as the API returned it."""
+    fields = ("brand", "material", "subtype", "material_number", "slicer_filament", "slicer_filament_name")
+    document = {
+        **{key: product[key] for key in fields},
+        "sizes": [
+            {
+                "id": s["id"],
+                "key": f"s{s['id']}",
+                "label_weight": s["label_weight"],
+                "core_weight": s["core_weight"],
+                "price": s["price"],
+            }
+            for s in product["sizes"]
+        ],
+        "colors": [
+            {"id": c["id"], "key": f"c{c['id']}", "color_name": c["color_name"], "rgba": c["rgba"]}
+            for c in product["colors"]
+        ],
+        "variants": [
+            {"color_key": f"c{v['color_id']}", "size_key": f"s{v['size_id']}", "price_override": v["price_override"]}
+            for v in product["variants"]
+        ],
+    }
+    document.update(overrides)
+    return document
+
+
+class TestPriceDate:
+    """When the prices were last checked: one date for the whole product, its
+    standard prices at the sizes and its special prices alike."""
+
+    @pytest.mark.asyncio
+    async def test_a_product_keeps_its_price_date_and_its_articles_carry_it(self, async_client: AsyncClient):
+        product = await _product(async_client, price_date="2026-09-29")
+
+        rows = (await async_client.get(f"{API}/articles")).json()
+
+        assert product["price_date"] == "2026-09-29"
+        assert {row["price_date"] for row in rows} == {"2026-09-29"}
+
+    @pytest.mark.asyncio
+    async def test_an_edit_without_it_keeps_it_and_null_clears_it(self, async_client: AsyncClient):
+        product = await _product(async_client, price_date="2026-09-29")
+
+        kept = await async_client.put(f"{API}/{product['id']}", json=_document(product))
+        cleared = await async_client.put(f"{API}/{product['id']}", json=_document(product, price_date=None))
+
+        assert kept.status_code == 200, kept.text
+        assert kept.json()["product"]["price_date"] == "2026-09-29"
+        assert cleared.json()["product"]["price_date"] is None
+
+    @pytest.mark.asyncio
+    async def test_a_product_without_one_has_none(self, async_client: AsyncClient):
+        product = await _product(async_client)
+
+        assert product["price_date"] is None
