@@ -1029,6 +1029,21 @@ describe('FileManagerPage', () => {
       expect(await within(toolbar()).findByRole('button', { name: 'Print (2 alternatives)' })).toBeInTheDocument();
     });
 
+    it('offers Combine to 3MF for STLs ticked across columns', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await descendToBrackets(user);
+      // bracket.stl sits in the root column, clamp.stl in the Brackets pane.
+      await user.click(await within(screen.getByTestId('columns-level-root')).findByText('bracket.stl'));
+      await user.click(await within(screen.getByTestId('columns-files-pane')).findByText('clamp.stl'));
+
+      expect(await screen.findByText('2 selected')).toBeInTheDocument();
+      const toolbar = screen.getByText('2 selected').closest('div') as HTMLElement;
+      expect(within(toolbar).getByRole('button', { name: 'Combine to 3MF' })).toBeInTheDocument();
+    });
+
     it('offers Select All until every file of the pane is ticked, and keeps other ticks', async () => {
       const user = userEvent.setup();
       render(<FileManagerPage />);
