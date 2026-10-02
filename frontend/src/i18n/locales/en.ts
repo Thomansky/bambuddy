@@ -4115,6 +4115,7 @@ export default {
     adding: 'Adding...',
     loadingFiles: 'Loading files...',
     folderIsEmpty: 'Folder is empty',
+    noFilesOutsideFolders: 'No files outside folders',
     noFilesYet: 'No files yet',
     folderEmptyDescription: 'Upload files or move files into this folder to get started.',
     noFilesDescription: 'Upload files to start organizing your print-related files.',

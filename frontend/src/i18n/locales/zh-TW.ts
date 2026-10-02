@@ -4072,6 +4072,7 @@ export default {
     adding: '新增中...',
     loadingFiles: '載入檔案中...',
     folderIsEmpty: '資料夾為空',
+    noFilesOutsideFolders: '資料夾外沒有檔案',
     noFilesYet: '尚無檔案',
     folderEmptyDescription: '上傳檔案或將檔案移入此資料夾以開始使用。',
     noFilesDescription: '上傳檔案以開始組織您的列印相關檔案。',

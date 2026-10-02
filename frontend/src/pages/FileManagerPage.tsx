@@ -146,9 +146,6 @@ function FileTypePlaceholderIcon({ fileType, className }: { fileType: string; cl
   return <Icon className={className} />;
 }
 
-// Which files have a preview at all: what a double-click opens, and what the
-// toolbar's Preview button appears for (#2976). Sliced files go to the
-// full-page gcode viewer, everything else to a modal.
 /**
  * The columns view's per-level file queries, plus every file they hold — the
  * files a tick in an earlier column can point at (#3020). Module-level, so its
@@ -159,6 +156,9 @@ function combineColumnFileQueries(results: UseQueryResult<LibraryFileListItem[]>
   return { results, files: results.flatMap((result) => result.data ?? []) };
 }
 
+// Which files have a preview at all: what a double-click opens, and what the
+// toolbar's Preview button appears for (#2976). Sliced files go to the
+// full-page gcode viewer, everything else to a modal.
 function isPreviewableLibraryFile(file: LibraryFileListItem): boolean {
   const type = file.file_type;
   return (
@@ -2152,13 +2152,16 @@ export function FileManagerPage() {
     });
   }, []);
 
-  // Select all adds the pane's files to what is ticked, so a file ticked in an
-  // earlier column of the columns view stays ticked (#3020).
+  // In the columns view Select all adds the pane's files to what is ticked, so
+  // a file ticked in an earlier column (still on screen) stays ticked (#3020).
+  // Grid and list replace the selection: a file a search has hidden must not
+  // stay ticked behind the user's back, or a bulk Delete would remove it.
   const handleSelectAll = useCallback(() => {
     if (filteredAndSortedFiles.length > 0) {
-      setSelectedFiles((prev) => [...new Set([...prev, ...filteredAndSortedFiles.map((f) => f.id)])]);
+      const paneIds = filteredAndSortedFiles.map((f) => f.id);
+      setSelectedFiles((prev) => (viewMode === 'columns' ? [...new Set([...prev, ...paneIds])] : paneIds));
     }
-  }, [filteredAndSortedFiles]);
+  }, [filteredAndSortedFiles, viewMode]);
 
   // "Deselect all" once every file of the pane is ticked. The pane's own ids,
   // not a count: ticks in earlier columns count towards the selection too.
@@ -3505,6 +3508,12 @@ export function FileManagerPage() {
                         ? t('fileManager.noMatchingFiles')
                         : selectedFolderId !== null
                           ? t('fileManager.folderIsEmpty')
+                          // At the root the pane lists only the files in no
+                          // folder, so with folders beside it "No files yet"
+                          // would be wrong (and an external bucket never has
+                          // unfiled files at all).
+                          : paneRootOnly && folderColumns[0].items.length > 0
+                            ? t('fileManager.noFilesOutsideFolders')
                           : topLevelView === 'external'
                             ? t('fileManager.externalIsEmpty')
                             : t('fileManager.noFilesYet')}

@@ -4085,6 +4085,7 @@ export default {
     adding: '追加中...',
     loadingFiles: 'ファイルを読み込み中...',
     folderIsEmpty: 'フォルダーは空です',
+    noFilesOutsideFolders: 'フォルダー外のファイルはありません',
     noFilesYet: 'ファイルはまだありません',
     folderEmptyDescription: 'ファイルをアップロードするか、このフォルダーにファイルを移動して開始しましょう。',
     noFilesDescription: '印刷関連ファイルの整理を始めるにはファイルをアップロードしてください。',

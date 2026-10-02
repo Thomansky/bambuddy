@@ -4114,6 +4114,7 @@ errors: {
     adding: 'Lägger till...',
     loadingFiles: 'Laddar filer...',
     folderIsEmpty: 'Mappen är tom',
+    noFilesOutsideFolders: 'Inga filer utanför mappar',
     noFilesYet: 'Inga filer än',
     folderEmptyDescription: 'Ladda upp filer eller flytta filer till denna mapp för att komma igång.',
     noFilesDescription: 'Ladda upp filer för att börja organisera dina utskriftsrelaterade filer.',

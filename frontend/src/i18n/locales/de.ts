@@ -4085,6 +4085,7 @@ export default {
     adding: 'Hinzufügen...',
     loadingFiles: 'Dateien werden geladen...',
     folderIsEmpty: 'Ordner ist leer',
+    noFilesOutsideFolders: 'Keine Dateien außerhalb von Ordnern',
     noFilesYet: 'Noch keine Dateien',
     folderEmptyDescription: 'Laden Sie Dateien hoch oder verschieben Sie Dateien in diesen Ordner.',
     noFilesDescription: 'Laden Sie Dateien hoch, um Ihre Druckdateien zu organisieren.',

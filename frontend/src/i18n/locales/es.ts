@@ -4087,6 +4087,7 @@ export default {
     adding: 'Añadiendo...',
     loadingFiles: 'Cargando archivos...',
     folderIsEmpty: 'La carpeta está vacía',
+    noFilesOutsideFolders: 'No hay archivos fuera de las carpetas',
     noFilesYet: 'Aún no hay archivos',
     folderEmptyDescription: 'Suba archivos o mueva archivos a esta carpeta para empezar.',
     noFilesDescription: 'Suba archivos para empezar a organizar sus archivos relacionados con la impresión.',

@@ -3894,6 +3894,7 @@ export default {
     adding: '추가 중...',
     loadingFiles: '파일 불러오는 중...',
     folderIsEmpty: '폴더가 비어 있음',
+    noFilesOutsideFolders: '폴더 밖에 있는 파일 없음',
     noFilesYet: '파일 없음',
     folderEmptyDescription: '파일을 업로드하거나 이 폴더로 이동하여 시작하세요.',
     noFilesDescription: '파일을 업로드하여 인쇄 관련 파일을 정리하세요.',

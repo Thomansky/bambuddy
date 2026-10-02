@@ -4072,6 +4072,7 @@ export default {
     adding: '添加中...',
     loadingFiles: '加载文件中...',
     folderIsEmpty: '文件夹为空',
+    noFilesOutsideFolders: '文件夹外没有文件',
     noFilesYet: '暂无文件',
     folderEmptyDescription: '上传文件或将文件移入此文件夹以开始使用。',
     noFilesDescription: '上传文件以开始组织您的打印相关文件。',

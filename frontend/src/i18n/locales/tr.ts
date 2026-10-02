@@ -4079,6 +4079,7 @@ export default {
     adding: 'Ekleniyor...',
     loadingFiles: 'Dosyalar yükleniyor...',
     folderIsEmpty: 'Klasör boş',
+    noFilesOutsideFolders: 'Klasör dışında dosya yok',
     noFilesYet: 'Henüz dosya yok',
     folderEmptyDescription: 'Başlamak için bu klasöre dosya yükleyin veya dosyaları taşıyın.',
     noFilesDescription: 'Baskıyla ilgili dosyalarınızı organize etmeye başlamak için dosya yükleyin.',

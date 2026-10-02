@@ -4073,6 +4073,7 @@ export default {
     adding: 'Ajout...',
     loadingFiles: 'Chargement...',
     folderIsEmpty: 'Dossier vide',
+    noFilesOutsideFolders: 'Aucun fichier hors des dossiers',
     noFilesYet: 'Aucun fichier',
     folderEmptyDescription: 'Téléversez ou déplacez des fichiers ici.',
     noFilesDescription: 'Téléversez des fichiers pour organiser.',

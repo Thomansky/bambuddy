@@ -4072,6 +4072,7 @@ export default {
     adding: 'Adicionando...',
     loadingFiles: 'Carregando arquivos...',
     folderIsEmpty: 'A pasta está vazia',
+    noFilesOutsideFolders: 'Nenhum arquivo fora das pastas',
     noFilesYet: 'Nenhum arquivo ainda',
     folderEmptyDescription: 'Envie arquivos ou mova arquivos para esta pasta para começar.',
     noFilesDescription: 'Envie arquivos para começar a organizar seus arquivos relacionados à impressão.',

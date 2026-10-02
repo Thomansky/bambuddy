@@ -4072,6 +4072,7 @@ export default {
     adding: 'Aggiunta...',
     loadingFiles: 'Caricamento file...',
     folderIsEmpty: 'La cartella e vuota',
+    noFilesOutsideFolders: 'Nessun file fuori dalle cartelle',
     noFilesYet: 'Nessun file ancora',
     folderEmptyDescription: 'Carica file o sposta file in questa cartella per iniziare.',
     noFilesDescription: 'Carica file per iniziare a organizzare i file di stampa.',

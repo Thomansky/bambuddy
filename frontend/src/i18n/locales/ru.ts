@@ -3886,6 +3886,7 @@ export default {
     adding: "Добавление...",
     loadingFiles: "Загрузка файлов...",
     folderIsEmpty: "Папка пуста",
+    noFilesOutsideFolders: "Нет файлов вне папок",
     noFilesYet: "Файлов пока нет",
     folderEmptyDescription: "Загрузите или переместите файлы в эту папку.",
     noFilesDescription: "Загрузите файлы, чтобы начать упорядочивать материалы для печати.",

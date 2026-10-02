@@ -1008,6 +1008,28 @@ describe('FileManagerPage', () => {
       expect(pane.queryByText('Vase')).not.toBeInTheDocument();
     });
 
+    it('says the root has no files outside folders, not that the library is empty', async () => {
+      const user = userEvent.setup();
+      // Every file sits in a folder: the root level's own list is empty.
+      server.use(
+        http.get('/api/v1/library/files', ({ request }) =>
+          HttpResponse.json(
+            new URL(request.url).searchParams.get('include_root') === 'true'
+              ? []
+              : Object.values(mockFolderFiles).flat()
+          )
+        )
+      );
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Spacer')).toBeInTheDocument());
+
+      await user.click(screen.getByTitle('Column view'));
+
+      const pane = within(await screen.findByTestId('columns-files-pane'));
+      expect(await pane.findByText('No files outside folders')).toBeInTheDocument();
+      expect(pane.queryByText('No files yet')).not.toBeInTheDocument();
+    });
+
     it('offers the toolbar actions for files ticked in an earlier column', async () => {
       const user = userEvent.setup();
       render(<FileManagerPage />);
@@ -1141,6 +1163,26 @@ describe('FileManagerPage', () => {
       await waitFor(() => {
         expect(screen.getByText('1 selected')).toBeInTheDocument();
       });
+    });
+
+    it('Select All replaces a selection the search has hidden in the grid', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      const benchyCard = screen.getByText('Benchy').closest('div[class*="cursor-pointer"]');
+      expect(benchyCard).not.toBeNull();
+      await user.click(benchyCard!);
+      expect(await screen.findByText('1 selected')).toBeInTheDocument();
+
+      // Benchy leaves the screen; Select All must not keep it ticked, or a
+      // bulk Delete would remove a file nobody can see.
+      await user.type(screen.getByPlaceholderText('Search files...'), 'vase');
+      await waitFor(() => expect(screen.queryByText('Benchy')).not.toBeInTheDocument());
+      await user.click(screen.getByText('Select All'));
+
+      expect(await screen.findByText('1 selected')).toBeInTheDocument();
+      expect(screen.getByText('Deselect All')).toBeInTheDocument();
     });
 
     it('shows bulk actions when files selected', async () => {

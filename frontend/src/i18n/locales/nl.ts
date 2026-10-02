@@ -4115,6 +4115,7 @@ export default {
     adding: 'Toevoegen...',
     loadingFiles: 'Bestanden laden...',
     folderIsEmpty: 'Map is leeg',
+    noFilesOutsideFolders: 'Geen bestanden buiten mappen',
     noFilesYet: 'Nog geen bestanden',
     folderEmptyDescription: 'Upload bestanden of verplaats bestanden naar deze map om te beginnen.',
     noFilesDescription: 'Upload bestanden om je afdrukgerelateerde bestanden te organiseren.',

@@ -4112,6 +4112,7 @@ export default {
     adding: "Додавання...",
     loadingFiles: "Завантаження файлів...",
     folderIsEmpty: "Папка порожня",
+    noFilesOutsideFolders: "Немає файлів поза папками",
     noFilesYet: "Файлів ще немає",
     folderEmptyDescription: "Щоб почати, вивантажте файли або перемістіть їх до цієї папки.",
     noFilesDescription: "Вивантажте файли, щоб упорядковувати матеріали для друку.",
