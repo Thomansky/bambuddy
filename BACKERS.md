@@ -63,7 +63,6 @@ If you sponsor and your name isn't here within 48h, please write an email to mar
 - [@boernie](https://github.com/boernie)
 - [@qoatzelcoat](https://github.com/qoatzelcoat)
 - [@Sanaki](https://github.com/Sanaki)
-- [@jlofshult](https://github.com/jlofshult)
 - [@TriadX1](https://github.com/TriadX1)
 - [@hazzardr](https://github.com/hazzardr)
 - [@Shihchiun](https://github.com/Shihchiun)

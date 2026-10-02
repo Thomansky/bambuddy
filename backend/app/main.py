@@ -88,7 +88,7 @@ from backend.app.core.config import APP_VERSION, settings as app_settings
 from backend.app.core.database import async_session, engine, init_db
 from backend.app.core.tasks import spawn_background_task
 from backend.app.core.websocket import ws_manager
-from backend.app.services import print_dispatch_context, slot_unlink_grace
+from backend.app.services import kprofile_drift, print_dispatch_context, slot_unlink_grace
 from backend.app.services.archive import ArchiveService, peek_plate_index_in_3mf, swap_plate_suffix
 from backend.app.services.archive_purge import archive_purge_service
 from backend.app.services.bambu_ftp import (
@@ -1614,6 +1614,22 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
         )
     elif not state.connected and _printer_kprofiles_primed_since_connect.get(printer_id, False):
         _printer_kprofiles_primed_since_connect[printer_id] = False
+
+    # A slot can lose its K-profile selection (cali_idx back to -1) with nothing
+    # else in the AMS report changing -- a power cycle does it to every slot --
+    # and on_ams_change never hears of it (#3219). Checked here, on every push
+    # while the printer is idle; needs_check is cheap and throttled per slot.
+    # Guarded: nothing here may stop the status broadcast below.
+    try:
+        if not state.connected:
+            kprofile_drift.forget_printer(printer_id)
+        elif kprofile_drift.needs_check(printer_id, state):
+            spawn_background_task(
+                kprofile_drift.reapply_lost_kprofiles(printer_id),
+                name=f"reapply-kprofiles-{printer_id}",
+            )
+    except Exception:
+        logging.getLogger(__name__).exception("[Printer %s] K-profile check failed", printer_id)
 
     # Offline-notification edge (#1752): schedule `on_printer_offline` on
     # connected → disconnected. The "back online" channel is already covered

@@ -6847,6 +6847,12 @@ export default {
     cancel: '取消',
     configuring: '配置中...',
     configureSlot: '配置槽位',
+    // Why an Orca profile went into the slot as the generic for its material (#3216)
+    orcaFallback: {
+      no_filament_id: '此 Orca 配置文件没有自己的耗材 ID，因此 OrcaSlicer 会将此槽位识别为 Generic {{material}}。',
+      lookup_failed: '无法从 Orca Cloud 读取此配置文件的耗材 ID，因此 OrcaSlicer 会将此槽位识别为 Generic {{material}}。请稍后重试。',
+      no_permission: '你没有 Orca Cloud 访问权限，因此无法读取此配置文件的耗材 ID。OrcaSlicer 会将此槽位识别为 Generic {{material}}。',
+    },
   },
 
   // Git Backup Settings

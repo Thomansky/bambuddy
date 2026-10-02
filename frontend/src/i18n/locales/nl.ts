@@ -6913,6 +6913,12 @@ export default {
     cancel: 'Annuleren',
     configuring: 'Configureren...',
     configureSlot: 'Sleuf configureren',
+    // Why an Orca profile went into the slot as the generic for its material (#3216)
+    orcaFallback: {
+      no_filament_id: 'Dit Orca-profiel heeft geen eigen filament-ID, dus OrcaSlicer ziet deze sleuf als Generic {{material}}.',
+      lookup_failed: 'De filament-ID van dit profiel kon niet uit Orca Cloud worden gelezen, dus OrcaSlicer ziet deze sleuf als Generic {{material}}. Probeer het zo opnieuw.',
+      no_permission: 'Je hebt geen toegang tot Orca Cloud, dus de filament-ID van dit profiel kon niet worden gelezen. OrcaSlicer ziet deze sleuf als Generic {{material}}.',
+    },
   },
 
   // Git Backup Settings

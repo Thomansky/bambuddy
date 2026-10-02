@@ -389,6 +389,7 @@ async def apply_spool_to_slot_via_mqtt(
         tray_sub_brands=tray_sub_brands,
         tray_type=tray_type,
         setting_id=setting_id,
+        configured_tray_info_idx=effective_tray_info_idx,
     )
 
     logger.info(

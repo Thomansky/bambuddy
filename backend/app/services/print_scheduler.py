@@ -30,7 +30,7 @@ from backend.app.models.settings import Settings
 from backend.app.models.smart_plug import SmartPlug
 from backend.app.models.spool_assignment import SpoolAssignment
 from backend.app.models.spoolman_slot_assignment import SpoolmanSlotAssignment
-from backend.app.services import drying_preflight, print_dispatch_context, stock_forecast
+from backend.app.services import drying_preflight, kprofile_drift, print_dispatch_context, stock_forecast
 from backend.app.services.bambu_ftp import (
     FtpFailureKind,
     FtpFailureReport,
@@ -8196,6 +8196,16 @@ class PrintScheduler:
                     effective_plate_id,
                     ams_mapping,
                 )
+
+        # A slot that lost its K-profile selection (a power cycle resets every
+        # slot to the default K) would print on the default. The idle check in
+        # the status handler normally restores it first, but nothing guarantees
+        # it ran before this dispatch (#3219). Unthrottled: once per job.
+        # Never allowed to stop the print it is protecting.
+        try:
+            await kprofile_drift.reapply_lost_kprofiles(item.printer_id, _used_global_tray_ids(item), throttle=False)
+        except Exception:
+            logger.exception("Queue item %s: K-profile check before dispatch failed", item.id)
 
         # Start the print with AMS mapping, plate_id and print options.
         # nozzle_mapping rides through verbatim — JSON string captured from

@@ -6804,6 +6804,12 @@ export default {
     cancel: 'İptal',
     configuring: 'Yapılandırılıyor...',
     configureSlot: 'Yuvayı Yapılandır',
+    // Why an Orca profile went into the slot as the generic for its material (#3216)
+    orcaFallback: {
+      no_filament_id: 'Bu Orca profilinin kendine ait bir filament kimliği yok, bu yüzden OrcaSlicer bu yuvayı Generic {{material}} olarak görecek.',
+      lookup_failed: 'Bu profilin filament kimliği Orca Cloud\'dan okunamadı, bu yüzden OrcaSlicer bu yuvayı Generic {{material}} olarak görecek. Birazdan tekrar deneyin.',
+      no_permission: 'Orca Cloud erişiminiz yok, bu yüzden bu profilin filament kimliği okunamadı. OrcaSlicer bu yuvayı Generic {{material}} olarak görecek.',
+    },
   },
 
   // Git Yedekleme Ayarları

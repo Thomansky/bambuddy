@@ -6911,6 +6911,12 @@ errors: {
     cancel: 'Avbryt',
     configuring: 'Konfigurerar...',
     configureSlot: 'Konfigurera fack',
+    // Why an Orca profile went into the slot as the generic for its material (#3216)
+    orcaFallback: {
+      no_filament_id: 'Den här Orca-profilen har inget eget filament-ID, så OrcaSlicer kommer att se den här platsen som Generic {{material}}.',
+      lookup_failed: 'Det gick inte att läsa profilens filament-ID från Orca Cloud, så OrcaSlicer kommer att se den här platsen som Generic {{material}}. Försök igen om en stund.',
+      no_permission: 'Du har inte åtkomst till Orca Cloud, så profilens filament-ID kunde inte läsas. OrcaSlicer kommer att se den här platsen som Generic {{material}}.',
+    },
   },
 
   // Git Backup Settings

@@ -6,7 +6,7 @@ import { Layers, Settings2, Package, Unlink, Link2, X } from 'lucide-react';
 import type { SpoolBuddyOutletContext } from '../../components/spoolbuddy/SpoolBuddyLayout';
 import { api } from '../../api/client';
 import type { PrinterStatus, AMSTray, SpoolAssignment } from '../../api/client';
-import { getGlobalTrayId, getFillBarColor, getSpoolmanFillLevel, getFallbackSpoolTag, formatSlotLabel, isBambuLabSpool, resolveSlotNozzleDiameter } from '../../utils/amsHelpers';
+import { getGlobalTrayId, getFillBarColor, getSpoolmanFillLevel, getFallbackSpoolTag, formatSlotLabel, isBambuLabSpool, resolveSlotNozzleDiameter, slotPresetDescribesTray } from '../../utils/amsHelpers';
 import { getSwatchStyle, resolveSpoolColorName } from '../../utils/colors';
 import { mapModelCode } from '../../utils/printerModel';
 import { spoolSwatchStyle } from '../../components/spoolbuddy/spoolPaint';
@@ -393,7 +393,10 @@ export function SpoolBuddyAmsPage() {
       trayInfoIdx: tray?.tray_info_idx || undefined,
       extruderId: isDualNozzle ? extruderId : undefined,
       caliIdx: tray?.cali_idx,
-      savedPresetId: slotPreset?.preset_id,
+      // Only while it still describes the slot (#3216).
+      savedPresetId: slotPresetDescribesTray(slotPreset?.preset_id, tray?.tray_info_idx, slotPreset?.tray_info_idx)
+        ? slotPreset?.preset_id
+        : undefined,
       location: `${getAmsName(amsId)} Slot ${trayId + 1}`,
     };
 
@@ -415,7 +418,9 @@ export function SpoolBuddyAmsPage() {
       trayInfoIdx: extTray.tray_info_idx || undefined,
       extruderId: isDualNozzle ? (extTrayId === 254 ? 1 : 0) : undefined,
       caliIdx: extTray.cali_idx,
-      savedPresetId: extSlotPreset?.preset_id,
+      savedPresetId: slotPresetDescribesTray(extSlotPreset?.preset_id, extTray.tray_info_idx, extSlotPreset?.tray_info_idx)
+        ? extSlotPreset?.preset_id
+        : undefined,
       location: isDualNozzle
         ? (extTrayId === 254 ? 'Ext-L' : 'Ext-R')
         : 'External',

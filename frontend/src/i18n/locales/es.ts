@@ -6870,6 +6870,12 @@ export default {
     cancel: 'Cancelar',
     configuring: 'Configurando...',
     configureSlot: 'Configurar ranura',
+    // Why an Orca profile went into the slot as the generic for its material (#3216)
+    orcaFallback: {
+      no_filament_id: 'Este perfil de Orca no tiene un ID de filamento propio, así que OrcaSlicer verá esta ranura como Generic {{material}}.',
+      lookup_failed: 'No se pudo leer el ID de filamento de este perfil desde Orca Cloud, así que OrcaSlicer verá esta ranura como Generic {{material}}. Inténtalo de nuevo en un momento.',
+      no_permission: 'No tienes acceso a Orca Cloud, así que no se pudo leer el ID de filamento de este perfil. OrcaSlicer verá esta ranura como Generic {{material}}.',
+    },
   },
 
   // Git Backup Settings

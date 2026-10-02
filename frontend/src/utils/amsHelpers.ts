@@ -675,13 +675,22 @@ export function isBambuLabSpool(tray: {
  * and a local preset (`local_68`) has no printer-side id at all, so neither can
  * be checked here and both keep the stored name. Same for a slot reporting no
  * id (generic filament with no tag), which is the case the row exists for.
+ *
+ * Rows written since #3216 also record the filament id the slot was given
+ * with the preset (`presetTrayInfoIdx`). That settles every kind of preset:
+ * once the printer reports a different id, something else — the slicer's
+ * Device tab, the printer's screen — re-configured the slot, and the row no
+ * longer describes it.
  */
 export function slotPresetDescribesTray(
   presetId: string | null | undefined,
   trayInfoIdx: string | null | undefined,
+  presetTrayInfoIdx?: string | null,
 ): boolean {
   const preset = (presetId || '').split('_')[0].toUpperCase();
   const tray = (trayInfoIdx || '').split('_')[0].toUpperCase();
+  const recorded = (presetTrayInfoIdx || '').split('_')[0].toUpperCase();
+  if (recorded && tray) return recorded === tray;
   if (!preset.startsWith('GFS') || !tray.startsWith('GF') || tray.startsWith('GFS')) return true;
   return `GF${preset.slice(3)}` === tray;
 }

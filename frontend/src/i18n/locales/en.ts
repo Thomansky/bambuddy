@@ -6913,6 +6913,12 @@ export default {
     cancel: 'Cancel',
     configuring: 'Configuring...',
     configureSlot: 'Configure Slot',
+    // Why an Orca profile went into the slot as the generic for its material (#3216)
+    orcaFallback: {
+      no_filament_id: 'This Orca profile has no filament ID of its own, so OrcaSlicer will see this slot as Generic {{material}}.',
+      lookup_failed: 'Couldn\'t read this profile\'s filament ID from Orca Cloud, so OrcaSlicer will see this slot as Generic {{material}}. Try again in a moment.',
+      no_permission: 'You don\'t have Orca Cloud access, so this profile\'s filament ID couldn\'t be read. OrcaSlicer will see this slot as Generic {{material}}.',
+    },
   },
 
   // Git Backup Settings

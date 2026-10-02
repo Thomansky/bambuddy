@@ -6547,7 +6547,13 @@ export default {
     resetSlot: '슬롯 초기화',
     cancel: '취소',
     configuring: '구성 중...',
-    configureSlot: '슬롯 구성'
+    configureSlot: '슬롯 구성',
+    // Why an Orca profile went into the slot as the generic for its material (#3216)
+    orcaFallback: {
+      no_filament_id: '이 Orca 프로필에는 자체 필라멘트 ID가 없어 OrcaSlicer에서 이 슬롯이 Generic {{material}}(으)로 표시됩니다.',
+      lookup_failed: 'Orca Cloud에서 이 프로필의 필라멘트 ID를 읽지 못해 OrcaSlicer에서 이 슬롯이 Generic {{material}}(으)로 표시됩니다. 잠시 후 다시 시도하세요.',
+      no_permission: 'Orca Cloud 접근 권한이 없어 이 프로필의 필라멘트 ID를 읽을 수 없었습니다. OrcaSlicer에서 이 슬롯이 Generic {{material}}(으)로 표시됩니다.',
+    },
   },
   githubBackup: {
     title: 'Git 백업',

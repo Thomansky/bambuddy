@@ -2985,6 +2985,9 @@ export interface SlotPresetMapping {
   tray_id: number;
   preset_id: string;
   preset_name: string;
+  // Filament id the slot was configured with alongside this preset; null for
+  // rows that predate it or whose writer did not know it (#3216).
+  tray_info_idx?: string | null;
 }
 
 // Filament types
@@ -6422,8 +6425,8 @@ export const api = {
     request<Record<number, SlotPresetMapping>>(`/printers/${printerId}/slot-presets`),
   getSlotPreset: (printerId: number, amsId: number, trayId: number) =>
     request<SlotPresetMapping | null>(`/printers/${printerId}/slot-presets/${amsId}/${trayId}`),
-  saveSlotPreset: (printerId: number, amsId: number, trayId: number, presetId: string, presetName: string, presetSource = 'cloud') =>
-    request<SlotPresetMapping>(`/printers/${printerId}/slot-presets/${amsId}/${trayId}?preset_id=${encodeURIComponent(presetId)}&preset_name=${encodeURIComponent(presetName)}&preset_source=${encodeURIComponent(presetSource)}`, {
+  saveSlotPreset: (printerId: number, amsId: number, trayId: number, presetId: string, presetName: string, presetSource = 'cloud', trayInfoIdx?: string) =>
+    request<SlotPresetMapping>(`/printers/${printerId}/slot-presets/${amsId}/${trayId}?preset_id=${encodeURIComponent(presetId)}&preset_name=${encodeURIComponent(presetName)}&preset_source=${encodeURIComponent(presetSource)}${trayInfoIdx ? `&tray_info_idx=${encodeURIComponent(trayInfoIdx)}` : ''}`, {
       method: 'PUT',
     }),
   deleteSlotPreset: (printerId: number, amsId: number, trayId: number) =>
@@ -6464,6 +6467,9 @@ export const api = {
       kprofile_filament_id?: string;
       kprofile_setting_id?: string;
       k_value?: number;
+      // Orca Cloud profile the slot is set to; the backend looks up its
+      // filament id when tray_info_idx is empty (#3216).
+      orca_profile_id?: string;
     }
   ) => {
     const params = new URLSearchParams({
@@ -6488,7 +6494,17 @@ export const api = {
     if (config.k_value !== undefined && config.k_value > 0) {
       params.set('k_value', config.k_value.toString());
     }
-    return request<{ success: boolean; message: string }>(
+    if (config.orca_profile_id) {
+      params.set('orca_profile_id', config.orca_profile_id);
+    }
+    return request<{
+      success: boolean;
+      message: string;
+      // The filament id the slot was actually given.
+      tray_info_idx?: string;
+      // Why an Orca profile went out as the generic for its material, or "".
+      orca_fallback_reason?: '' | 'no_filament_id' | 'lookup_failed' | 'no_permission';
+    }>(
       `/printers/${printerId}/slots/${amsId}/${trayId}/configure?${params}`,
       { method: 'POST' }
     );

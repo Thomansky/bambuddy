@@ -379,6 +379,9 @@ class TestAssignSpoolPresetMapping:
         # Must use slicer_filament_name, NOT "PLA Silk" from material+subtype
         assert presets["1"]["preset_name"] == "Bambu PLA Silk"
         assert presets["1"]["preset_id"] == "GFSA05"
+        # The filament id the slot was given goes with it, so the slot card can
+        # tell a later re-configuration from elsewhere (#3216).
+        assert presets["1"]["tray_info_idx"] == "GFA05"
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -398,6 +401,7 @@ class TestAssignSpoolPresetMapping:
             preset_id="GFSA01",
             preset_name="Bambu PLA Matte",
             preset_source="cloud",
+            tray_info_idx="GFA01",
         )
         db_session.add(old_mapping)
         await db_session.commit()
@@ -435,6 +439,8 @@ class TestAssignSpoolPresetMapping:
         # Old "Bambu PLA Matte" must be overwritten
         assert presets["2"]["preset_name"] == "Generic PLA Silk"
         assert presets["2"]["preset_id"] == "GFSL96"
+        # ...and so must the filament id recorded with it (#3216).
+        assert presets["2"]["tray_info_idx"] == "GFL96"
 
     @pytest.mark.asyncio
     @pytest.mark.integration

@@ -1632,6 +1632,41 @@ class TestConfigureAMSSlotAPI:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    @pytest.mark.parametrize("cali_idx", [-1, 9354])
+    async def test_configure_records_the_k_profile_pick(self, async_client: AsyncClient, printer_factory, cali_idx):
+        """A Default pick must not be undone by the lost-selection check (#3219)."""
+        printer = await printer_factory(name="X1C")
+
+        mock_client = MagicMock()
+        mock_client.ams_set_filament_setting.return_value = True
+        mock_client.extrusion_cali_sel.return_value = True
+        mock_client.request_status_update.return_value = True
+
+        with (
+            patch("backend.app.api.routes.printers.printer_manager") as mock_pm,
+            patch("backend.app.api.routes.printers.kprofile_drift.note_slot_configured") as note,
+        ):
+            mock_pm.get_client.return_value = mock_client
+            mock_pm.get_status.return_value = None
+
+            response = await async_client.post(
+                f"/api/v1/printers/{printer.id}/slots/1/2/configure",
+                params={
+                    "tray_info_idx": "GFL05",
+                    "tray_type": "PLA",
+                    "tray_sub_brands": "PLA Basic",
+                    "tray_color": "FFFFFFFF",
+                    "nozzle_temp_min": 190,
+                    "nozzle_temp_max": 230,
+                    "cali_idx": cali_idx,
+                },
+            )
+
+            assert response.status_code == 200
+            note.assert_called_once_with(printer.id, 1, 2, cali_idx)
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_configure_builtin_empty_setting_id_is_derived(self, async_client: AsyncClient, printer_factory):
         """A built-in preset (GF* tray_info_idx, empty setting_id) gets a derived GFS* setting_id (#2604).
 
