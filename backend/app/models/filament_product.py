@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.core.database import Base
@@ -34,6 +34,9 @@ class FilamentProduct(Base):
     nozzle_temp_min: Mapped[int | None] = mapped_column(Integer)
     nozzle_temp_max: Mapped[int | None] = mapped_column(Integer)
     note: Mapped[str | None] = mapped_column(String(500))
+    # When the prices were last checked — the standard prices at the sizes and
+    # the special prices of single combinations alike.
+    price_date: Mapped[date | None] = mapped_column(Date)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -107,6 +110,11 @@ class FilamentProductSize(Base):
     # converts, so nobody divides by hand.
     price: Mapped[float | None] = mapped_column(Float)
     price_vat_included: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    # The size usually ordered; goods-in offers it first. One per product.
+    is_standard: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    # Filament without a spool of its own, to go on a reusable one. A product
+    # can sell the same weight both ways, "1 kg" and "1 kg Refill".
+    refill: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
 
     product: Mapped[FilamentProduct] = relationship(back_populates="sizes")
 

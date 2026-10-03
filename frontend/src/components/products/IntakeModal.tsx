@@ -13,7 +13,7 @@ import {
   costPerKg,
   findVariant,
   formatMoney,
-  formatWeight,
+  formatSizeLabel,
   parsePrice,
   priceText,
   variantParts,
@@ -155,7 +155,7 @@ export function IntakeModal({ onClose, initialProductId = null }: IntakeModalPro
       });
       setCreated({
         ids: result.spool_ids,
-        label: `${product.label} · ${colorLabel(parts.color)} · ${formatWeight(parts.size.label_weight)}`,
+        label: `${product.label} · ${colorLabel(parts.color)} · ${sizeText(parts.size)}`,
         settled: result.orders_settled ?? 0,
       });
       setStep('done');
@@ -189,6 +189,10 @@ export function IntakeModal({ onClose, initialProductId = null }: IntakeModalPro
       : [];
 
   const perKg = parts ? costPerKg(parsePrice(price), parts.size.label_weight) : null;
+  // "1 kg Refill" for a refill, as everywhere a size is named.
+  function sizeText(size: { label_weight: number; refill: boolean }) {
+    return formatSizeLabel(size.label_weight, size.refill, t('inventory.products.refill'));
+  }
   const listPrice = parts ? parts.variant.effective_price : null;
 
   return (
@@ -301,7 +305,13 @@ export function IntakeModal({ onClose, initialProductId = null }: IntakeModalPro
                               const sizesInColor = product.sizes.filter((s) =>
                                 product.variants.some((v) => v.color_id === color.id && v.size_id === s.id),
                               );
-                              setSizeId(sizesInColor.length === 1 ? sizesInColor[0].id : null);
+                              // One size settles it; otherwise the standard size, the one
+                              // usually ordered, is offered first.
+                              setSizeId(
+                                sizesInColor.length === 1
+                                  ? sizesInColor[0].id
+                                  : (sizesInColor.find((s) => s.standard)?.id ?? null),
+                              );
                             }}
                             className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm ${
                               colorId === color.id
@@ -336,7 +346,12 @@ export function IntakeModal({ onClose, initialProductId = null }: IntakeModalPro
                                 : 'border-bambu-dark-tertiary text-bambu-gray hover:text-white'
                             }`}
                           >
-                            {formatWeight(size.label_weight)}
+                            {sizeText(size)}
+                            {size.standard && (
+                              <span className="ml-1 text-bambu-green" title={t('inventory.products.standardSize')}>
+                                ★
+                              </span>
+                            )}
                           </button>
                         ))}
                       </div>
@@ -374,7 +389,7 @@ export function IntakeModal({ onClose, initialProductId = null }: IntakeModalPro
                 <div className="min-w-0">
                   <div className="text-white font-medium truncate">{product.label}</div>
                   <div className="text-sm text-bambu-gray">
-                    {colorLabel(parts.color)} · {formatWeight(parts.size.label_weight)}
+                    {colorLabel(parts.color)} · {sizeText(parts.size)}
                     {product.material_number && (
                       <span className="ml-2 px-1.5 py-0.5 text-xs rounded bg-bambu-dark-tertiary text-white">
                         {t('inventory.products.materialNumberShort', { number: product.material_number })}

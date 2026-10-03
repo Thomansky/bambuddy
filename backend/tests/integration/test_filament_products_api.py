@@ -155,3 +155,131 @@ class TestApiKeys:
         response = await async_client.get(f"{API}/articles")
 
         assert response.status_code == 401
+
+
+def _document(product: dict, **overrides) -> dict:
+    """The editor's save document for a product as the API returned it."""
+    fields = ("brand", "material", "subtype", "material_number", "slicer_filament", "slicer_filament_name")
+    document = {
+        **{key: product[key] for key in fields},
+        "sizes": [
+            {
+                "id": s["id"],
+                "key": f"s{s['id']}",
+                "label_weight": s["label_weight"],
+                "core_weight": s["core_weight"],
+                "price": s["price"],
+            }
+            for s in product["sizes"]
+        ],
+        "colors": [
+            {"id": c["id"], "key": f"c{c['id']}", "color_name": c["color_name"], "rgba": c["rgba"]}
+            for c in product["colors"]
+        ],
+        "variants": [
+            {"color_key": f"c{v['color_id']}", "size_key": f"s{v['size_id']}", "price_override": v["price_override"]}
+            for v in product["variants"]
+        ],
+    }
+    document.update(overrides)
+    return document
+
+
+class TestPriceDate:
+    """When the prices were last checked: one date for the whole product, its
+    standard prices at the sizes and its special prices alike."""
+
+    @pytest.mark.asyncio
+    async def test_a_product_keeps_its_price_date_and_its_articles_carry_it(self, async_client: AsyncClient):
+        product = await _product(async_client, price_date="2026-09-29")
+
+        rows = (await async_client.get(f"{API}/articles")).json()
+
+        assert product["price_date"] == "2026-09-29"
+        assert {row["price_date"] for row in rows} == {"2026-09-29"}
+
+    @pytest.mark.asyncio
+    async def test_an_edit_without_it_keeps_it_and_null_clears_it(self, async_client: AsyncClient):
+        product = await _product(async_client, price_date="2026-09-29")
+
+        kept = await async_client.put(f"{API}/{product['id']}", json=_document(product))
+        cleared = await async_client.put(f"{API}/{product['id']}", json=_document(product, price_date=None))
+
+        assert kept.status_code == 200, kept.text
+        assert kept.json()["product"]["price_date"] == "2026-09-29"
+        assert cleared.json()["product"]["price_date"] is None
+
+    @pytest.mark.asyncio
+    async def test_a_product_without_one_has_none(self, async_client: AsyncClient):
+        product = await _product(async_client)
+
+        assert product["price_date"] is None
+
+
+class TestStandardSizeAndRefill:
+    """A product marks the size it is usually ordered in, and a weight can be
+    sold on a spool and as a refill side by side."""
+
+    SIZES = [
+        {"key": "kg1", "label_weight": 1000, "core_weight": 250, "price": 20.0},
+        {"key": "kg1r", "label_weight": 1000, "core_weight": 250, "price": 17.0, "refill": True, "standard": True},
+    ]
+    VARIANTS = [{"color_key": "black", "size_key": "kg1"}, {"color_key": "black", "size_key": "kg1r"}]
+
+    @pytest.mark.asyncio
+    async def test_a_weight_can_be_sold_on_a_spool_and_as_a_refill(self, async_client: AsyncClient):
+        product = await _product(async_client, sizes=self.SIZES, variants=self.VARIANTS)
+
+        sizes = sorted((s["label_weight"], s["refill"], s["standard"], s["price"]) for s in product["sizes"])
+        assert sizes == [(1000, False, False, 20.0), (1000, True, True, 17.0)]
+
+    @pytest.mark.asyncio
+    async def test_the_same_size_twice_is_refused(self, async_client: AsyncClient):
+        for refill in (False, True):
+            twice = [
+                {"key": "a", "label_weight": 1000, "refill": refill},
+                {"key": "b", "label_weight": 1000, "refill": refill},
+            ]
+            response = await async_client.post(API, json={"material": "PLA", "sizes": twice})
+
+            assert response.status_code == 400, refill
+
+    @pytest.mark.asyncio
+    async def test_one_standard_size_at_most(self, async_client: AsyncClient):
+        product = await _product(
+            async_client,
+            sizes=[
+                {"key": "kg1", "label_weight": 1000, "standard": True},
+                {"key": "kg5", "label_weight": 5000, "standard": True},
+            ],
+            variants=[],
+        )
+
+        assert {s["label_weight"]: s["standard"] for s in product["sizes"]} == {1000: True, 5000: False}
+
+    @pytest.mark.asyncio
+    async def test_the_articles_say_refill_and_standard_size(self, async_client: AsyncClient):
+        await _product(async_client, sizes=self.SIZES, variants=self.VARIANTS)
+
+        rows = (await async_client.get(f"{API}/articles")).json()
+
+        assert sorted((row["refill"], row["standard_size"], row["price"]) for row in rows) == [
+            (False, False, 20.0),
+            (True, True, 17.0),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_the_shopping_list_names_a_refill(self, async_client: AsyncClient):
+        product = await _product(
+            async_client,
+            sizes=self.SIZES,
+            variants=[{"color_key": "black", "size_key": "kg1r", "min_stock": 2}],
+        )
+        refill = next(v for v in product["variants"] if v["min_stock"] == 2)
+
+        lines = (await async_client.get(f"{API}/reorder")).json()
+        await async_client.post(f"{API}/reorder", json={"items": [{"variant_id": refill["id"], "quantity": 2}]})
+        [item] = (await async_client.get("/api/v1/inventory/shopping-list")).json()
+
+        assert [line["refill"] for line in lines] == [True]
+        assert item["note"] == "1 kg Refill"

@@ -5566,6 +5566,12 @@ async def run_migrations(conn):
     # Target stock per variant, and shopping-list lines that know which
     # variant they restock and where it is bought (#3165).
     await _safe_execute(conn, "ALTER TABLE filament_variants ADD COLUMN min_stock INTEGER")
+    # When a product's prices were last checked (#3165).
+    await _safe_execute(conn, "ALTER TABLE filament_products ADD COLUMN price_date DATE")
+    # A product's standard size, and sizes that are refills (#3165).
+    no = "0" if is_sqlite() else "FALSE"
+    await _safe_execute(conn, f"ALTER TABLE filament_product_sizes ADD COLUMN is_standard BOOLEAN DEFAULT {no}")
+    await _safe_execute(conn, f"ALTER TABLE filament_product_sizes ADD COLUMN refill BOOLEAN DEFAULT {no}")
     await _safe_execute(conn, "ALTER TABLE filament_shopping_list ADD COLUMN variant_id INTEGER")
     await _safe_execute(conn, "ALTER TABLE filament_shopping_list ADD COLUMN supplier_id INTEGER")
     await _safe_execute(

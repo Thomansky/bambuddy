@@ -3943,6 +3943,10 @@ export interface FilamentProductSize {
   core_weight_catalog_id: number | null;
   price: number | null;
   price_vat_included: boolean;
+  /** The size usually ordered; one per product. */
+  standard: boolean;
+  /** Filament without a spool of its own; "1 kg" and "1 kg Refill" can coexist. */
+  refill: boolean;
 }
 
 export interface FilamentProductColor {
@@ -4006,6 +4010,8 @@ export interface FilamentProduct {
   nozzle_temp_min: number | null;
   nozzle_temp_max: number | null;
   note: string | null;
+  /** When the prices were last checked, YYYY-MM-DD. */
+  price_date: string | null;
   sizes: FilamentProductSize[];
   colors: FilamentProductColor[];
   variants: FilamentVariant[];
@@ -4026,6 +4032,8 @@ export interface FilamentProductInput {
   nozzle_temp_min: number | null;
   nozzle_temp_max: number | null;
   note: string | null;
+  /** Left out, the product keeps its date. */
+  price_date?: string | null;
   /** Left out, the product keeps the ones it has. */
   presets?: { printer_model: string; slicer_filament: string; slicer_filament_name: string | null }[];
   sizes: {
@@ -4035,6 +4043,8 @@ export interface FilamentProductInput {
     core_weight: number;
     price: number | null;
     price_vat_included: boolean;
+    standard?: boolean;
+    refill?: boolean;
   }[];
   colors: { id: number | null; key: string; color_name: string | null; rgba: string | null }[];
   variants: { color_key: string; size_key: string; price_override: number | null; min_stock?: number | null }[];
@@ -4052,6 +4062,7 @@ export interface ProductReorderLine {
   extra_colors: string | null;
   effect_type: string | null;
   label_weight: number;
+  refill: boolean;
   min_stock: number;
   spools: number;
   in_stock: number;

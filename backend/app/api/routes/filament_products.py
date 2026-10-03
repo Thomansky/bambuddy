@@ -1,6 +1,8 @@
 """Product master data for filament (#3165): products, colour × size variants,
 codes learnt at intake, and spools created from a variant."""
 
+from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -52,6 +54,10 @@ class ProductSizeIn(BaseModel):
     core_weight_catalog_id: int | None = None
     price: float | None = Field(default=None, ge=0)
     price_vat_included: bool = True
+    # The size usually ordered; one per product, the first one marked wins.
+    standard: bool = False
+    # Filament without a spool of its own; "1 kg" and "1 kg Refill" can coexist.
+    refill: bool = False
 
 
 class ProductColorIn(BaseModel):
@@ -94,6 +100,8 @@ class ProductIn(BaseModel):
     nozzle_temp_min: int | None = Field(default=None, ge=0, le=500)
     nozzle_temp_max: int | None = Field(default=None, ge=0, le=500)
     note: str | None = Field(default=None, max_length=500)
+    # When the prices were last checked; left out, the date stays as it is.
+    price_date: date | None = None
     # The preset per printer model; left out, they stay as they are.
     presets: list[ProductPresetIn] | None = None
     sizes: list[ProductSizeIn] = []
@@ -128,6 +136,8 @@ class ArticleOut(BaseModel):
     rgba: str | None = Field(description="The colour as RRGGBBAA")
     label_weight: int = Field(description="Filament on a full spool, in grams")
     core_weight: int = Field(description="The empty spool, in grams")
+    refill: bool = Field(description="Filament without a spool of its own, to go on a reusable one")
+    standard_size: bool = Field(description="Whether this is the product's standard size, the one usually ordered")
     price: float | None = Field(
         description="What one spool costs: the combination's own price, else its size's (the manufacturer's)"
     )
@@ -143,6 +153,7 @@ class ArticleOut(BaseModel):
     slicer_filament: str | None
     slicer_filament_name: str | None
     suppliers: list[str] = Field(description="Where the product has been bought, the usual supplier first")
+    price_date: date | None = Field(description="When the product's prices were last checked")
 
 
 class ReorderItemIn(BaseModel):
@@ -200,6 +211,7 @@ def _product_out(product: FilamentProduct, stock: dict[int, VariantStock], on_or
         "nozzle_temp_min": product.nozzle_temp_min,
         "nozzle_temp_max": product.nozzle_temp_max,
         "note": product.note,
+        "price_date": product.price_date.isoformat() if product.price_date else None,
         "sizes": [
             {
                 "id": size.id,
@@ -208,6 +220,8 @@ def _product_out(product: FilamentProduct, stock: dict[int, VariantStock], on_or
                 "core_weight_catalog_id": size.core_weight_catalog_id,
                 "price": size.price,
                 "price_vat_included": size.price_vat_included,
+                "standard": size.is_standard,
+                "refill": size.refill,
             }
             for size in product.sizes
         ],
