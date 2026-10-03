@@ -3,6 +3,7 @@ import type { FilamentProduct } from '../../../api/client';
 import {
   costPerKg,
   formatPriceDate,
+  formatSizeLabel,
   parsePrice,
   presetModels,
   productMatches,
@@ -105,6 +106,11 @@ describe('small helpers', () => {
     expect(formatPriceDate('2026-09-29')).toBe(expected);
     expect(formatPriceDate(null)).toBe('');
     expect(formatPriceDate('29.09.2026')).toBe('');
+  });
+
+  it('names a refill as one', () => {
+    expect(formatSizeLabel(1000, false, 'Refill')).toBe('1 kg');
+    expect(formatSizeLabel(1000, true, 'Refill')).toBe('1 kg Refill');
   });
 
   it('turns a spool price into cost per kg', () => {

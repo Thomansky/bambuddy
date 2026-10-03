@@ -7,7 +7,7 @@ import type { ProductReorderLine } from '../../api/client';
 import { useToast } from '../../contexts/ToastContext';
 import { FilamentSwatch } from '../FilamentSwatch';
 import { getCurrencySymbol } from '../../utils/currency';
-import { formatMoney, formatWeight } from './productUtils';
+import { formatMoney, formatSizeLabel } from './productUtils';
 
 interface ReorderModalProps {
   onClose: () => void;
@@ -32,9 +32,9 @@ function quantityOf(choice: LineChoice): number {
   return Number.isFinite(value) ? Math.min(Math.max(value, 0), MAX_QUANTITY) : 0;
 }
 
-function lineLabel(line: ProductReorderLine): string {
+function lineLabel(line: ProductReorderLine, refillWord: string): string {
   const color = line.color_name || (line.rgba ? `#${line.rgba.slice(0, 6)}` : '?');
-  return `${line.product_label} · ${color} · ${formatWeight(line.label_weight)}`;
+  return `${line.product_label} · ${color} · ${formatSizeLabel(line.label_weight, line.refill, refillWord)}`;
 }
 
 // Reorder (#3165): every colour × size below its target stock, less what the
@@ -44,6 +44,7 @@ function lineLabel(line: ProductReorderLine): string {
 export function ReorderModal({ onClose, onDone }: ReorderModalProps) {
   const { t } = useTranslation();
   const { showToast } = useToast();
+  const refillWord = t('inventory.products.refill');
   const queryClient = useQueryClient();
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.getSettings });
   const currency = getCurrencySymbol(settings?.currency || 'USD');
@@ -202,7 +203,7 @@ export function ReorderModal({ onClose, onDone }: ReorderModalProps) {
                                   checked={choice.selected}
                                   onChange={() => update(line, { selected: !choice.selected })}
                                   className="w-4 h-4 accent-bambu-green"
-                                  aria-label={lineLabel(line)}
+                                  aria-label={lineLabel(line, refillWord)}
                                 />
                               </td>
                               <td className="px-2 py-1.5">
@@ -219,7 +220,7 @@ export function ReorderModal({ onClose, onDone }: ReorderModalProps) {
                                       {line.material_number && (
                                         <span className="font-mono text-bambu-gray mr-1.5">{line.material_number}</span>
                                       )}
-                                      {lineLabel(line)}
+                                      {lineLabel(line, refillWord)}
                                     </div>
                                     <div className="text-xs text-bambu-gray">
                                       {t('inventory.products.reorder.status', {
@@ -237,7 +238,7 @@ export function ReorderModal({ onClose, onDone }: ReorderModalProps) {
                                   inputMode="numeric"
                                   value={choice.quantity}
                                   onChange={(e) => update(line, { quantity: e.target.value.replace(/[^0-9]/g, '') })}
-                                  aria-label={`${t('inventory.products.reorder.quantity')} ${lineLabel(line)}`}
+                                  aria-label={`${t('inventory.products.reorder.quantity')} ${lineLabel(line, refillWord)}`}
                                 />
                               </td>
                               <td className="px-2 py-1.5 min-w-[9rem]">
@@ -247,7 +248,7 @@ export function ReorderModal({ onClose, onDone }: ReorderModalProps) {
                                   onChange={(e) =>
                                     update(line, { supplierId: e.target.value ? Number(e.target.value) : null })
                                   }
-                                  aria-label={`${t('inventory.products.supplier')} ${lineLabel(line)}`}
+                                  aria-label={`${t('inventory.products.supplier')} ${lineLabel(line, refillWord)}`}
                                 >
                                   {line.suppliers.map((s) => (
                                     <option key={s.supplier_id} value={s.supplier_id}>

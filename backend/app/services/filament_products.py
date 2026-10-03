@@ -102,7 +102,18 @@ def product_label(product: FilamentProduct) -> str:
 
 def variant_label(product: FilamentProduct, color: FilamentProductColor, size: FilamentProductSize) -> str:
     color_part = color.color_name or (f"#{color.rgba[:6]}" if color.rgba else "?")
-    return f"{product_label(product)} · {color_part} · {format_weight(size.label_weight)}"
+    return f"{product_label(product)} · {color_part} · {size_label(size)}"
+
+
+def size_label(size: FilamentProductSize) -> str:
+    """'1 kg', or '1 kg Refill' for filament without a spool of its own."""
+    return f"{format_weight(size.label_weight)} Refill" if size.refill else format_weight(size.label_weight)
+
+
+def preferred_size_order(sizes) -> list[FilamentProductSize]:
+    """Sizes in the order a spool that only knows its weight picks among them:
+    the standard size, then one on a spool, then a refill."""
+    return sorted(sizes, key=lambda size: (not size.is_standard, bool(size.refill), size.id or 0))
 
 
 def format_weight(grams: int) -> str:
@@ -257,14 +268,19 @@ async def save_product(db: AsyncSession, product: FilamentProduct | None, data) 
     creating = product is None
     # --- validate the document before touching anything
     size_keys: set[str] = set()
-    weights: set[int] = set()
+    # A weight can be sold on a spool and as a refill, but not twice the same way.
+    weights: set[tuple[int, bool]] = set()
     for size in data.sizes:
         if size.key in size_keys:
             raise ProductError(f"Duplicate size key {size.key!r}")
-        if size.label_weight in weights:
-            raise ProductError(f"The size {format_weight(size.label_weight)} is listed twice")
+        identity = (size.label_weight, bool(getattr(size, "refill", False)))
+        if identity in weights:
+            name = format_weight(size.label_weight) + (" Refill" if identity[1] else "")
+            raise ProductError(f"The size {name} is listed twice")
         size_keys.add(size.key)
-        weights.add(size.label_weight)
+        weights.add(identity)
+    # One standard size at most; the first one marked wins.
+    standard_key = next((size.key for size in data.sizes if getattr(size, "standard", False)), None)
     color_keys: set[str] = set()
     color_names: set[str] = set()
     for color in data.colors:
@@ -335,6 +351,8 @@ async def save_product(db: AsyncSession, product: FilamentProduct | None, data) 
             "core_weight_catalog_id": incoming.core_weight_catalog_id,
             "price": incoming.price,
             "price_vat_included": incoming.price_vat_included,
+            "is_standard": incoming.key == standard_key,
+            "refill": bool(getattr(incoming, "refill", False)),
         }
         if row is None:
             row = FilamentProductSize(product_id=product.id, **values)
@@ -674,6 +692,8 @@ async def article_rows(
                 "rgba": color.rgba,
                 "label_weight": size.label_weight,
                 "core_weight": size.core_weight,
+                "refill": size.refill,
+                "standard_size": size.is_standard,
                 "price": price,
                 "price_vat_included": size.price_vat_included,
                 "cost_per_kg": price_to_cost_per_kg(price, size.label_weight),
@@ -732,6 +752,7 @@ async def reorder_lines(db: AsyncSession) -> list[dict]:
                     "extra_colors": color.extra_colors,
                     "effect_type": color.effect_type,
                     "label_weight": size.label_weight,
+                    "refill": size.refill,
                     "min_stock": variant.min_stock,
                     "spools": here.spools,
                     "in_stock": here.in_stock,
@@ -795,7 +816,7 @@ async def add_to_shopping_list(db: AsyncSession, items) -> dict:
             existing.quantity_spools = (existing.quantity_spools or 0) + item.quantity
             merged += 1
             continue
-        note_parts = [format_weight(variant.size.label_weight)]
+        note_parts = [size_label(variant.size)]
         if supplier_row is not None:
             note_parts.append(supplier_row.supplier.name if supplier_row.supplier else None)
         db.add(
@@ -997,7 +1018,12 @@ async def plan_conversion(db: AsyncSession) -> ConversionPlan:
                     effect_type=color.effect_type,
                     existing_id=color.id,
                 )
-            for size in existing.sizes:
+            # Spools only know their weight; where a weight is sold two ways,
+            # they go to the size preferred_size_order puts first.
+            size_ids: dict[int, int] = {}
+            for size in preferred_size_order(existing.sizes):
+                if size.label_weight in plan.sizes:
+                    continue
                 plan.sizes[size.label_weight] = PlannedSize(
                     label_weight=size.label_weight,
                     core_weight=size.core_weight,
@@ -1005,8 +1031,8 @@ async def plan_conversion(db: AsyncSession) -> ConversionPlan:
                     price_vat_included=size.price_vat_included,
                     existing_id=size.id,
                 )
+                size_ids[size.id] = size.label_weight
             color_ids = {c.id: color_key(c.color_name, c.rgba) for c in existing.colors}
-            size_ids = {s.id: s.label_weight for s in existing.sizes}
             for variant in existing.variants:
                 pair = (color_ids.get(variant.color_id), size_ids.get(variant.size_id))
                 if None not in pair:
@@ -1192,7 +1218,11 @@ class _ProductEntry:
     product: FilamentProduct
     colors: dict[str, FilamentProductColor]
     colors_by_hex: dict[str, list[FilamentProductColor]]
+    # The size a spool of that weight goes to: the standard size, else the one
+    # on a spool, else the refill (see preferred_size_order).
     sizes: dict[int, FilamentProductSize]
+    # Every size of a weight, in that order.
+    sizes_by_weight: dict[int, list[FilamentProductSize]]
     variants: dict[tuple[int, int], FilamentVariant]
 
 
@@ -1212,9 +1242,13 @@ async def _product_entries(db: AsyncSession) -> dict[tuple[str, str, str], _Prod
             product=product,
             colors=colors,
             colors_by_hex=by_hex,
-            sizes={size.label_weight: size for size in product.sizes},
+            sizes={},
+            sizes_by_weight=defaultdict(list),
             variants={(v.color_id, v.size_id): v for v in product.variants},
         )
+        for size in preferred_size_order(product.sizes):
+            entries[key].sizes.setdefault(size.label_weight, size)
+            entries[key].sizes_by_weight[size.label_weight].append(size)
     return entries
 
 
@@ -1311,6 +1345,7 @@ async def auto_assign_spools(db: AsyncSession, spools: list[Spool], *, fill_empt
             db.add(size)
             await db.flush()
             entry.sizes[weight] = size
+            entry.sizes_by_weight[weight].append(size)
         variant = entry.variants.get((color.id, size.id))
         if variant is None:
             variant = FilamentVariant(product_id=product.id, color_id=color.id, size_id=size.id)
@@ -1352,12 +1387,13 @@ async def untagged_spool_for_tray(
         if "bambu" not in brand or product_material != wanted_material or product_subtype != wanted_subtype:
             continue
         color = _match_color(entry, None, rgba)
-        size = entry.sizes.get(int(label_weight))
-        if color is None or size is None:
+        if color is None:
             continue
-        variant = entry.variants.get((color.id, size.id))
-        if variant is not None:
-            variant_ids.append(variant.id)
+        # A roll booked in as "1 kg" or as "1 kg Refill" can take the tag alike.
+        for size in entry.sizes_by_weight.get(int(label_weight), []):
+            variant = entry.variants.get((color.id, size.id))
+            if variant is not None:
+                variant_ids.append(variant.id)
     if not variant_ids:
         return None
     result = await db.execute(

@@ -79,6 +79,11 @@ export function priceText(value: number | null | undefined): string {
   return value === null || value === undefined ? '' : String(value);
 }
 
+/** "1 kg", or "1 kg Refill" for filament without a spool of its own. */
+export function formatSizeLabel(labelWeight: number, refill: boolean, refillWord: string): string {
+  return refill ? `${formatWeight(labelWeight)} ${refillWord}` : formatWeight(labelWeight);
+}
+
 /** A product's "prices as of" date (YYYY-MM-DD) the way the user reads dates. */
 export function formatPriceDate(iso: string | null | undefined): string {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso ?? '');

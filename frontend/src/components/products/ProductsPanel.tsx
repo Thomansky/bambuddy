@@ -31,6 +31,7 @@ import {
   findVariant,
   formatMoney,
   formatPriceDate,
+  formatSizeLabel,
   formatStock,
   formatWeight,
   mergeColumnConfig,
@@ -150,11 +151,18 @@ const columnCells: Record<string, (ctx: CellCtx) => ReactNode> = {
       {product.colors.length > 8 && <span className="text-xs text-bambu-gray">+{product.colors.length - 8}</span>}
     </div>
   ),
-  sizes: ({ product, currency }) => (
+  sizes: ({ product, currency, t }) => (
     <div className="flex flex-wrap gap-1">
       {product.sizes.map((size) => (
-        <span key={size.id} className="px-1.5 py-0.5 text-xs rounded bg-bambu-dark text-bambu-gray whitespace-nowrap">
-          {formatWeight(size.label_weight)}
+        <span
+          key={size.id}
+          className={`px-1.5 py-0.5 text-xs rounded whitespace-nowrap ${
+            size.standard ? 'bg-bambu-green/15 text-bambu-green' : 'bg-bambu-dark text-bambu-gray'
+          }`}
+          title={size.standard ? t('inventory.products.standardSize') : undefined}
+        >
+          {size.standard && '★ '}
+          {formatSizeLabel(size.label_weight, size.refill, t('inventory.products.refill'))}
           {size.price !== null && ` · ${formatMoney(size.price, currency)}`}
         </span>
       ))}
@@ -847,8 +855,13 @@ function StockMatrix({ product, currency }: { product: FilamentProduct; currency
           <tr className="text-xs text-bambu-gray">
             <th className="pr-6 py-1 text-left font-medium align-top">{t('inventory.products.color')}</th>
             {product.sizes.map((size) => (
-              <th key={size.id} className="px-4 py-1 text-center font-medium whitespace-nowrap">
-                {formatWeight(size.label_weight)}
+              <th
+                key={size.id}
+                className="px-4 py-1 text-center font-medium whitespace-nowrap"
+                title={size.standard ? t('inventory.products.standardSize') : undefined}
+              >
+                {size.standard && <span className="text-bambu-green">★ </span>}
+                {formatSizeLabel(size.label_weight, size.refill, t('inventory.products.refill'))}
                 {size.price !== null && (
                   <span className="block font-normal text-bambu-gray/70">{formatMoney(size.price, currency)}</span>
                 )}

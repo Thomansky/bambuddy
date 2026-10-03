@@ -110,6 +110,11 @@ class FilamentProductSize(Base):
     # converts, so nobody divides by hand.
     price: Mapped[float | None] = mapped_column(Float)
     price_vat_included: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    # The size usually ordered; goods-in offers it first. One per product.
+    is_standard: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    # Filament without a spool of its own, to go on a reusable one. A product
+    # can sell the same weight both ways, "1 kg" and "1 kg Refill".
+    refill: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
 
     product: Mapped[FilamentProduct] = relationship(back_populates="sizes")
 

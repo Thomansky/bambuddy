@@ -214,3 +214,72 @@ class TestPriceDate:
         product = await _product(async_client)
 
         assert product["price_date"] is None
+
+
+class TestStandardSizeAndRefill:
+    """A product marks the size it is usually ordered in, and a weight can be
+    sold on a spool and as a refill side by side."""
+
+    SIZES = [
+        {"key": "kg1", "label_weight": 1000, "core_weight": 250, "price": 20.0},
+        {"key": "kg1r", "label_weight": 1000, "core_weight": 250, "price": 17.0, "refill": True, "standard": True},
+    ]
+    VARIANTS = [{"color_key": "black", "size_key": "kg1"}, {"color_key": "black", "size_key": "kg1r"}]
+
+    @pytest.mark.asyncio
+    async def test_a_weight_can_be_sold_on_a_spool_and_as_a_refill(self, async_client: AsyncClient):
+        product = await _product(async_client, sizes=self.SIZES, variants=self.VARIANTS)
+
+        sizes = sorted((s["label_weight"], s["refill"], s["standard"], s["price"]) for s in product["sizes"])
+        assert sizes == [(1000, False, False, 20.0), (1000, True, True, 17.0)]
+
+    @pytest.mark.asyncio
+    async def test_the_same_size_twice_is_refused(self, async_client: AsyncClient):
+        for refill in (False, True):
+            twice = [
+                {"key": "a", "label_weight": 1000, "refill": refill},
+                {"key": "b", "label_weight": 1000, "refill": refill},
+            ]
+            response = await async_client.post(API, json={"material": "PLA", "sizes": twice})
+
+            assert response.status_code == 400, refill
+
+    @pytest.mark.asyncio
+    async def test_one_standard_size_at_most(self, async_client: AsyncClient):
+        product = await _product(
+            async_client,
+            sizes=[
+                {"key": "kg1", "label_weight": 1000, "standard": True},
+                {"key": "kg5", "label_weight": 5000, "standard": True},
+            ],
+            variants=[],
+        )
+
+        assert {s["label_weight"]: s["standard"] for s in product["sizes"]} == {1000: True, 5000: False}
+
+    @pytest.mark.asyncio
+    async def test_the_articles_say_refill_and_standard_size(self, async_client: AsyncClient):
+        await _product(async_client, sizes=self.SIZES, variants=self.VARIANTS)
+
+        rows = (await async_client.get(f"{API}/articles")).json()
+
+        assert sorted((row["refill"], row["standard_size"], row["price"]) for row in rows) == [
+            (False, False, 20.0),
+            (True, True, 17.0),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_the_shopping_list_names_a_refill(self, async_client: AsyncClient):
+        product = await _product(
+            async_client,
+            sizes=self.SIZES,
+            variants=[{"color_key": "black", "size_key": "kg1r", "min_stock": 2}],
+        )
+        refill = next(v for v in product["variants"] if v["min_stock"] == 2)
+
+        lines = (await async_client.get(f"{API}/reorder")).json()
+        await async_client.post(f"{API}/reorder", json={"items": [{"variant_id": refill["id"], "quantity": 2}]})
+        [item] = (await async_client.get("/api/v1/inventory/shopping-list")).json()
+
+        assert [line["refill"] for line in lines] == [True]
+        assert item["note"] == "1 kg Refill"

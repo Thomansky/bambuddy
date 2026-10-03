@@ -221,6 +221,30 @@ describe('ProductsPanel', () => {
     expect(screen.getByText((content) => content.includes(asOf))).toBeInTheDocument();
   });
 
+  it('marks the standard size and names a refill', async () => {
+    const base = { core_weight: 250, core_weight_catalog_id: null, price_vat_included: true, refill: false, standard: false };
+    server.use(
+      http.get('/api/v1/inventory/products', () =>
+        HttpResponse.json([
+          product({
+            id: 9,
+            label: 'Bambu Lab PLA Basic',
+            brand: 'Bambu Lab',
+            sizes: [
+              { ...base, id: 90, label_weight: 1000, price: 20 },
+              { ...base, id: 91, label_weight: 1000, price: 17, refill: true, standard: true },
+            ],
+          }),
+        ]),
+      ),
+    );
+    renderPanel();
+
+    const table = await screen.findByRole('table');
+    expect(within(table).getByText('★ 1 kg Refill · €17.00')).toBeInTheDocument();
+    expect(within(table).getByText('1 kg · €20.00')).toBeInTheDocument();
+  });
+
   it('offers the columns in the same dialog as the spool list', async () => {
     const user = userEvent.setup();
     renderPanel();

@@ -19,6 +19,7 @@ import { extractPresetModel, matchesPrinterModelSuffix } from '../../utils/slice
 import {
   costPerKg,
   formatMoney,
+  formatSizeLabel,
   formatStock,
   formatWeight,
   parsePrice,
@@ -41,6 +42,10 @@ interface SizeRow {
   core_weight: string;
   price: string;
   price_vat_included: boolean;
+  /** The size usually ordered; one per product. */
+  standard: boolean;
+  /** Filament without a spool of its own. */
+  refill: boolean;
 }
 
 /** The preset for one printer model; the product's own covers the rest. */
@@ -82,11 +87,11 @@ function toInt(text: string): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
-/** Sizes lightest first; one without a weight yet waits at the end. The sort
- *  is stable, so two rows with the same weight keep their order. */
+/** Sizes lightest first, a weight on a spool before its refill; one without a
+ *  weight yet waits at the end. */
 function sortSizes(rows: SizeRow[]): SizeRow[] {
   const weight = (row: SizeRow) => toInt(row.label_weight) ?? Number.MAX_SAFE_INTEGER;
-  return [...rows].sort((a, b) => weight(a) - weight(b));
+  return [...rows].sort((a, b) => weight(a) - weight(b) || Number(a.refill) - Number(b.refill));
 }
 
 // Product master data (#3165): one product, its colours and sizes, and the
@@ -126,6 +131,8 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
         core_weight: String(s.core_weight),
         price: priceText(s.price),
         price_vat_included: s.price_vat_included,
+        standard: s.standard ?? false,
+        refill: s.refill ?? false,
       })) ?? [],
     ),
   );
@@ -234,8 +241,18 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
   const spoolsInColumn = (sizeKey: string) =>
     colors.reduce((sum, color) => sum + spoolsInCell(cellKey(color.key, sizeKey)), 0);
 
+  // "1 kg Refill" for a refill, as everywhere a size is named.
+  const sizeText = (size: SizeRow) =>
+    toInt(size.label_weight)
+      ? formatSizeLabel(toInt(size.label_weight) ?? 0, size.refill, t('inventory.products.refill'))
+      : '?';
+
+  // One standard size at most: marking another moves it, marking it again clears it.
+  const toggleStandard = (key: string) =>
+    setSizes((prev) => prev.map((s) => ({ ...s, standard: s.key === key ? !s.standard : false })));
+
   const addSize = (grams?: number) => {
-    if (grams && sizes.some((s) => toInt(s.label_weight) === grams)) return;
+    if (grams && sizes.some((s) => toInt(s.label_weight) === grams && !s.refill)) return;
     const key = newKey('s');
     setSizes((prev) =>
       sortSizes([
@@ -247,6 +264,8 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
           core_weight: grams && grams <= 1000 ? '250' : '',
           price: '',
           price_vat_included: prev[0]?.price_vat_included ?? true,
+          standard: false,
+          refill: false,
         },
       ]),
     );
@@ -406,6 +425,16 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
       showToast(t('inventory.products.sizeWeightRequired'), 'error');
       return;
     }
+    // A weight can be on a spool and a refill, but not twice the same way.
+    const seen = new Set<string>();
+    for (const size of sizes) {
+      const identity = `${toInt(size.label_weight)}|${size.refill}`;
+      if (seen.has(identity)) {
+        showToast(t('inventory.products.sizeListedTwice', { size: sizeText(size) }), 'error');
+        return;
+      }
+      seen.add(identity);
+    }
     const sizeKeys = new Set(sizes.map((s) => s.key));
     const colorKeys = new Set(colors.map((c) => c.key));
     const document: FilamentProductInput = {
@@ -433,6 +462,8 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
         core_weight: toInt(s.core_weight) ?? 0,
         price: parsePrice(s.price),
         price_vat_included: s.price_vat_included,
+        standard: s.standard,
+        refill: s.refill,
       })),
       colors: colors.map((c) => ({
         id: c.id,
@@ -501,7 +532,7 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
     if (!variant) return '?';
     const color = colors.find((c) => c.id === variant.color_id);
     const size = sizes.find((s) => s.id === variant.size_id);
-    return `${color?.color_name || (color?.hex ? `#${color.hex}` : '?')} · ${size ? formatWeight(toInt(size.label_weight) ?? 0) : '?'}`;
+    return `${color?.color_name || (color?.hex ? `#${color.hex}` : '?')} · ${size ? sizeText(size) : '?'}`;
   };
 
   const tickedCount = [...cells.keys()].filter((key) => {
@@ -739,7 +770,13 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
                 <table className="w-full min-w-[36rem] text-sm">
                   <thead>
                     <tr className="text-xs text-bambu-gray">
+                      <th className="w-7 pb-1" title={t('inventory.products.standardSizeHint')}>
+                        <Star className="w-3.5 h-3.5" />
+                      </th>
                       <th className="text-left font-medium pb-1">{t('inventory.products.labelWeight')}</th>
+                      <th className="text-left font-medium pb-1" title={t('inventory.products.refillHint')}>
+                        {t('inventory.products.refill')}
+                      </th>
                       <th className="text-left font-medium pb-1">{t('inventory.products.coreWeight')}</th>
                       <th className="text-left font-medium pb-1" title={t('inventory.products.listPriceHint')}>
                         {t('inventory.products.listPrice')}
@@ -755,6 +792,17 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
                       const blocked = spoolsInColumn(size.key) > 0;
                       return (
                         <tr key={size.key}>
+                          <td className="pr-1 py-1">
+                            <button
+                              onClick={() => toggleStandard(size.key)}
+                              aria-pressed={size.standard}
+                              title={t('inventory.products.standardSizeHint')}
+                              aria-label={t('inventory.products.makeStandardSize', { size: sizeText(size) })}
+                              className={`p-1 rounded ${size.standard ? 'text-bambu-green' : 'text-bambu-gray/50 hover:text-white'}`}
+                            >
+                              <Star className={`w-4 h-4 ${size.standard ? 'fill-current' : ''}`} />
+                            </button>
+                          </td>
                           <td className="pr-2 py-1">
                             <div className="flex items-center gap-1">
                               <input
@@ -767,6 +815,20 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
                               />
                               <span className="text-xs text-bambu-gray">g</span>
                             </div>
+                          </td>
+                          <td className="pr-2 py-1 text-center">
+                            <input
+                              type="checkbox"
+                              checked={size.refill}
+                              onChange={(e) =>
+                                setSizes((prev) =>
+                                  sortSizes(prev.map((s) => (s.key === size.key ? { ...s, refill: e.target.checked } : s))),
+                                )
+                              }
+                              title={t('inventory.products.refillHint')}
+                              aria-label={`${t('inventory.products.refill')} ${size.label_weight} g`}
+                              className="w-4 h-4 accent-bambu-green"
+                            />
                           </td>
                           <td className="pr-2 py-1">
                             <div className="flex items-center gap-1">
@@ -944,7 +1006,8 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
                       <th className="px-3 py-2 text-left text-xs text-bambu-gray font-medium">{t('inventory.products.color')}</th>
                       {sizes.map((size) => (
                         <th key={size.key} className="px-3 py-2 text-center text-xs text-bambu-gray font-medium whitespace-nowrap">
-                          {toInt(size.label_weight) ? formatWeight(toInt(size.label_weight) ?? 0) : '?'}
+                          {size.standard && <Star className="inline w-3 h-3 mr-0.5 -mt-0.5 text-bambu-green fill-current" />}
+                          {sizeText(size)}
                           <div className="font-normal text-bambu-gray/70">
                             {parsePrice(size.price) !== null ? formatMoney(parsePrice(size.price), currency) : '–'}
                           </div>
@@ -980,7 +1043,7 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
                                   onChange={() => toggleCell(key)}
                                   title={spools > 0 ? t('inventory.products.cannotRemove', { count: spools }) : undefined}
                                   className="w-4 h-4 accent-bambu-green disabled:opacity-60"
-                                  aria-label={`${color.color_name} ${size.label_weight} g`}
+                                  aria-label={`${color.color_name} ${sizeText(size)}`}
                                 />
                                 {ticked && matrixMode === 'target' && (
                                   <input
@@ -989,7 +1052,7 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
                                     value={minStock.get(key) ?? ''}
                                     placeholder="–"
                                     title={t('inventory.products.minStock')}
-                                    aria-label={`${t('inventory.products.minStock')} ${color.color_name} ${size.label_weight} g`}
+                                    aria-label={`${t('inventory.products.minStock')} ${color.color_name} ${sizeText(size)}`}
                                     onChange={(e) =>
                                       setMinStock((prev) => new Map(prev).set(key, e.target.value.replace(/[^0-9]/g, '')))
                                     }

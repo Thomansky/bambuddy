@@ -379,3 +379,70 @@ describe('ProductEditorModal — prices as of', () => {
     expect(saved[0].price_date).toBe(today);
   });
 });
+
+describe('ProductEditorModal — the standard size and refills', () => {
+  let saved: FilamentProductInput[];
+
+  beforeEach(() => {
+    saved = [];
+    server.use(
+      http.get('/api/v1/settings/', () => HttpResponse.json({ currency: 'EUR' })),
+      http.get('/api/v1/inventory/suppliers', () => HttpResponse.json([])),
+      http.put('/api/v1/inventory/products/1', async ({ request }) => {
+        saved.push((await request.json()) as FilamentProductInput);
+        return HttpResponse.json({ product: PRODUCT, spools_updated: 0 });
+      }),
+    );
+  });
+
+  const addOneKilo = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(screen.getByRole('button', { name: 'Size' }));
+    const typed = screen.getAllByRole('textbox', { name: 'Net weight' }).at(-1) as HTMLInputElement;
+    await user.type(typed, '1000');
+  };
+
+  it('sells a weight as a refill next to the spool, and marks the standard size', async () => {
+    const onSaved = vi.fn();
+    const user = userEvent.setup();
+    render(<ProductEditorModal product={PRODUCT} onClose={vi.fn()} onSaved={onSaved} />);
+
+    await addOneKilo(user);
+    await user.click(screen.getAllByRole('checkbox', { name: 'Refill 1000 g' })[1]);
+    await user.click(screen.getByRole('button', { name: 'Make 1 kg Refill the standard size' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(saved[0].sizes.map((s) => [s.label_weight, s.refill, s.standard])).toEqual([
+      [1000, false, false],
+      [1000, true, true],
+    ]);
+  });
+
+  it('moves the standard size, and a second click clears it', async () => {
+    const onSaved = vi.fn();
+    const user = userEvent.setup();
+    const product = { ...PRODUCT, sizes: [{ ...PRODUCT.sizes[0], standard: true, refill: false }] };
+    render(<ProductEditorModal product={product} onClose={vi.fn()} onSaved={onSaved} />);
+
+    const star = screen.getByRole('button', { name: 'Make 1 kg the standard size' });
+    expect(star).toHaveAttribute('aria-pressed', 'true');
+    await user.click(star);
+    expect(star).toHaveAttribute('aria-pressed', 'false');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(saved[0].sizes[0].standard).toBe(false);
+  });
+
+  it('refuses the same size twice', async () => {
+    const onSaved = vi.fn();
+    const user = userEvent.setup();
+    render(<ProductEditorModal product={PRODUCT} onClose={vi.fn()} onSaved={onSaved} />);
+
+    await addOneKilo(user);
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByText('The size 1 kg is listed twice')).toBeInTheDocument();
+    expect(saved).toEqual([]);
+  });
+});

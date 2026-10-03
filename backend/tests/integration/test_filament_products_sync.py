@@ -414,3 +414,61 @@ class TestPresetPerPrinterModel:
         )
         await db_session.commit()
         assert await resolve("H2D") == ("PFUS0123", "My PLA @BBL H2D")
+
+
+class TestASpoolOfAWeightSoldTwoWays:
+    """A spool only knows its weight. Where a product sells that weight on a
+    spool and as a refill, a new spool goes to the standard size if it is one
+    of them, else to the one on a spool."""
+
+    @staticmethod
+    async def _sold_two_ways(client: AsyncClient, standard: str | None) -> dict:
+        sizes = [
+            {"key": "kg1", "label_weight": 1000, "core_weight": 250, "price": 20.0},
+            {"key": "kg1r", "label_weight": 1000, "core_weight": 250, "price": 17.0, "refill": True},
+        ]
+        for size in sizes:
+            size["standard"] = size["key"] == standard
+        return await _product(
+            client,
+            sizes=sizes,
+            variants=[{"color_key": "charcoal", "size_key": "kg1"}, {"color_key": "charcoal", "size_key": "kg1r"}],
+        )
+
+    @staticmethod
+    def _size_of(product: dict, variant_id: int) -> dict:
+        variant = next(v for v in product["variants"] if v["id"] == variant_id)
+        return next(s for s in product["sizes"] if s["id"] == variant["size_id"])
+
+    @pytest.mark.asyncio
+    async def test_it_goes_to_the_standard_size(self, async_client: AsyncClient, db_session: AsyncSession):
+        product = await self._sold_two_ways(async_client, standard="kg1r")
+
+        spool = await _fresh(db_session, (await _new_spool(async_client))["id"])
+
+        assert self._size_of(product, spool.variant_id)["refill"] is True
+
+    @pytest.mark.asyncio
+    async def test_a_roll_booked_in_as_a_refill_takes_the_tag(
+        self, async_client: AsyncClient, db_session: AsyncSession
+    ):
+        product = await self._sold_two_ways(async_client, standard=None)
+        refill = next(v["id"] for v in product["variants"] if self._size_of(product, v["id"])["refill"])
+        [booked] = (
+            await async_client.post(f"{API}/variants/{refill}/intake", json={"quantity": 1, "price_per_spool": 17.0})
+        ).json()["spool_ids"]
+
+        found = await find_matching_untagged_spool(db_session, _tray())
+
+        assert found is not None
+        assert found.id == booked
+
+    @pytest.mark.asyncio
+    async def test_without_one_it_goes_to_the_size_on_a_spool(
+        self, async_client: AsyncClient, db_session: AsyncSession
+    ):
+        product = await self._sold_two_ways(async_client, standard=None)
+
+        spool = await _fresh(db_session, (await _new_spool(async_client))["id"])
+
+        assert self._size_of(product, spool.variant_id)["refill"] is False

@@ -54,6 +54,10 @@ class ProductSizeIn(BaseModel):
     core_weight_catalog_id: int | None = None
     price: float | None = Field(default=None, ge=0)
     price_vat_included: bool = True
+    # The size usually ordered; one per product, the first one marked wins.
+    standard: bool = False
+    # Filament without a spool of its own; "1 kg" and "1 kg Refill" can coexist.
+    refill: bool = False
 
 
 class ProductColorIn(BaseModel):
@@ -132,6 +136,8 @@ class ArticleOut(BaseModel):
     rgba: str | None = Field(description="The colour as RRGGBBAA")
     label_weight: int = Field(description="Filament on a full spool, in grams")
     core_weight: int = Field(description="The empty spool, in grams")
+    refill: bool = Field(description="Filament without a spool of its own, to go on a reusable one")
+    standard_size: bool = Field(description="Whether this is the product's standard size, the one usually ordered")
     price: float | None = Field(
         description="What one spool costs: the combination's own price, else its size's (the manufacturer's)"
     )
@@ -214,6 +220,8 @@ def _product_out(product: FilamentProduct, stock: dict[int, VariantStock], on_or
                 "core_weight_catalog_id": size.core_weight_catalog_id,
                 "price": size.price,
                 "price_vat_included": size.price_vat_included,
+                "standard": size.is_standard,
+                "refill": size.refill,
             }
             for size in product.sizes
         ],
