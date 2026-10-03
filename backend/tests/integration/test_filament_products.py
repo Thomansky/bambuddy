@@ -58,8 +58,6 @@ def _document(product: dict) -> dict:
                 "material_number",
                 "slicer_filament",
                 "slicer_filament_name",
-                "nozzle_temp_min",
-                "nozzle_temp_max",
                 "note",
             )
         },
@@ -97,8 +95,6 @@ async def _new_product(client: AsyncClient, **overrides) -> dict:
         "material": "PLA",
         "subtype": "Matte",
         "material_number": "52",
-        "nozzle_temp_min": 190,
-        "nozzle_temp_max": 230,
         "sizes": [
             {"key": "kg1", "label_weight": 1000, "core_weight": 250, "price": 20.0},
             {"key": "kg5", "label_weight": 5000, "core_weight": 900, "price": 90.0},
@@ -159,8 +155,6 @@ class TestTakingOverTheSpools:
 
         await async_client.post(f"{API}/conversion")
 
-        product = (await async_client.get(API)).json()[0]
-        assert (product["nozzle_temp_min"], product["nozzle_temp_max"]) == (190, 230)
         odd = await _reload(db_session, odd_id)
         assert (odd.nozzle_temp_min, odd.nozzle_temp_max, odd.note) == (200, 240, "hot one")
         odd_variant = odd.variant_id
@@ -224,7 +218,8 @@ class TestIntake:
         assert (spool.color_name, spool.rgba) == ("Black", "000000FF")
         assert (spool.label_weight, spool.core_weight) == (5000, 900)
         assert spool.material_number == "52"
-        assert (spool.nozzle_temp_min, spool.nozzle_temp_max) == (190, 230)
+        # The product has no nozzle range: the slot takes the material's.
+        assert (spool.nozzle_temp_min, spool.nozzle_temp_max) == (None, None)
         assert spool.cost_per_kg == 18.0
         assert spool.location_id == location
         assert spool.weight_used == 0
@@ -290,16 +285,40 @@ class TestEditingTheProduct:
 
         document = _document(product)
         document["material_number"] = "77"
-        document["nozzle_temp_max"] = 240
+        document["slicer_filament"] = "GFA01"
         response = await async_client.put(f"{API}/{product['id']}", json=document)
         assert response.status_code == 200, response.text
         assert response.json()["spools_updated"] == 1
 
         active = await _reload(db_session, ids[0])
-        assert (active.material_number, active.nozzle_temp_max) == ("77", 240)
+        assert (active.material_number, active.slicer_filament) == ("77", "GFA01")
         # History stays what it was.
         old = await _reload(db_session, ids[1])
-        assert (old.material_number, old.nozzle_temp_max) == ("52", 230)
+        assert (old.material_number, old.slicer_filament) == ("52", None)
+
+    @pytest.mark.asyncio
+    async def test_a_spool_keeps_its_own_nozzle_range(self, async_client: AsyncClient, db_session):
+        """The product does not carry a nozzle range: a range set on a spool
+        stays, even when an older editor still sends one along."""
+        product = await _new_product(async_client)
+        spool_id = (
+            await async_client.post(
+                f"{API}/variants/{_variant(product, 'Black', 1000)['id']}/intake", json={"quantity": 1}
+            )
+        ).json()["spool_ids"][0]
+        spool = await _reload(db_session, spool_id)
+        spool.nozzle_temp_min, spool.nozzle_temp_max = 205, 225
+        await db_session.commit()
+
+        document = _document(product)
+        document["material_number"] = "77"
+        document.update(nozzle_temp_min=190, nozzle_temp_max=230)
+        response = await async_client.put(f"{API}/{product['id']}", json=document)
+
+        assert response.status_code == 200, response.text
+        assert "nozzle_temp_min" not in response.json()["product"]
+        spool = await _reload(db_session, spool_id)
+        assert (spool.material_number, spool.nozzle_temp_min, spool.nozzle_temp_max) == ("77", 205, 225)
 
     @pytest.mark.asyncio
     async def test_a_colour_edit_reaches_only_that_colour(self, async_client: AsyncClient, db_session):

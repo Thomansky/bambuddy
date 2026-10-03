@@ -13,6 +13,7 @@ import { PresetPicker } from '../spool-form/PresetPicker';
 import { findPresetOption } from '../spool-form/utils';
 import { usePresetOptions } from './usePresetOptions';
 import { ModelBadge } from './ModelBadge';
+import { RatingStars } from './RatingStars';
 import { getCurrencySymbol } from '../../utils/currency';
 import { localDateKey } from '../../utils/date';
 import { extractPresetModel, matchesPrinterModelSuffix } from '../../utils/slicerPrinterMatch';
@@ -22,6 +23,7 @@ import {
   formatSizeLabel,
   formatStock,
   formatWeight,
+  looksLikeSupport,
   parsePrice,
   presetModelOf,
   presetStem,
@@ -61,6 +63,13 @@ interface SupplierRow {
   supplier_id: number;
   /** The usual supplier; the reorder list starts from it. */
   preferred: boolean;
+}
+
+/** A support material that goes with the product: another product. */
+interface SupportRow {
+  support_product_id: number;
+  /** 1 (poor) to 4 (very good) stars; null while not rated. */
+  rating: number | null;
 }
 
 interface ColorRow {
@@ -114,9 +123,13 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
   const [materialNumber, setMaterialNumber] = useState(product?.material_number ?? '');
   const [slicerFilament, setSlicerFilament] = useState(product?.slicer_filament ?? '');
   const [slicerFilamentName, setSlicerFilamentName] = useState(product?.slicer_filament_name ?? '');
-  const [tempMin, setTempMin] = useState(product?.nozzle_temp_min?.toString() ?? '');
-  const [tempMax, setTempMax] = useState(product?.nozzle_temp_max?.toString() ?? '');
   const [note, setNote] = useState(product?.note ?? '');
+  // Support materials (#3165): other products of the master, each rated by
+  // how well it worked with this one. They keep their place while rated.
+  const [supportRows, setSupportRows] = useState<SupportRow[]>(() =>
+    (product?.supports ?? []).map((row) => ({ support_product_id: row.support_product_id, rating: row.rating })),
+  );
+  const { data: allProducts = [] } = useQuery({ queryKey: ['filament-products'], queryFn: api.getFilamentProducts });
   // When the prices were last checked: the standard prices at the sizes and
   // the special prices in the matrix alike. YYYY-MM-DD, or '' for none.
   const [priceDate, setPriceDate] = useState(product?.price_date ?? '');
@@ -355,6 +368,31 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
       return rest;
     });
 
+  // The product's own rows name their support before the product list is in.
+  const supportName = (id: number) =>
+    allProducts.find((p) => p.id === id)?.label ??
+    product?.supports?.find((s) => s.support_product_id === id)?.label ??
+    '?';
+  // What can still be added, support materials first ("Support for PLA",
+  // PVA, …), then every other product, since a PETG can carry a PLA too.
+  const addableSupports = useMemo(() => {
+    const candidates = allProducts
+      .filter((p) => p.id !== product?.id && !supportRows.some((row) => row.support_product_id === p.id))
+      .sort((a, b) => a.label.localeCompare(b.label));
+    return {
+      likely: candidates.filter(looksLikeSupport),
+      others: candidates.filter((p) => !looksLikeSupport(p)),
+    };
+  }, [allProducts, product, supportRows]);
+
+  const addSupport = (id: number) =>
+    setSupportRows((prev) =>
+      prev.some((row) => row.support_product_id === id) ? prev : [...prev, { support_product_id: id, rating: null }],
+    );
+  const rateSupport = (id: number, rating: number | null) =>
+    setSupportRows((prev) => prev.map((row) => (row.support_product_id === id ? { ...row, rating } : row)));
+  const removeSupport = (id: number) => setSupportRows((prev) => prev.filter((row) => row.support_product_id !== id));
+
   // A model is offered only the presets made for it, as in the spool dialog;
   // one that names no model stays, and so does the one already chosen.
   const optionsForModel = (model: string, selected: string): FilamentOption[] => {
@@ -451,8 +489,6 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
           slicer_filament: row.slicer_filament,
           slicer_filament_name: row.slicer_filament_name || null,
         })),
-      nozzle_temp_min: toInt(tempMin),
-      nozzle_temp_max: toInt(tempMax),
       note: note.trim() || null,
       price_date: priceDate || null,
       sizes: sizes.map((s) => ({
@@ -483,6 +519,7 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
         })
         .filter((v) => colorKeys.has(v.color_key) && sizeKeys.has(v.size_key)),
       suppliers: supplierRows.map((row) => ({ supplier_id: row.supplier_id, preferred: row.preferred })),
+      supports: supportRows.map((row) => ({ support_product_id: row.support_product_id, rating: row.rating })),
     };
     setSaving(true);
     try {
@@ -688,26 +725,65 @@ export function ProductEditorModal({ product, onClose, onSaved }: ProductEditorM
                   </div>
                 )}
               </div>
-              <label className="block">
-                <span className="text-xs text-bambu-gray">{t('inventory.products.nozzleTemp')}</span>
-                <div className="flex items-center gap-1">
-                  <input
-                    className={inputClass}
-                    inputMode="numeric"
-                    value={tempMin}
-                    placeholder="min"
-                    onChange={(e) => setTempMin(e.target.value)}
-                  />
-                  <span className="text-bambu-gray">–</span>
-                  <input
-                    className={inputClass}
-                    inputMode="numeric"
-                    value={tempMax}
-                    placeholder="max"
-                    onChange={(e) => setTempMax(e.target.value)}
-                  />
-                </div>
-              </label>
+              {/* Support material: other products that print as this one's
+                  supports, each rated by how well it worked. */}
+              <div className="block min-w-0 space-y-1.5">
+                <span className="text-xs text-bambu-gray block" title={t('inventory.products.supportsHint')}>
+                  {t('inventory.products.supports')}
+                </span>
+                {supportRows.map((row) => {
+                  const name = supportName(row.support_product_id);
+                  return (
+                    <div key={row.support_product_id} className="flex items-center gap-1.5">
+                      <span className="flex-1 min-w-0 truncate text-sm text-white" title={name}>
+                        {name}
+                      </span>
+                      <RatingStars
+                        value={row.rating}
+                        label={name}
+                        onChange={(rating) => rateSupport(row.support_product_id, rating)}
+                      />
+                      <button
+                        onClick={() => removeSupport(row.support_product_id)}
+                        className="p-1 rounded text-red-500 hover:bg-red-500/10 shrink-0"
+                        aria-label={t('inventory.products.removeSupport', { name })}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  );
+                })}
+                {addableSupports.likely.length + addableSupports.others.length > 0 && (
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      if (e.target.value) addSupport(Number(e.target.value));
+                    }}
+                    aria-label={t('inventory.products.addSupport')}
+                    className="max-w-full px-2 py-1 text-xs bg-bambu-dark border border-dashed border-bambu-dark-tertiary rounded-full text-bambu-gray hover:text-white focus:border-bambu-green focus:outline-none"
+                  >
+                    <option value="">+ {t('inventory.products.addSupport')}</option>
+                    {addableSupports.likely.length > 0 && (
+                      <optgroup label={t('inventory.products.supportMaterials')}>
+                        {addableSupports.likely.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.label}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {addableSupports.others.length > 0 && (
+                      <optgroup label={t('inventory.products.otherProducts')}>
+                        {addableSupports.others.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.label}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                  </select>
+                )}
+              </div>
               <label className="block">
                 <span className="text-xs text-bambu-gray">{t('inventory.products.note')}</span>
                 <input className={inputClass} value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} />

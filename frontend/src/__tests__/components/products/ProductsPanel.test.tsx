@@ -44,8 +44,7 @@ function product(patch: Partial<FilamentProduct>): FilamentProduct {
     slicer_filament: null,
     slicer_filament_name: null,
     presets: [],
-    nozzle_temp_min: null,
-    nozzle_temp_max: null,
+    supports: [],
     note: null,
     price_date: null,
     sizes: [],
@@ -245,6 +244,42 @@ describe('ProductsPanel', () => {
     expect(within(table).getByText('1 kg · €20.00')).toBeInTheDocument();
   });
 
+  it('shows the best rated support material, and every one when unfolded', async () => {
+    server.use(
+      http.get('/api/v1/inventory/products', () =>
+        HttpResponse.json([
+          {
+            ...PRODUCTS[0],
+            supports: [
+              { support_product_id: 5, label: 'Bambu Lab Support for PLA', rating: 4 },
+              { support_product_id: 6, label: 'Bambu Lab PVA', rating: null },
+            ],
+          },
+        ]),
+      ),
+    );
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByRole('table');
+
+    // The column is there to be shown, like every optional one.
+    await user.click(screen.getByRole('button', { name: /Columns/ }));
+    const entry = (await screen.findByText('Support material')).parentElement as HTMLElement;
+    await user.click(within(entry).getByTitle('Show column'));
+    await user.click(screen.getByRole('button', { name: 'Apply Changes' }));
+
+    const table = screen.getByRole('table');
+    expect(within(table).getByRole('columnheader', { name: /Support material/ })).toBeInTheDocument();
+    expect(within(table).getByRole('img', { name: 'Bambu Lab Support for PLA: Very good (4 of 4)' })).toBeInTheDocument();
+    expect(within(table).getByText('+1')).toBeInTheDocument();
+    expect(within(table).queryByText('Bambu Lab PVA')).not.toBeInTheDocument();
+
+    await user.click(within(table).getByText('Bambu Lab'));
+
+    expect(await screen.findByRole('img', { name: 'Bambu Lab PVA: Not rated yet' })).toBeInTheDocument();
+    expect(screen.getAllByRole('img', { name: 'Bambu Lab Support for PLA: Very good (4 of 4)' })).toHaveLength(2);
+  });
+
   it('offers the columns in the same dialog as the spool list', async () => {
     const user = userEvent.setup();
     renderPanel();
@@ -252,7 +287,7 @@ describe('ProductsPanel', () => {
 
     await user.click(screen.getByRole('button', { name: /Columns/ }));
 
-    const dialog = (await screen.findByText('Nozzle temp.')).closest('div.fixed') as HTMLElement;
+    const dialog = (await screen.findByText('Support material')).closest('div.fixed') as HTMLElement;
     expect(within(dialog).getByText('Spool type')).toBeInTheDocument();
     expect(within(dialog).getByText('Manufacturer')).toBeInTheDocument();
   });

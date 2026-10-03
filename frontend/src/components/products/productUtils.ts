@@ -123,6 +123,29 @@ export function presetModels(
   return [{ model: ownModel, name: own }, ...rows];
 }
 
+/** How well a support material worked with a product: 1 (poor) to 4 (very good). */
+export const MAX_RATING = 4;
+const RATING_WORDS = ['ratingPoor', 'ratingFair', 'ratingGood', 'ratingVeryGood'];
+type TFn = (key: string, opts?: Record<string, unknown>) => string;
+
+/** The word for one rating ("Good"). */
+export function ratingWord(t: TFn, value: number): string {
+  return t(`inventory.products.${RATING_WORDS[value - 1]}`);
+}
+
+/** "Good (3 of 4)", or "Not rated yet". */
+export function ratingText(t: TFn, value: number | null): string {
+  return value
+    ? t('inventory.products.ratingOf', { rating: ratingWord(t, value), stars: value, max: MAX_RATING })
+    : t('inventory.products.notRated');
+}
+
+/** Whether a product is made to be printed as support — "Support for PLA",
+ *  PLA-S, PVA, BVOH, HIPS — so the support picker offers it first. */
+export function looksLikeSupport(product: Pick<FilamentProduct, 'material' | 'subtype'>): boolean {
+  return /support|\b(?:pva|bvoh|hips)\b|-s\b/i.test(`${product.material} ${product.subtype ?? ''}`);
+}
+
 /** The supplier a product is usually bought from: the starred one, else the first. */
 export function usualSupplier(product: FilamentProduct): FilamentProductSupplier | undefined {
   return product.suppliers.find((s) => s.preferred) ?? product.suppliers[0];

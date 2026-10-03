@@ -4,6 +4,7 @@ import {
   costPerKg,
   formatPriceDate,
   formatSizeLabel,
+  looksLikeSupport,
   parsePrice,
   presetModels,
   productMatches,
@@ -21,8 +22,7 @@ const product: FilamentProduct = {
   slicer_filament: null,
   slicer_filament_name: null,
   presets: [],
-  nozzle_temp_min: null,
-  nozzle_temp_max: null,
+  supports: [],
   note: null,
   price_date: null,
   sizes: [{ id: 10, label_weight: 1000, core_weight: 250, core_weight_catalog_id: null, price: 20, price_vat_included: true }],
@@ -116,5 +116,20 @@ describe('small helpers', () => {
   it('turns a spool price into cost per kg', () => {
     expect(costPerKg(90, 5000)).toBe(18);
     expect(costPerKg(null, 1000)).toBeNull();
+  });
+});
+
+describe('looksLikeSupport', () => {
+  it.each([
+    ['Support for PLA', null, true],
+    ['PLA-S', null, true],
+    ['PVA', null, true],
+    ['HIPS', 'VXL 90', true],
+    ['Support', 'P-support 279', true],
+    ['PETG', 'Basic', false],
+    ['TPU-AMS', null, false],
+    ['PA6-GF', null, false],
+  ])('%s %s: %s', (material, subtype, expected) => {
+    expect(looksLikeSupport({ material, subtype })).toBe(expected);
   });
 });

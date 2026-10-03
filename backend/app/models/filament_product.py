@@ -12,9 +12,11 @@ class FilamentProduct(Base):
     and sizes.
 
     The product is the home of what every spool of it shares — brand,
-    material, subtype, the internal material number, preset and temperatures.
-    Its preset per printer model is the exception to the copying below: it is
-    read where a spool's preset is resolved for a printer, not copied.
+    material, subtype, the internal material number and preset. Its preset
+    per printer model is the exception to the copying below: it is read where
+    a spool's preset is resolved for a printer, not copied. The nozzle range
+    stays with the spool (a slot falls back to the material's); databases from
+    before keep the product's old ``nozzle_temp_*`` columns, unused.
     Colours and sizes are declared once on the product; a variant is a
     colour × size combination that actually exists. Spools keep their own
     copy of all of it (every read path stays untouched) and point at their
@@ -31,8 +33,6 @@ class FilamentProduct(Base):
     material_number: Mapped[str | None] = mapped_column(String(64))
     slicer_filament: Mapped[str | None] = mapped_column(String(50))
     slicer_filament_name: Mapped[str | None] = mapped_column(String(100))
-    nozzle_temp_min: Mapped[int | None] = mapped_column(Integer)
-    nozzle_temp_max: Mapped[int | None] = mapped_column(Integer)
     note: Mapped[str | None] = mapped_column(String(500))
     # When the prices were last checked — the standard prices at the sizes and
     # the special prices of single combinations alike.
@@ -66,6 +66,14 @@ class FilamentProduct(Base):
         cascade="all",
         lazy="selectin",
         order_by="[FilamentProductSupplier.preferred.desc(), FilamentProductSupplier.id]",
+    )
+    # The support materials that go with it, and how well each worked.
+    supports: Mapped[list["FilamentProductSupport"]] = relationship(
+        back_populates="product",
+        cascade="all",
+        lazy="selectin",
+        foreign_keys="FilamentProductSupport.product_id",
+        order_by="FilamentProductSupport.id",
     )
 
 
@@ -189,3 +197,19 @@ class FilamentProductSupplier(Base):
 
     product: Mapped[FilamentProduct] = relationship(back_populates="suppliers")
     supplier: Mapped[Supplier] = relationship(lazy="selectin")
+
+
+class FilamentProductSupport(Base):
+    """A support material that goes with the product — another product of
+    the master ("Support for PLA", PVA, a PETG under PLA) — and how well it
+    worked with it, from 1 (poor) to 4 (very good) stars, or not rated yet."""
+
+    __tablename__ = "filament_product_supports"
+    __table_args__ = (UniqueConstraint("product_id", "support_product_id", name="uq_filament_product_supports_pair"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("filament_products.id", ondelete="CASCADE"), index=True)
+    support_product_id: Mapped[int] = mapped_column(ForeignKey("filament_products.id", ondelete="CASCADE"), index=True)
+    rating: Mapped[int | None] = mapped_column(Integer)
+
+    product: Mapped[FilamentProduct] = relationship(back_populates="supports", foreign_keys=[product_id])

@@ -24,6 +24,7 @@ import { ColumnConfigModal, type ColumnConfig } from '../ColumnConfigModal';
 import { FilamentSwatch } from '../FilamentSwatch';
 import { getCurrencySymbol } from '../../utils/currency';
 import { ModelBadge } from './ModelBadge';
+import { RatingStars } from './RatingStars';
 import {
   colorLabel,
   compareProducts,
@@ -40,6 +41,7 @@ import {
   priceRange,
   productMatches,
   productTotals,
+  ratingText,
   usualSupplier,
 } from './productUtils';
 
@@ -85,7 +87,7 @@ const DEFAULT_COLUMNS: ColumnConfig[] = [
   { id: 'price_date', label: 'Prices as of', visible: false },
   { id: 'spool_type', label: 'Spool type', visible: false },
   { id: 'preset', label: 'Slicer preset', visible: false },
-  { id: 'nozzle_temp', label: 'Nozzle temp.', visible: false },
+  { id: 'supports', label: 'Support material', visible: false },
   { id: 'variants', label: 'Variants', visible: false },
   { id: 'spools', label: 'Spools', visible: true },
   { id: 'stock', label: 'Stock', visible: true },
@@ -108,7 +110,7 @@ const columnHeaders: Record<string, (t: TFn) => string> = {
   price_date: (t) => t('inventory.products.columns.priceDate'),
   spool_type: (t) => t('inventory.products.columns.spoolType'),
   preset: (t) => t('inventory.products.columns.preset'),
-  nozzle_temp: (t) => t('inventory.products.columns.nozzleTemp'),
+  supports: (t) => t('inventory.products.columns.supports'),
   variants: (t) => t('inventory.products.columns.variants'),
   spools: (t) => t('inventory.products.columns.spools'),
   stock: (t) => t('inventory.products.columns.stock'),
@@ -216,14 +218,21 @@ const columnCells: Record<string, (ctx: CellCtx) => ReactNode> = {
       </span>
     );
   },
-  nozzle_temp: ({ product }) =>
-    product.nozzle_temp_min && product.nozzle_temp_max ? (
-      <span className="text-sm text-bambu-gray whitespace-nowrap">
-        {product.nozzle_temp_min}–{product.nozzle_temp_max} °C
+  // The best rated support material, and how many more there are.
+  supports: ({ product, t }) => {
+    const [best, ...rest] = product.supports ?? [];
+    if (!best) return EMPTY;
+    return (
+      <span
+        className="flex items-center gap-1.5 whitespace-nowrap"
+        title={(product.supports ?? []).map((row) => `${row.label}: ${ratingText(t, row.rating)}`).join('\n')}
+      >
+        <span className="text-sm text-bambu-gray">{best.label}</span>
+        <RatingStars value={best.rating} label={best.label} size="sm" />
+        {rest.length > 0 && <span className="text-xs text-bambu-gray">+{rest.length}</span>}
       </span>
-    ) : (
-      EMPTY
-    ),
+    );
+  },
   variants: ({ product }) => <span className="text-sm text-bambu-gray">{product.variants.length}</span>,
   spools: ({ product }) => <span className="text-sm text-white">{product.spool_count}</span>,
   stock: ({ product }) => <span className="text-sm text-bambu-gray whitespace-nowrap">{formatStock(product.remaining_g)}</span>,
@@ -275,7 +284,7 @@ const columnSortValues: Record<
   price_date: (p) => p.price_date || '\uffff',
   spool_type: (p, catalogMap) => spoolTypeNames(p, catalogMap) || '￿',
   preset: (p) => p.slicer_filament_name || p.slicer_filament || '￿',
-  nozzle_temp: (p) => p.nozzle_temp_min ?? Number.MAX_VALUE,
+  supports: (p) => p.supports?.[0]?.label || '￿',
   variants: (p) => p.variants.length,
   spools: (p) => p.spool_count,
   stock: (p) => p.remaining_g,
@@ -949,17 +958,20 @@ function StockMatrix({ product, currency }: { product: FilamentProduct; currency
             .join(' · ')}
         </p>
       )}
-      {(product.nozzle_temp_min || product.slicer_filament_name || product.note) && (
+      {(product.supports ?? []).length > 0 && (
+        <p className="text-xs text-bambu-gray flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span>{t('inventory.products.supports')}:</span>
+          {product.supports.map((row) => (
+            <span key={row.support_product_id} className="inline-flex items-center gap-1">
+              {row.label}
+              <RatingStars value={row.rating} label={row.label} size="sm" />
+            </span>
+          ))}
+        </p>
+      )}
+      {(product.slicer_filament_name || product.note) && (
         <p className="text-xs text-bambu-gray">
-          {[
-            product.nozzle_temp_min && product.nozzle_temp_max
-              ? `${product.nozzle_temp_min}–${product.nozzle_temp_max} °C`
-              : null,
-            product.slicer_filament_name,
-            product.note,
-          ]
-            .filter(Boolean)
-            .join(' · ')}
+          {[product.slicer_filament_name, product.note].filter(Boolean).join(' · ')}
         </p>
       )}
     </div>
