@@ -74,8 +74,6 @@ def _document(product: dict, *, drop: tuple[str, int] | None = None) -> dict:
                 "material_number",
                 "slicer_filament",
                 "slicer_filament_name",
-                "nozzle_temp_min",
-                "nozzle_temp_max",
                 "note",
             )
         },

@@ -19,7 +19,7 @@ import logging
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.filament_product import (
@@ -28,6 +28,7 @@ from backend.app.models.filament_product import (
     FilamentProductPreset,
     FilamentProductSize,
     FilamentProductSupplier,
+    FilamentProductSupport,
     FilamentVariant,
     FilamentVariantCode,
 )
@@ -46,14 +47,14 @@ PRODUCT_SPOOL_FIELDS = (
     "material_number",
     "slicer_filament",
     "slicer_filament_name",
-    "nozzle_temp_min",
-    "nozzle_temp_max",
 )
 PRODUCT_FIELDS = PRODUCT_SPOOL_FIELDS + ("note",)
 COLOR_SPOOL_FIELDS = ("color_name", "rgba", "extra_colors", "effect_type")
 SIZE_SPOOL_FIELDS = ("label_weight", "core_weight", "core_weight_catalog_id")
 
 MAX_INTAKE_QUANTITY = 100
+# How well a support material worked with a product: 1 (poor) to 4 (very good).
+MAX_SUPPORT_RATING = 4
 # Shopping-list lines that are still coming: not yet bought, or bought and
 # not yet booked in.
 OPEN_ORDER_STATUSES = ("pending", "purchased")
@@ -313,6 +314,21 @@ async def save_product(db: AsyncSession, product: FilamentProduct | None, data) 
         known = set((await db.execute(select(Supplier.id).where(Supplier.id.in_(supplier_ids)))).scalars().all())
         if known != set(supplier_ids):
             raise ProductError("Unknown supplier")
+    # Support materials are other products of the master, each named once.
+    support_rows = getattr(data, "supports", None)
+    if support_rows is not None:
+        support_ids = [row.support_product_id for row in support_rows]
+        if len(set(support_ids)) != len(support_ids):
+            raise ProductError("A support material is listed twice")
+        if not creating and product.id in support_ids:
+            raise ProductError("A product cannot be its own support material")
+        if any(row.rating is not None and not 1 <= row.rating <= MAX_SUPPORT_RATING for row in support_rows):
+            raise ProductError(f"A rating goes from 1 to {MAX_SUPPORT_RATING} stars")
+        if support_ids:
+            query = select(FilamentProduct.id).where(FilamentProduct.id.in_(support_ids))
+            known = set((await db.execute(query)).scalars().all())
+            if known != set(support_ids):
+                raise ProductError("Unknown support material")
 
     if creating:
         product = FilamentProduct(material=_clean(data.material))
@@ -418,6 +434,21 @@ async def save_product(db: AsyncSession, product: FilamentProduct | None, data) 
         db.add(FilamentProductSupplier(product_id=product.id, supplier_id=incoming.supplier_id, preferred=preferred))
     await db.flush()
 
+    # --- support materials, when the document carries them: rebuilt, like
+    # the suppliers. A rating is a note about the pair; nothing is written through.
+    if support_rows is not None:
+        if not creating:
+            for row in list(product.supports):
+                await db.delete(row)
+            await db.flush()
+        for incoming in support_rows:
+            db.add(
+                FilamentProductSupport(
+                    product_id=product.id, support_product_id=incoming.support_product_id, rating=incoming.rating
+                )
+            )
+        await db.flush()
+
     kept_size_ids = {row.id for row in size_by_key.values()}
     kept_color_ids = {row.id for row in color_by_key.values()}
     wanted = {(color_by_key[v.color_key].id, size_by_key[v.size_key].id): v for v in data.variants}
@@ -511,9 +542,24 @@ async def delete_product(db: AsyncSession, product: FilamentProduct) -> int:
         )
         unlinked = result.rowcount or 0
         await _forget_orders(db, variant_ids)
+    # The products it was a support material for no longer name it.
+    await db.execute(delete(FilamentProductSupport).where(FilamentProductSupport.support_product_id == product.id))
     await db.delete(product)
     await db.flush()
     return unlinked
+
+
+async def product_labels(db: AsyncSession, product_ids) -> dict[int, str]:
+    """The label of each of these products, by id, without loading them whole."""
+    ids = list(set(product_ids))
+    if not ids:
+        return {}
+    rows = await db.execute(
+        select(FilamentProduct.id, FilamentProduct.brand, FilamentProduct.material, FilamentProduct.subtype).where(
+            FilamentProduct.id.in_(ids)
+        )
+    )
+    return {row.id: product_label(row) for row in rows.all()}
 
 
 # ---------------------------------------------------------------- codes
@@ -897,8 +943,6 @@ class PlannedProduct:
     material_number: str | None
     slicer_filament: str | None
     slicer_filament_name: str | None
-    nozzle_temp_min: int | None
-    nozzle_temp_max: int | None
     colors: dict[str, PlannedColor] = field(default_factory=dict)
     sizes: dict[int, PlannedSize] = field(default_factory=dict)
     # (colour key, label weight) -> (existing variant id or None, spool ids)
@@ -1006,8 +1050,6 @@ async def plan_conversion(db: AsyncSession) -> ConversionPlan:
                 material_number=existing.material_number,
                 slicer_filament=existing.slicer_filament,
                 slicer_filament_name=existing.slicer_filament_name,
-                nozzle_temp_min=existing.nozzle_temp_min,
-                nozzle_temp_max=existing.nozzle_temp_max,
             )
             for color in existing.colors:
                 plan.colors[color_key(color.color_name, color.rgba)] = PlannedColor(
@@ -1038,7 +1080,6 @@ async def plan_conversion(db: AsyncSession) -> ConversionPlan:
                 if None not in pair:
                     plan.variants[pair] = (variant.id, [])
         else:
-            temps = _mode([(s.nozzle_temp_min, s.nozzle_temp_max) for s in members], (None, None))
             plan = PlannedProduct(
                 key=key,
                 existing_id=None,
@@ -1048,8 +1089,6 @@ async def plan_conversion(db: AsyncSession) -> ConversionPlan:
                 material_number=numbers.most_common(1)[0][0] if numbers else None,
                 slicer_filament=_mode([s.slicer_filament for s in members]),
                 slicer_filament_name=_mode([s.slicer_filament_name for s in members]),
-                nozzle_temp_min=temps[0],
-                nozzle_temp_max=temps[1],
             )
         plan.material_numbers = numbers
 
@@ -1141,8 +1180,6 @@ async def apply_conversion(db: AsyncSession) -> dict:
                 material_number=planned.material_number,
                 slicer_filament=planned.slicer_filament,
                 slicer_filament_name=planned.slicer_filament_name,
-                nozzle_temp_min=planned.nozzle_temp_min,
-                nozzle_temp_max=planned.nozzle_temp_max,
             )
             db.add(product)
             await db.flush()
@@ -1274,9 +1311,6 @@ def _fill_empty(spool: Spool, product: FilamentProduct, variant: FilamentVariant
         spool.slicer_filament = product.slicer_filament
         if not spool.slicer_filament_name:
             spool.slicer_filament_name = product.slicer_filament_name
-    if spool.nozzle_temp_min is None and spool.nozzle_temp_max is None:
-        spool.nozzle_temp_min = product.nozzle_temp_min
-        spool.nozzle_temp_max = product.nozzle_temp_max
     if spool.cost_per_kg is None:
         cost = price_to_cost_per_kg(effective_price(variant, size), size.label_weight)
         if cost is not None:

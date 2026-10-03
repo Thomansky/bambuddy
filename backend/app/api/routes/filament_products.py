@@ -35,6 +35,7 @@ from backend.app.services.filament_products import (
     plan_conversion,
     price_to_cost_per_kg,
     product_label,
+    product_labels,
     receive_order,
     reorder_lines,
     save_product,
@@ -90,6 +91,13 @@ class ProductSupplierIn(BaseModel):
     preferred: bool = False
 
 
+class ProductSupportIn(BaseModel):
+    # Another product of the master that prints as this one's support.
+    support_product_id: int
+    # How well it worked: 1 (poor) to 4 (very good) stars; null = not rated yet.
+    rating: int | None = Field(default=None, ge=1, le=4)
+
+
 class ProductIn(BaseModel):
     brand: str | None = Field(default=None, max_length=100)
     material: str = Field(min_length=1, max_length=50)
@@ -97,8 +105,6 @@ class ProductIn(BaseModel):
     material_number: str | None = Field(default=None, max_length=64)
     slicer_filament: str | None = Field(default=None, max_length=50)
     slicer_filament_name: str | None = Field(default=None, max_length=100)
-    nozzle_temp_min: int | None = Field(default=None, ge=0, le=500)
-    nozzle_temp_max: int | None = Field(default=None, ge=0, le=500)
     note: str | None = Field(default=None, max_length=500)
     # When the prices were last checked; left out, the date stays as it is.
     price_date: date | None = None
@@ -108,6 +114,8 @@ class ProductIn(BaseModel):
     colors: list[ProductColorIn] = []
     variants: list[ProductVariantIn] = []
     suppliers: list[ProductSupplierIn] = []
+    # The support materials that go with it; left out, they stay as they are.
+    supports: list[ProductSupportIn] | None = None
 
 
 class CodeIn(BaseModel):
@@ -166,7 +174,9 @@ class ReorderIn(BaseModel):
     items: list[ReorderItemIn] = Field(min_length=1, max_length=500)
 
 
-def _product_out(product: FilamentProduct, stock: dict[int, VariantStock], on_order: dict[int, int]) -> dict:
+def _product_out(
+    product: FilamentProduct, stock: dict[int, VariantStock], on_order: dict[int, int], labels: dict[int, str]
+) -> dict:
     sizes = {size.id: size for size in product.sizes}
     variants = []
     for variant in product.variants:
@@ -208,8 +218,6 @@ def _product_out(product: FilamentProduct, stock: dict[int, VariantStock], on_or
             }
             for row in product.presets
         ],
-        "nozzle_temp_min": product.nozzle_temp_min,
-        "nozzle_temp_max": product.nozzle_temp_max,
         "note": product.note,
         "price_date": product.price_date.isoformat() if product.price_date else None,
         "sizes": [
@@ -244,6 +252,15 @@ def _product_out(product: FilamentProduct, stock: dict[int, VariantStock], on_or
             }
             for row in product.suppliers
         ],
+        # The best rated first; those not rated yet last.
+        "supports": [
+            {
+                "support_product_id": row.support_product_id,
+                "label": labels.get(row.support_product_id, ""),
+                "rating": row.rating,
+            }
+            for row in sorted(product.supports, key=lambda row: (row.rating is None, -(row.rating or 0), row.id))
+        ],
         "spool_count": sum(v["spool_count"] for v in variants),
         "remaining_g": sum(v["remaining_g"] for v in variants),
     }
@@ -254,7 +271,8 @@ async def _fresh_product_out(db: AsyncSession, product_id: int) -> dict:
     product = await load_product(db, product_id)
     variant_ids = [variant.id for variant in product.variants]
     stock = await variant_stock(db, variant_ids)
-    return _product_out(product, stock, await variant_on_order(db, variant_ids))
+    labels = await product_labels(db, [row.support_product_id for row in product.supports])
+    return _product_out(product, stock, await variant_on_order(db, variant_ids), labels)
 
 
 @router.get("")
@@ -264,12 +282,14 @@ async def list_products(
 ):
     """Every product with its sizes, colours and the combinations that exist
     (price, cost per kg, stock, target, codes), its slicer preset per printer
-    model and where it has been bought. For one row per combination, see
+    model, where it has been bought and the support materials that go with it,
+    rated 1–4 stars. For one row per combination, see
     `GET /inventory/products/articles`."""
     products = await load_products(db)
     stock = await variant_stock(db)
     on_order = await variant_on_order(db)
-    return [_product_out(product, stock, on_order) for product in products]
+    labels = {product.id: product_label(product) for product in products}
+    return [_product_out(product, stock, on_order, labels) for product in products]
 
 
 @router.get("/reorder")

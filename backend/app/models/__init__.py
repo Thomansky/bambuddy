@@ -12,6 +12,7 @@ from backend.app.models.filament_product import (
     FilamentProductPreset,
     FilamentProductSize,
     FilamentProductSupplier,
+    FilamentProductSupport,
     FilamentVariant,
     FilamentVariantCode,
 )
@@ -109,6 +110,7 @@ __all__ = [
     "FilamentProductPreset",
     "FilamentProductSize",
     "FilamentProductSupplier",
+    "FilamentProductSupport",
     "FilamentVariant",
     "FilamentVariantCode",
     "SpoolUsageHistory",

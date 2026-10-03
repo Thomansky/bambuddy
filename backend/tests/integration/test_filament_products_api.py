@@ -8,6 +8,9 @@ permission reaches it and one without does not.
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
+
+from backend.app.models.filament_product import FilamentProductSupport
 
 pytestmark = pytest.mark.integration
 
@@ -283,3 +286,92 @@ class TestStandardSizeAndRefill:
 
         assert [line["refill"] for line in lines] == [True]
         assert item["note"] == "1 kg Refill"
+
+
+class TestSupportMaterial:
+    """A product names the support materials that go with it — other products
+    of the master — each rated from 1 (poor) to 4 (very good) stars, or not
+    rated yet."""
+
+    @staticmethod
+    async def _support(client: AsyncClient, material: str, number: str, subtype: str | None = None) -> dict:
+        return await _product(client, material=material, subtype=subtype, material_number=number)
+
+    @pytest.mark.asyncio
+    async def test_they_come_back_named_the_best_rated_first(self, async_client: AsyncClient):
+        pla_support = await self._support(async_client, "Support for PLA", "90")
+        pva = await self._support(async_client, "PVA", "91")
+        petg = await self._support(async_client, "PETG", "92", "Basic")
+
+        product = await _product(
+            async_client,
+            supports=[
+                {"support_product_id": petg["id"]},
+                {"support_product_id": pva["id"], "rating": 2},
+                {"support_product_id": pla_support["id"], "rating": 4},
+            ],
+        )
+
+        assert [(row["label"], row["rating"]) for row in product["supports"]] == [
+            ("Bambu Lab Support for PLA", 4),
+            ("Bambu Lab PVA", 2),
+            ("Bambu Lab PETG Basic", None),
+        ]
+        listed = next(p for p in (await async_client.get(API)).json() if p["id"] == product["id"])
+        assert listed["supports"] == product["supports"]
+
+    @pytest.mark.asyncio
+    async def test_an_edit_without_them_keeps_them_and_an_empty_list_clears_them(self, async_client: AsyncClient):
+        pva = await self._support(async_client, "PVA", "91")
+        product = await _product(async_client, supports=[{"support_product_id": pva["id"], "rating": 3}])
+        url = f"{API}/{product['id']}"
+
+        kept = await async_client.put(url, json=_document(product))
+        rerated = await async_client.put(
+            url, json=_document(product, supports=[{"support_product_id": pva["id"], "rating": 1}])
+        )
+        cleared = await async_client.put(url, json=_document(product, supports=[]))
+
+        assert kept.status_code == 200, kept.text
+        assert [row["rating"] for row in kept.json()["product"]["supports"]] == [3]
+        assert [row["rating"] for row in rerated.json()["product"]["supports"]] == [1]
+        assert cleared.json()["product"]["supports"] == []
+
+    @pytest.mark.asyncio
+    async def test_a_document_that_cannot_be_right_is_refused(self, async_client: AsyncClient):
+        pva = await self._support(async_client, "PVA", "91")
+        product = await _product(async_client)
+        url = f"{API}/{product['id']}"
+
+        for supports in (
+            [{"support_product_id": product["id"]}],
+            [{"support_product_id": pva["id"]}, {"support_product_id": pva["id"], "rating": 2}],
+            [{"support_product_id": 9999}],
+        ):
+            response = await async_client.put(url, json=_document(product, supports=supports))
+            assert response.status_code == 400, supports
+        for rating in (0, 5):
+            supports = [{"support_product_id": pva["id"], "rating": rating}]
+            response = await async_client.put(url, json=_document(product, supports=supports))
+            assert response.status_code == 422, rating
+
+    @pytest.mark.asyncio
+    async def test_a_deleted_support_material_is_gone_from_the_products_it_went_with(self, async_client: AsyncClient):
+        pva = await self._support(async_client, "PVA", "91")
+        product = await _product(async_client, supports=[{"support_product_id": pva["id"], "rating": 3}])
+
+        response = await async_client.delete(f"{API}/{pva['id']}")
+
+        assert response.status_code == 200, response.text
+        assert (await async_client.get(f"{API}/{product['id']}")).json()["supports"] == []
+
+    @pytest.mark.asyncio
+    async def test_a_deleted_product_takes_its_ratings_along(self, async_client: AsyncClient, db_session):
+        pva = await self._support(async_client, "PVA", "91")
+        product = await _product(async_client, supports=[{"support_product_id": pva["id"], "rating": 3}])
+
+        await async_client.delete(f"{API}/{product['id']}")
+
+        db_session.expire_all()
+        assert (await db_session.execute(select(FilamentProductSupport))).scalars().all() == []
+        assert (await async_client.get(f"{API}/{pva['id']}")).status_code == 200

@@ -3997,6 +3997,16 @@ export interface FilamentProductSupplier {
   preferred: boolean;
 }
 
+/** A support material that goes with the product: another product of the
+ *  master, and how well it worked with it. */
+export interface FilamentProductSupport {
+  support_product_id: number;
+  /** The support product's label ("Bambu Lab Support for PLA"). */
+  label: string;
+  /** 1 (poor) to 4 (very good) stars; null while not rated yet. */
+  rating: number | null;
+}
+
 export interface FilamentProduct {
   id: number;
   label: string;
@@ -4007,8 +4017,6 @@ export interface FilamentProduct {
   slicer_filament: string | null;
   slicer_filament_name: string | null;
   presets: FilamentProductPreset[];
-  nozzle_temp_min: number | null;
-  nozzle_temp_max: number | null;
   note: string | null;
   /** When the prices were last checked, YYYY-MM-DD. */
   price_date: string | null;
@@ -4016,6 +4024,8 @@ export interface FilamentProduct {
   colors: FilamentProductColor[];
   variants: FilamentVariant[];
   suppliers: FilamentProductSupplier[];
+  /** The best rated first, those not rated yet last. */
+  supports: FilamentProductSupport[];
   spool_count: number;
   remaining_g: number;
 }
@@ -4029,8 +4039,6 @@ export interface FilamentProductInput {
   material_number: string | null;
   slicer_filament: string | null;
   slicer_filament_name: string | null;
-  nozzle_temp_min: number | null;
-  nozzle_temp_max: number | null;
   note: string | null;
   /** Left out, the product keeps its date. */
   price_date?: string | null;
@@ -4049,6 +4057,8 @@ export interface FilamentProductInput {
   colors: { id: number | null; key: string; color_name: string | null; rgba: string | null }[];
   variants: { color_key: string; size_key: string; price_override: number | null; min_stock?: number | null }[];
   suppliers: { supplier_id: number; preferred: boolean }[];
+  /** Left out, the product keeps the ones it has. */
+  supports?: { support_product_id: number; rating: number | null }[];
 }
 
 /** A combination below its target stock (#3165), and where to buy it. */

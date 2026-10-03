@@ -41,8 +41,7 @@ const PRODUCT: FilamentProduct = {
   slicer_filament: null,
   slicer_filament_name: null,
   presets: [],
-  nozzle_temp_min: null,
-  nozzle_temp_max: null,
+  supports: [],
   note: null,
   price_date: null,
   sizes: [{ id: 10, label_weight: 1000, core_weight: 250, core_weight_catalog_id: null, price: 20, price_vat_included: true }],
@@ -444,5 +443,97 @@ describe('ProductEditorModal — the standard size and refills', () => {
 
     expect(await screen.findByText('The size 1 kg is listed twice')).toBeInTheDocument();
     expect(saved).toEqual([]);
+  });
+});
+
+describe('ProductEditorModal — support material', () => {
+  let saved: FilamentProductInput[];
+  const other = (id: number, label: string, material: string): FilamentProduct => ({
+    ...PRODUCT,
+    id,
+    label,
+    material,
+    subtype: null,
+  });
+  const OTHERS = [
+    other(5, 'Bambu Lab Support for PLA', 'Support for PLA'),
+    other(6, 'Bambu Lab PVA', 'PVA'),
+    other(7, 'Sunlu PETG', 'PETG'),
+  ];
+  const withSupports: FilamentProduct = {
+    ...PRODUCT,
+    supports: [
+      { support_product_id: 5, label: 'Bambu Lab Support for PLA', rating: 4 },
+      { support_product_id: 6, label: 'Bambu Lab PVA', rating: 2 },
+    ],
+  };
+
+  beforeEach(() => {
+    saved = [];
+    server.use(
+      http.get('/api/v1/settings/', () => HttpResponse.json({ currency: 'EUR' })),
+      http.get('/api/v1/inventory/suppliers', () => HttpResponse.json([])),
+      http.get('/api/v1/inventory/products', () => HttpResponse.json([PRODUCT, ...OTHERS])),
+      http.put('/api/v1/inventory/products/1', async ({ request }) => {
+        saved.push((await request.json()) as FilamentProductInput);
+        return HttpResponse.json({ product: PRODUCT, spools_updated: 0 });
+      }),
+    );
+  });
+
+  it('takes the place of the nozzle temperature', () => {
+    render(<ProductEditorModal product={PRODUCT} onClose={vi.fn()} onSaved={vi.fn()} />);
+
+    expect(screen.getByText('Support material')).toBeInTheDocument();
+    expect(screen.queryByText(/Nozzle temperature/)).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('max')).not.toBeInTheDocument();
+  });
+
+  it('offers the support materials first, and never the product itself', async () => {
+    render(<ProductEditorModal product={PRODUCT} onClose={vi.fn()} onSaved={vi.fn()} />);
+
+    const add = await screen.findByRole('combobox', { name: 'Add support material' });
+    const groups = within(add).getAllByRole('group');
+    expect(groups.map((group) => group.getAttribute('label'))).toEqual(['Support materials', 'Other products']);
+    expect(within(groups[0]).getAllByRole('option').map((option) => option.textContent)).toEqual([
+      'Bambu Lab PVA',
+      'Bambu Lab Support for PLA',
+    ]);
+    expect(within(groups[1]).getAllByRole('option').map((option) => option.textContent)).toEqual(['Sunlu PETG']);
+  });
+
+  it('adds them, rates them and saves them; a second click clears a rating', async () => {
+    const onSaved = vi.fn();
+    const user = userEvent.setup();
+    render(<ProductEditorModal product={PRODUCT} onClose={vi.fn()} onSaved={onSaved} />);
+
+    await user.selectOptions(await screen.findByRole('combobox', { name: 'Add support material' }), '5');
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Add support material' }), '7');
+    await user.click(screen.getByRole('button', { name: 'Rate Bambu Lab Support for PLA: Very good' }));
+    const fair = screen.getByRole('button', { name: 'Rate Sunlu PETG: Fair' });
+    await user.click(fair);
+    expect(fair).toHaveAttribute('aria-pressed', 'true');
+    await user.click(fair);
+    expect(fair).toHaveAttribute('aria-pressed', 'false');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(saved[0].supports).toEqual([
+      { support_product_id: 5, rating: 4 },
+      { support_product_id: 7, rating: null },
+    ]);
+  });
+
+  it('keeps the ones it has until one is removed', async () => {
+    const onSaved = vi.fn();
+    const user = userEvent.setup();
+    render(<ProductEditorModal product={withSupports} onClose={vi.fn()} onSaved={onSaved} />);
+
+    expect(screen.getByRole('button', { name: 'Rate Bambu Lab PVA: Fair' })).toHaveAttribute('aria-pressed', 'true');
+    await user.click(screen.getByRole('button', { name: 'Remove the support material Bambu Lab PVA' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(saved[0].supports).toEqual([{ support_product_id: 5, rating: 4 }]);
   });
 });

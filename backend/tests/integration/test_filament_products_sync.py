@@ -26,8 +26,6 @@ async def _product(client: AsyncClient, **overrides) -> dict:
         "material": "PLA",
         "subtype": "Matte",
         "material_number": "52",
-        "nozzle_temp_min": 190,
-        "nozzle_temp_max": 230,
         "sizes": [
             {"key": "g500", "label_weight": 500, "core_weight": 180, "price": 12.0},
             {"key": "kg1", "label_weight": 1000, "core_weight": 250, "price": 20.0},
@@ -103,7 +101,6 @@ class TestNewSpoolsFindTheirProduct:
         assert spool["variant_id"] == _variant_id(product, "Charcoal", 1000)
         assert spool["material_number"] == "52"
         assert spool["cost_per_kg"] == 20.0
-        assert (spool["nozzle_temp_min"], spool["nozzle_temp_max"]) == (190, 230)
 
     @pytest.mark.asyncio
     async def test_what_the_spool_brings_along_is_kept(self, async_client: AsyncClient):
