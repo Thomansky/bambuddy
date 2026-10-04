@@ -91,6 +91,14 @@ const COLUMN_CONFIG_KEY = 'bambuddy-inventory-columns';
 // characters, so a 65-character sentinel is one no spool can ever carry.
 const MATERIAL_NUMBER_NONE = 'none'.padStart(65, '_');
 
+// Sort key for the material-number column (#2870). The table compares sort
+// values with plain < / >, which puts "15" before "2"; padding every digit run
+// to the column's 64-character cap makes that comparison numeric-aware, so the
+// column orders the same way as the filter chip and the dialog suggestions.
+function materialNumberSortKey(value: string | null): string {
+  return (value || '').toLowerCase().replace(/\d+/g, (digits) => digits.padStart(64, '0'));
+}
+
 const DEFAULT_COLUMNS: ColumnConfig[] = [
   { id: 'id', label: '#', visible: true },
   { id: 'added_time', label: 'Added', visible: true },
@@ -594,7 +602,7 @@ const columnSortValues: Record<
   used: (s) => s.weight_used,
   remaining: (s) => s.label_weight > 0 ? Math.max(0, s.label_weight - s.weight_used) / s.label_weight : 0,
   note: (s) => (s.note || '').toLowerCase(),
-  material_number: (s) => (s.material_number || '').toLowerCase(),
+  material_number: (s) => materialNumberSortKey(s.material_number),
   // Sorts on the purchase-source supplier, falling back to the first
   // assignment — a spool has to sit in exactly one place in the list.
   suppliers: (s) => {
@@ -1746,14 +1754,19 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
             <Button
               variant="secondary"
               disabled={filteredSpools.length === 0}
-              // Pre-select every visible spool so the user lands in "all
-              // checked", then refines downward in the modal. Per-card icon
-              // pre-selects only that spool — both flows share the same picker.
-              onClick={() => setLabelPickerSpoolIds(filteredSpools.map((s) => s.id))}
+              // Pre-select the spools ticked in the list; with none ticked,
+              // every visible spool, so the user refines downward in the modal
+              // (#2980). Per-card icon pre-selects only that spool — all flows
+              // share the same picker.
+              onClick={() =>
+                setLabelPickerSpoolIds(selectedIds.size > 0 ? [...selectedIds] : filteredSpools.map((s) => s.id))
+              }
               title={
                 filteredSpools.length === 0
                   ? t('inventory.labels.noSpoolsTitle', 'No spools to label')
-                  : t('inventory.labels.bulkTitle', 'Pick spools to print labels for from the {{count}} currently shown', { count: filteredSpools.length })
+                  : selectedIds.size > 0
+                    ? t('inventory.labels.selectedTitle', 'Print labels for the {{count}} selected spools', { count: selectedIds.size })
+                    : t('inventory.labels.bulkTitle', 'Pick spools to print labels for from the {{count}} currently shown', { count: filteredSpools.length })
               }
             >
               <Printer className="w-4 h-4" />

@@ -19,7 +19,7 @@ import json
 import sqlite3
 import zipfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -87,3 +87,45 @@ async def test_an_unimportable_backup_is_refused_with_both_versions(async_client
     assert "99.9.9" in detail
     assert APP_VERSION in detail
     assert "Nothing has been changed" in detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_overlay_logo_survives_backup_and_restore(async_client, monkeypatch, tmp_path):
+    from backend.app.api.routes.settings import create_backup_zip
+
+    # Keep the restored database separate from the integration-test engine.
+    db_path = tmp_path / "bambuddy.db"
+    with sqlite3.connect(db_path) as db:
+        db.execute("CREATE TABLE backup_marker (id INTEGER PRIMARY KEY)")
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(app_settings, "base_dir", tmp_path)
+    monkeypatch.setattr(app_settings, "database_url", f"sqlite+aiosqlite:///{db_path}")
+    logo_dir = tmp_path / "overlay-branding"
+    logo_dir.mkdir()
+    logo = logo_dir / "logo.png"
+    original = b"saved overlay logo"
+    logo.write_bytes(original)
+
+    zip_path, _ = await create_backup_zip(output_path=tmp_path)
+    with zipfile.ZipFile(zip_path) as archive:
+        assert archive.read("overlay-branding/logo.png") == original
+    logo.write_bytes(b"replacement logo")
+    (logo_dir / "stale.png").write_bytes(b"stale")
+
+    with (
+        patch("backend.app.core.database.close_all_connections", new_callable=AsyncMock),
+        patch("backend.app.core.database.reinitialize_database", new_callable=AsyncMock),
+        patch("backend.app.core.database.init_db", new_callable=AsyncMock),
+        patch("backend.app.services.print_scheduler.scheduler.stop"),
+        patch("backend.app.services.smart_plug_manager.smart_plug_manager.stop_scheduler"),
+        patch("backend.app.services.notification_service.notification_service.stop_digest_scheduler"),
+    ):
+        response = await async_client.post(
+            "/api/v1/settings/restore",
+            files={"file": ("backup.zip", zip_path.read_bytes(), "application/zip")},
+        )
+
+    assert response.status_code == 200, response.text
+    assert logo.read_bytes() == original
+    assert not (logo_dir / "stale.png").exists()

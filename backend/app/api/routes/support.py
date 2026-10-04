@@ -365,6 +365,7 @@ def _collect_process_info() -> dict:
         out["connections"] = len(proc.net_connections(kind="inet"))
     except Exception:
         pass
+    out.update(_collect_fd_info(proc))
 
     # Children by executable name only. The count per name is what identifies a
     # leak; the arguments would leak credentials.
@@ -408,6 +409,72 @@ def _collect_process_info() -> dict:
     except Exception:
         pass
 
+    return out
+
+
+def _fd_kind(target: str) -> str:
+    """What an open descriptor points at, without saying where (#2883)."""
+    for prefix, kind in (("socket:", "socket"), ("pipe:", "pipe"), ("anon_inode:", "anon_inode")):
+        if target.startswith(prefix):
+            return kind
+    if target.endswith(".db"):
+        return "database"
+    if target.endswith(".db-wal"):
+        return "database_wal"
+    if target.endswith(".db-shm"):
+        return "database_shm"
+    if target.startswith("/dev/"):
+        return "device"
+    return "file"
+
+
+def _collect_fd_info(proc) -> dict:
+    """Descriptors in use, by kind, against the limit (#2883).
+
+    #2883 ran out of descriptors at a 1024 limit, and the SQLite pool could
+    account for only part of that. Nobody could say what held the rest, because
+    a bundle carried no count. ``fds_by_type`` answers it from the next report:
+    database, -wal and -shm separately (WAL keeps a closed connection's db fd
+    open), sockets, pipes and everything else. Kinds only, never paths. Linux
+    only for the breakdown; best-effort throughout.
+    """
+    import os
+
+    out: dict = {}
+    try:
+        out["num_fds"] = proc.num_fds()
+    except Exception:
+        pass
+    try:
+        import resource
+
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        infinity = resource.RLIM_INFINITY
+        out["fd_limit"] = {
+            "soft": "unlimited" if soft == infinity else soft,
+            "hard": "unlimited" if hard == infinity else hard,
+        }
+    except Exception:
+        pass
+    try:
+        from backend.app.core import fd_limit
+
+        if fd_limit.startup_status is not None:
+            out["fd_limit_at_startup"] = dict(fd_limit.startup_status)
+    except Exception:
+        pass
+    try:
+        kinds: dict[str, int] = {}
+        for name in os.listdir("/proc/self/fd"):
+            try:
+                kind = _fd_kind(os.readlink(f"/proc/self/fd/{name}"))
+            except OSError:
+                # Closed between listing and reading, which is normal.
+                continue
+            kinds[kind] = kinds.get(kind, 0) + 1
+        out["fds_by_type"] = dict(sorted(kinds.items(), key=lambda kv: -kv[1]))
+    except Exception:
+        pass
     return out
 
 
@@ -926,6 +993,7 @@ async def _collect_support_info() -> dict:
                     "ams_tray_count": ams_tray_count,
                     "has_vt_tray": has_vt_tray,
                     "external_camera_configured": bool(printer.external_camera_url),
+                    "camera_light_auto": bool(printer.camera_light_auto),
                     "plate_detection_enabled": printer.plate_detection_enabled,
                     "obico_enabled": obico_globally_enabled
                     and (obico_enabled_set is None or printer.id in obico_enabled_set),
@@ -992,6 +1060,7 @@ async def _collect_support_info() -> dict:
             "host",
             "broker",  # MQTT broker hostname / IP — network exposure
             "credential",
+            "client_id",  # e.g. manyfold_client_id (#1471): half of an OAuth login
         }
         # Value-based safety net: redact anything whose value carries an
         # unambiguous secret prefix, even if the key name didn't match.

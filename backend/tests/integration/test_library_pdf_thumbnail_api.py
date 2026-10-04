@@ -237,7 +237,7 @@ class TestExternalScanBackfill:
         await db_session.refresh(pdf_row)
         await db_session.refresh(step_row)
 
-        await library_routes._backfill_external_stl_thumbnails([folder.id])
+        await library_routes._backfill_external_thumbnails([folder.id])
 
         await db_session.refresh(pdf_row)
         await db_session.refresh(step_row)

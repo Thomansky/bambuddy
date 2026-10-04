@@ -178,7 +178,13 @@ class _Harness:
         # Per-printer states for a farm; printers not listed report `state`.
         self.states = states or {}
         self.client = MagicMock()
-        self.client.ams_refresh_tray = refresh or MagicMock(return_value=(True, "Refreshing"))
+        # ams_refresh_tray is awaited (#3206): a plain callable a test passes
+        # becomes the side effect of an async double.
+        if refresh is None:
+            refresh = AsyncMock(return_value=(True, "Refreshing"))
+        elif not isinstance(refresh, AsyncMock):
+            refresh = AsyncMock(side_effect=refresh)
+        self.client.ams_refresh_tray = refresh
         self.tasks: list[asyncio.Task] = []
         self.launched = MagicMock()
         self.pa_applied = AsyncMock()
@@ -245,7 +251,7 @@ class TestSettingOn:
             seen.setdefault("attributed", scheduler._rfid_rereads.get(1))
             return True, "Refreshing"
 
-        h.client.ams_refresh_tray = MagicMock(side_effect=refresh)
+        h.client.ams_refresh_tray = AsyncMock(side_effect=refresh)
         await h.run()
 
         # One ams_get_rfid per unread slot, in slot order, nothing dispatched
@@ -301,7 +307,7 @@ class TestSettingOn:
             started.set()
             return True, "Refreshing"
 
-        h.client.ams_refresh_tray = MagicMock(side_effect=refresh)
+        h.client.ams_refresh_tray = AsyncMock(side_effect=refresh)
 
         with h.patched(slot_timeout=30.0):
             await scheduler.check_queue()
@@ -398,7 +404,7 @@ class TestSettingOn:
     async def test_a_refused_slot_is_skipped_not_waited_on(self, ctx):
         await _set(ctx, "queue_rfid_reread_before_start", "true")
         await _add_item(ctx)
-        refresh = MagicMock(return_value=(False, "Please unload filament first"))
+        refresh = AsyncMock(return_value=(False, "Please unload filament first"))
 
         h = await _Harness(ctx, PrintScheduler(), _printer_state(unread=(0, 1)), refresh=refresh).run()
 
@@ -410,7 +416,7 @@ class TestSettingOn:
     async def test_the_printer_is_released_when_the_read_blows_up(self, ctx):
         await _set(ctx, "queue_rfid_reread_before_start", "true")
         await _add_item(ctx)
-        refresh = MagicMock(side_effect=RuntimeError("mqtt gone"))
+        refresh = AsyncMock(side_effect=RuntimeError("mqtt gone"))
         scheduler = PrintScheduler()
 
         await _Harness(ctx, scheduler, _printer_state(), refresh=refresh).run()
@@ -540,7 +546,7 @@ class TestModelBasedItemsTurnedDownForFilament:
             started.set()
             return True, "Refreshing"
 
-        h.client.ams_refresh_tray = MagicMock(side_effect=refresh)
+        h.client.ams_refresh_tray = AsyncMock(side_effect=refresh)
 
         with h.patched(slot_timeout=30.0):
             await scheduler.check_queue()
@@ -702,7 +708,7 @@ class TestEveryDecisionIsInTheLog:
     async def test_a_refusal_is_quoted(self, ctx, caplog):
         await _set(ctx, "queue_rfid_reread_before_start", "true")
         await _add_item(ctx)
-        refresh = MagicMock(return_value=(False, "Please unload filament first"))
+        refresh = AsyncMock(return_value=(False, "Please unload filament first"))
 
         with caplog.at_level(logging.INFO, logger="backend.app.services.print_scheduler"):
             await _Harness(ctx, PrintScheduler(), _printer_state(), refresh=refresh).run()
@@ -785,7 +791,7 @@ class TestEveryDecisionIsInTheLog:
             h.state = None  # MQTT session gone a moment after the command
             return True, "Refreshing"
 
-        h.client.ams_refresh_tray = MagicMock(side_effect=refresh)
+        h.client.ams_refresh_tray = AsyncMock(side_effect=refresh)
 
         with (
             h.patched(slot_timeout=30.0),
@@ -1053,7 +1059,7 @@ class TestTheSlotThatReadNothing:
         await _set(ctx, "queue_rfid_reread_before_start", "true")
         await _add_item(ctx)
         scheduler = PrintScheduler()
-        refresh = MagicMock(return_value=(False, "Please unload filament first"))
+        refresh = AsyncMock(return_value=(False, "Please unload filament first"))
 
         await _Harness(ctx, scheduler, _printer_state(), refresh=refresh).run()
 

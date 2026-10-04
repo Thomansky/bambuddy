@@ -605,12 +605,13 @@ describe('Layout', () => {
 
     const findMakerWorldNavLink = () => {
       // Sidebar nav links use react-router's `to` prop, which renders as a
-      // plain `<a href="/makerworld">`. Match on the href so the test isn't
-      // coupled to whatever locale string is rendered.
-      return document.querySelector('aside a[href="/makerworld"]');
+      // plain `<a href="/model-sources">`. Match on the href so the test isn't
+      // coupled to whatever locale string is rendered. The page was
+      // MakerWorld-only until Manyfold joined it as a second tab (#1471).
+      return document.querySelector('aside a[href="/model-sources"]');
     };
 
-    it('hides the MakerWorld nav entry when the user lacks makerworld:view', async () => {
+    it('hides the Model Sources nav entry when the user has neither source permission', async () => {
       // Standard user without the MakerWorld permission. Every other
       // permission they hold (library:read, etc.) is irrelevant here — the
       // gate is per-entry and the MakerWorld entry must not render.
@@ -626,7 +627,7 @@ describe('Layout', () => {
         expect(sidebar?.querySelector('a[href="/files"]')).toBeInTheDocument();
       });
 
-      expect(findMakerWorldNavLink()).toBeNull();
+      await waitFor(() => expect(findMakerWorldNavLink()).toBeNull());
     });
 
     it('shows the MakerWorld nav entry when the user has makerworld:view', async () => {
@@ -636,6 +637,16 @@ describe('Layout', () => {
         'queue:read',
         'makerworld:view',
       ]);
+
+      render(<Layout />);
+
+      await waitFor(() => {
+        expect(findMakerWorldNavLink()).toBeInTheDocument();
+      });
+    });
+
+    it('shows the Model Sources nav entry with manyfold:view alone (#1471)', async () => {
+      enableAuthWithUser(['library:read', 'manyfold:view']);
 
       render(<Layout />);
 

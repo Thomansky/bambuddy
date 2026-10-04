@@ -20,6 +20,7 @@ from sqlalchemy import delete, or_, select, text
 
 from backend.app.api.routes import (
     ams_history,
+    announcements,
     api_keys,
     archive_purge,
     archives,
@@ -50,6 +51,7 @@ from backend.app.api.routes import (
     location_ha_sensors,
     maintenance,
     makerworld,
+    manyfold,
     metrics,
     mfa,
     notification_templates,
@@ -57,11 +59,13 @@ from backend.app.api.routes import (
     number_series,
     obico,
     orca_cloud,
+    overlay_branding,
     pa_calibration,
     pending_uploads,
     pipeline_runs,
     print_log,
     print_queue,
+    printer_locations,
     printer_sensor_history,
     printers,
     projects,
@@ -91,7 +95,7 @@ from backend.app.core.config import APP_VERSION, settings as app_settings
 from backend.app.core.database import async_session, engine, init_db
 from backend.app.core.tasks import spawn_background_task
 from backend.app.core.websocket import ws_manager
-from backend.app.services import maintenance_actions, print_dispatch_context
+from backend.app.services import kprofile_drift, maintenance_actions, print_dispatch_context, slot_unlink_grace
 from backend.app.services.archive import ArchiveService, peek_plate_index_in_3mf, swap_plate_suffix
 from backend.app.services.archive_purge import archive_purge_service
 from backend.app.services.bambu_ftp import (
@@ -107,6 +111,7 @@ from backend.app.services.bambu_ftp import (
     with_ftp_retry,
 )
 from backend.app.services.bambu_mqtt import PrinterState
+from backend.app.services.camera_light import camera_light
 from backend.app.services.energy_plug import energy_plug_candidates, select_energy_reading
 from backend.app.services.github_backup import github_backup_service
 from backend.app.services.ha_sensor_manager import ha_sensor_manager
@@ -479,13 +484,18 @@ _kill_switch_setting_cache: tuple[bool, float] | None = None
 # provider notification when the immediate attempt failed.
 _kill_switch_notification_tasks: dict[int, asyncio.Task[bool]] = {}
 
-# Track HMS errors that have been notified: {printer_id: set of error codes}
-# This prevents sending duplicate notifications for the same error
-_notified_hms_errors: dict[int, set[str]] = {}
-# Track when HMS errors were last seen: {printer_id: timestamp}
-# Used to debounce clearing — prevents flapping errors from re-triggering notifications
-_hms_last_seen: dict[int, float] = {}
-_HMS_CLEAR_GRACE_SECONDS = 30.0
+# HMS faults already notified, with when each was last seen:
+# {printer_id: {fault key: timestamp}}. Tracked per fault, not per printer: a
+# fault that flickers beside a held notice was forgotten on every gap and
+# notified on every return (#3226). The window is long because the measured
+# gaps reach 64 s.
+_notified_hms_errors: dict[int, dict[str, float]] = {}
+_HMS_CLEAR_GRACE_SECONDS = 600.0
+# The print state each printer was last seen in, and the faults recorded before
+# it last changed, which are forgotten as soon as they are gone (see
+# _take_new_hms_faults).
+_hms_print_state: dict[int, str] = {}
+_hms_forget_when_gone: dict[int, set[str]] = {}
 
 # Track timelapse file baselines at print start: {printer_id: set of video filenames}
 # Used for snapshot-diff detection at print completion
@@ -1514,19 +1524,93 @@ def _hms_errors_to_notify(errors: list, new_error_codes: set[str]) -> list:
     return [e for e in errors if _hms_notify_key(e) in new_error_codes and _hms_fault_counts(e)]
 
 
-def _take_new_hms_faults(printer_id: int, errors: list) -> list:
+def _take_new_hms_faults(printer_id: int, errors: list, print_state: str | None = None) -> list:
     """The faults on this printer not notified yet, and record them as notified.
 
     Tracking is updated before anything is sent, so concurrent status callbacks
-    cannot notify the same fault twice. The set is replaced, not extended: a
-    fault that clears and later returns is notified again, and the grace period
-    in the caller keeps a fault that flickers off for a moment from doing that.
+    cannot notify the same fault twice. A notified fault is forgotten once it
+    has been gone for ``_HMS_CLEAR_GRACE_SECONDS``, so one that flickers off
+    and on is notified once (#3226), while one that clears and comes back much
+    later is notified again.
+
+    When ``print_state`` changes (a print resumed, started or finished), every
+    fault recorded so far is forgotten the first time it is gone, without the
+    wait: a runout fixed before resuming must be notified if it happens again a
+    few minutes later, while the printer sits paused. Not only the faults gone
+    at the change itself, because the update that flips the state can still
+    carry the old fault (a ``print_error`` entry stays until a payload brings
+    ``hms``).
     """
+    now = time.time()
     current = {_hms_notify_key(e) for e in errors}
-    new = current - _notified_hms_errors.get(printer_id, set())
-    _notified_hms_errors[printer_id] = current
-    _hms_last_seen[printer_id] = time.time()
+    seen = _notified_hms_errors.setdefault(printer_id, {})
+    forget_when_gone = _hms_forget_when_gone.setdefault(printer_id, set())
+
+    if print_state is not None:
+        print_state = print_state.upper()
+        if _hms_print_state.get(printer_id, print_state) != print_state:
+            forget_when_gone.update(seen)
+        _hms_print_state[printer_id] = print_state
+
+    for key, last_seen in list(seen.items()):
+        if key not in current and (key in forget_when_gone or now - last_seen >= _HMS_CLEAR_GRACE_SECONDS):
+            del seen[key]
+            forget_when_gone.discard(key)
+
+    new = current - seen.keys()
+    for key in current:
+        seen[key] = now
+    if not seen:
+        _notified_hms_errors.pop(printer_id, None)
+    if not forget_when_gone:
+        _hms_forget_when_gone.pop(printer_id, None)
     return _hms_errors_to_notify(errors, new)
+
+
+# `stg_cur` values that mean the printer is not in a preparation stage: 0 is
+# "Printing", -1 and 255 are "no stage" (#3211).
+_NO_PREPARATION_STAGES = frozenset({0, -1, 255})
+
+
+def _progress_milestone_to_notify(printer_id: int, state: PrinterState) -> int | None:
+    """The milestone (25, 50 or 75) this status update reaches for the first time, if any.
+
+    Records it as notified. Called only for a printing state with progress above 0.
+
+    Progress before the first layer is not progress through the print (#3211).
+    An A1 mini reports ``mc_percent`` 85 in the first frame of a print, while
+    still preheating the bed at layer 0, then 3, 7, 40 and 44 through its
+    calibration, and starts layer 1 at 45. Read as progress, that 85 sent the
+    75% notification together with Print Started, and since 75 was then on
+    record, 25 and 50 could never fire. So nothing counts while the printer
+    reports a layer count but has not started layer 1.
+
+    Without a layer count -- a print whose first frame carried no
+    ``total_layer_num``, until the pushall that asks for it is answered
+    (#2702) -- the preparation stage says the same thing: before layer 1 the
+    A1 mini reported ``stg_cur`` 2, 4, 14 and 1 (bed preheating, calibration,
+    homing), and 0 from layer 1 on. -1 and 255 are "no stage". A printer that
+    reports neither keeps the old behaviour rather than never notifying.
+    """
+    if (state.layer_num or 0) < 1:
+        if (state.total_layers or 0) > 0:
+            return None
+        if state.stg_cur not in _NO_PREPARATION_STAGES:
+            return None
+
+    progress = state.progress or 0
+    current_milestone = 0
+    if progress >= 75:
+        current_milestone = 75
+    elif progress >= 50:
+        current_milestone = 50
+    elif progress >= 25:
+        current_milestone = 25
+
+    if current_milestone > _last_progress_milestone.get(printer_id, 0):
+        _last_progress_milestone[printer_id] = current_milestone
+        return current_milestone
+    return None
 
 
 async def on_printer_status_change(printer_id: int, state: PrinterState):
@@ -1590,6 +1674,22 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
         )
     elif not state.connected and _printer_kprofiles_primed_since_connect.get(printer_id, False):
         _printer_kprofiles_primed_since_connect[printer_id] = False
+
+    # A slot can lose its K-profile selection (cali_idx back to -1) with nothing
+    # else in the AMS report changing -- a power cycle does it to every slot --
+    # and on_ams_change never hears of it (#3219). Checked here, on every push
+    # while the printer is idle; needs_check is cheap and throttled per slot.
+    # Guarded: nothing here may stop the status broadcast below.
+    try:
+        if not state.connected:
+            kprofile_drift.forget_printer(printer_id)
+        elif kprofile_drift.needs_check(printer_id, state):
+            spawn_background_task(
+                kprofile_drift.reapply_lost_kprofiles(printer_id),
+                name=f"reapply-kprofiles-{printer_id}",
+            )
+    except Exception:
+        logging.getLogger(__name__).exception("[Printer %s] K-profile check failed", printer_id)
 
     # Offline-notification edge (#1752): schedule `on_printer_offline` on
     # connected → disconnected. The "back online" channel is already covered
@@ -1847,20 +1947,8 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
     is_printing = state.state in ("RUNNING", "PRINTING")
 
     if is_printing and progress > 0:
-        # Determine which milestone we've reached
-        current_milestone = 0
-        if progress >= 75:
-            current_milestone = 75
-        elif progress >= 50:
-            current_milestone = 50
-        elif progress >= 25:
-            current_milestone = 25
-
-        last_milestone = _last_progress_milestone.get(printer_id, 0)
-
-        # If we've crossed a new milestone, send notification
-        if current_milestone > last_milestone:
-            _last_progress_milestone[printer_id] = current_milestone
+        current_milestone = _progress_milestone_to_notify(printer_id, state)
+        if current_milestone is not None:
             try:
                 from backend.app.models.printer import Printer
 
@@ -1906,7 +1994,7 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
     # Check for new HMS errors and send notifications
     current_hms_errors = getattr(state, "hms_errors", []) or []
     if current_hms_errors:
-        new_errors = _take_new_hms_faults(printer_id, current_hms_errors)
+        new_errors = _take_new_hms_faults(printer_id, current_hms_errors, state.state)
 
         if new_errors:
             try:
@@ -1988,15 +2076,10 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
                 logging.getLogger(__name__).warning(f"HMS error notification failed: {e}")
 
     else:
-        # No HMS errors — only clear tracking after a grace period to prevent
-        # flapping errors (brief hms:[] gaps) from re-triggering notifications.
-        # Some HMS codes (e.g. chamber temp regulation during PETG prints) toggle
-        # on/off every few seconds as conditions fluctuate around thresholds.
-        if printer_id in _notified_hms_errors:
-            last_seen = _hms_last_seen.get(printer_id, 0)
-            if time.time() - last_seen >= _HMS_CLEAR_GRACE_SECONDS:
-                _notified_hms_errors.pop(printer_id, None)
-                _hms_last_seen.pop(printer_id, None)
+        # No HMS errors: nothing to send, but faults gone long enough (or gone
+        # across a print state change) are forgotten. Some codes, e.g. chamber
+        # temperature regulation during PETG prints, toggle every few seconds.
+        _take_new_hms_faults(printer_id, [], state.state)
 
     await ws_manager.send_printer_status(
         printer_id,
@@ -2100,56 +2183,22 @@ async def on_fts_inlet_change(printer_id: int, ams_id: int, inlet: str):
         logger.warning("[Printer %s] Could not re-apply K-profiles after inlet move: %s", printer_id, e)
 
 
-async def on_ams_change(printer_id: int, ams_data: list):
-    """Handle AMS data changes - sync to Spoolman if enabled and auto mode."""
+async def _unlink_stale_assignments(printer_id: int, ams_data: list, printing_now: bool) -> None:
+    """Unlink built-in inventory assignments whose slot no longer holds their spool.
+
+    Runs from ``on_ams_change`` and, for removals held by ``slot_unlink_grace``,
+    from the delayed re-check -- which is why it takes the AMS data and print
+    state as arguments instead of reading them from the push (#3186).
+    """
     logger = logging.getLogger(__name__)
-
-    # Snapshot BEFORE any await: if a print is active, skip weight sync later.
-    # on_print_complete may pop _active_sessions during our awaits (#880).
-    from backend.app.services.usage_tracker import _active_sessions
-
-    _print_active = printer_id in _active_sessions
-
-    # A slot that reports empty while a print is running is a filament runout,
-    # not a spool swap: the spool is still physically in the AMS, just
-    # consumed. Dropping either inventory backend's slot link there loses the
-    # only record of which spool fed the print, so the completion path can't
-    # charge the runout segment to anything. Both cleanup passes below consult
-    # this; computed once, up front, so neither depends on the other having run.
-    _unlink_state = printer_manager.get_status(printer_id)
-    printing_now = (getattr(_unlink_state, "state", "") or "").upper() in ("RUNNING", "PAUSE")
-
-    # MQTT relay - publish AMS change
-    try:
-        printer_info = printer_manager.get_printer(printer_id)
-        if printer_info:
-            await mqtt_relay.on_ams_change(printer_id, printer_info.name, printer_info.serial_number, ams_data)
-    except Exception:
-        pass  # Don't fail AMS callback if MQTT fails
-
-    # Broadcast AMS change via WebSocket (bypasses status_key deduplication)
-    # This ensures frontend gets immediate updates when AMS slots are configured
-    try:
-        state = printer_manager.get_status(printer_id)
-        if state:
-            logger.info("[Printer %s] Broadcasting AMS change via WebSocket", printer_id)
-            await ws_manager.send_printer_status(
-                printer_id,
-                printer_state_to_dict(
-                    state,
-                    printer_id,
-                    printer_manager.get_model(printer_id),
-                    printer_manager.get_drying_targets(printer_id),
-                ),
-            )
-    except Exception as e:
-        logger.warning("Failed to broadcast AMS change for printer %s: %s", printer_id, e)
 
     from backend.app.utils.color_utils import colors_similar as _colors_similar
 
-    # Auto-unlink spool assignments with stale fingerprints
+    # Auto-unlink spool assignments with stale fingerprints. Under the
+    # per-printer assignment lock since #3186: the held-removal re-check runs
+    # this outside any MQTT push, so it can now overlap one.
     try:
-        async with async_session() as db:
+        async with _get_ams_assignment_lock(printer_id), async_session() as db:
             from sqlalchemy.orm import selectinload
 
             from backend.app.api.routes.inventory import _find_tray_in_ams_data
@@ -2175,6 +2224,8 @@ async def on_ams_change(printer_id: int, ams_data: list):
             # unlinking the spool that fed the print — the next idle-time pass
             # unlinks it if the user really did take it out.
             stale = []
+            # Removals this pass is holding rather than unlinking (#3186).
+            held: set[tuple] = set()
             for assignment in assignments:
                 # External spool assignments (ams_id=255) live in vt_tray, not AMS data
                 if assignment.ams_id == 255:
@@ -2198,6 +2249,20 @@ async def on_ams_change(printer_id: int, ams_data: list):
                             assignment.spool_id,
                             assignment.ams_id,
                             assignment.tray_id,
+                        )
+                        continue
+                    # A whole AMS unit can drop out of one push and come back in
+                    # the next; only a slot that stays gone is a removal (#3186).
+                    hold_key = ("inventory", assignment.ams_id, assignment.tray_id, assignment.spool_id)
+                    if not slot_unlink_grace.removal_confirmed(printer_id, hold_key):
+                        held.add(hold_key)
+                        logger.info(
+                            "Auto-unlink held: spool %d AMS%d-T%d — tray not found in AMS data; "
+                            "unlinking if it is still gone in %ds",
+                            assignment.spool_id,
+                            assignment.ams_id,
+                            assignment.tray_id,
+                            int(slot_unlink_grace.GRACE_SECONDS),
                         )
                         continue
                     logger.info(
@@ -2341,7 +2406,20 @@ async def on_ams_change(printer_id: int, ams_data: list):
                         # threw away the identity the user had supplied, which is
                         # the only place it existed (#3100). A slot the bit calls
                         # empty, or one that carries no bit at all, still unlinks.
-                        if spool_present(current_tray) is True and not cur_color.strip() and not cur_type.strip():
+                        #
+                        # Unless the slot was reported empty first: a removal
+                        # already held means a spool came out and another went
+                        # in, so the blank report keeps the hold running below
+                        # rather than cancelling it (#3186).
+                        if (
+                            spool_present(current_tray) is True
+                            and not cur_color.strip()
+                            and not cur_type.strip()
+                            and not slot_unlink_grace.is_held(
+                                printer_id,
+                                ("inventory", assignment.ams_id, assignment.tray_id, assignment.spool_id),
+                            )
+                        ):
                             logger.info(
                                 "Auto-unlink skipped: spool %d AMS%d-T%d — slot still occupied, "
                                 "tray reports no filament data yet",
@@ -2350,6 +2428,24 @@ async def on_ams_change(printer_id: int, ams_data: list):
                                 assignment.tray_id,
                             )
                             continue
+                        # A blank report the presence bit does not vouch for is
+                        # still only one push. An idle X1C cleared a whole AMS
+                        # unit's bits, colour and type for a moment and lost
+                        # four saved assignments that way (#3186); unlink only
+                        # if the slot is still blank after the grace period.
+                        if not cur_color.strip() and not cur_type.strip():
+                            hold_key = ("inventory", assignment.ams_id, assignment.tray_id, assignment.spool_id)
+                            if not slot_unlink_grace.removal_confirmed(printer_id, hold_key):
+                                held.add(hold_key)
+                                logger.info(
+                                    "Auto-unlink held: spool %d AMS%d-T%d — tray reports no filament data; "
+                                    "unlinking if it is still blank in %ds",
+                                    assignment.spool_id,
+                                    assignment.ams_id,
+                                    assignment.tray_id,
+                                    int(slot_unlink_grace.GRACE_SECONDS),
+                                )
+                                continue
                         # Fingerprint mismatch — but check if tray now matches the
                         # assigned spool (e.g. auto-configure changed the tray).
                         # Both sides are reduced to the type the slot can carry
@@ -2422,6 +2518,7 @@ async def on_ams_change(printer_id: int, ams_data: list):
                             spool.material if spool else "?",
                         )
                         stale.append(assignment)  # Spool changed
+            slot_unlink_grace.settle(printer_id, "inventory", held)
             # Snapshot slots before delete — ORM attribute access after the
             # commit would refresh against a deleted row.
             unlinked_slots = [(a.ams_id, a.tray_id) for a in stale]
@@ -2449,6 +2546,161 @@ async def on_ams_change(printer_id: int, ams_data: list):
     except Exception as e:
         logger.warning("Spool assignment cleanup failed: %s", e, exc_info=True)
 
+
+async def _expire_spoolman_empty_slots(printer_id: int, ams_data: list, printing_now: bool) -> None:
+    """Delete Spoolman slot rows whose held removal has run its grace period.
+
+    The Spoolman half of the #3186 re-check. The full sync in ``on_ams_change``
+    talks to Spoolman for every tray; this only needs the local rows, so it
+    repeats that pass's empty-slot decision -- a tray with no type or no colour
+    (``parse_ams_tray`` returns None for exactly those), not during a print, and
+    not in a slot the presence bit calls occupied -- and nothing else.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        async with async_session() as db:
+            from backend.app.api.routes.settings import get_setting
+            from backend.app.models.spoolman_slot_assignment import SpoolmanSlotAssignment
+            from backend.app.services.ams_slot_presence import spool_present
+
+            enabled = await get_setting(db, "spoolman_enabled")
+            if not enabled or enabled.lower() != "true":
+                return
+            sync_mode = await get_setting(db, "spoolman_sync_mode")
+            if sync_mode and sync_mode != "auto":
+                return
+
+            trays: dict[tuple[int, int], dict] = {}
+            for ams_unit in ams_data or []:
+                if not isinstance(ams_unit, dict):
+                    continue
+                for tray in ams_unit.get("tray", []):
+                    if isinstance(tray, dict):
+                        trays[(int(ams_unit.get("id", 0)), int(tray.get("id", 0)))] = tray
+
+            rows = (
+                (
+                    await db.execute(
+                        select(SpoolmanSlotAssignment).where(SpoolmanSlotAssignment.printer_id == printer_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            held: set[tuple] = set()
+            expired: list[tuple[int, int]] = []
+            for row in rows:
+                tray = trays.get((row.ams_id, row.tray_id))
+                if tray is None or printing_now:
+                    continue
+                if (tray.get("tray_type") or "").strip() and (tray.get("tray_color") or "").strip():
+                    continue
+                hold_key = ("spoolman", row.ams_id, row.tray_id, row.spoolman_spool_id)
+                if spool_present(tray) is True and not slot_unlink_grace.is_held(printer_id, hold_key):
+                    continue
+                if slot_unlink_grace.removal_confirmed(printer_id, hold_key):
+                    expired.append((row.ams_id, row.tray_id))
+                else:
+                    held.add(hold_key)
+            slot_unlink_grace.settle(printer_id, "spoolman", held)
+            if not expired:
+                return
+            # A statement rather than ORM deletes, like the sync pass: the two
+            # can overlap, and a row the other already removed must not fail
+            # this commit.
+            for ams_id, tray_id in expired:
+                await db.execute(
+                    delete(SpoolmanSlotAssignment).where(
+                        SpoolmanSlotAssignment.printer_id == printer_id,
+                        SpoolmanSlotAssignment.ams_id == ams_id,
+                        SpoolmanSlotAssignment.tray_id == tray_id,
+                    )
+                )
+            await db.commit()
+            logger.info("Unlinked %d Spoolman slot(s) that stayed empty for printer %d", len(expired), printer_id)
+            for ams_id, tray_id in expired:
+                await ws_manager.broadcast(
+                    {
+                        "type": "spool_assignment_changed",
+                        "printer_id": printer_id,
+                        "ams_id": ams_id,
+                        "tray_id": tray_id,
+                    }
+                )
+    except Exception as e:
+        logger.warning("Spoolman slot re-check failed for printer %s: %s", printer_id, e, exc_info=True)
+
+
+async def _recheck_held_unlinks(printer_id: int) -> None:
+    """Re-run just the slot cleanup against the printer's current AMS state.
+
+    Scheduled by ``slot_unlink_grace`` when it holds a removal. The unlink
+    passes otherwise run only when the AMS hash changes, and a slot that went
+    empty and stayed empty may never change it again.
+    """
+    status = printer_manager.get_status(printer_id)
+    # A disconnected printer's state is its last report, not a new one: acting
+    # on it would "confirm" a removal nobody has seen for the whole grace
+    # period. Leave the holds; the first push after reconnecting decides.
+    if status is None or not status.connected:
+        return
+    ams_raw = status.raw_data.get("ams")
+    ams_data = ams_raw.get("ams", []) if isinstance(ams_raw, dict) else ams_raw if isinstance(ams_raw, list) else []
+    printing_now = (getattr(status, "state", "") or "").upper() in ("RUNNING", "PAUSE")
+    await _unlink_stale_assignments(printer_id, ams_data, printing_now)
+    await _expire_spoolman_empty_slots(printer_id, ams_data, printing_now)
+
+
+slot_unlink_grace.set_recheck(_recheck_held_unlinks)
+
+
+async def on_ams_change(printer_id: int, ams_data: list):
+    """Handle AMS data changes - sync to Spoolman if enabled and auto mode."""
+    logger = logging.getLogger(__name__)
+
+    # Snapshot BEFORE any await: if a print is active, skip weight sync later.
+    # on_print_complete may pop _active_sessions during our awaits (#880).
+    from backend.app.services.usage_tracker import _active_sessions
+
+    _print_active = printer_id in _active_sessions
+
+    # A slot that reports empty while a print is running is a filament runout,
+    # not a spool swap: the spool is still physically in the AMS, just
+    # consumed. Dropping either inventory backend's slot link there loses the
+    # only record of which spool fed the print, so the completion path can't
+    # charge the runout segment to anything. Both cleanup passes below consult
+    # this; computed once, up front, so neither depends on the other having run.
+    _unlink_state = printer_manager.get_status(printer_id)
+    printing_now = (getattr(_unlink_state, "state", "") or "").upper() in ("RUNNING", "PAUSE")
+
+    # MQTT relay - publish AMS change
+    try:
+        printer_info = printer_manager.get_printer(printer_id)
+        if printer_info:
+            await mqtt_relay.on_ams_change(printer_id, printer_info.name, printer_info.serial_number, ams_data)
+    except Exception:
+        pass  # Don't fail AMS callback if MQTT fails
+
+    # Broadcast AMS change via WebSocket (bypasses status_key deduplication)
+    # This ensures frontend gets immediate updates when AMS slots are configured
+    try:
+        state = printer_manager.get_status(printer_id)
+        if state:
+            logger.info("[Printer %s] Broadcasting AMS change via WebSocket", printer_id)
+            await ws_manager.send_printer_status(
+                printer_id,
+                printer_state_to_dict(
+                    state,
+                    printer_id,
+                    printer_manager.get_model(printer_id),
+                    printer_manager.get_drying_targets(printer_id),
+                ),
+            )
+    except Exception as e:
+        logger.warning("Failed to broadcast AMS change for printer %s: %s", printer_id, e)
+
+    await _unlink_stale_assignments(printer_id, ams_data, printing_now)
+
     # Auto-manage inventory spools from AMS tray data (skip if Spoolman manages AMS).
     # Serialised per-printer via _ams_assignment_locks: MQTT bursts can deliver
     # two AMS pushes ~30 ms apart, and without the lock both callbacks read
@@ -2458,6 +2710,8 @@ async def on_ams_change(printer_id: int, ams_data: list):
     # bug stayed latent there. See _ams_assignment_locks comment for details.
     try:
         async with _get_ams_assignment_lock(printer_id), async_session() as db:
+            from sqlalchemy.orm import selectinload
+
             from backend.app.api.routes.settings import get_setting
             from backend.app.models.spool import Spool
             from backend.app.models.spool_assignment import SpoolAssignment as SA
@@ -2802,6 +3056,7 @@ async def on_ams_change(printer_id: int, ams_data: list):
             synced = 0
             slot_changes: list[tuple[int, int, int]] = []  # (ams_id, tray_id, spoolman_spool_id) to upsert
             empty_slots: list[tuple[int, int]] = []  # (ams_id, tray_id) whose tray is now empty
+            spoolman_held: set[tuple] = set()  # removals held for the grace period (#3186)
             for ams_unit in ams_data:
                 if not isinstance(ams_unit, dict):
                     continue
@@ -2834,8 +3089,27 @@ async def on_ams_change(printer_id: int, ams_data: list):
                         # the first idle push after it was inserted. Same
                         # deletion as the internal inventory's in #3100, same
                         # answer, so the two modes stay in step.
-                        if not printing_now and spool_present(tray_data) is not True:
-                            empty_slots.append((ams_id, tray_id_raw))
+                        #
+                        # And only once the slot has stayed empty for the grace
+                        # period -- the internal inventory's #3186 answer, for
+                        # the same one-push blank.
+                        linked_spool = spoolman_slot_map.get((ams_id, tray_id_raw))
+                        hold_key = ("spoolman", ams_id, tray_id_raw, linked_spool)
+                        if not printing_now and (
+                            spool_present(tray_data) is not True or slot_unlink_grace.is_held(printer_id, hold_key)
+                        ):
+                            if linked_spool is None or slot_unlink_grace.removal_confirmed(printer_id, hold_key):
+                                empty_slots.append((ams_id, tray_id_raw))
+                            else:
+                                spoolman_held.add(hold_key)
+                                logger.info(
+                                    "Spoolman slot unlink held: AMS%d-T%d (spool %d) reports empty; "
+                                    "unlinking if it is still empty in %ds",
+                                    ams_id,
+                                    tray_id_raw,
+                                    linked_spool,
+                                    int(slot_unlink_grace.GRACE_SECONDS),
+                                )
                         _clear_unknown_tag_dedup(printer_id, ams_id, tray_id_raw)
                         continue
 
@@ -2853,6 +3127,7 @@ async def on_ams_change(printer_id: int, ams_data: list):
                         result = await client.sync_ams_tray(
                             tray,
                             printer_name,
+                            db,
                             # Per-print tracking is the only weight writer (#1119).
                             # AMS auto-sync still maintains spool metadata / slot
                             # assignments but no longer touches remaining_weight.
@@ -2913,6 +3188,8 @@ async def on_ams_change(printer_id: int, ams_data: list):
                     except Exception as e:
                         logger.error("Error syncing AMS %s tray %s: %s", ams_id, tray.tray_id, e)
 
+            slot_unlink_grace.settle(printer_id, "spoolman", spoolman_held)
+
             if synced > 0:
                 logger.info("Auto-synced %s AMS trays to Spoolman for printer %s", synced, printer_id)
 
@@ -2972,14 +3249,84 @@ async def on_ams_change(printer_id: int, ams_data: list):
         logging.getLogger(__name__).error("Spoolman AMS sync failed for printer %s: %s", printer_id, e)
 
 
-async def _capture_snapshot_for_notification(printer_id: int, printer, logger) -> bytes | None:
+# Largest finish photo attached to a notification; a bigger one is still linked.
+_FINISH_PHOTO_ATTACH_MAX_BYTES = 2_500_000
+
+
+async def _finish_photo_for_notification(
+    db, archive, archive_id: int, filename: str
+) -> tuple[str | None, bytes | None]:
+    """The ``{finish_photo_url}`` link and the bytes to attach, for a print's finish photo.
+
+    With authentication off the link is the archive's own photo route, as it
+    always was: it opens without a login and doesn't expire. With
+    authentication on that route needs a media token, which nothing tapping a
+    link in Telegram, CallMeBot or a Home Assistant notification has, so the
+    link only ever answered 401. The photo is then saved as a notification
+    photo as well (utils/notification_photos.py) and the link points there: an
+    unguessable name that opens this one photo and nothing else, for 3 days.
+
+    The link is relative when no External URL is set. Bytes over
+    ``_FINISH_PHOTO_ATTACH_MAX_BYTES`` are linked but not attached. Returns
+    ``(None, None)`` when the photo can't be found.
+    """
+    from backend.app.api.routes.settings import get_setting
+    from backend.app.core.auth import is_auth_enabled
+    from backend.app.utils.archive_paths import find_archive_photo
+    from backend.app.utils.notification_photos import save_notification_photo
+
+    log = logging.getLogger(__name__)
+    base = ((await get_setting(db, "external_url")) or "").strip().rstrip("/")
+    url: str | None = f"{base}/api/v1/archives/{archive_id}/photos/{filename}"
+
+    photo_bytes: bytes | None = None
+    try:
+        photo_path = find_archive_photo(archive, filename)
+        if photo_path is not None:
+            photo_bytes = await asyncio.to_thread(photo_path.read_bytes)
+    except Exception as e:
+        log.warning("[NOTIFY-BG] Failed to read finish photo bytes: %s", e)
+
+    try:
+        auth_on = await is_auth_enabled(db)
+    except Exception:
+        auth_on = True  # Unknown: the archive link may need a login, so don't rely on it.
+    if auth_on:
+        url = None
+        if photo_bytes:
+            try:
+                name = await asyncio.to_thread(save_notification_photo, photo_bytes, "print_complete")
+                url = f"{base}/api/v1/notifications/photos/{name}"
+            except Exception as e:
+                log.warning("[NOTIFY-BG] Failed to save finish photo for its link: %s", e)
+
+    if photo_bytes is not None and len(photo_bytes) > _FINISH_PHOTO_ATTACH_MAX_BYTES:
+        log.warning("[NOTIFY-BG] Finish photo too large for attachment: %s bytes", len(photo_bytes))
+        return url, None
+    if photo_bytes:
+        log.info("[NOTIFY-BG] Loaded finish photo bytes: %s bytes", len(photo_bytes))
+    return url, photo_bytes
+
+
+async def _capture_snapshot_for_notification(printer_id: int, printer, logger, *, light: bool = True) -> bytes | None:
     """Capture a camera snapshot for notification image attachment.
 
     Returns JPEG bytes (max 2.5MB) or None if capture fails or is unavailable.
     Uses: external camera > buffered frame > fresh capture.
+
+    Turns the chamber light on for the picture when the printer asks for it
+    (#1655). ``light=False`` is for callers that capture all through a print,
+    where the light would flash with every frame.
     """
     if not printer:
         return None
+
+    async with camera_light(printer if light else None):
+        return await _capture_snapshot_frame(printer_id, printer, logger)
+
+
+async def _capture_snapshot_frame(printer_id: int, printer, logger) -> bytes | None:
+    """The capture behind ``_capture_snapshot_for_notification``."""
 
     try:
         from backend.app.api.routes.settings import get_setting
@@ -3091,8 +3438,9 @@ async def _maybe_bank_inprint_frame(printer_id: int, layer_num: int) -> None:
             return
         # Reuses the notification snapshot path, which honours the
         # `capture_finish_photo` setting (returns None when disabled) so we
-        # don't bank frames the user never asked for.
-        frame = await _capture_snapshot_for_notification(printer_id, printer, logger)
+        # don't bank frames the user never asked for. Without the chamber light
+        # (#1655): this runs every 25 seconds for the whole print.
+        frame = await _capture_snapshot_for_notification(printer_id, printer, logger, light=False)
         if frame:
             _inprint_frame_bank[printer_id] = frame
             _inprint_frame_bank_ts[printer_id] = now
@@ -3160,6 +3508,8 @@ async def _dispatch_user_print_email(
     printer_name: str,
     filename: str,
     db,
+    image_data: bytes | None = None,
+    finish_photo_url: str | None = None,
 ) -> None:
     """Send a user-specific print-completion email based on print status.
 
@@ -3186,6 +3536,8 @@ async def _dispatch_user_print_email(
         printer_name=printer_name,
         filename=filename,
         db=db,
+        image_data=image_data,
+        finish_photo_url=finish_photo_url,
     )
 
 
@@ -3720,6 +4072,12 @@ async def on_print_start(printer_id: int, data: dict):
 
     # Clear any stale user-stopped flag from previous print cycles
     _user_stopped_printers.discard(printer_id)
+    # A new print starts its milestones from zero (#3211). The status path only
+    # resets on progress below 5 while not printing, which a printer that goes
+    # from FINISH at 100% straight into a new print at a preparation-phase 85%
+    # never shows. This callback does not fire after a Bambuddy restart (#1304)
+    # or on resume from pause, so it cannot repeat a milestone mid-print.
+    _last_progress_milestone[printer_id] = 0
     _kill_switch_notification_tasks.pop(printer_id, None)
 
     # #1721: drop any leftover pre-captured finish frame from a prior print
@@ -3868,36 +4226,58 @@ async def on_print_start(printer_id: int, data: dict):
                         # Wait for light to physically turn on and camera to adjust exposure
                         await asyncio.sleep(2.5)
 
-                logger.info("[PLATE CHECK] Running plate detection for printer %s", printer_id)
-                plate_result = await check_plate_empty(
-                    printer_id=printer_id,
-                    ip_address=printer.ip_address,
-                    access_code=printer.access_code,
-                    model=printer.model,
-                    include_debug_image=False,
-                    external_camera_url=printer.external_camera_url,
-                    external_camera_type=printer.external_camera_type,
-                    use_external=printer.external_camera_enabled,
-                    roi=roi,
-                    external_camera_snapshot_url=printer.external_camera_snapshot_url,
-                )
-
-                # Restore chamber light to original state
-                if light_was_off and client:
-                    logger.info("[PLATE CHECK] Restoring chamber light to off for printer %s", printer_id)
-                    client.set_chamber_light(False)
-
-                if not plate_result.needs_calibration and not plate_result.is_empty:
-                    # Objects detected - pause the print!
-                    logger.warning(
-                        f"[PLATE CHECK] Objects detected on plate for printer {printer_id}! "
-                        f"Confidence: {plate_result.confidence:.0%}, Diff: {plate_result.difference_percent:.1f}%"
+                plate_photo_data = None
+                objects_detected = False
+                try:
+                    logger.info("[PLATE CHECK] Running plate detection for printer %s", printer_id)
+                    plate_result = await check_plate_empty(
+                        printer_id=printer_id,
+                        ip_address=printer.ip_address,
+                        access_code=printer.access_code,
+                        model=printer.model,
+                        include_debug_image=False,
+                        external_camera_url=printer.external_camera_url,
+                        external_camera_type=printer.external_camera_type,
+                        use_external=printer.external_camera_enabled,
+                        roi=roi,
+                        external_camera_snapshot_url=printer.external_camera_snapshot_url,
                     )
-                    client = printer_manager.get_client(printer_id)
-                    if client:
-                        client.pause_print()
-                        logger.info("[PLATE CHECK] Print paused for printer %s", printer_id)
 
+                    objects_detected = not plate_result.needs_calibration and not plate_result.is_empty
+                    if objects_detected:
+                        # Objects detected - pause the print!
+                        logger.warning(
+                            f"[PLATE CHECK] Objects detected on plate for printer {printer_id}! "
+                            f"Confidence: {plate_result.confidence:.0%}, Diff: {plate_result.difference_percent:.1f}%"
+                        )
+                        pause_client = printer_manager.get_client(printer_id)
+                        if pause_client:
+                            pause_client.pause_print()
+                            logger.info("[PLATE CHECK] Print paused for printer %s", printer_id)
+
+                        # Snapshot while the light's still on — restoring it first
+                        # would leave the notification with a dark photo.
+                        try:
+                            plate_photo_data = await _capture_snapshot_for_notification(printer_id, printer, logger)
+                        except Exception as snap_err:
+                            logger.warning(
+                                "[PLATE CHECK] Failed to capture snapshot for printer %s: %s", printer_id, snap_err
+                            )
+                finally:
+                    # Restore chamber light to original state as soon as the
+                    # camera is done with it, whatever happened above.
+                    if light_was_off and client:
+                        logger.info("[PLATE CHECK] Restoring chamber light to off for printer %s", printer_id)
+                        try:
+                            client.set_chamber_light(False)
+                        except Exception as light_err:
+                            logger.warning(
+                                "[PLATE CHECK] Failed to restore chamber light for printer %s: %s",
+                                printer_id,
+                                light_err,
+                            )
+
+                if objects_detected:
                     # Send notification about plate not empty
                     await ws_manager.broadcast(
                         {
@@ -3915,6 +4295,7 @@ async def on_print_start(printer_id: int, data: dict):
                             printer_name=printer.name,
                             db=db,
                             difference_percent=plate_result.difference_percent,
+                            image_data=plate_photo_data,
                         )
                     except Exception as notif_err:
                         logger.warning("[PLATE CHECK] Failed to send notification: %s", notif_err)
@@ -6123,7 +6504,9 @@ _PLATE_RESTORE_SETTLE_SECONDS = 12.0
 # How long `_background_finish_photo` waits for this producer. Must cover the
 # settle window plus a worst-case RTSP grab (15s), and stay below the
 # notification path's own photo wait so a slow producer degrades to a
-# photo-less notification rather than a missed one.
+# photo-less notification rather than a missed one. The chamber light's
+# snapshot delay (#1655) spends from the spare 8 seconds, which is why
+# camera_light.MAX_DELAY_SECONDS stays below it.
 _FINISH_PHOTO_PRODUCER_WAIT_SECONDS = _PLATE_RESTORE_SETTLE_SECONDS + 23.0
 
 
@@ -6450,51 +6833,54 @@ async def on_finish_photo_moment(printer_id: int, data: dict):
             elif await _restore_plate_for_finish_photo(printer_id, wants_restore, logger):
                 restore_max_z = wants_restore
 
-        if frame_bytes is None and printer.external_camera_enabled and printer.external_camera_url:
-            from backend.app.api.routes.camera import live_frame_for_capture
-            from backend.app.services.external_camera import capture_frame
+        # Chamber light for the live capture below (#1655). The banked frame
+        # above was taken without it, like every in-print bank.
+        async with camera_light(printer if frame_bytes is None else None):
+            if frame_bytes is None and printer.external_camera_enabled and printer.external_camera_url:
+                from backend.app.api.routes.camera import live_frame_for_capture
+                from backend.app.services.external_camera import capture_frame
 
-            # #2707: this used to collide with the live view and fail, which is
-            # how finish-photo notifications went out with no image attached.
-            # Leaving frame_bytes None keeps the rest of the fallback chain.
-            defer, buffered = live_frame_for_capture(printer_id)
-            if defer:
-                frame_bytes = buffered
-            else:
-                frame_bytes = await capture_frame(
-                    printer.external_camera_url,
-                    printer.external_camera_type or "mjpeg",
-                    snapshot_url=printer.external_camera_snapshot_url,
-                )
-            if frame_bytes:
-                logger.info(
-                    "[FINISH-PHOTO-MOMENT] captured external-camera frame (%d bytes)",
-                    len(frame_bytes),
-                )
-        elif frame_bytes is None:
-            from backend.app.api.routes.camera import get_buffered_frame
-
-            buffered = get_buffered_frame(printer_id)
-            if buffered:
-                frame_bytes = buffered
-                logger.info(
-                    "[FINISH-PHOTO-MOMENT] used buffered RTSP frame (%d bytes)",
-                    len(frame_bytes),
-                )
-            else:
-                from backend.app.services.camera import capture_camera_frame_bytes
-
-                frame_bytes = await capture_camera_frame_bytes(
-                    ip_address=printer.ip_address,
-                    access_code=printer.access_code,
-                    model=printer.model,
-                    timeout=15,
-                )
+                # #2707: this used to collide with the live view and fail, which is
+                # how finish-photo notifications went out with no image attached.
+                # Leaving frame_bytes None keeps the rest of the fallback chain.
+                defer, buffered = live_frame_for_capture(printer_id)
+                if defer:
+                    frame_bytes = buffered
+                else:
+                    frame_bytes = await capture_frame(
+                        printer.external_camera_url,
+                        printer.external_camera_type or "mjpeg",
+                        snapshot_url=printer.external_camera_snapshot_url,
+                    )
                 if frame_bytes:
                     logger.info(
-                        "[FINISH-PHOTO-MOMENT] captured RTSP frame (%d bytes)",
+                        "[FINISH-PHOTO-MOMENT] captured external-camera frame (%d bytes)",
                         len(frame_bytes),
                     )
+            elif frame_bytes is None:
+                from backend.app.api.routes.camera import get_buffered_frame
+
+                buffered = get_buffered_frame(printer_id)
+                if buffered:
+                    frame_bytes = buffered
+                    logger.info(
+                        "[FINISH-PHOTO-MOMENT] used buffered RTSP frame (%d bytes)",
+                        len(frame_bytes),
+                    )
+                else:
+                    from backend.app.services.camera import capture_camera_frame_bytes
+
+                    frame_bytes = await capture_camera_frame_bytes(
+                        ip_address=printer.ip_address,
+                        access_code=printer.access_code,
+                        model=printer.model,
+                        timeout=15,
+                    )
+                    if frame_bytes:
+                        logger.info(
+                            "[FINISH-PHOTO-MOMENT] captured RTSP frame (%d bytes)",
+                            len(frame_bytes),
+                        )
 
         if frame_bytes:
             if not frame_already_rotated:
@@ -7885,63 +8271,67 @@ async def on_print_complete(printer_id: int, data: dict):
             # Fallback chain: external camera → buffered live frame →
             # fresh RTSP capture. Only runs if the timelapse path above
             # didn't already produce a photo.
-            if not photo_filename:
-                if printer.external_camera_enabled and printer.external_camera_url:
-                    logger.info("[PHOTO-BG] Using external camera")
-                    from backend.app.api.routes.camera import live_frame_for_capture
-                    from backend.app.services.external_camera import capture_frame
+            # Chamber light for the live capture below (#1655).
+            async with camera_light(printer if not photo_filename else None):
+                if not photo_filename:
+                    if printer.external_camera_enabled and printer.external_camera_url:
+                        logger.info("[PHOTO-BG] Using external camera")
+                        from backend.app.api.routes.camera import live_frame_for_capture
+                        from backend.app.services.external_camera import capture_frame
 
-                    # #2707: the second half of the finish-photo failure — the
-                    # pre-capture and this fallback both collided with the live
-                    # view. None here continues down the fallback chain.
-                    defer, buffered = live_frame_for_capture(printer_id)
-                    if defer:
-                        frame_data = buffered
+                        # #2707: the second half of the finish-photo failure — the
+                        # pre-capture and this fallback both collided with the live
+                        # view. None here continues down the fallback chain.
+                        defer, buffered = live_frame_for_capture(printer_id)
+                        if defer:
+                            frame_data = buffered
+                        else:
+                            frame_data = await capture_frame(
+                                printer.external_camera_url,
+                                printer.external_camera_type or "mjpeg",
+                                snapshot_url=printer.external_camera_snapshot_url,
+                            )
+                        if frame_data:
+                            frame_data = _apply_camera_rotation(frame_data, printer, logger)
+                            photos_dir = archive_dir / "photos"
+                            photos_dir.mkdir(parents=True, exist_ok=True)
+                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                            photo_filename = f"finish_{timestamp}_{uuid.uuid4().hex[:8]}.jpg"
+                            photo_path = photos_dir / photo_filename
+                            await asyncio.to_thread(photo_path.write_bytes, frame_data)
+                            logger.info("[PHOTO-BG] Saved external camera frame: %s", photo_filename)
                     else:
-                        frame_data = await capture_frame(
-                            printer.external_camera_url,
-                            printer.external_camera_type or "mjpeg",
-                            snapshot_url=printer.external_camera_snapshot_url,
-                        )
-                    if frame_data:
-                        frame_data = _apply_camera_rotation(frame_data, printer, logger)
-                        photos_dir = archive_dir / "photos"
-                        photos_dir.mkdir(parents=True, exist_ok=True)
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        photo_filename = f"finish_{timestamp}_{uuid.uuid4().hex[:8]}.jpg"
-                        photo_path = photos_dir / photo_filename
-                        await asyncio.to_thread(photo_path.write_bytes, frame_data)
-                        logger.info("[PHOTO-BG] Saved external camera frame: %s", photo_filename)
-                else:
-                    # Check if camera stream is active - use buffered frame to avoid freeze
-                    # Check both RTSP streams (_active_streams) and chamber image streams (_active_chamber_streams)
-                    active_for_printer = [k for k in _active_streams if k.startswith(f"{printer_id}-")]
-                    active_chamber_for_printer = [k for k in _active_chamber_streams if k.startswith(f"{printer_id}-")]
-                    buffered_frame = get_buffered_frame(printer_id)
+                        # Check if camera stream is active - use buffered frame to avoid freeze
+                        # Check both RTSP streams (_active_streams) and chamber image streams (_active_chamber_streams)
+                        active_for_printer = [k for k in _active_streams if k.startswith(f"{printer_id}-")]
+                        active_chamber_for_printer = [
+                            k for k in _active_chamber_streams if k.startswith(f"{printer_id}-")
+                        ]
+                        buffered_frame = get_buffered_frame(printer_id)
 
-                    if (active_for_printer or active_chamber_for_printer) and buffered_frame:
-                        # Use frame from active stream
-                        logger.info("[PHOTO-BG] Using buffered frame from active stream")
-                        buffered_frame = _apply_camera_rotation(buffered_frame, printer, logger)
-                        photos_dir = archive_dir / "photos"
-                        photos_dir.mkdir(parents=True, exist_ok=True)
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        photo_filename = f"finish_{timestamp}_{uuid.uuid4().hex[:8]}.jpg"
-                        photo_path = photos_dir / photo_filename
-                        await asyncio.to_thread(photo_path.write_bytes, buffered_frame)
-                        logger.info("[PHOTO-BG] Saved buffered frame: %s", photo_filename)
-                    else:
-                        # No active stream - capture new frame
-                        from backend.app.services.camera import capture_finish_photo
+                        if (active_for_printer or active_chamber_for_printer) and buffered_frame:
+                            # Use frame from active stream
+                            logger.info("[PHOTO-BG] Using buffered frame from active stream")
+                            buffered_frame = _apply_camera_rotation(buffered_frame, printer, logger)
+                            photos_dir = archive_dir / "photos"
+                            photos_dir.mkdir(parents=True, exist_ok=True)
+                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                            photo_filename = f"finish_{timestamp}_{uuid.uuid4().hex[:8]}.jpg"
+                            photo_path = photos_dir / photo_filename
+                            await asyncio.to_thread(photo_path.write_bytes, buffered_frame)
+                            logger.info("[PHOTO-BG] Saved buffered frame: %s", photo_filename)
+                        else:
+                            # No active stream - capture new frame
+                            from backend.app.services.camera import capture_finish_photo
 
-                        photo_filename = await capture_finish_photo(
-                            printer_id=printer_id,
-                            ip_address=printer.ip_address,
-                            access_code=printer.access_code,
-                            model=printer.model,
-                            archive_dir=archive_dir,
-                            rotation=getattr(printer, "camera_rotation", 0),
-                        )
+                            photo_filename = await capture_finish_photo(
+                                printer_id=printer_id,
+                                ip_address=printer.ip_address,
+                                access_code=printer.access_code,
+                                model=printer.model,
+                                archive_dir=archive_dir,
+                                rotation=getattr(printer, "camera_rotation", 0),
+                            )
 
             # Write phase: attach the photo in a fresh short-lived session.
             if photo_filename:
@@ -8118,37 +8508,13 @@ async def on_print_complete(printer_id: int, data: dict):
                             archive_data["usage_results"] = usage_results
                         # Add finish photo URL and image bytes if available
                         if finish_photo_filename:
-                            from backend.app.api.routes.settings import get_setting
-
-                            external_url = await get_setting(db, "external_url")
-                            if external_url:
-                                external_url = external_url.rstrip("/")
-                                archive_data["finish_photo_url"] = (
-                                    f"{external_url}/api/v1/archives/{archive_id}/photos/{finish_photo_filename}"
-                                )
-                            else:
-                                # Fallback to relative URL (won't work for external services)
-                                archive_data["finish_photo_url"] = (
-                                    f"/api/v1/archives/{archive_id}/photos/{finish_photo_filename}"
-                                )
-
-                            # Read finish photo bytes for image attachment (e.g. Pushover)
-                            try:
-                                from backend.app.utils.archive_paths import find_archive_photo
-
-                                photo_path = find_archive_photo(archive, finish_photo_filename)
-                                if photo_path is not None:
-                                    photo_bytes = await asyncio.to_thread(photo_path.read_bytes)
-                                    if len(photo_bytes) <= 2_500_000:
-                                        archive_data["image_data"] = photo_bytes
-                                        logger.info("[NOTIFY-BG] Loaded finish photo bytes: %s bytes", len(photo_bytes))
-                                    else:
-                                        logger.warning(
-                                            f"[NOTIFY-BG] Finish photo too large for attachment: "
-                                            f"{len(photo_bytes)} bytes"
-                                        )
-                            except Exception as e:
-                                logger.warning("[NOTIFY-BG] Failed to read finish photo bytes: %s", e)
+                            photo_url, photo_bytes = await _finish_photo_for_notification(
+                                db, archive, archive_id, finish_photo_filename
+                            )
+                            if photo_url:
+                                archive_data["finish_photo_url"] = photo_url
+                            if photo_bytes:
+                                archive_data["image_data"] = photo_bytes
 
                 if not await _kill_switch_notification_already_sent(kill_switch_notification_task):
                     await notification_service.on_print_complete(
@@ -8175,6 +8541,8 @@ async def on_print_complete(printer_id: int, data: dict):
                         printer_name,
                         raw_filename,
                         db,
+                        image_data=archive_data.get("image_data"),
+                        finish_photo_url=archive_data.get("finish_photo_url"),
                     )
 
                 logger.info("[NOTIFY-BG] Completed")
@@ -9414,6 +9782,12 @@ async def lifespan(app: FastAPI):
 
     install_proactor_reset_filter()
 
+    # Before anything opens files or sockets in bulk: a soft limit of 1024 is
+    # what turned descriptor exhaustion into a corrupted database (#2883).
+    from backend.app.core.fd_limit import raise_open_file_limit
+
+    raise_open_file_limit()
+
     # Before init_db, so the warning is near the top of the log rather than
     # below a migration run. See warn_if_running_on_uvloop for what is at stake.
     warn_if_running_on_uvloop()
@@ -9860,6 +10234,11 @@ async def lifespan(app: FastAPI):
     # L-2: Start periodic auth cleanup (stale TOTP + expired revoked JTIs)
     start_auth_cleanup()
 
+    # Maintainer announcements: a signed feed fetched from GitHub every few hours.
+    from backend.app.services import announcements as announcements_service
+
+    announcements_service.start()
+
     from backend.app.services.printer_media import start_printer_download_cleanup
 
     start_printer_download_cleanup()
@@ -9918,10 +10297,14 @@ async def lifespan(app: FastAPI):
         logging.warning("Failed to shut down camera broadcasters: %s", e)
     stop_expected_prints_cleanup()
     stop_auth_cleanup()
+    from backend.app.services import announcements as announcements_service
+
+    announcements_service.stop()
     from backend.app.services.printer_media import stop_printer_download_cleanup
 
     await stop_printer_download_cleanup()
     printer_manager.disconnect_all()
+    slot_unlink_grace.reset()
     await close_spoolman_client()
 
     # Stop all virtual printer services
@@ -10001,6 +10384,8 @@ PUBLIC_API_ROUTES = {
     # rejects an absent, expired, revoked, or wrong-scoped token. In particular a
     # plain ``camera_stream`` token does NOT open this door.
     "/api/v1/camwall/printers",
+    # Overlay branding: the route enforces overlay-scoped token authentication.
+    "/api/v1/overlay-branding/logo",
 }
 
 # Route prefixes that are public (for routes with dynamic segments)
@@ -10448,6 +10833,7 @@ app.include_router(bug_report.router, prefix=app_settings.api_prefix)
 app.include_router(users.router, prefix=app_settings.api_prefix)
 app.include_router(groups.router, prefix=app_settings.api_prefix)
 app.include_router(printers.router, prefix=app_settings.api_prefix)
+app.include_router(printer_locations.router, prefix=app_settings.api_prefix)
 app.include_router(archives.router, prefix=app_settings.api_prefix)
 app.include_router(filaments.router, prefix=app_settings.api_prefix)
 app.include_router(finance.router, prefix=app_settings.api_prefix)
@@ -10455,6 +10841,7 @@ app.include_router(inventory.router, prefix=app_settings.api_prefix)
 app.include_router(filament_products.router, prefix=app_settings.api_prefix)
 app.include_router(labels.router, prefix=app_settings.api_prefix)
 app.include_router(settings_routes.router, prefix=app_settings.api_prefix)
+app.include_router(overlay_branding.router, prefix=app_settings.api_prefix)
 app.include_router(cloud.router, prefix=app_settings.api_prefix)
 app.include_router(orca_cloud.router, prefix=app_settings.api_prefix)
 app.include_router(local_presets.router, prefix=app_settings.api_prefix)
@@ -10474,6 +10861,7 @@ app.include_router(spoolman.router, prefix=app_settings.api_prefix)
 app.include_router(spoolman_inventory.router, prefix=app_settings.api_prefix)
 app.include_router(updates.router, prefix=app_settings.api_prefix)
 app.include_router(sponsor_prompt.router, prefix=app_settings.api_prefix)
+app.include_router(announcements.router, prefix=app_settings.api_prefix)
 app.include_router(maintenance.router, prefix=app_settings.api_prefix)
 app.include_router(camera.router, prefix=app_settings.api_prefix)
 app.include_router(camwall.router, prefix=app_settings.api_prefix)
@@ -10490,6 +10878,7 @@ app.include_router(pipeline_runs.pipeline_run_router, prefix=app_settings.api_pr
 app.include_router(slicer_presets.router, prefix=app_settings.api_prefix)
 app.include_router(archive_purge.router, prefix=app_settings.api_prefix)
 app.include_router(makerworld.router, prefix=app_settings.api_prefix)
+app.include_router(manyfold.router, prefix=app_settings.api_prefix)
 app.include_router(api_keys.router, prefix=app_settings.api_prefix)
 app.include_router(connected_apps.router, prefix=app_settings.api_prefix)
 app.include_router(webhook.router, prefix=app_settings.api_prefix)

@@ -557,6 +557,230 @@ class TestNfcEndpoints:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    async def test_tag_scanned_other_tag_matches_ams_spool_by_tray_uuid(self, async_client: AsyncClient, spool_factory):
+        """A Bambu spool has two tags with different UIDs but one block-9 tray UUID.
+
+        The AMS created the spool from one tag; scanning the other tag on
+        SpoolBuddy must find that spool through the tray UUID, not offer a
+        duplicate (#984).
+        """
+        spool = await spool_factory(tag_uid="1E783DA000000100", tray_uuid="5E5498918CBF4B94A25EF669C24DECC3")
+
+        with patch("backend.app.api.routes.spoolbuddy.ws_manager") as mock_ws:
+            mock_ws.broadcast = AsyncMock()
+            resp = await async_client.post(
+                f"{API}/nfc/tag-scanned",
+                json={"device_id": "sb-1", "tag_uid": "8E3A00A2", "tray_uuid": "5E5498918CBF4B94A25EF669C24DECC3"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["spool_id"] == spool.id
+        msg = mock_ws.broadcast.call_args[0][0]
+        assert msg["type"] == "spoolbuddy_tag_matched"
+        assert msg["tray_uuid"] == "5E5498918CBF4B94A25EF669C24DECC3"
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_tag_scanned_unknown_tag_carries_tray_uuid(self, async_client: AsyncClient):
+        """The kiosk saves the tray UUID from the unknown-tag event on quick-add and link."""
+        with patch("backend.app.api.routes.spoolbuddy.ws_manager") as mock_ws:
+            mock_ws.broadcast = AsyncMock()
+            resp = await async_client.post(
+                f"{API}/nfc/tag-scanned",
+                json={"device_id": "sb-1", "tag_uid": "8E3A00A2", "tray_uuid": "9e0b0717bee94d7887eb1d8dfd1a14f3"},
+            )
+
+        assert resp.json()["matched"] is False
+        msg = mock_ws.broadcast.call_args[0][0]
+        assert msg["type"] == "spoolbuddy_unknown_tag"
+        assert msg["tray_uuid"] == "9E0B0717BEE94D7887EB1D8DFD1A14F3"
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_tag_scanned_drops_filament_type_sent_as_tray_uuid(self, async_client: AsyncClient, spool_factory):
+        """Daemons before #984 sent blocks 4-5 -- the filament type -- as tray_uuid.
+
+        That value is the same for every spool of one type, so it must neither
+        match a spool nor reach the kiosk, where quick-add would save it.
+        """
+        pla_matte = "504C41204D6174746500000000000000"  # "PLA Matte"
+        await spool_factory(tag_uid="11111111", tray_uuid=pla_matte)
+
+        with patch("backend.app.api.routes.spoolbuddy.ws_manager") as mock_ws:
+            mock_ws.broadcast = AsyncMock()
+            resp = await async_client.post(
+                f"{API}/nfc/tag-scanned",
+                json={"device_id": "sb-1", "tag_uid": "22222222", "tray_uuid": pla_matte},
+            )
+
+        assert resp.json()["matched"] is False
+        msg = mock_ws.broadcast.call_args[0][0]
+        assert msg["type"] == "spoolbuddy_unknown_tag"
+        assert msg["tray_uuid"] is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_tag_scanned_drops_invalid_tray_uuid_but_matches_tag_uid(
+        self, async_client: AsyncClient, spool_factory
+    ):
+        """An old daemon still matches by tag_uid, as before the fix."""
+        spool = await spool_factory(tag_uid="22222222")
+
+        with patch("backend.app.api.routes.spoolbuddy.ws_manager") as mock_ws:
+            mock_ws.broadcast = AsyncMock()
+            resp = await async_client.post(
+                f"{API}/nfc/tag-scanned",
+                json={"device_id": "sb-1", "tag_uid": "22222222", "tray_uuid": "504C41204D6174746500000000000000"},
+            )
+
+        assert resp.json()["spool_id"] == spool.id
+        assert mock_ws.broadcast.call_args[0][0]["tray_uuid"] is None
+
+    # Spools added on the kiosk before #984 carry only one tag's UID. A scan that
+    # matches one by that exact UID saves the tray UUID read from the same tag.
+    TRAY = "9E0B0717BEE94D7887EB1D8DFD1A14F3"
+
+    async def _scan(self, async_client: AsyncClient, tag_uid: str, tray_uuid: str | None):
+        with patch("backend.app.api.routes.spoolbuddy.ws_manager") as mock_ws:
+            mock_ws.broadcast = AsyncMock()
+            resp = await async_client.post(
+                f"{API}/nfc/tag-scanned",
+                json={"device_id": "sb-1", "tag_uid": tag_uid, "tray_uuid": tray_uuid},
+            )
+        assert resp.status_code == 200
+        return resp.json()
+
+    async def _tray_uuid_of(self, db_session: AsyncSession, spool_id: int) -> str | None:
+        from sqlalchemy import select
+
+        db_session.expire_all()
+        return (await db_session.execute(select(Spool.tray_uuid).where(Spool.id == spool_id))).scalar_one()
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_exact_tag_match_saves_tray_uuid(self, async_client: AsyncClient, spool_factory, db_session):
+        spool_id = (await spool_factory(tag_uid="AABB1122")).id
+
+        data = await self._scan(async_client, "AABB1122", self.TRAY)
+
+        assert data["spool_id"] == spool_id
+        assert await self._tray_uuid_of(db_session, spool_id) == self.TRAY
+        # The spool's other tag now finds it.
+        assert (await self._scan(async_client, "8E3A00A2", self.TRAY))["spool_id"] == spool_id
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_fuzzy_tag_match_saves_nothing(self, async_client: AsyncClient, spool_factory, db_session):
+        """A first-byte-variance match may be another spool's tag."""
+        spool = await spool_factory(tag_uid="BABB1122")
+
+        data = await self._scan(async_client, "AABB1122", self.TRAY)
+
+        assert data["spool_id"] == spool.id
+        assert await self._tray_uuid_of(db_session, spool.id) is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_tray_uuid_held_by_another_spool_is_not_copied(
+        self, async_client: AsyncClient, spool_factory, db_session
+    ):
+        from datetime import datetime, timezone
+
+        await spool_factory(tag_uid="11111111", tray_uuid=self.TRAY, archived_at=datetime.now(timezone.utc))
+        spool = await spool_factory(tag_uid="AABB1122")
+
+        await self._scan(async_client, "AABB1122", self.TRAY)
+
+        assert await self._tray_uuid_of(db_session, spool.id) is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_existing_tray_uuid_is_kept(self, async_client: AsyncClient, spool_factory, db_session):
+        other = "5E5498918CBF4B94A25EF669C24DECC3"
+        spool = await spool_factory(tag_uid="AABB1122", tray_uuid=other)
+
+        await self._scan(async_client, "AABB1122", self.TRAY)
+
+        assert await self._tray_uuid_of(db_session, spool.id) == other
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_spoolman_exact_tag_match_stores_tray_uuid_as_tag(self, async_client: AsyncClient):
+        sm_spool = {
+            "id": 7,
+            "filament": {"material": "PLA", "name": "PLA Matte", "color_hex": "008080", "weight": 1000.0},
+            "extra": {"tag": '"AABB1122"'},
+            "used_weight": 0.0,
+        }
+        mock_client = MagicMock()
+        mock_client.get_spools = AsyncMock(return_value=[sm_spool])
+        mock_client.find_spool_by_tag = AsyncMock(
+            side_effect=lambda tag, cached_spools=None: sm_spool if tag == "AABB1122" else None
+        )
+        mock_client.merge_spool_extra = AsyncMock(return_value={})
+
+        with patch(
+            "backend.app.api.routes.spoolbuddy._get_spoolman_client_or_none",
+            new_callable=AsyncMock,
+            return_value=mock_client,
+        ):
+            data = await self._scan(async_client, "AABB1122", self.TRAY)
+
+        assert data["spool_id"] == 7
+        mock_client.merge_spool_extra.assert_awaited_once_with(7, {"tag": f'"{self.TRAY}"'})
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_spoolman_match_by_tray_uuid_writes_nothing(self, async_client: AsyncClient):
+        sm_spool = {
+            "id": 7,
+            "filament": {"material": "PLA", "name": "PLA Matte", "color_hex": "008080", "weight": 1000.0},
+            "extra": {"tag": f'"{self.TRAY}"'},
+            "used_weight": 0.0,
+        }
+        mock_client = MagicMock()
+        mock_client.get_spools = AsyncMock(return_value=[sm_spool])
+        mock_client.find_spool_by_tag = AsyncMock(return_value=sm_spool)
+        mock_client.merge_spool_extra = AsyncMock(return_value={})
+
+        with patch(
+            "backend.app.api.routes.spoolbuddy._get_spoolman_client_or_none",
+            new_callable=AsyncMock,
+            return_value=mock_client,
+        ):
+            data = await self._scan(async_client, "AABB1122", self.TRAY)
+
+        assert data["spool_id"] == 7
+        mock_client.merge_spool_extra.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_spoolman_write_failure_still_reports_the_match(self, async_client: AsyncClient):
+        sm_spool = {
+            "id": 7,
+            "filament": {"material": "PLA", "name": "PLA Matte", "color_hex": "008080", "weight": 1000.0},
+            "extra": {"tag": '"AABB1122"'},
+            "used_weight": 0.0,
+        }
+        mock_client = MagicMock()
+        mock_client.get_spools = AsyncMock(return_value=[sm_spool])
+        mock_client.find_spool_by_tag = AsyncMock(
+            side_effect=lambda tag, cached_spools=None: sm_spool if tag == "AABB1122" else None
+        )
+        mock_client.merge_spool_extra = AsyncMock(side_effect=SpoolmanUnavailableError("down"))
+
+        with patch(
+            "backend.app.api.routes.spoolbuddy._get_spoolman_client_or_none",
+            new_callable=AsyncMock,
+            return_value=mock_client,
+        ):
+            data = await self._scan(async_client, "AABB1122", self.TRAY)
+
+        assert data["matched"] is True
+        assert data["spool_id"] == 7
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_tag_removed(self, async_client: AsyncClient):
         with patch("backend.app.api.routes.spoolbuddy.ws_manager") as mock_ws:
             mock_ws.broadcast = AsyncMock()

@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 import uuid
+import zlib
 from collections.abc import AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -19,10 +20,13 @@ from backend.app.core import database
 from backend.app.core.auth import (
     RequireCameraStreamTokenIfAuthEnabled,
     RequirePermissionIfAuthEnabled,
+    RequirePrinterPermissionIfAuthEnabled,
     create_camera_stream_token,
+    current_api_key_if_present,
 )
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
+from backend.app.models.api_key import APIKey
 from backend.app.models.printer import Printer
 from backend.app.models.user import User
 from backend.app.services.camera import (
@@ -44,6 +48,7 @@ from backend.app.services.camera_fanout import (
     iter_subscriber,
     shutdown_broadcaster,
 )
+from backend.app.services.camera_light import camera_light
 from backend.app.services.camera_profiles import get_camera_profile
 from backend.app.utils.ffmpeg_output import summarize_ffmpeg_stderr
 
@@ -70,6 +75,23 @@ _FFMPEG_TERM_TIMEOUT = 2.0
 # cleanup_orphaned_streams' /proc scan reaps any Bambu ffmpeg not attached to
 # an active stream on its next pass.
 _FFMPEG_KILL_TIMEOUT = 2.0
+
+# How long an RTSP stream may keep emitting byte-identical JPEGs before the
+# ffmpeg behind it is restarted (#3218). A dead upstream can leave ffmpeg
+# repeating its last frame indefinitely: measured on a P2S, ~29 fps of one
+# frame for two hours with no socket to the printer left at all, while every
+# check that counts frames saw a healthy stream. A live camera practically
+# never repeats a frame byte for byte -- sensor noise changes every one (2262
+# of 2262 distinct on an idle X1C chamber, #3189) -- so a run this long means
+# the picture is frozen.
+_RTSP_FROZEN_SECONDS = 20.0
+# "Practically never" is not never: a dark, idle chamber can encode to the same
+# frame every time. When the first frame after such a restart is the frozen one
+# again, the camera really is showing that picture, and the stream only
+# re-checks at this much longer interval until the picture changes -- so a
+# still scene costs one reconnect every few minutes instead of every 20 s, and a
+# real freeze on it is still recovered.
+_RTSP_STILL_RECHECK_SECONDS = 300.0
 
 # Track active ffmpeg processes for cleanup
 _active_streams: dict[str, asyncio.subprocess.Process] = {}
@@ -635,6 +657,11 @@ async def generate_rtsp_mjpeg_stream(
     process = None
     stderr_tail: _FfmpegStderrTail | None = None
     got_any_frames = False
+    # Across sessions (#3218): the frame a session froze on, and whether the
+    # next session showed the very same picture -- a still scene, not a
+    # frozen ffmpeg.
+    frozen_crc: int | None = None
+    still_scene = False
 
     try:
         while reconnect_count <= profile.rtsp_reconnect_max:
@@ -650,7 +677,14 @@ async def generate_rtsp_mjpeg_stream(
                     ip_address,
                     stream_id,
                 )
-                await asyncio.sleep(profile.rtsp_reconnect_delay)
+                # Fast after a session that delivered frames (reconnect_count
+                # is 1 then), backing off while the printer keeps refusing.
+                await asyncio.sleep(
+                    min(
+                        profile.rtsp_reconnect_delay * 2 ** (reconnect_count - 1),
+                        profile.rtsp_reconnect_backoff_max,
+                    )
+                )
                 if disconnect_event and disconnect_event.is_set():
                     break
 
@@ -698,6 +732,14 @@ async def generate_rtsp_mjpeg_stream(
             buffer = b""
             stream_ended = False
             client_gone = False
+            session_got_frames = False
+            # A frame that differs from the one before, not any frame, is what
+            # shows the picture is live: ffmpeg can repeat its last one
+            # forever (#3218).
+            last_frame_crc: int | None = None
+            last_change = time.time()
+            identical_frames = 0
+            frozen = False
 
             while True:
                 if disconnect_event and disconnect_event.is_set():
@@ -735,12 +777,40 @@ async def generate_rtsp_mjpeg_stream(
                         frame = buffer[: end_idx + 2]
                         buffer = buffer[end_idx + 2 :]
                         got_any_frames = True
+                        session_got_frames = True
+
+                        now = time.time()
+                        frame_crc = zlib.crc32(frame)
+                        if last_frame_crc is None:
+                            # First frame of this session. The same frame the
+                            # last session froze on means the camera really
+                            # shows that picture (see _RTSP_STILL_RECHECK_SECONDS).
+                            still_scene = frozen_crc is not None and frame_crc == frozen_crc
+                            if still_scene:
+                                logger.info(
+                                    "RTSP picture unchanged after restart for %s (stream_id=%s): "
+                                    "treating it as a still scene, re-checking every %.0fs",
+                                    ip_address,
+                                    stream_id,
+                                    _RTSP_STILL_RECHECK_SECONDS,
+                                )
+                            last_frame_crc = frame_crc
+                            last_change = now
+                        elif frame_crc != last_frame_crc:
+                            last_frame_crc = frame_crc
+                            last_change = now
+                            identical_frames = 0
+                            # The picture moves: back to the normal check.
+                            still_scene = False
+                            frozen_crc = None
+                        else:
+                            identical_frames += 1
 
                         if printer_id is not None:
                             _last_frames[printer_id] = frame
-                            _last_frame_times[printer_id] = time.time()
+                            _last_frame_times[printer_id] = now
                             if stream_id:
-                                _stream_last_frame_times[stream_id] = time.time()
+                                _stream_last_frame_times[stream_id] = now
 
                         yield (
                             b"--frame\r\n"
@@ -748,6 +818,33 @@ async def generate_rtsp_mjpeg_stream(
                             b"Content-Length: " + str(len(frame)).encode() + b"\r\n"
                             b"\r\n" + frame + b"\r\n"
                         )
+
+                        if now - last_change > (_RTSP_STILL_RECHECK_SECONDS if still_scene else _RTSP_FROZEN_SECONDS):
+                            frozen = True
+                            frozen_crc = last_frame_crc
+                            break
+
+                    if frozen:
+                        if still_scene:
+                            logger.info(
+                                "RTSP still-scene re-check for %s (stream_id=%s), restarting ffmpeg",
+                                ip_address,
+                                stream_id,
+                            )
+                        else:
+                            stderr_text = await _read_ffmpeg_stderr(process)
+                            if stderr_text:
+                                logger.warning("ffmpeg stderr (stream_id=%s): %s", stream_id, stderr_text)
+                            logger.warning(
+                                "RTSP output frozen for %s (stream_id=%s): %d identical frames over %.0fs, "
+                                "restarting ffmpeg",
+                                ip_address,
+                                stream_id,
+                                identical_frames,
+                                time.time() - last_change,
+                            )
+                        stream_ended = True
+                        break
 
                 except TimeoutError:
                     stderr_text = await _read_ffmpeg_stderr(process)
@@ -784,6 +881,13 @@ async def generate_rtsp_mjpeg_stream(
                 break
 
             if stream_ended:
+                # The budget is for failures in a row. A session that
+                # delivered video was a success, however it ended -- a stock
+                # X1C ends every session after about a minute, which under a
+                # lifetime count stopped the live view for good after half an
+                # hour.
+                if session_got_frames:
+                    reconnect_count = 0
                 reconnect_count += 1
                 continue
 
@@ -792,7 +896,7 @@ async def generate_rtsp_mjpeg_stream(
 
         if reconnect_count > profile.rtsp_reconnect_max:
             logger.error(
-                "RTSP max reconnects (%d) reached for %s (stream_id=%s)",
+                "RTSP max consecutive reconnects (%d) reached for %s (stream_id=%s)",
                 profile.rtsp_reconnect_max,
                 ip_address,
                 stream_id,
@@ -831,14 +935,21 @@ async def generate_rtsp_mjpeg_stream(
 
 @router.post("/camera/stream-token")
 async def create_stream_token(
-    _: User | None = RequirePermissionIfAuthEnabled(Permission.CAMERA_VIEW),
+    user: User | None = RequirePermissionIfAuthEnabled(Permission.CAMERA_VIEW),
+    api_key: APIKey | None = Depends(current_api_key_if_present),
 ):
     """Create a reusable token for camera stream/snapshot access.
 
     Returns a token valid for 60 minutes that can be appended as ?token=xxx
-    to camera stream/snapshot URLs loaded via <img> tags.
+    to camera stream/snapshot URLs loaded via <img> tags. The token opens only
+    the printers its minter may see (#1727).
     """
-    return {"token": await create_camera_stream_token()}
+    return {
+        "token": await create_camera_stream_token(
+            username=user.username if user is not None else None,
+            api_key_id=api_key.id if api_key is not None else None,
+        )
+    }
 
 
 @router.get("/{printer_id}/camera/stream")
@@ -938,20 +1049,22 @@ async def camera_stream(
         async def external_stream_wrapper():
             """Wrap external stream to track start/stop and update frame times."""
             try:
-                async for frame in generate_mjpeg_stream(
-                    printer.external_camera_url,
-                    printer.external_camera_type,
-                    fps,
-                    on_process=_register_external_process,
-                    on_frame=_publish_external_frame,
-                    stop_event=stop_event,
-                ):
-                    # generate_mjpeg_stream already handles rate limiting;
-                    # track frame times (per-printer + per-stream) for stall detection
-                    now = time.time()
-                    _last_frame_times[printer_id] = now
-                    _stream_last_frame_times[stream_id] = now
-                    yield frame
+                # Chamber light while the viewer watches (#1655).
+                async with camera_light(printer, wait=False):
+                    async for frame in generate_mjpeg_stream(
+                        printer.external_camera_url,
+                        printer.external_camera_type,
+                        fps,
+                        on_process=_register_external_process,
+                        on_frame=_publish_external_frame,
+                        stop_event=stop_event,
+                    ):
+                        # generate_mjpeg_stream already handles rate limiting;
+                        # track frame times (per-printer + per-stream) for stall detection
+                        now = time.time()
+                        _last_frame_times[printer_id] = now
+                        _stream_last_frame_times[stream_id] = now
+                        yield frame
             finally:
                 # Best-effort unregister. If an abrupt disconnect skips this
                 # finally, the registry entries persist — which is exactly what
@@ -1057,13 +1170,16 @@ async def camera_stream(
         logger.info("Camera viewer detached from %s (subscribers=%d)", fanout_key, remaining)
 
     async def _generate():
-        async for chunk in iter_subscriber(
-            broadcaster,
-            queue,
-            is_disconnected=_is_disconnected,
-            on_unsubscribe=_log_detach,
-        ):
-            yield chunk
+        # Chamber light while this viewer watches (#1655). Held per viewer, so
+        # it goes off once the last one leaves.
+        async with camera_light(printer, wait=False):
+            async for chunk in iter_subscriber(
+                broadcaster,
+                queue,
+                is_disconnected=_is_disconnected,
+                on_unsubscribe=_log_detach,
+            ):
+                yield chunk
 
     return StreamingResponse(
         _generate(),
@@ -1079,7 +1195,7 @@ async def camera_stream(
 @router.api_route("/{printer_id}/camera/stop", methods=["GET", "POST"])
 async def stop_camera_stream(
     printer_id: int,
-    _: User | None = RequirePermissionIfAuthEnabled(Permission.CAMERA_VIEW),
+    _: User | None = RequirePrinterPermissionIfAuthEnabled(Permission.CAMERA_VIEW),
 ):
     """Stop active camera streams for a printer.
 
@@ -1173,9 +1289,6 @@ async def camera_snapshot(
 
     Requires a stream token query param (?token=xxx) when auth is enabled.
     """
-    import tempfile
-    from pathlib import Path
-
     # Fetch the printer in a short-lived session and release the pooled DB
     # connection BEFORE the camera capture below (up to 15s, longer under a
     # saturated FTP/camera pool). Holding a Depends(get_db) session across the
@@ -1185,6 +1298,17 @@ async def camera_snapshot(
     # below reads only already-loaded scalar columns (expire_on_commit=False).
     async with database.async_session() as db:
         printer = await get_printer_or_404(printer_id, db)
+
+    # Chamber light for the picture (#1655). Home Assistant and other
+    # automations take their pictures here.
+    async with camera_light(printer):
+        return await _snapshot_response(printer_id, printer)
+
+
+async def _snapshot_response(printer_id: int, printer: Printer) -> Response:
+    """The capture behind ``camera_snapshot``."""
+    import tempfile
+    from pathlib import Path
 
     # Check for external camera first
     if printer.external_camera_enabled and printer.external_camera_url:
@@ -1268,7 +1392,7 @@ async def camera_snapshot(
 async def test_camera(
     printer_id: int,
     db: AsyncSession = Depends(get_db),
-    _: User | None = RequirePermissionIfAuthEnabled(Permission.CAMERA_VIEW),
+    _: User | None = RequirePrinterPermissionIfAuthEnabled(Permission.CAMERA_VIEW),
 ):
     """Test camera connection for a printer.
 
@@ -1289,7 +1413,7 @@ async def test_camera(
 async def diagnose_camera_route(
     printer_id: int,
     db: AsyncSession = Depends(get_db),
-    _: User | None = RequirePermissionIfAuthEnabled(Permission.CAMERA_VIEW),
+    _: User | None = RequirePrinterPermissionIfAuthEnabled(Permission.CAMERA_VIEW),
 ):
     """Run staged diagnostics for a printer's camera path.
 
@@ -1323,7 +1447,7 @@ async def diagnose_camera_route(
 @router.get("/{printer_id}/camera/status")
 async def camera_status(
     printer_id: int,
-    _: User | None = RequirePermissionIfAuthEnabled(Permission.CAMERA_VIEW),
+    _: User | None = RequirePrinterPermissionIfAuthEnabled(Permission.CAMERA_VIEW),
 ):
     """Get the status of an active camera stream.
 
@@ -1391,7 +1515,7 @@ async def test_external_camera(
     url: str,
     camera_type: str,
     db: AsyncSession = Depends(get_db),
-    _: User | None = RequirePermissionIfAuthEnabled(Permission.CAMERA_VIEW),
+    _: User | None = RequirePrinterPermissionIfAuthEnabled(Permission.CAMERA_VIEW),
 ):
     """Test external camera connection.
 
@@ -1418,7 +1542,7 @@ async def check_plate_empty(
     use_external: bool | None = None,
     include_debug_image: bool = False,
     db: AsyncSession = Depends(get_db),
-    _: User | None = RequirePermissionIfAuthEnabled(Permission.CAMERA_VIEW),
+    _: User | None = RequirePrinterPermissionIfAuthEnabled(Permission.CAMERA_VIEW),
 ):
     """Check if the build plate is empty using camera vision.
 
@@ -1536,7 +1660,7 @@ async def calibrate_plate_detection(
     label: str | None = None,
     use_external: bool | None = None,
     db: AsyncSession = Depends(get_db),
-    _: User | None = RequirePermissionIfAuthEnabled(Permission.CAMERA_VIEW),
+    _: User | None = RequirePrinterPermissionIfAuthEnabled(Permission.CAMERA_VIEW),
 ):
     """Calibrate plate detection by capturing a reference image of the empty plate.
 
@@ -1609,7 +1733,7 @@ async def delete_plate_calibration(
     printer_id: int,
     plate_type: str | None = None,
     db: AsyncSession = Depends(get_db),
-    _: User | None = RequirePermissionIfAuthEnabled(Permission.CAMERA_VIEW),
+    _: User | None = RequirePrinterPermissionIfAuthEnabled(Permission.CAMERA_VIEW),
 ):
     """Delete the plate detection calibration for a printer and plate type.
 
@@ -1650,7 +1774,7 @@ async def get_plate_detection_status(
     printer_id: int,
     plate_type: str | None = None,
     db: AsyncSession = Depends(get_db),
-    _: User | None = RequirePermissionIfAuthEnabled(Permission.CAMERA_VIEW),
+    _: User | None = RequirePrinterPermissionIfAuthEnabled(Permission.CAMERA_VIEW),
 ):
     """Check plate detection status for a printer and plate type.
 
@@ -1694,7 +1818,7 @@ async def get_plate_detection_status(
 async def get_plate_references(
     printer_id: int,
     db: AsyncSession = Depends(get_db),
-    _: User | None = RequirePermissionIfAuthEnabled(Permission.CAMERA_VIEW),
+    _: User | None = RequirePrinterPermissionIfAuthEnabled(Permission.CAMERA_VIEW),
 ):
     """Get all calibration references for a printer with metadata.
 
@@ -1759,7 +1883,7 @@ async def update_reference_label(
     index: int,
     label: str,
     db: AsyncSession = Depends(get_db),
-    _: User | None = RequirePermissionIfAuthEnabled(Permission.CAMERA_VIEW),
+    _: User | None = RequirePrinterPermissionIfAuthEnabled(Permission.CAMERA_VIEW),
 ):
     """Update the label for a calibration reference."""
     from backend.app.services.plate_detection import PlateDetector, is_plate_detection_available
@@ -1784,7 +1908,7 @@ async def delete_reference(
     printer_id: int,
     index: int,
     db: AsyncSession = Depends(get_db),
-    _: User | None = RequirePermissionIfAuthEnabled(Permission.CAMERA_VIEW),
+    _: User | None = RequirePrinterPermissionIfAuthEnabled(Permission.CAMERA_VIEW),
 ):
     """Delete a specific calibration reference."""
     from backend.app.services.plate_detection import PlateDetector, is_plate_detection_available

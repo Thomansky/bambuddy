@@ -26,6 +26,7 @@ from backend.app.models.notification import (
 )
 from backend.app.models.notification_template import NotificationTemplate
 from backend.app.services.print_confirmation import one_tap_url
+from backend.app.utils.notification_photos import save_notification_photo
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +145,41 @@ def _opaque_http_failure(response: httpx.Response, *, label: str) -> str:
         (response.text or "")[:200],
     )
     return f"HTTP {response.status_code} from the configured {label} (see server logs at debug level for details)"
+
+
+_sample_notification_image: bytes | None = None
+_sample_notification_image_loaded = False
+
+
+def _load_sample_notification_image() -> bytes | None:
+    """Render the bundled app screenshot as a small JPEG.
+
+    Stands in for a real camera snapshot on Test Configuration / test-all,
+    since there's no live print to capture one from. Cached after the first
+    call so we're not re-reading and resizing the file on every click.
+    """
+    global _sample_notification_image, _sample_notification_image_loaded
+    if _sample_notification_image_loaded:
+        return _sample_notification_image
+    _sample_notification_image_loaded = True
+    try:
+        from io import BytesIO
+
+        from PIL import Image
+
+        from backend.app.core.config import settings
+
+        source_path = settings.static_dir / "img" / "screenshot-desktop.png"
+        with Image.open(source_path) as img:
+            resized = img.convert("RGB")
+            resized.thumbnail((640, 640))
+            buffer = BytesIO()
+            resized.save(buffer, format="JPEG", quality=85)
+            _sample_notification_image = buffer.getvalue()
+    except Exception as e:
+        logger.warning("Failed to build sample notification image: %s", e)
+        _sample_notification_image = None
+    return _sample_notification_image
 
 
 class NotificationService:
@@ -297,34 +333,51 @@ class NotificationService:
         return title, body
 
     async def send_test_notification(
-        self, provider_type: str, config: dict[str, Any], db: AsyncSession | None = None
+        self,
+        provider_type: str,
+        config: dict[str, Any],
+        db: AsyncSession | None = None,
+        attach_photo: bool = True,
     ) -> tuple[bool, str]:
-        """Send a test notification to verify configuration."""
+        """Send a test notification to verify configuration.
+
+        attach_photo mirrors the provider's own toggle (see _send_to_provider)
+        — when set, a bundled sample image stands in for a real snapshot.
+        """
         if db:
             title, message = await self._build_message_from_template(db, "test", {})
         else:
             title = "Bambuddy Test"
             message = "This is a test notification. If you see this, notifications are working!"
 
+        image_data = await asyncio.to_thread(_load_sample_notification_image) if attach_photo else None
+
         try:
             if provider_type == "callmebot":
                 return await self._send_callmebot(config, f"{title}\n{message}")
             elif provider_type == "ntfy":
-                return await self._send_ntfy(config, title, message)
+                return await self._send_ntfy(config, title, message, image_data=image_data)
             elif provider_type == "pushover":
-                return await self._send_pushover(config, title, message)
+                return await self._send_pushover(config, title, message, image_data=image_data)
             elif provider_type == "telegram":
-                return await self._send_telegram(config, f"*{title}*\n{message}")
+                return await self._send_telegram(config, f"*{title}*\n{message}", image_data=image_data)
             elif provider_type == "email":
-                return await self._send_email(config, title, message)
+                return await self._send_email(config, title, message, image_data=image_data)
             elif provider_type == "discord":
-                return await self._send_discord(config, title, message)
+                return await self._send_discord(config, title, message, image_data=image_data)
             elif provider_type == "webhook":
-                return await self._send_webhook(config, title, message)
+                photo_url = None
+                if attach_photo and (config.get("payload_format") or "generic").strip() == "slack":
+                    photo_url = await self._get_or_build_photo_url(db, image_data, "test")
+                return await self._send_webhook(
+                    config, title, message, image_data=image_data, event_type="test", image_url=photo_url
+                )
             elif provider_type == "homeassistant":
-                return await self._send_homeassistant(config, title, message, db=db)
+                photo_url = await self._get_or_build_photo_url(db, image_data, "test") if attach_photo else None
+                return await self._send_homeassistant(config, title, message, db=db, image_url=photo_url)
             elif provider_type == "bark":
-                return await self._send_bark(config, title, message)
+                photo_url = await self._get_or_build_photo_url(db, image_data, "test") if attach_photo else None
+                return await self._send_bark(config, title, message, image_url=photo_url)
             else:
                 return False, f"Unknown provider type: {provider_type}"
         except Exception as e:
@@ -351,7 +404,9 @@ class NotificationService:
         else:
             return False, f"HTTP {response.status_code}: {response.text[:200]}"
 
-    async def _send_bark(self, config: dict, title: str, message: str, url: str | None = None) -> tuple[bool, str]:
+    async def _send_bark(
+        self, config: dict, title: str, message: str, url: str | None = None, image_url: str | None = None
+    ) -> tuple[bool, str]:
         """Send notification via Bark, the self-hostable iOS push service (#1495).
 
         POSTs JSON to {server}/push. Defaults to the official api.day.app
@@ -385,6 +440,10 @@ class NotificationService:
             payload["level"] = level
         if url:
             payload["url"] = url
+        if image_url:
+            # Closest thing Bark has to a photo attachment — shows as a
+            # round icon on iOS.
+            payload["icon"] = image_url
 
         client = await self._get_client()
         response = await client.post(f"{server}/push", json=payload)
@@ -935,6 +994,7 @@ class NotificationService:
         image_data: bytes | None = None,
         event_type: str | None = None,
         variables: dict | None = None,
+        image_url: str | None = None,
     ) -> tuple[bool, str]:
         """Send notification via generic webhook (POST JSON).
 
@@ -955,7 +1015,8 @@ class NotificationService:
 
         # Build payload based on format
         if payload_format == "slack":
-            # Slack/Mattermost format - just text field
+            # Incoming webhooks can't take a byte upload, so a photo has to
+            # be a URL Slack/Mattermost fetch themselves.
             data = {"text": f"*{title}*\n{message}"}
             if event_type == "print_confirm_request":
                 # Slack and Mattermost fetch every URL in the text to build
@@ -972,6 +1033,8 @@ class NotificationService:
                 # get it back.
                 data["unfurl_links"] = False
                 data["unfurl_media"] = False
+            if image_url:
+                data["attachments"] = [{"fallback": title, "image_url": image_url}]
         else:
             # Generic format with custom field names
             custom_field_title = config.get("field_title", "title").strip() or "title"
@@ -1018,7 +1081,12 @@ class NotificationService:
             return False, f"Webhook error: {str(e)}"
 
     async def _send_homeassistant(
-        self, config: dict, title: str, message: str, db: AsyncSession | None = None
+        self,
+        config: dict,
+        title: str,
+        message: str,
+        db: AsyncSession | None = None,
+        image_url: str | None = None,
     ) -> tuple[bool, str]:
         """Send notification via Home Assistant.
 
@@ -1093,6 +1161,7 @@ class NotificationService:
         # reach the notify service. Only included when configured — the default
         # persistent_notification.create schema rejects unknown keys.
         raw_data = config.get("data")
+        data_payload: dict = {}
         if raw_data:
             if isinstance(raw_data, str):
                 try:
@@ -1103,8 +1172,19 @@ class NotificationService:
                 parsed_data = raw_data
             if not isinstance(parsed_data, dict):
                 return False, 'The Data field must be a JSON object, e.g. {"priority": "high", "ttl": 0}'
-            if parsed_data:
-                payload["data"] = parsed_data
+            data_payload = parsed_data
+
+        if image_url and service:
+            # HA's notify.* services fetch data.image themselves. Gated on a
+            # custom service being set: the default persistent_notification
+            # .create has a strict schema and 400s on fields it doesn't
+            # recognize, so we'd break plain notifications for anyone who
+            # never asked for a photo. setdefault so a user's own "image"
+            # key still wins.
+            data_payload.setdefault("image", image_url)
+
+        if data_payload:
+            payload["data"] = data_payload
 
         client = await self._get_client()
         response = await client.post(url, json=payload, headers=headers)
@@ -1120,6 +1200,54 @@ class NotificationService:
             # gets the same treatment.
             return False, _opaque_http_failure(response, label="Home Assistant endpoint")
 
+    async def _get_or_build_photo_url(
+        self,
+        db: AsyncSession | None,
+        image_data: bytes | None,
+        event_type: str | None,
+        photo_cache: dict | None = None,
+    ) -> str | None:
+        """Return a URL for a notification photo, for providers that fetch it themselves.
+
+        Writes *image_data* under an unguessable filename and builds the URL
+        from the ``external_url`` setting. The filename is the only credential
+        (see notification_photos.py), so the URL opens this one photo and
+        nothing else -- no camera token, which would open every printer's live
+        stream. Print Complete goes through here too rather than reusing the
+        archive's ``finish_photo_url``: that route needs a media token, so with
+        auth on HA/Bark/Slack would get a 401.
+
+        Returns None with no photo or no ``external_url`` set: HA and Bark
+        fetch this URL themselves, so a relative path does them no good.
+
+        *photo_cache* is shared by every provider in one send, so only the
+        first HA/Bark/Slack provider pays for the disk write. It's kept apart
+        from the template variables so the URL never lands in a generic
+        webhook's payload.
+        """
+        if photo_cache is not None and "url" in photo_cache:
+            return photo_cache["url"]
+
+        if not image_data or db is None:
+            return None
+
+        from backend.app.api.routes.settings import get_setting
+
+        external_url = (await get_setting(db, "external_url") or "").strip()
+        if not external_url:
+            return None
+
+        try:
+            filename = await asyncio.to_thread(save_notification_photo, image_data, event_type or "event")
+        except Exception as e:
+            logger.warning("Failed to persist notification photo: %s", e)
+            return None
+
+        url = f"{external_url.rstrip('/')}/api/v1/notifications/photos/{filename}"
+        if photo_cache is not None:
+            photo_cache["url"] = url
+        return url
+
     async def _send_to_provider(
         self,
         provider: NotificationProvider,
@@ -1129,14 +1257,26 @@ class NotificationService:
         image_data: bytes | None = None,
         event_type: str | None = None,
         variables: dict | None = None,
+        photo_cache: dict | None = None,
     ) -> tuple[bool, str]:
-        """Send notification to a specific provider."""
+        """Send notification to a specific provider.
+
+        *photo_cache* lets the providers of one send share a single persisted
+        photo URL (see _get_or_build_photo_url).
+        """
         # Check quiet hours
         if self._is_in_quiet_hours(provider):
             logger.info("Skipping notification to %s - quiet hours active", provider.name)
             return True, "Skipped - quiet hours"
 
         config = json.loads(provider.config) if isinstance(provider.config, str) else provider.config
+
+        # attach_photo is a per-provider opt-out. Clearing image_data covers
+        # the byte-upload providers below; HA/Bark/Slack get their own check
+        # further down too, since they could otherwise get the URL an earlier
+        # provider in the same send left in photo_cache.
+        if not provider.attach_photo:
+            image_data = None
 
         try:
             if provider.provider_type == "callmebot":
@@ -1231,11 +1371,27 @@ class NotificationService:
             elif provider.provider_type == "discord":
                 return await self._send_discord(config, title, message, image_data=image_data)
             elif provider.provider_type == "webhook":
+                # Only Slack format needs a URL — generic format gets the
+                # base64 image field instead.
+                photo_url = None
+                if provider.attach_photo and (config.get("payload_format") or "generic").strip() == "slack":
+                    photo_url = await self._get_or_build_photo_url(db, image_data, event_type, photo_cache)
                 return await self._send_webhook(
-                    config, title, message, image_data=image_data, event_type=event_type, variables=variables
+                    config,
+                    title,
+                    message,
+                    image_data=image_data,
+                    event_type=event_type,
+                    variables=variables,
+                    image_url=photo_url,
                 )
             elif provider.provider_type == "homeassistant":
-                return await self._send_homeassistant(config, title, message, db=db)
+                photo_url = (
+                    await self._get_or_build_photo_url(db, image_data, event_type, photo_cache)
+                    if provider.attach_photo
+                    else None
+                )
+                return await self._send_homeassistant(config, title, message, db=db, image_url=photo_url)
             elif provider.provider_type == "bark":
                 # Outcome confirmation (#1898): Bark opens one URL on tap —
                 # deep-link into the confirmation dialog, like Pushover.
@@ -1243,7 +1399,12 @@ class NotificationService:
                 _bark_confirm = (variables or {}).get("confirm_url")
                 if event_type == "print_confirm_request" and _bark_confirm and _bark_confirm.startswith("http"):
                     bark_url = _bark_confirm
-                return await self._send_bark(config, title, message, url=bark_url)
+                photo_url = (
+                    await self._get_or_build_photo_url(db, image_data, event_type, photo_cache)
+                    if provider.attach_photo
+                    else None
+                )
+                return await self._send_bark(config, title, message, url=bark_url, image_url=photo_url)
             else:
                 return False, f"Unknown provider type: {provider.provider_type}"
         except Exception as e:
@@ -1346,11 +1507,19 @@ class NotificationService:
         All notifications are always sent immediately. If digest mode is enabled,
         the notification is ALSO queued for the daily digest summary.
         """
+        photo_cache: dict = {}
         for provider in providers:
             try:
                 # Always send notification immediately
                 success, error = await self._send_to_provider(
-                    provider, title, message, db, image_data=image_data, event_type=event_type, variables=variables
+                    provider,
+                    title,
+                    message,
+                    db,
+                    image_data=image_data,
+                    event_type=event_type,
+                    variables=variables,
+                    photo_cache=photo_cache,
                 )
 
                 # Also queue for digest if enabled (digest is a summary, not a queue)
@@ -1873,6 +2042,7 @@ class NotificationService:
         printer_name: str,
         db: AsyncSession,
         difference_percent: float | None = None,
+        image_data: bytes | None = None,
     ):
         """Handle plate not empty event - objects detected on build plate before print."""
         providers = await self._get_providers_for_event(db, "on_plate_not_empty", printer_id)
@@ -1894,6 +2064,7 @@ class NotificationService:
             printer_id,
             printer_name,
             force_immediate=True,
+            image_data=image_data,
             variables=variables,
         )
 
@@ -1934,7 +2105,7 @@ class NotificationService:
         self,
         printer_id: int,
         printer_name: str,
-        slot: int,
+        slot: str,
         remaining_percent: int,
         db: AsyncSession,
         color: str | None = None,
@@ -1946,7 +2117,7 @@ class NotificationService:
 
         variables = {
             "printer": printer_name,
-            "slot": str(slot),
+            "slot": slot,
             "remaining_percent": str(remaining_percent),
             "color": color or "",
         }
@@ -2394,6 +2565,8 @@ class NotificationService:
         printer_name: str,
         filename: str,
         db: AsyncSession,
+        image_data: bytes | None = None,
+        finish_photo_url: str | None = None,
     ) -> None:
         """Send a print event email notification to the user who submitted the job.
 
@@ -2403,6 +2576,10 @@ class NotificationService:
             printer_name: Name of the printer
             filename: Raw filename or subtask name
             db: Database session
+            image_data: Camera snapshot bytes, if one was captured for the event.
+            finish_photo_url: The same snapshot's public URL — only used so the
+                template can reference {finish_photo_url}, which is what opts
+                the email into inlining the photo (see send_user_print_notification).
         """
         if created_by_id is None:
             logger.debug("[EMAIL] Skipping user print email (%s): no created_by_id", event_type)
@@ -2488,6 +2665,8 @@ class NotificationService:
                 "printer": printer_name,
                 "filename": self._clean_filename(filename),
             }
+            if finish_photo_url:
+                variables["finish_photo_url"] = finish_photo_url
 
             # Send the email
             await send_user_print_notification(
@@ -2496,6 +2675,7 @@ class NotificationService:
                 user_email=user.email,
                 username=user.username,
                 variables=variables,
+                image_data=image_data,
             )
             logger.info("[EMAIL] User print email sent: event=%s → %s", event_type, user.email)
         except Exception as e:
@@ -2674,15 +2854,31 @@ class NotificationService:
         rate_g_day: float,
         days_left: int,
         db: AsyncSession,
+        *,
+        subtype: str | None = None,
+        color: str | None = None,
+        skip_break_subscribers: bool = False,
     ):
-        """Fire when an inventory SKU reaches its reorder point."""
+        """Fire when an inventory SKU reaches its reorder point.
+
+        ``subtype`` and ``color`` are what tell apart the messages for two colours of one
+        product, which the forecast (grouped by colour as well) reports separately.
+
+        A SKU in stock break has also reached its reorder point. ``skip_break_subscribers``
+        leaves out the providers that have the break alert on, so the producer can send
+        the reorder event for a break SKU without telling those providers twice.
+        """
         providers = await self._get_providers_for_event(db, "on_stock_reorder_alert", None)
+        if skip_break_subscribers:
+            providers = [p for p in providers if not p.on_stock_break_alert]
         if not providers:
             return
 
         variables = {
             "material": material,
+            "subtype": subtype or "",
             "brand": brand or "",
+            "color": color or "",
             "stock_g": f"{stock_g:.0f}",
             "rate_g_day": f"{rate_g_day:.1f}",
             "days_left": str(days_left),
@@ -2700,15 +2896,23 @@ class NotificationService:
         days_left: int,
         lead_time_days: int,
         db: AsyncSession,
+        *,
+        subtype: str | None = None,
+        color: str | None = None,
     ):
-        """Fire when a stock break is detected (stock runs out before lead time)."""
+        """Fire when a stock break is detected (stock runs out before lead time).
+
+        ``subtype`` and ``color`` as for :meth:`on_stock_reorder_alert`.
+        """
         providers = await self._get_providers_for_event(db, "on_stock_break_alert", None)
         if not providers:
             return
 
         variables = {
             "material": material,
+            "subtype": subtype or "",
             "brand": brand or "",
+            "color": color or "",
             "stock_g": f"{stock_g:.0f}",
             "rate_g_day": f"{rate_g_day:.1f}",
             "days_left": str(days_left),

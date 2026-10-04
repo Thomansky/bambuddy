@@ -29,6 +29,8 @@ from backend.app.api.routes.cloud import resolve_api_key_cloud_owner
 from backend.app.api.routes.library_variants import normalize_model_name, resolve_variant_model
 from backend.app.api.routes.print_queue import _extract_filament_types_from_3mf
 from backend.app.core.auth import (
+    QueueReviewRequired,
+    RequestPrinterScope,
     require_media_token_ownership,
     require_ownership_permission,
     require_permission_if_auth_enabled,
@@ -36,6 +38,7 @@ from backend.app.core.auth import (
 from backend.app.core.config import settings as app_settings
 from backend.app.core.database import async_session, get_db
 from backend.app.core.permissions import Permission
+from backend.app.core.printer_scope import PrinterScope, ensure_model_target_allowed
 from backend.app.core.tasks import spawn_background_task
 from backend.app.models.archive import PrintArchive
 from backend.app.models.library import LibraryFile, LibraryFileTag, LibraryFolder
@@ -54,6 +57,7 @@ from backend.app.schemas.library import (
     BulkDeleteRequest,
     BulkDeleteResponse,
     ClientThumbnailResponse,
+    CombineFilesRequest,
     ExternalFolderCreate,
     FileDuplicate,
     FileListResponse,
@@ -673,17 +677,17 @@ async def save_3mf_bytes_to_library(
     source_url: str | None = None,
     owner_id: int | None = None,
 ) -> tuple[LibraryFile, bool]:
-    """Save a 3MF blob into the library and return ``(library_file, was_existing)``.
+    """Save a fetched file into the library and return ``(library_file, was_existing)``.
 
-    Used by routes that receive a 3MF in-process rather than as a multipart
-    upload (currently: MakerWorld import; reusable for any future source that
-    fetches bytes server-side). Deduplicates by ``source_url`` when provided —
+    Used by routes that receive a file in-process rather than as a multipart
+    upload: the MakerWorld import (3MF) and the Manyfold import (3MF, STL,
+    STEP). Deduplicates by ``source_url`` when provided —
     if a LibraryFile with the same source_url already exists, the existing
     row is returned and the bytes are NOT re-saved (MakerWorld signed URLs
     change each download, so hash-based dedupe alone would miss re-imports).
 
     Parses 3MF metadata + thumbnail the same way the multipart upload route
-    does, via :class:`ThreeMFParser`. Paths are stored as relative so the
+    does, via :class:`ThreeMFParser`, and renders an STL's thumbnail. Paths are stored as relative so the
     library is portable across installs.
     """
     # Source-URL-based dedupe: return the existing row untouched.
@@ -720,8 +724,10 @@ async def save_3mf_bytes_to_library(
     thumbnail_path: str | None = None
     if ext == ".3mf":
         try:
+            # Off the event loop: the parser still decompresses the whole model
+            # entry, which for a combined plate is hundreds of MB (#3162).
             parser = ThreeMFParser(str(file_path))
-            raw_metadata = parser.parse()
+            raw_metadata = await asyncio.to_thread(parser.parse)
             thumb_data = raw_metadata.get("_thumbnail_data")
             thumb_ext = raw_metadata.get("_thumbnail_ext", ".png")
             if thumb_data:
@@ -737,6 +743,17 @@ async def save_3mf_bytes_to_library(
             # still land in the library so the user can see / delete it rather
             # than failing the whole request.
             logger.warning("Failed to parse 3MF %s: %s", filename, exc)
+    elif ext == ".stl":
+        # Manyfold imports (#1471) bring STLs. Same thumbnail as the multipart
+        # upload gives them, with the same pre-skip for stubs too small to hold
+        # a triangle.
+        try:
+            if file_path.stat().st_size >= MIN_USABLE_STL_BYTES:
+                thumbnail_path = await asyncio.to_thread(
+                    generate_stl_thumbnail, file_path, get_library_thumbnails_dir()
+                )
+        except Exception as exc:  # noqa: BLE001 — a thumbnail must never fail the import
+            logger.warning("Failed to render STL thumbnail for %s: %s", filename, exc)
 
     library_file = LibraryFile(
         folder_id=folder_id,
@@ -1014,7 +1031,12 @@ def ingest_library_file_content(
     )
 
 
-async def _backfill_external_stl_thumbnails(folder_ids: list[int]) -> None:
+# What the endpoint stores. The grid renders at ~256px, so anything larger is
+# downscaled rather than kept.
+STORED_CLIENT_THUMBNAIL_EDGE = 512
+
+
+async def _backfill_external_thumbnails(folder_ids: list[int]) -> None:
     """Generate STL and PDF thumbnails for an external folder tree in the background.
 
     Spawned via ``asyncio.create_task`` from ``scan_external_folder`` so the
@@ -1023,7 +1045,9 @@ async def _backfill_external_stl_thumbnails(folder_ids: list[int]) -> None:
     the request open for many minutes (each file triggers a ``trimesh.load``
     + matplotlib render, ~1-5s each) and the FE modal times out before the
     final ``db.commit()`` runs — causing the original symptom in #1299 where
-    subdirectories never showed up because nothing got committed.
+    subdirectories never showed up because nothing got committed. PDFs are
+    faster (a PDFium page render) but a share holding hundreds of them would
+    still hold the request open, so they are rendered here too.
 
     Opens its own session because the request session is closed by the time
     this task starts running. Commits per-file so a worker restart mid-run
@@ -2456,7 +2480,7 @@ async def scan_external_folder(
                     logger.debug("Failed to extract metadata from external 3mf %s: %s", filepath, e)
 
             # STL and PDF thumbnails are deferred to a background task spawned
-            # after the scan's db.commit() — see _backfill_external_stl_thumbnails.
+            # after the scan's db.commit() — see _backfill_external_thumbnails.
             # Doing them inline would block the HTTP request for minutes on a
             # large NAS mount (#1299).
 
@@ -2555,17 +2579,17 @@ async def scan_external_folder(
 
     await db.commit()
 
-    # Spawn STL thumbnail backfill in the background — the scan endpoint
+    # Spawn STL/PDF thumbnail backfill in the background — the scan endpoint
     # returns immediately so the FE modal closes and subdirectories are
     # visible right away; thumbnails fill in over the following seconds /
-    # minutes as the task processes each STL file. Survives FE refresh —
+    # minutes as the task processes each file. Survives FE refresh —
     # the task lives in the FastAPI event loop, not the request scope.
     # folder_cache.values() covers the root + every pre-existing subfolder
     # + every subfolder created during this scan. all_folder_ids on its own
     # would miss the newly-created ones (it's snapshotted before the walk).
     spawn_background_task(
-        _backfill_external_stl_thumbnails(list(set(folder_cache.values()))),
-        name=f"stl-backfill-folder-{folder_id}",
+        _backfill_external_thumbnails(list(set(folder_cache.values()))),
+        name=f"thumbnail-backfill-folder-{folder_id}",
     )
 
     return {"status": "success", "added": added, "removed": removed}
@@ -3234,15 +3258,23 @@ async def list_pending_preview_thumbnails(
 async def batch_generate_stl_thumbnails(
     request: BatchThumbnailRequest,
     db: AsyncSession = Depends(get_db),
-    _: User | None = Depends(require_permission_if_auth_enabled(Permission.LIBRARY_UPDATE_ALL)),
+    auth_result: tuple[User | None, bool] = Depends(
+        require_ownership_permission(
+            Permission.LIBRARY_UPDATE_ALL,
+            Permission.LIBRARY_UPDATE_OWN,
+        )
+    ),
 ):
     """Generate thumbnails for STL and PDF files in batch.
 
     The route keeps its STL-era name for API compatibility; since #2976 it
     covers every type the server can render itself (``SERVER_THUMBNAIL_TYPES``).
 
-    Note: Requires library:update_all permission since this is a batch operation
-    that may affect files owned by different users.
+    With library:update_all this covers every matching file; with only
+    library:update_own it is narrowed to the caller's own files, the same
+    rule as update_file. The File Manager offers the toolbar button and the
+    per-file "Generate Thumbnail" entry to update_own users, and both land
+    here.
 
     Can generate thumbnails for:
     - Specific file IDs (file_ids)
@@ -3254,6 +3286,10 @@ async def batch_generate_stl_thumbnails(
 
     # Build query based on request
     query = LibraryFile.active().where(LibraryFile.file_type.in_(SERVER_THUMBNAIL_TYPES))
+
+    user, can_modify_all = auth_result
+    if not can_modify_all:
+        query = query.where(LibraryFile.created_by_id == user.id)
 
     if request.file_ids:
         # Specific files
@@ -3361,11 +3397,97 @@ def is_sliced_file(filename: str) -> bool:
     return lower.endswith(".gcode") or ".gcode." in lower
 
 
+@router.post("/files/combine", response_model=FileUploadResponse)
+async def combine_files(
+    request: CombineFilesRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User | None = Depends(require_permission_if_auth_enabled(Permission.LIBRARY_UPLOAD)),
+):
+    """Combine STL library files into one multi-object 3MF.
+
+    The slicer sidecar takes one model per slice, so putting several separate
+    STLs (or several copies of one, #2999) on one plate means building that
+    file first. The result is a new library file that slices like any other
+    3MF; with auto-arrange on, the slicer lays the objects out on the bed.
+    The sources are left untouched.
+    """
+    from backend.app.services.mesh_combine import CombinePart, MeshCombineError, combine_parts_to_3mf
+
+    filename = request.filename.strip()
+    if not filename.lower().endswith(".3mf"):
+        filename = f"{filename}.3mf"
+    try:
+        validate_print_filename(filename)
+    except InvalidFilenameError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    if request.folder_id is not None:
+        folder = (
+            await db.execute(select(LibraryFolder).where(LibraryFolder.id == request.folder_id))
+        ).scalar_one_or_none()
+        if folder is None:
+            raise HTTPException(status_code=404, detail="Folder not found")
+
+    # Same per-row visibility the slice route applies: a READ_OWN caller must
+    # not be able to pull another user's model into their own file by raw id.
+    can_read_all = current_user is None or current_user.has_permission(Permission.LIBRARY_READ_ALL.value)
+
+    # The same file listed twice is one object with the copies added up, so
+    # its mesh is loaded and stored once. Order follows first appearance.
+    copies_by_id: dict[int, int] = {}
+    for item in request.items:
+        copies_by_id[item.file_id] = copies_by_id.get(item.file_id, 0) + item.copies
+
+    rows = (await db.execute(LibraryFile.active().where(LibraryFile.id.in_(copies_by_id)))).scalars().all()
+    by_id = {row.id: row for row in rows}
+
+    # Gate every source before touching any of them on disk, so the answer for
+    # a file the caller can't see is the same 404 whatever else is in the list.
+    sources = [_ensure_library_file_visible(by_id.get(file_id), current_user, can_read_all) for file_id in copies_by_id]
+
+    parts: list[CombinePart] = []
+    for lib_file in sources:
+        if not lib_file.filename.lower().endswith(".stl"):
+            raise HTTPException(status_code=400, detail=f"Only STL files can be combined: {lib_file.filename}")
+        src_path = _resolve_source_disk_path(lib_file)
+        if src_path is None or not src_path.exists():
+            raise HTTPException(status_code=404, detail=f"Source file missing on disk: {lib_file.filename}")
+        parts.append(CombinePart(name=lib_file.filename, path=src_path, copies=copies_by_id[lib_file.id]))
+
+    try:
+        content = await asyncio.to_thread(combine_parts_to_3mf, parts)
+    except MeshCombineError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    # The preview is embedded as Metadata/thumbnail.png by combine_parts_to_3mf,
+    # so ThreeMFParser picks it up here like any other 3MF's thumbnail. Loading
+    # the combined file back to render one would expand every copy.
+    library_file, _ = await save_3mf_bytes_to_library(
+        db,
+        file_bytes=content,
+        filename=filename,
+        folder_id=request.folder_id,
+        source_type="combined",
+        owner_id=current_user.id if current_user else None,
+    )
+
+    return FileUploadResponse(
+        id=library_file.id,
+        filename=library_file.filename,
+        file_type=library_file.file_type,
+        file_size=library_file.file_size,
+        thumbnail_path=library_file.thumbnail_path,
+        metadata=library_file.file_metadata,
+    )
+
+
 @router.post("/files/add-to-queue", response_model=AddToQueueResponse)
 async def add_files_to_queue(
     request: AddToQueueRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User | None = Depends(require_permission_if_auth_enabled(Permission.QUEUE_CREATE)),
+    printer_scope: PrinterScope = RequestPrinterScope,
+    review_required: bool = QueueReviewRequired,
 ):
     """Add library files to the print queue.
 
@@ -3389,9 +3511,13 @@ async def add_files_to_queue(
         raise HTTPException(400, "Cannot specify both printer_id and target_model")
 
     if request.printer_id is not None:
+        printer_scope.ensure(request.printer_id)
         printer_row = (await db.execute(select(Printer).where(Printer.id == request.printer_id))).scalar_one_or_none()
         if not printer_row:
             raise HTTPException(400, "Printer not found")
+    else:
+        # Without a printer, every file goes to "any printer of a model"
+        ensure_model_target_allowed(current_user, printer_scope)
 
     # Active printers of every model, read once, and only when the batch has no
     # printer of its own -- with one named, neither the check below nor the
@@ -3544,6 +3670,8 @@ async def add_files_to_queue(
                 # on `created_by_id` — so the user who queued the file could not
                 # see it in their own queue.
                 created_by_id=current_user.id if current_user else None,
+                # Waits for someone to start it unless they may print without review (#1620)
+                manual_start=review_required,
             )
             db.add(queue_item)
 

@@ -38,6 +38,9 @@ class Printer(Base):
     # expose a dedicated frame endpoint (e.g. go2rtc's /api/frame.jpeg). #1177.
     external_camera_snapshot_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     camera_rotation: Mapped[int] = mapped_column(default=0)  # 0, 90, 180, 270 degrees
+    # Picked for the chamber light while the camera is in use (#1655). Only
+    # counts when the app setting camera_light_mode is "selected".
+    camera_light_auto: Mapped[bool] = mapped_column(Boolean, default=False)
     # Plate detection - check if build plate is empty before starting print
     plate_detection_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     # ROI for plate detection (percentages: 0.0-1.0)

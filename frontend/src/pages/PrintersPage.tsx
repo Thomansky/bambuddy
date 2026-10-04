@@ -1,6 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { compareFwVersions } from '../utils/firmwareVersion';
+import { mapModelCode } from '../utils/printerModel';
 import { formatPrintName } from '../utils/printName';
 import { isBedSlinger } from '../utils/bedSlinger';
 import { computePopoverPosition, type PopoverPosition } from '../utils/popoverPosition';
@@ -157,6 +158,7 @@ import {
   PictureInPicture2,
   ThumbsUp,
   ThumbsDown,
+  KeyRound,
 } from 'lucide-react';
 import { ConfirmOutcomeDialog } from '../components/ConfirmOutcomeDialog';
 
@@ -202,12 +204,13 @@ import { FileUploadModal } from '../components/FileUploadModal';
 import { PrintModal } from '../components/PrintModal';
 import { PrinterInfoModal } from '../components/PrinterInfoModal';
 import { FeedDirectionModal } from '../components/FeedDirectionModal';
-import { getAmsLabel, getGlobalTrayId, getFillBarColor, getSpoolmanFillLevel, getFallbackSpoolTag, installedNozzleDiameters, isBambuLabSpool, resolveSlotNozzleDiameter, resolveSlotExtruder, formatSlotLabel, slotPresetDescribesTray, FTS_INLET_SIDE } from '../utils/amsHelpers';
-import { MAX_CHAMBER_TEMP_C, getPrinterImage, getWifiStrength, filterCompatibleQueueItems, isPrinterCurrentlyDispatchable, mapModelCode } from '../utils/printer';
+import { getAmsLabel, getEmptySlotKind, getGlobalTrayId, getFillBarColor, getSpoolmanFillLevel, getFallbackSpoolTag, installedNozzleDiameters, isBambuLabSpool, resolveSlotNozzleDiameter, resolveSlotExtruder, formatSlotLabel, slotPresetDescribesTray, FTS_INLET_SIDE } from '../utils/amsHelpers';
+import { MAX_CHAMBER_TEMP_C, getPrinterImage, getWifiStrength, filterCompatibleQueueItems, isPrinterCurrentlyDispatchable } from '../utils/printer';
 import { FilamentSlotCircle } from '../components/FilamentSlotCircle';
 import { Collapsible } from '../components/Collapsible';
 import { ConnectionDiagnosticModal, DiagnosticChecklist } from '../components/ConnectionDiagnostic';
 import { getColorName, parseFilamentColor, isLightColor } from '../utils/colors';
+import { NumberInput } from '../components/NumberInput';
 
 // The status filter's options, and the only values it may hold. One list so a
 // saved filter cannot be validated against a set the dropdown has since moved
@@ -1079,32 +1082,6 @@ function TemperatureIndicator({ temp, goodThreshold = 28, fairThreshold = 35, on
 }
 
 
-
-/** Classify an empty AMS slot for UI rendering (#1322 follow-up).
- *
- *  "physical" — firmware positively confirmed no spool (state 9 or 10). The
- *  bambu_mqtt handler now promotes tray_exist_bits=0 slots to state=9, so
- *  every empty-by-bitmask slot lands here regardless of firmware payload
- *  shape.
- *
- *  "reset" — tray_type is missing/empty but firmware hasn't confirmed
- *  emptiness (state is null, 3, or any non-9/10 value). Typically a slot
- *  the user cleared with "Reset Slot" where a physical spool may still be
- *  loaded but unassigned.
- *
- *  Returns null when the slot is loaded (tray_type is present).
- */
-function getEmptySlotKind(tray: { tray_type?: string | null; state?: number | null; exists?: boolean | null } | null | undefined): 'physical' | 'reset' | null {
-  if (tray?.tray_type) return null;
-  // tray_exist_bits is firmware's authoritative presence signal: a non-RFID
-  // spool the firmware can't identify is physically present (exists === true)
-  // but carries no tray_type, so it must read as "?" (loaded, unconfigured),
-  // never "Empty" (#2527). BambuStudio draws it the same way. Only fall back to
-  // the state=9/10 heuristic when the bitmask was unavailable (exists == null).
-  if (tray?.exists === true) return 'reset';
-  if (tray?.exists === false) return 'physical';
-  return (tray?.state === 9 || tray?.state === 10) ? 'physical' : 'reset';
-}
 
 // How long to wait for an AMS to report a live drying cycle after the printer
 // acked the start command (#2533). Firmware moves to DryStatus 1 (Checking)
@@ -2145,7 +2122,7 @@ function PrinterCard({
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { showToast } = useToast();
-  const { hasPermission, canModify } = useAuth();
+  const { hasPermission, canModify, authEnabled, isAdmin } = useAuth();
   const [showMenu, setShowMenu] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteArchives, setDeleteArchives] = useState(true);
@@ -3780,6 +3757,18 @@ function PrinterCard({
             <Info className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
             {t('printers.printerInformation')}
           </button>
+          {authEnabled && isAdmin && (
+            <button
+              className="w-full px-4 py-2 text-left text-sm hover:bg-bambu-dark-tertiary flex items-center gap-2"
+              onClick={() => {
+                setShowMenu(false);
+                navigate(`/settings?tab=users&sub=printer-access&view=printers&printer=${printer.id}`);
+              }}
+            >
+              <KeyRound className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
+              {t('printerAccess.whoHasAccess')}
+            </button>
+          )}
           {/* Maintenance Mode toggle (#1476) — leverages backend is_active flag */}
           <button
             className={`w-full px-4 py-2 text-left text-sm flex items-center gap-2 ${
@@ -5562,7 +5551,7 @@ function PrinterCard({
                                 // Only trusted while it still describes what the printer reports in the
                                 // slot: the row survives a spool swap, and the display chain below puts
                                 // it ahead of the live filament id (see slotPresetDescribesTray).
-                                const slotPresetName = slotPresetDescribesTray(slotPreset?.preset_id, tray?.tray_info_idx)
+                                const slotPresetName = slotPresetDescribesTray(slotPreset?.preset_id, tray?.tray_info_idx, slotPreset?.tray_info_idx)
                                   ? slotPreset?.preset_name
                                   : undefined;
 
@@ -5827,7 +5816,7 @@ function PrinterCard({
                                             trayInfoIdx: tray?.tray_info_idx || undefined,
                                             extruderId: resolveSlotExtruder(ams.id, tray?.id ?? 0, amsExtruderMap, amsSwitchInlet),
                                             caliIdx: tray?.cali_idx,
-                                            savedPresetId: slotPreset?.preset_id,
+                                            savedPresetId: slotPresetDescribesTray(slotPreset?.preset_id, tray?.tray_info_idx, slotPreset?.tray_info_idx) ? slotPreset?.preset_id : undefined,
                                           }),
                                         }}
                                       >
@@ -5894,7 +5883,7 @@ function PrinterCard({
                       // Only trusted while it still describes what the printer reports in the
                       // slot: the row survives a spool swap, and the display chain below puts
                       // it ahead of the live filament id (see slotPresetDescribesTray).
-                      const slotPresetName = slotPresetDescribesTray(slotPreset?.preset_id, tray?.tray_info_idx)
+                      const slotPresetName = slotPresetDescribesTray(slotPreset?.preset_id, tray?.tray_info_idx, slotPreset?.tray_info_idx)
                         ? slotPreset?.preset_name
                         : undefined;
                       const htSlotId = tray?.id ?? 0;
@@ -6258,7 +6247,7 @@ function PrinterCard({
                                         trayInfoIdx: tray?.tray_info_idx || undefined,
                                         extruderId: resolveSlotExtruder(ams.id, tray?.id ?? 0, amsExtruderMap, amsSwitchInlet),
                                         caliIdx: tray?.cali_idx,
-                                        savedPresetId: slotPreset?.preset_id,
+                                        savedPresetId: slotPresetDescribesTray(slotPreset?.preset_id, tray?.tray_info_idx, slotPreset?.tray_info_idx) ? slotPreset?.preset_id : undefined,
                                       }),
                                     }}
                                   >
@@ -6359,7 +6348,7 @@ function PrinterCard({
                               // Only trusted while it still describes what the printer reports in the
                               // slot: the row survives a spool swap, and the display chain below puts
                               // it ahead of the live filament id (see slotPresetDescribesTray).
-                              const extSlotPresetName = slotPresetDescribesTray(extSlotPreset?.preset_id, extTray.tray_info_idx)
+                              const extSlotPresetName = slotPresetDescribesTray(extSlotPreset?.preset_id, extTray.tray_info_idx, extSlotPreset?.tray_info_idx)
                                 ? extSlotPreset?.preset_name
                                 : undefined;
 
@@ -6565,7 +6554,7 @@ function PrinterCard({
                                           trayInfoIdx: extTray.tray_info_idx || undefined,
                                           extruderId: isDualNozzle ? (extTrayId === 254 ? 1 : 0) : undefined,
                                           caliIdx: extTray.cali_idx,
-                                          savedPresetId: extSlotPreset?.preset_id,
+                                          savedPresetId: slotPresetDescribesTray(extSlotPreset?.preset_id, extTray.tray_info_idx, extSlotPreset?.tray_info_idx) ? extSlotPreset?.preset_id : undefined,
                                         }),
                                       }}
                                     >
@@ -7549,12 +7538,12 @@ function PrinterCard({
                   <div className="flex items-center justify-between mb-1">
                     <label className="text-[length:var(--pc-t10,10px)] text-white/70 font-medium">{t('printers.drying.temperature')}</label>
                     <div className="flex items-center gap-1">
-                      <input
-                        type="number"
+                      <NumberInput
                         min={45}
                         max={maxTemp}
                         value={dryingTemp}
-                        onChange={e => setDryingTemp(Math.min(maxTemp, Math.max(45, Number(e.target.value) || 45)))}
+                        onChange={setDryingTemp}
+                        fallback={45}
                         className="w-12 px-1 py-0.5 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-[length:var(--pc-t11,11px)] text-center focus:outline-none focus:border-bambu-green [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                       />
                       <span className="text-[length:var(--pc-t10,10px)] text-bambu-gray">°C</span>
@@ -7578,12 +7567,12 @@ function PrinterCard({
                   <div className="flex items-center justify-between mb-1">
                     <label className="text-[length:var(--pc-t10,10px)] text-white/70 font-medium">{t('printers.drying.duration')}</label>
                     <div className="flex items-center gap-1">
-                      <input
-                        type="number"
+                      <NumberInput
                         min={1}
                         max={24}
                         value={dryingDuration}
-                        onChange={e => setDryingDuration(Math.min(24, Math.max(1, Number(e.target.value) || 1)))}
+                        onChange={setDryingDuration}
+                        fallback={1}
                         className="w-10 px-1 py-0.5 bg-bambu-dark border border-bambu-dark-tertiary rounded text-white text-[length:var(--pc-t11,11px)] text-center focus:outline-none focus:border-bambu-green [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                       />
                       <span className="text-[length:var(--pc-t10,10px)] text-bambu-gray">{t('printers.drying.hours')}</span>
@@ -8197,6 +8186,7 @@ export function AddPrinterModal({
                 value={form.location || ''}
                 onChange={(e) => setForm({ ...form, location: e.target.value })}
                 placeholder={t('printers.modal.locationPlaceholder')}
+                maxLength={100}
               />
               <p className="text-xs text-bambu-gray mt-1">{t('printers.locationHelp')}</p>
             </div>
@@ -8567,6 +8557,7 @@ function EditPrinterModal({
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
+  const { authEnabled, isAdmin } = useAuth();
   const [form, setForm] = useState({
     name: printer.name,
     ip_address: printer.ip_address,
@@ -8579,6 +8570,25 @@ function EditPrinterModal({
   const [wearCostPerHour, setWearCostPerHour] = useState(depreciationFieldFromApi(printer.wear_cost_per_hour));
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.getSettings });
   const currencySymbol = getCurrencySymbol(settings?.currency || 'USD');
+
+  // Groups can be given a location (#1727), so a move changes who can use the
+  // printer. Non-admins can't read groups; the server refuses their move instead.
+  const { data: groups } = useQuery({
+    queryKey: ['groups'],
+    queryFn: () => api.getGroups(),
+    enabled: authEnabled && isAdmin,
+  });
+  const newLocation = form.location.trim();
+  const accessChangedFor =
+    newLocation !== (printer.location || '')
+      ? (groups ?? [])
+          .filter(
+            (g) =>
+              g.restrict_printers &&
+              (g.locations ?? []).some((loc) => loc === printer.location || loc === newLocation)
+          )
+          .map((g) => g.name)
+      : [];
 
   // Setup-time pre-flight — same warn-on-save as the Add-Printer dialog, so an
   // edit that breaks connectivity (e.g. a mistyped IP) is caught before save.
@@ -8609,7 +8619,8 @@ function EditPrinterModal({
       name: form.name,
       ip_address: form.ip_address,
       model: form.model || undefined,
-      location: form.location || undefined,
+      // null clears it; leaving it out kept the old location
+      location: form.location.trim() || null,
       auto_archive: form.auto_archive,
       is_active: form.is_active,
       wear_cost_per_hour: depreciationFieldToApi(wearCostPerHour),
@@ -8738,8 +8749,15 @@ function EditPrinterModal({
                 value={form.location}
                 onChange={(e) => setForm({ ...form, location: e.target.value })}
                 placeholder={t('printers.modal.locationPlaceholder')}
+                maxLength={100}
               />
               <p className="text-xs text-bambu-gray mt-1">{t('printers.locationHelp')}</p>
+              {accessChangedFor.length > 0 && (
+                <p className="flex items-start gap-1.5 text-xs text-yellow-700 dark:text-yellow-400 mt-1">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
+                  {t('printerAccess.moveWarning', { groups: accessChangedFor.join(', ') })}
+                </p>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <input
@@ -9048,6 +9066,9 @@ export function PrintersPage() {
     queryKey: ['ui-preferences'],
     queryFn: api.getUiPreferences,
   });
+  // Only once the preferences are in: deciding on `undefined` meant a check
+  // switched off still went out once per printer on every page load.
+  const firmwareChecksOn = settings !== undefined && settings.check_printer_firmware !== false;
 
   // Parse user-configured temperature/fan presets once, with defensive fallback
   // to built-in defaults on parse failure (validators on the backend already
@@ -9738,6 +9759,14 @@ export function PrintersPage() {
             <ArrowDown className="w-4 h-4 text-white" />
           )}
         </button>
+        <RouterLink
+          to="/printer-locations"
+          className="h-8 shrink-0 px-2 rounded-lg border bg-bambu-dark border-bambu-dark-tertiary text-white hover:bg-bambu-dark-tertiary transition-colors flex items-center justify-center"
+          title={t('printers.locations.title')}
+          aria-label={t('printers.locations.title')}
+        >
+          <Box className="w-4 h-4 text-bambu-green" />
+        </RouterLink>
       </div>
 
       {/* Page view toggle: Cards / Cam Wall */}
@@ -10102,7 +10131,7 @@ export function PrintersPage() {
                       cameraViewMode={cameraViewMode}
                       onOpenEmbeddedCamera={(id, name) => setEmbeddedCameraPrinters(prev => new Map(prev).set(id, { id, name }))}
                       onSelectCameraViewMode={selectCameraViewMode}
-                      checkPrinterFirmware={settings?.check_printer_firmware !== false}
+                      checkPrinterFirmware={firmwareChecksOn}
                       dryingPresets={effectiveDryingPresets}
                       nozzleTempPresets={effectiveNozzleTempPresets}
                       bedTempPresets={effectiveBedTempPresets}
@@ -10155,7 +10184,7 @@ export function PrintersPage() {
               cameraViewMode={cameraViewMode}
               onOpenEmbeddedCamera={(id, name) => setEmbeddedCameraPrinters(prev => new Map(prev).set(id, { id, name }))}
               onSelectCameraViewMode={selectCameraViewMode}
-              checkPrinterFirmware={settings?.check_printer_firmware !== false}
+              checkPrinterFirmware={firmwareChecksOn}
               dryingPresets={effectiveDryingPresets}
               nozzleTempPresets={effectiveNozzleTempPresets}
               bedTempPresets={effectiveBedTempPresets}

@@ -83,7 +83,11 @@ def _mock_spoolman_client_local() -> MagicMock:
 
 
 class TestTagScannedBroadcastsTrayUuid:
-    """nfc/tag-scanned broadcasts include tray_uuid from the request payload."""
+    """nfc/tag-scanned broadcasts include tray_uuid from the request payload.
+
+    The values are real block-9 tray UUIDs: anything else is dropped as a
+    pre-#984 daemon value (see test_spoolbuddy.py).
+    """
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -116,7 +120,7 @@ class TestTagScannedBroadcastsTrayUuid:
                 json={
                     "device_id": "sb-test",
                     "tag_uid": "AABB1122334455FF",
-                    "tray_uuid": "DEADBEEFDEADBEEFDEADBEEFDEADBEEF",
+                    "tray_uuid": "9E0B0717BEE94D7887EB1D8DFD1A14F3",
                 },
             )
 
@@ -126,7 +130,7 @@ class TestTagScannedBroadcastsTrayUuid:
         msg = mock_ws.broadcast.call_args[0][0]
         assert msg["type"] == "spoolbuddy_tag_matched"
         assert msg["tag_uid"] == "AABB1122334455FF"
-        assert msg["tray_uuid"] == "DEADBEEFDEADBEEFDEADBEEFDEADBEEF"
+        assert msg["tray_uuid"] == "9E0B0717BEE94D7887EB1D8DFD1A14F3"
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -135,7 +139,7 @@ class TestTagScannedBroadcastsTrayUuid:
     ):
         """Spoolman fallback match broadcasts tray_uuid alongside tag_uid."""
         sm_spool = _spoolman_spool(5)
-        sm_spool["extra"] = {"tag": '"DEADBEEFDEADBEEFDEADBEEFDEADBEEF"'}
+        sm_spool["extra"] = {"tag": '"9E0B0717BEE94D7887EB1D8DFD1A14F3"'}
         mock_client = _mock_spoolman_client_local()
         mock_client.find_spool_by_tag = AsyncMock(return_value=sm_spool)
 
@@ -161,7 +165,7 @@ class TestTagScannedBroadcastsTrayUuid:
                 json={
                     "device_id": "sb-test",
                     "tag_uid": "AABB1122334455FF",
-                    "tray_uuid": "DEADBEEFDEADBEEFDEADBEEFDEADBEEF",
+                    "tray_uuid": "9E0B0717BEE94D7887EB1D8DFD1A14F3",
                 },
             )
 
@@ -170,7 +174,7 @@ class TestTagScannedBroadcastsTrayUuid:
         mock_ws.broadcast.assert_called_once()
         msg = mock_ws.broadcast.call_args[0][0]
         assert msg["type"] == "spoolbuddy_tag_matched"
-        assert msg["tray_uuid"] == "DEADBEEFDEADBEEFDEADBEEFDEADBEEF"
+        assert msg["tray_uuid"] == "9E0B0717BEE94D7887EB1D8DFD1A14F3"
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -201,7 +205,7 @@ class TestTagScannedBroadcastsTrayUuid:
                 json={
                     "device_id": "sb-test",
                     "tag_uid": "AABB1122334455FF",
-                    "tray_uuid": "CAFEBABECAFEBABECAFEBABECAFEBABE",
+                    "tray_uuid": "5E5498918CBF4B94A25EF669C24DECC3",
                 },
             )
 
@@ -210,7 +214,7 @@ class TestTagScannedBroadcastsTrayUuid:
         mock_ws.broadcast.assert_called_once()
         msg = mock_ws.broadcast.call_args[0][0]
         assert msg["type"] == "spoolbuddy_unknown_tag"
-        assert msg["tray_uuid"] == "CAFEBABECAFEBABECAFEBABECAFEBABE"
+        assert msg["tray_uuid"] == "5E5498918CBF4B94A25EF669C24DECC3"
 
     @pytest.mark.asyncio
     @pytest.mark.integration

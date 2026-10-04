@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { Printer, Archive, ListOrdered, BarChart3, Cloud, Settings, Sun, Moon, Monitor, ChevronLeft, ChevronRight, Keyboard, Github, ArrowUpCircle, Wrench, FolderKanban, FolderOpen, X, Menu, Info, Plug, Bug, LogOut, Key, Loader2, Disc3, ShieldAlert, Globe, Bell, Receipt, type LucideIcon } from 'lucide-react';
+import { Printer, Archive, ListOrdered, BarChart3, Cloud, Settings, Sun, Moon, Monitor, ChevronLeft, ChevronRight, Keyboard, Github, ArrowUpCircle, Wrench, FolderKanban, FolderOpen, X, Menu, Info, Plug, Bug, LogOut, Key, Loader2, Disc3, ShieldAlert, Globe, Bell, Receipt, Megaphone, type LucideIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '../contexts/ThemeContext';
 import { KeyboardShortcutsModal } from './KeyboardShortcutsModal';
@@ -21,6 +21,9 @@ import { Card, CardHeader, CardContent } from './Card';
 import { parseUTCDate } from '../utils/date';
 import { Button } from './Button';
 import { BugReportBubble } from './BugReportBubble';
+import { AnnouncementsPanel } from './AnnouncementsPanel';
+import { AnnouncementBanner } from './AnnouncementBanner';
+import { useAnnouncements } from '../hooks/useAnnouncements';
 import {
   getHiddenSidebarSystemItemIds,
   getSidebarOrder,
@@ -45,7 +48,8 @@ export const defaultNavItems: NavItem[] = [
   { id: 'queue', to: '/queue', icon: ListOrdered, labelKey: 'nav.queue' },
   { id: 'projects', to: '/projects', icon: FolderKanban, labelKey: 'nav.projects' },
   { id: 'files', to: '/files', icon: FolderOpen, labelKey: 'nav.files' },
-  { id: 'makerworld', to: '/makerworld', icon: Globe, labelKey: 'nav.makerworld' },
+  // Id kept from when the page was MakerWorld-only, so saved sidebar orders and hidden items still apply.
+  { id: 'makerworld', to: '/model-sources', icon: Globe, labelKey: 'nav.modelSources' },
   { id: 'profiles', to: '/profiles', icon: Cloud, labelKey: 'nav.profiles' },
   { id: 'maintenance', to: '/maintenance', icon: Wrench, labelKey: 'nav.maintenance' },
   { id: 'stats', to: '/stats', icon: BarChart3, labelKey: 'nav.stats' },
@@ -148,6 +152,25 @@ export function Layout() {
     queryFn: api.getUiFlags,
     staleTime: 5 * 60 * 1000, // 5 minutes
   });
+
+  // Announcements from the Bambuddy maintainers: the sidebar entry above System,
+  // the slide-over list, and the banner for unread important/critical ones. The
+  // entry is there for whoever may see announcements, also with none published.
+  const {
+    visible: announcementsVisible,
+    announcements,
+    unread: unreadAnnouncements,
+    bannerItems,
+    markRead: markAnnouncementRead,
+  } = useAnnouncements();
+  const [announcementsOpen, setAnnouncementsOpen] = useState(false);
+  const [announcementFocus, setAnnouncementFocus] = useState<string | null>(null);
+  const openAnnouncements = useCallback((focusId?: string) => {
+    setMobileDrawerOpen(false);
+    setAnnouncementFocus(focusId ?? null);
+    setAnnouncementsOpen(true);
+  }, []);
+  const closeAnnouncements = useCallback(() => setAnnouncementsOpen(false), []);
 
   // Sponsor-prompt toast — fires once per session post-auth if a milestone is eligible.
   useSponsorPrompt(uiFlags?.currency ?? 'USD');
@@ -329,7 +352,7 @@ export function Layout() {
       inventory: 'inventory:read',
       finance: 'cost_centers:read_own',
       files: ['library:read', 'library:read_own', 'library:read_all'],
-      makerworld: 'makerworld:view',
+      makerworld: ['makerworld:view', 'manyfold:view'],
       settings: 'settings:read',
       // The user-email-preferences API requires notifications:user_email, so
       // gate the nav item on the same permission (both default groups —
@@ -732,9 +755,11 @@ export function Layout() {
         {/* Footer */}
         <div className="flex-shrink-0 p-2 border-t border-bambu-dark-tertiary">
           {isSidebarCompact || sidebarExpanded ? (
-            <div className="flex flex-col gap-2 px-2">
-              {/* Top row: icons */}
-              <div className="flex items-center justify-center gap-1 flex-wrap">
+            <div className="flex flex-col gap-2">
+              {/* Top row: icons. 32px each with no gap so seven fit the 239px
+                  of an expanded sidebar -- announcements, System, GitHub,
+                  shortcuts, theme, password, logout -- without wrapping. */}
+              <div className="flex items-center justify-center flex-wrap [&>a]:p-1.5 [&>button]:p-1.5 [&>span]:p-1.5 [&>div>button]:p-1.5">
                 {hasSwitchbarPlugs && (
                   <div className="relative">
                     <button
@@ -750,6 +775,25 @@ export function Layout() {
                       <SwitchbarPopover onClose={() => setShowSwitchbar(false)} />
                     )}
                   </div>
+                )}
+                {announcementsVisible && (
+                  <button
+                    onClick={() => openAnnouncements()}
+                    className="relative p-2 rounded-lg hover:bg-bambu-dark-tertiary transition-colors text-bambu-gray-light hover:text-white"
+                    title={t('announcements.title')}
+                    aria-label={
+                      unreadAnnouncements.length > 0
+                        ? t('announcements.unread', { count: unreadAnnouncements.length })
+                        : t('announcements.title')
+                    }
+                  >
+                    <Megaphone className="w-5 h-5" />
+                    {unreadAnnouncements.length > 0 && (
+                      <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 flex items-center justify-center text-[10px] font-bold rounded-full bg-bambu-green text-white">
+                        {unreadAnnouncements.length}
+                      </span>
+                    )}
+                  </button>
                 )}
                 {hasPermission('system:read') ? (
                   <NavLink
@@ -855,6 +899,23 @@ export function Layout() {
                     <SwitchbarPopover onClose={() => setShowSwitchbar(false)} />
                   )}
                 </div>
+              )}
+              {announcementsVisible && (
+                <button
+                  onClick={() => openAnnouncements()}
+                  className="relative p-2 rounded-lg hover:bg-bambu-dark-tertiary transition-colors text-bambu-gray-light hover:text-white"
+                  title={t('announcements.title')}
+                  aria-label={
+                    unreadAnnouncements.length > 0
+                      ? t('announcements.unread', { count: unreadAnnouncements.length })
+                      : t('announcements.title')
+                  }
+                >
+                  <Megaphone className="w-5 h-5" />
+                  {unreadAnnouncements.length > 0 && (
+                    <span className="absolute top-1 right-1 w-2.5 h-2.5 rounded-full bg-bambu-green ring-2 ring-bambu-dark-secondary" />
+                  )}
+                </button>
               )}
               {hasPermission('system:read') ? (
                 <NavLink
@@ -979,6 +1040,7 @@ export function Layout() {
             </div>
           </div>
         )}
+        <AnnouncementBanner items={bannerItems} onOpen={openAnnouncements} markRead={markAnnouncementRead} />
         {/* Persistent update banner */}
         {showUpdateBanner && (
           <div className="bg-bambu-green/20 border-b border-bambu-green/30 px-4 py-2 flex items-center justify-between">
@@ -1008,6 +1070,13 @@ export function Layout() {
         )}
         <Outlet />
       </main>
+      <AnnouncementsPanel
+        open={announcementsOpen}
+        onClose={closeAnnouncements}
+        announcements={announcements}
+        markRead={markAnnouncementRead}
+        focusId={announcementFocus}
+      />
 
       <UnknownSpoolModal
         prompt={unknownSpool.prompt}

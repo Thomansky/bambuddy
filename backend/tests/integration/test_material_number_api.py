@@ -281,6 +281,33 @@ class TestMaterialNumberInheritance:
         assert resp.status_code == 200
         assert resp.json()["material_number"] == "15"
 
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_timestamp_tie_goes_to_the_newest_spool(
+        self, async_client: AsyncClient, spool_factory, db_session: AsyncSession
+    ):
+        """Two donors touched in the same second must not pick one at random."""
+        from datetime import datetime
+
+        same_moment = datetime(2026, 1, 1, 12, 0, 0)
+        older = await spool_factory(material_number="15")
+        newer = await spool_factory(material_number="16")
+        for spool in (older, newer):
+            spool.updated_at = same_moment
+        await db_session.commit()
+
+        resp = await async_client.post(
+            "/api/v1/inventory/spools",
+            json={
+                "material": "PLA",
+                "subtype": "Basic",
+                "brand": "Bambu Lab",
+                "color_name": "Jade White",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["material_number"] == "16"
+
 
 class TestMaterialNumberStats:
     @pytest.mark.asyncio

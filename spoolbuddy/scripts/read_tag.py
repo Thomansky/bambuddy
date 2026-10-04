@@ -61,7 +61,7 @@ BAMBU_MASTER_KEY = bytes(
 BAMBU_CONTEXT = b"RFID-A\x00"  # 7 bytes including null terminator
 
 # Blocks to read for Bambu tag data
-BAMBU_BLOCKS = [1, 2, 4, 5]
+BAMBU_BLOCKS = [1, 2, 4, 5, 9]
 
 
 def hkdf_derive_keys(uid: bytes) -> bytes:
@@ -676,6 +676,7 @@ def main():
             for block_num in BAMBU_BLOCKS:
                 raw += blocks[block_num]
             print(f"\n    Raw payload ({len(raw)} bytes): {raw.hex().upper()}")
+            print(f"    tray_uuid (block 9): {blocks[9][:16].hex().upper()}")
 
         elif sak in (0x00, 0x04):
             # NTAG / MIFARE Ultralight family — SpoolEase / OpenPrintTag

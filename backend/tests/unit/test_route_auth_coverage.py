@@ -98,6 +98,11 @@ _PUBLIC_ROUTES: frozenset[tuple[str, str]] = frozenset(
         # confirmation page and writes nothing; the POST behind it records.
         ("GET", "/api/v1/archives/confirm/{token}/{verdict}"),
         ("POST", "/api/v1/archives/confirm/{token}/{verdict}"),
+        # Notification snapshot (#3089) — HA, Bark and Slack fetch it with no
+        # session. The filename embeds secrets.token_urlsafe(24) and is the
+        # credential; the handler serves only names of that exact shape, younger
+        # than three days, and it opens that one photo and nothing else.
+        ("GET", "/api/v1/notifications/photos/{filename}"),
         # Obico cached frame — one-time nonce embedded in <img> tags.
         ("GET", "/api/v1/obico/cached-frame/{nonce}"),
         # MakerWorld thumbnail proxy — fetches external URL; no Bambuddy data exposed.
@@ -160,7 +165,8 @@ def _has_auth_dep(dependant) -> bool:
 
 
 def _ws_endpoint_does_inline_token_check(route: APIWebSocketRoute) -> bool:
-    """True if the websocket endpoint reads its source uses ``verify_websocket_token``.
+    """True if the websocket endpoint's source calls ``verify_websocket_token``
+    (or its ``_principal`` variant, which also returns the minting API key).
 
     WebSocket routes don't pass auth via the standard Depends machinery
     (the WebSocket handshake doesn't carry headers), so the auth check
@@ -176,7 +182,7 @@ def _ws_endpoint_does_inline_token_check(route: APIWebSocketRoute) -> bool:
         source = inspect.getsource(route.endpoint)
     except (OSError, TypeError):
         return False
-    return bool(re.search(r"\bverify_websocket_token\s*\(", source))
+    return bool(re.search(r"\bverify_websocket_token(?:_principal)?\s*\(", source))
 
 
 @pytest.mark.unit

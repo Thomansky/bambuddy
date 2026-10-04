@@ -121,6 +121,35 @@ class TestPrintQueueAPI:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    @pytest.mark.parametrize("pinned_first", [True, False], ids=["pinned-above-any", "any-above-pinned"])
+    async def test_list_follows_queue_position_across_pinned_and_any_jobs(
+        self, async_client: AsyncClient, printer_factory, queue_item_factory, pinned_first
+    ):
+        """A printer's first pending item is the one the scheduler starts next (#3200).
+
+        The printer card's "Next in queue" shows that first item. The list used
+        to sort by printer first, which put every "Any <model>" job (no
+        printer_id) ahead of a job pinned to the printer -- the order the
+        scheduler itself had until #3200 -- so the card kept naming a lower
+        "Any" job after dispatch was fixed.
+        """
+        printer = await printer_factory(model="P2S")
+        pinned_pos, any_pos = (1, 2) if pinned_first else (2, 1)
+        pinned = await queue_item_factory(printer_id=printer.id, position=pinned_pos)
+        any_model = await queue_item_factory(printer_id=None, target_model="P2S", position=any_pos)
+        later_any = await queue_item_factory(printer_id=None, target_model="P2S", position=3)
+
+        response = await async_client.get(
+            "/api/v1/queue/", params={"printer_id": printer.id, "status": "pending", "target_model": "P2S"}
+        )
+
+        assert response.status_code == 200
+        ids = [item["id"] for item in response.json()]
+        expected_head = [pinned.id, any_model.id] if pinned_first else [any_model.id, pinned.id]
+        assert ids == [*expected_head, later_any.id]
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_add_to_queue(self, async_client: AsyncClient, printer_factory, archive_factory, db_session):
         """Verify item can be added to queue."""
         printer = await printer_factory()
@@ -936,6 +965,22 @@ class TestPrintQueueAPI:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    async def test_update_queue_item_skip_filament_check(
+        self, async_client: AsyncClient, queue_item_factory, db_session
+    ):
+        """#2799: the print dialog sends it on edit when the mapping deliberately
+        puts a slot on another material."""
+        item = await queue_item_factory()
+        response = await async_client.patch(f"/api/v1/queue/{item.id}", json={"skip_filament_check": True})
+        assert response.status_code == 200
+        assert response.json()["skip_filament_check"] is True
+
+        # Omitted on a later edit, it stays as it was.
+        response = await async_client.patch(f"/api/v1/queue/{item.id}", json={"manual_start": True})
+        assert response.json()["skip_filament_check"] is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_delete_queue_item(self, async_client: AsyncClient, queue_item_factory, db_session):
         """Verify queue item can be deleted."""
         item = await queue_item_factory()
@@ -1104,6 +1149,65 @@ class TestQueueStartEndpoint:
         result = response.json()
         assert result["manual_start"] is False
         assert result["status"] == "pending"
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_start_with_a_filament_not_loaded_offers_print_anyway(
+        self, async_client: AsyncClient, queue_item_factory, db_session
+    ):
+        """#2799: Start on an item whose filament has no tray answers 409 with the
+        missing filaments instead of releasing it to be held again."""
+        from unittest.mock import AsyncMock, patch
+
+        item = await queue_item_factory(manual_start=True)
+        with patch(
+            "backend.app.services.print_scheduler.scheduler.missing_filament_for_start",
+            AsyncMock(return_value=["PETG #2850E0"]),
+        ):
+            response = await async_client.post(f"/api/v1/queue/{item.id}/start")
+
+        assert response.status_code == 409
+        assert response.json()["detail"] == {"code": "unmatched_filament", "missing": ["PETG #2850E0"]}
+        await db_session.refresh(item)
+        assert item.manual_start is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_failing_filament_check_does_not_break_start(
+        self, async_client: AsyncClient, queue_item_factory, db_session
+    ):
+        """The check is a convenience; the scheduler still holds the item if the
+        filament is missing, so an error in it must not turn Start into a 500."""
+        from unittest.mock import AsyncMock, patch
+
+        item = await queue_item_factory(manual_start=True)
+        with patch(
+            "backend.app.services.print_scheduler.scheduler.missing_filament_for_start",
+            AsyncMock(side_effect=RuntimeError("boom")),
+        ):
+            response = await async_client.post(f"/api/v1/queue/{item.id}/start")
+
+        assert response.status_code == 200
+        assert response.json()["manual_start"] is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_print_anyway_past_a_filament_not_loaded(
+        self, async_client: AsyncClient, queue_item_factory, db_session
+    ):
+        """The retry with skip_filament_check is not asked again, and is remembered."""
+        from unittest.mock import AsyncMock, patch
+
+        item = await queue_item_factory(manual_start=True)
+        check = AsyncMock(return_value=["PETG #2850E0"])
+        with patch("backend.app.services.print_scheduler.scheduler.missing_filament_for_start", check):
+            response = await async_client.post(f"/api/v1/queue/{item.id}/start?skip_filament_check=true")
+
+        assert response.status_code == 200
+        check.assert_not_awaited()
+        result = response.json()
+        assert result["manual_start"] is False
+        assert result["skip_filament_check"] is True
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -2856,10 +2960,16 @@ class TestAbortedStatusNormalisation:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_add_to_queue_insert_position_scopes_unassigned_items(
+    async def test_add_to_queue_positions_are_one_sequence_across_printers(
         self, async_client: AsyncClient, printer_factory, archive_factory, db_session
     ):
-        """Unassigned inserts shift only the unassigned queue scope."""
+        """Positions are shared by pinned and unassigned items (#3200).
+
+        The queue page lists and reorders pending items as one list and the
+        scheduler dispatches in that order, so a pinned item added after two
+        unassigned ones lands after them, and an insert at the top shifts
+        everything, not only its own printer's items.
+        """
         printer = await printer_factory()
         unassigned_first = await archive_factory(print_name="Unassigned First")
         unassigned_second = await archive_factory(print_name="Unassigned Second")
@@ -2873,7 +2983,7 @@ class TestAbortedStatusNormalisation:
             json={"printer_id": printer.id, "archive_id": assigned.id},
         )
         assert assigned_response.status_code == 200
-        assert assigned_response.json()["position"] == 1
+        assert assigned_response.json()["position"] == 3
 
         response = await async_client.post(
             "/api/v1/queue/",
@@ -2884,19 +2994,14 @@ class TestAbortedStatusNormalisation:
         )
         assert response.status_code == 200
 
-        unassigned_response = await async_client.get("/api/v1/queue/?printer_id=-1")
-        unassigned_items = sorted(unassigned_response.json(), key=lambda item: item["position"])
-        assert [item["archive_id"] for item in unassigned_items] == [
+        all_items = sorted((await async_client.get("/api/v1/queue/")).json(), key=lambda item: item["position"])
+        assert [item["archive_id"] for item in all_items] == [
             priority.id,
             unassigned_first.id,
             unassigned_second.id,
+            assigned.id,
         ]
-        assert [item["position"] for item in unassigned_items] == [1, 2, 3]
-
-        assigned_scope_response = await async_client.get(f"/api/v1/queue/?printer_id={printer.id}&target_model=NONE")
-        assigned_items = sorted(assigned_scope_response.json(), key=lambda item: item["position"])
-        assert [item["archive_id"] for item in assigned_items] == [assigned.id]
-        assert [item["position"] for item in assigned_items] == [1]
+        assert [item["position"] for item in all_items] == [1, 2, 3, 4]
 
     @pytest.mark.asyncio
     @pytest.mark.integration

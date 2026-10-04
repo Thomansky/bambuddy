@@ -5,15 +5,25 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app.core.auth import check_printer_access, check_webhook_permission, get_api_key
+from backend.app.core.auth import (
+    api_key_printer_scope,
+    check_webhook_permission,
+    ensure_api_key_printer_access,
+    get_api_key,
+    is_auth_enabled,
+    queue_review_required_for,
+    resolve_apikey_owner,
+)
 from backend.app.core.database import get_db
 from backend.app.models.api_key import APIKey
 from backend.app.models.archive import PrintArchive
 from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer import Printer
+from backend.app.schemas.printer import HMSErrorResponse, hms_error_responses
 from backend.app.services.number_series import SERIES_QUEUE_JOB, allocate_number
 from backend.app.services.print_confirmation import confirm_outcome_for_new_queue_item
 from backend.app.services.printer_manager import printer_manager
+from backend.app.services.queue_position import next_queue_position
 
 logger = logging.getLogger(__name__)
 
@@ -42,11 +52,28 @@ class QueueAddResponse(BaseModel):
 class PrinterStatusResponse(BaseModel):
     id: int
     name: str
+    # The printer's own serial, so a client can tell printers apart by what
+    # they report rather than by Bambuddy's row id (#2919).
+    serial_number: str
     connected: bool
     state: str | None
     current_print: str | None
     progress: float | None
+    # Minutes, as the printer reports it. Kept for existing clients;
+    # remaining_seconds is the same estimate in seconds, the unit the
+    # notification pipeline uses (#2919).
     remaining_time: int | None
+    remaining_seconds: int | None = None
+    layer_num: int | None = None
+    total_layers: int | None = None
+    # Bambu's id for the running job. A new value marks a new print, even when
+    # two prints of the same file run back to back between two polls. None
+    # when the job has no id: Bambu reports "0" or "" for local prints (for
+    # example one started on the printer), the same reading main.py uses.
+    subtask_id: str | None = None
+    # Live HMS faults, in the same shape as GET /printers/{id}/status. They
+    # tell a filament runout apart from someone pressing pause.
+    hms_errors: list[HMSErrorResponse] = []
 
 
 class QueueStatusResponse(BaseModel):
@@ -55,6 +82,18 @@ class QueueStatusResponse(BaseModel):
     pending: int
     printing: int
     items: list[dict]
+
+
+def _job_id(subtask_id) -> str | None:
+    """The printer's job id as text, or None when the job has none.
+
+    Stored as the printer sent it, so coerce: a numeric id would fail
+    validation and turn a status poll into a 500.
+    """
+    if subtask_id is None:
+        return None
+    value = str(subtask_id).strip()
+    return None if value in ("", "0") else value
 
 
 # Webhook endpoints
@@ -71,7 +110,7 @@ async def webhook_add_to_queue(
     Requires 'can_queue' permission.
     """
     await check_webhook_permission(db, api_key, "queue")
-    check_printer_access(api_key, data.printer_id)
+    await ensure_api_key_printer_access(db, api_key, data.printer_id)
 
     # Verify archive exists
     result = await db.execute(select(PrintArchive).where(PrintArchive.id == data.archive_id))
@@ -85,18 +124,9 @@ async def webhook_add_to_queue(
     if not printer:
         raise HTTPException(status_code=404, detail="Printer not found")
 
-    # Get next position
-    result = await db.execute(
-        select(PrintQueueItem.position)
-        .where(
-            PrintQueueItem.printer_id == data.printer_id,
-            PrintQueueItem.status == "pending",
-        )
-        .order_by(PrintQueueItem.position.desc())
-        .limit(1)
-    )
-    max_position = result.scalar()
-    next_position = (max_position or 0) + 1
+    # Append to the end of the queue: positions are one sequence across all
+    # pending items, not one per printer (#3200).
+    next_position = await next_queue_position(db)
 
     # Parse scheduled time if provided
     scheduled_time = None
@@ -125,6 +155,8 @@ async def webhook_add_to_queue(
         # for the person whose key it is. Legacy keys predating per-user ownership
         # have no `user_id`, and those rows stay ownerless.
         created_by_id=api_key.user_id,
+        # Waits for someone to start it unless the owner may print without review (#1620)
+        manual_start=await is_auth_enabled(db) and queue_review_required_for(await resolve_apikey_owner(db, api_key)),
     )
     db.add(queue_item)
     await db.flush()
@@ -160,7 +192,7 @@ async def webhook_start_print(
     Requires 'can_control_printer' permission.
     """
     await check_webhook_permission(db, api_key, "control_printer")
-    check_printer_access(api_key, printer_id)
+    await ensure_api_key_printer_access(db, api_key, printer_id)
 
     # Get printer
     result = await db.execute(select(Printer).where(Printer.id == printer_id))
@@ -181,6 +213,18 @@ async def webhook_start_print(
     queue_item = result.scalar_one_or_none()
     if not queue_item:
         raise HTTPException(status_code=404, detail="No pending prints in queue")
+
+    # Starting a waiting job is a review decision (#1620): a key whose owner
+    # needs review for their own jobs can't make one for anybody's
+    if (
+        queue_item.manual_start
+        and await is_auth_enabled(db)
+        and queue_review_required_for(await resolve_apikey_owner(db, api_key))
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="The next job waits for review: someone who can manage all queue jobs has to start it",
+        )
 
     # Clear manual_start so the scheduler will dispatch. If the item was
     # already auto-dispatchable this is a no-op; the scheduler will still
@@ -204,7 +248,7 @@ async def webhook_stop_print(
     Requires 'can_control_printer' permission.
     """
     await check_webhook_permission(db, api_key, "control_printer")
-    check_printer_access(api_key, printer_id)
+    await ensure_api_key_printer_access(db, api_key, printer_id)
 
     status = printer_manager.get_status(printer_id)
     # `printer_manager.get_status(...)` returns a ``PrinterState`` dataclass
@@ -236,7 +280,7 @@ async def webhook_cancel_print(
     Requires 'can_control_printer' permission.
     """
     await check_webhook_permission(db, api_key, "control_printer")
-    check_printer_access(api_key, printer_id)
+    await ensure_api_key_printer_access(db, api_key, printer_id)
 
     status = printer_manager.get_status(printer_id)
     # Same dataclass-not-dict shape as stop_print above (#1584).
@@ -266,7 +310,7 @@ async def webhook_get_printer_status(
     Requires 'can_read_status' permission.
     """
     await check_webhook_permission(db, api_key, "read_status")
-    check_printer_access(api_key, printer_id)
+    await ensure_api_key_printer_access(db, api_key, printer_id)
 
     # Get printer
     result = await db.execute(select(Printer).where(Printer.id == printer_id))
@@ -280,14 +324,31 @@ async def webhook_get_printer_status(
     # attribute access, not dict lookup. The previous `.get(...)` calls raised
     # AttributeError and surfaced as a generic 500 for any printer that
     # actually had a status row (#1584).
+    if status is None:
+        return PrinterStatusResponse(
+            id=printer.id,
+            name=printer.name,
+            serial_number=printer.serial_number,
+            connected=False,
+            state=None,
+            current_print=None,
+            progress=None,
+            remaining_time=None,
+        )
     return PrinterStatusResponse(
         id=printer.id,
         name=printer.name,
-        connected=status.connected if status else False,
-        state=status.state if status else None,
-        current_print=status.current_print if status else None,
-        progress=status.progress if status else None,
-        remaining_time=status.remaining_time if status else None,
+        serial_number=printer.serial_number,
+        connected=status.connected,
+        state=status.state,
+        current_print=status.current_print,
+        progress=status.progress,
+        remaining_time=status.remaining_time,
+        remaining_seconds=status.remaining_time * 60 if status.remaining_time is not None else None,
+        layer_num=status.layer_num,
+        total_layers=status.total_layers,
+        subtask_id=_job_id(status.subtask_id),
+        hms_errors=hms_error_responses(status.hms_errors),
     )
 
 
@@ -305,15 +366,15 @@ async def webhook_get_queue_status(
 
     # Get printers
     if printer_id:
-        check_printer_access(api_key, printer_id)
+        await ensure_api_key_printer_access(db, api_key, printer_id)
         result = await db.execute(select(Printer).where(Printer.id == printer_id))
         printers = result.scalars().all()
     else:
         result = await db.execute(select(Printer))
         printers = result.scalars().all()
-        # Filter by allowed printers if limited
-        if api_key.printer_ids is not None:
-            printers = [p for p in printers if p.id in api_key.printer_ids]
+        # Only the printers the key (and its owner) may reach
+        scope = await api_key_printer_scope(db, api_key)
+        printers = [p for p in printers if scope.allows(p.id)]
 
     response = []
     for printer in printers:

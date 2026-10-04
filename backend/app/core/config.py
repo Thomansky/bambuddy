@@ -75,9 +75,11 @@ class Settings(BaseSettings):
     database_url: str = _external_db_url or f"sqlite+aiosqlite:///{_db_path}"
 
     # Database connection pool sizing. ``None`` = use the built-in, dialect-aware
-    # default (PostgreSQL: pool_size 20 + max_overflow 80; SQLite: 20 + 200).
+    # default (PostgreSQL: pool_size 20 + max_overflow 60; SQLite: 10 + 90).
     # Large PostgreSQL printer farms can raise these via the DB_POOL_SIZE /
     # DB_MAX_OVERFLOW / DB_POOL_TIMEOUT / DB_POOL_RECYCLE env vars (issue #2572).
+    # A large farm still on SQLite can raise DB_MAX_OVERFLOW, but is better
+    # served by moving to PostgreSQL (#2883).
     # Make sure PostgreSQL ``max_connections`` comfortably exceeds
     # (pool_size + max_overflow) x number of app worker processes.
     db_pool_size: int | None = Field(default=None, gt=0)
@@ -151,6 +153,8 @@ _INTENTIONAL_UNSETTINGS = {
     "BAMBUDDY_OIDC_AUTO_LINK_EXISTING",
     "BAMBUDDY_OIDC_EMAIL_CLAIM",
     "BAMBUDDY_OIDC_REQUIRE_EMAIL_VERIFIED",
+    "BAMBUDDY_OIDC_GROUP_CLAIM",
+    "BAMBUDDY_OIDC_GROUP_MAPPING",
     "BAMBUDDY_OIDC_ICON_URL",
     "BAMBUDDY_OIDC_AUTOLOGIN",
     "BAMBUDDY_OIDC_DEFAULT_GROUP",

@@ -80,7 +80,7 @@ class PrintQueueItemCreate(BaseModel):
     require_previous_success: bool = False
     auto_off_after: bool = False  # Power off printer after print completes
     manual_start: bool = False  # Requires manual trigger to start (staged)
-    insert_at_top: bool = False  # Insert ahead of other pending items in the same queue scope
+    insert_at_top: bool = False  # Insert ahead of other pending items (one queue order across all printers, #3200)
     insert_position: int | None = None  # 1-indexed insertion position for priority queueing
     # Persistent "Print Anyway" acknowledgement (#1698-followup). When set,
     # PrintModal already showed the deficit warning and the user confirmed,
@@ -147,6 +147,9 @@ class PrintQueueItemUpdate(BaseModel):
     require_previous_success: bool | None = None
     auto_off_after: bool | None = None
     manual_start: bool | None = None
+    # Set by the print dialog when the mapping deliberately puts a slot on a
+    # tray of another material, so the dispatch re-check keeps it (#2799).
+    skip_filament_check: bool | None = None
     ams_mapping: list[int] | None = None
     plate_id: int | None = None
     # Print options

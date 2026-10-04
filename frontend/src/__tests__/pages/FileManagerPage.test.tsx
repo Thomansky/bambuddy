@@ -999,6 +999,40 @@ describe('FileManagerPage', () => {
       expect(await screen.findByTestId('model-viewer-modal')).toBeInTheDocument();
     });
 
+    it('offers Combine to 3MF for STLs ticked across columns', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await descendToBrackets(user);
+      // bracket.stl sits in the root column, clamp.stl in the Brackets pane.
+      await user.click(await within(screen.getByTestId('columns-level-root')).findByText('bracket.stl'));
+      await user.click(await within(screen.getByTestId('columns-files-pane')).findByText('clamp.stl'));
+
+      const actions = within(await screen.findByTestId('selection-actions'));
+      expect(actions.getByText('2 selected')).toBeInTheDocument();
+      expect(actions.getByRole('button', { name: 'Combine to 3MF' })).toBeInTheDocument();
+    });
+
+    it('offers Select All until every file of the pane is ticked, and keeps other ticks', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      await descendToBrackets(user);
+      await user.click(await within(screen.getByTestId('columns-level-folder-1')).findByText('Spacer'));
+      await user.click(await within(screen.getByTestId('columns-files-pane')).findByText('clamp.stl'));
+
+      // Two ticked, but only one of the pane's two files.
+      expect(await within(screen.getByTestId('selection-actions')).findByText('2 selected')).toBeInTheDocument();
+      expect(screen.getByText('Select All')).toBeInTheDocument();
+
+      await user.click(screen.getByText('Select All'));
+
+      expect(await within(screen.getByTestId('selection-actions')).findByText('3 selected')).toBeInTheDocument();
+      expect(screen.getByText('Deselect All')).toBeInTheDocument();
+    });
+
     it('keeps a level\'s folders visible while its files are still loading', async () => {
       const user = userEvent.setup();
       server.use(
@@ -1970,6 +2004,26 @@ describe('FileManagerPage', () => {
       });
     });
 
+    it('Select All replaces a selection the search has hidden in the grid', async () => {
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+      await waitFor(() => expect(screen.getByText('Benchy')).toBeInTheDocument());
+
+      const benchyCard = screen.getByText('Benchy').closest('div[class*="cursor-pointer"]');
+      expect(benchyCard).not.toBeNull();
+      await user.click(benchyCard!);
+      expect(await screen.findByText('1 selected')).toBeInTheDocument();
+
+      // Benchy leaves the screen; Select All must not keep it ticked, or a
+      // bulk Delete would remove a file nobody can see.
+      await user.type(screen.getByPlaceholderText('Search files...'), 'cube');
+      await waitFor(() => expect(screen.queryByText('Benchy')).not.toBeInTheDocument());
+      await user.click(screen.getByText('Select All'));
+
+      expect(await screen.findByText('1 selected')).toBeInTheDocument();
+      expect(screen.getByText('Deselect All')).toBeInTheDocument();
+    });
+
     it('shows bulk actions when files selected', async () => {
       const user = userEvent.setup();
       render(<FileManagerPage />);
@@ -2464,6 +2518,15 @@ describe('FileManagerPage', () => {
 
       // User filter dropdown should not be present
       expect(screen.queryByPlaceholderText('Filter by user')).not.toBeInTheDocument();
+
+      // #3105: the logged-out column set needs the same floors as the
+      // authenticated one, minus the Uploaded By track.
+      const header = screen.getByTestId('file-list-grid-header');
+      const rows = screen.getAllByTestId('file-list-grid-row');
+      for (const el of [header, ...rows]) {
+        expect(el).toHaveClass('min-w-min');
+        expect(el.className).toContain('grid-cols-[24px_minmax(240px,1fr)_100px_100px_100px_minmax(96px,200px)_252px]');
+      }
     });
 
     it('shows "Uploaded By" column and user filter when auth is enabled', async () => {
@@ -2523,6 +2586,17 @@ describe('FileManagerPage', () => {
 
       // Username should be displayed in the column
       expect(screen.getByText('testuser')).toBeInTheDocument();
+
+      // #3105: the authenticated grid has enough fixed-width columns to
+      // squeeze a bare 1fr filename track to zero. Header and rows must share
+      // the same minimum width and non-collapsible filename and tags tracks
+      // so the existing overflow wrapper scrolls instead.
+      const header = screen.getByTestId('file-list-grid-header');
+      const rows = screen.getAllByTestId('file-list-grid-row');
+      for (const el of [header, ...rows]) {
+        expect(el).toHaveClass('min-w-min');
+        expect(el.className).toContain('grid-cols-[24px_minmax(240px,1fr)_120px_100px_100px_100px_minmax(96px,200px)_252px]');
+      }
     });
   });
 

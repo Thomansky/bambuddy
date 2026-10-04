@@ -27,6 +27,7 @@ from backend.app.core.auth import (
     create_access_token,
     create_media_token,
     create_websocket_token,
+    current_api_key_if_present,
     get_current_active_user,
     get_password_hash,
     get_user_by_email,
@@ -40,6 +41,7 @@ from backend.app.core.auth import (
 )
 from backend.app.core.database import async_session, get_db
 from backend.app.core.oidc_env import env_bool
+from backend.app.models.api_key import APIKey
 from backend.app.models.auth_ephemeral import AuthEphemeralToken, AuthRateLimitEvent, EventType, TokenType
 from backend.app.models.group import Group
 from backend.app.models.settings import Settings
@@ -569,6 +571,7 @@ async def authenticate_credentials(db: AsyncSession, username: str, password: st
     """
     user = None
     ldap_user = None
+    ldap_user_provisioned = False
     ldap_settings = await _get_ldap_settings(db)
     if ldap_settings:
         try:
@@ -592,10 +595,14 @@ async def authenticate_credentials(db: AsyncSession, username: str, password: st
                             # User doesn't exist and auto-provision is off
                             ldap_user = None
                         else:
-                            # Auto-provision LDAP user
+                            # Auto-provision LDAP user. Provisioning already sets the
+                            # email, groups and finance defaults the sync below would,
+                            # so a new user skips it (it also logged the default-group
+                            # warning a second time, #3197).
                             user = await _provision_ldap_user(db, ldap_user, ldap_config)
+                            ldap_user_provisioned = True
 
-                    if user and ldap_user:
+                    if user and ldap_user and not ldap_user_provisioned:
                         # Update email and group mappings on each login
                         await _sync_ldap_user(db, user, ldap_user, ldap_config)
                         # Keep finance defaults idempotently in sync for LDAP users
@@ -658,6 +665,7 @@ async def resolve_second_factors(db: AsyncSession, user: User) -> tuple[bool, bo
 @router.post("/ws-token")
 async def mint_websocket_token(
     current_user: User | None = RequirePermissionIfAuthEnabled(Permission.WEBSOCKET_CONNECT),
+    api_key: APIKey | None = Depends(current_api_key_if_present),
 ):
     """Mint a short-lived token for ``/api/v1/ws`` connections (GHSA-r2qv follow-up).
 
@@ -675,7 +683,9 @@ async def mint_websocket_token(
     passes via the standard allowlist (``can_read_status`` covers it).
     """
     username = current_user.username if current_user is not None else None
-    return {"token": await create_websocket_token(username)}
+    # The socket only carries the printers its minter may see (#1727)
+    api_key_id = api_key.id if api_key is not None else None
+    return {"token": await create_websocket_token(username, api_key_id)}
 
 
 @router.post("/media-token")
@@ -1480,13 +1490,19 @@ async def _sync_ldap_user(db: AsyncSession, user: User, ldap_user, ldap_config) 
 
     current_group_ids = {g.id for g in user.groups}
     new_group_ids = {g.id for g in new_groups}
-    if current_group_ids != new_group_ids:
+    groups_changed = current_group_ids != new_group_ids
+    if groups_changed:
         user.groups = new_groups
         changed = True
 
     if changed:
         await db.commit()
         logger.info("Synced LDAP user attributes: %s", user.username)
+        if groups_changed:
+            # The user's open dashboards may now see other printers (#1727)
+            from backend.app.core.websocket import ws_manager
+
+            await ws_manager.refresh_printer_scopes()
 
 
 @router.post("/ldap/test")
@@ -1742,6 +1758,7 @@ def _long_lived_token_to_response(record, *, plaintext: str | None = None) -> di
 @router.post("/tokens", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def create_long_lived_camera_token(
     payload: dict,
+    response: Response,
     current_user: User | None = RequirePermissionIfAuthEnabled(Permission.CAMERA_VIEW),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1800,6 +1817,7 @@ async def create_long_lived_camera_token(
         scope,
         created.record.expires_at.isoformat(),
     )
+    response.headers["Cache-Control"] = "no-store"
     return _long_lived_token_to_response(created.record, plaintext=created.plaintext)
 
 

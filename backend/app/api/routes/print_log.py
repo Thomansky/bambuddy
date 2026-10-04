@@ -7,6 +7,8 @@ from sqlalchemy import delete, func, nullslast, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.auth import (
+    MediaOrRequestPrinterScope,
+    RequestPrinterScope,
     RequirePermissionIfAuthEnabled,
     require_media_token_ownership,
     require_ownership_permission,
@@ -14,6 +16,7 @@ from backend.app.core.auth import (
 from backend.app.core.config import settings
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
+from backend.app.core.printer_scope import PrinterScope
 from backend.app.models.print_log import PrintLogEntry
 from backend.app.models.user import User
 from backend.app.schemas.print_log import PrintLogEntrySchema, PrintLogEntryUpdate, PrintLogResponse
@@ -71,6 +74,7 @@ async def get_print_log(
             Permission.ARCHIVES_READ_OWN,
         )
     ),
+    printer_scope: PrinterScope = RequestPrinterScope,
 ):
     """Get the print log."""
     user, can_read_all = auth_result
@@ -79,6 +83,10 @@ async def get_print_log(
     if user is not None and not can_read_all:
         query = query.where(PrintLogEntry.created_by_id == user.id)
         count_query = count_query.where(PrintLogEntry.created_by_id == user.id)
+    # Only prints on printers the caller may see (#1727)
+    if (clause := printer_scope.where(PrintLogEntry.printer_id)) is not None:
+        query = query.where(clause)
+        count_query = count_query.where(clause)
 
     if printer_id is not None:
         query = query.where(PrintLogEntry.printer_id == printer_id)
@@ -151,6 +159,7 @@ async def get_print_log_thumbnail(
             Permission.ARCHIVES_READ_OWN,
         )
     ),
+    printer_scope: PrinterScope = MediaOrRequestPrinterScope,
 ):
     """Get the thumbnail for a print log entry.
 
@@ -168,7 +177,7 @@ async def get_print_log_thumbnail(
     """
     user, can_read_all = auth_result
     entry = await db.get(PrintLogEntry, entry_id)
-    if not entry or not entry.thumbnail_path:
+    if not entry or not entry.thumbnail_path or not printer_scope.allows(entry.printer_id):
         raise HTTPException(404, "Thumbnail not found")
     if not can_read_all and (user is None or entry.created_by_id != user.id):
         raise HTTPException(404, "Thumbnail not found")
@@ -190,12 +199,17 @@ async def get_print_log_thumbnail(
 async def clear_print_log(
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.ARCHIVES_DELETE_ALL),
+    printer_scope: PrinterScope = RequestPrinterScope,
 ):
     """Clear the print log.
 
     Only deletes log entries. Archives and queue items are never touched.
     """
-    result = await db.execute(delete(PrintLogEntry))
+    # Entries for printers the caller can't see stay (#1727)
+    statement = delete(PrintLogEntry)
+    if (clause := printer_scope.where(PrintLogEntry.printer_id)) is not None:
+        statement = statement.where(clause)
+    result = await db.execute(statement)
     deleted = result.rowcount
     await db.commit()
 
@@ -213,6 +227,7 @@ async def delete_print_log_entry(
             Permission.ARCHIVES_DELETE_OWN,
         )
     ),
+    printer_scope: PrinterScope = RequestPrinterScope,
 ):
     """Delete a single print-log entry (#1687).
 
@@ -225,7 +240,7 @@ async def delete_print_log_entry(
     user, can_modify_all = auth_result
 
     entry = await db.get(PrintLogEntry, entry_id)
-    if not entry:
+    if not entry or not printer_scope.allows(entry.printer_id):
         raise HTTPException(404, "Print log entry not found")
 
     if not can_modify_all:
@@ -282,6 +297,7 @@ async def update_print_log_entry(
             Permission.ARCHIVES_UPDATE_OWN,
         )
     ),
+    printer_scope: PrinterScope = RequestPrinterScope,
 ):
     """Edit a single Print Log row's classification (#1687 part 4, reporter
     IndividualGhost1905).
@@ -299,7 +315,7 @@ async def update_print_log_entry(
     user, can_modify_all = auth_result
 
     entry = await db.get(PrintLogEntry, entry_id)
-    if not entry:
+    if not entry or not printer_scope.allows(entry.printer_id):
         raise HTTPException(404, "Print log entry not found")
 
     if not can_modify_all:

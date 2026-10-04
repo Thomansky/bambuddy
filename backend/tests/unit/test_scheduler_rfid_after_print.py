@@ -171,6 +171,9 @@ def _transport(state) -> BambuMQTTClient:
     client = BambuMQTTClient(ip_address="10.0.0.1", serial_number="X1C0001", access_code="x", model="X1C")
     client._client = MagicMock()
     client.state = state
+    # Nobody answers ams_get_rfid here, and silence counts as accepted (#3206):
+    # no point waiting the real three seconds for it on every slot.
+    client._rfid_ack_timeout = 0.0
     return client
 
 
@@ -184,7 +187,7 @@ class _Round:
         self.transport = _transport(state) if client else None
         self.client = MagicMock() if client else None
         if self.client is not None:
-            self.client.ams_refresh_tray = MagicMock(side_effect=self._refresh(refresh))
+            self.client.ams_refresh_tray = AsyncMock(side_effect=self._refresh(refresh))
             # Default: the printer accepts the unload and retracts at once.
             self.client.ams_unload_filament = MagicMock(side_effect=unload or self._retract)
         self.tasks: list[asyncio.Task] = []
@@ -203,8 +206,8 @@ class _Round:
         decide whether the command was accepted in the first place.
         """
 
-        def call(ams_id, slot_id):
-            ok, message = self.transport.ams_refresh_tray(ams_id, slot_id)
+        async def call(ams_id, slot_id):
+            ok, message = await self.transport.ams_refresh_tray(ams_id, slot_id)
             if ok and hook is not None:
                 return hook(ams_id, slot_id)
             return ok, message
@@ -384,7 +387,7 @@ class TestTheLoadedTray:
         )
 
     @pytest.mark.parametrize("tray_now", [0, 1, 5, 128, 254])
-    def test_the_stand_down_is_the_rule_the_transport_itself_enforces(self, tray_now):
+    async def test_the_stand_down_is_the_rule_the_transport_itself_enforces(self, tray_now):
         """Pinned against the real client. The round stands down because
         ``ams_refresh_tray`` refuses for the whole printer; if that ever became
         a per-slot gate, this is the test that says the round may read the
@@ -392,15 +395,15 @@ class TestTheLoadedTray:
         transport = _transport(_finished(tray_now=tray_now))
 
         for ams_id, slot_id in ((0, 0), (0, 3), (1, 2)):
-            ok, message = transport.ams_refresh_tray(ams_id, slot_id)
+            ok, message = await transport.ams_refresh_tray(ams_id, slot_id)
             assert not ok
             assert "unload filament first" in message
         assert transport._client.publish.call_count == 0
 
-    def test_nothing_loaded_is_what_lets_a_round_read_at_all(self):
+    async def test_nothing_loaded_is_what_lets_a_round_read_at_all(self):
         transport = _transport(_finished(tray_now=255))
 
-        ok, _message = transport.ams_refresh_tray(0, 3)
+        ok, _message = await transport.ams_refresh_tray(0, 3)
 
         assert ok
         assert transport._client.publish.call_count == 1

@@ -1495,6 +1495,9 @@ class BambuMQTTClient:
         # on both an X1C and an H2D (#2718). Filled by the MQTT thread, drained
         # by await_cali_ack.
         self._pending_cali_acks: dict[str, dict | None] = {}
+        # Acks for RFID re-reads (ams_get_rfid, and the M620 R gcode_line
+        # fallback), keyed the same way. Drained by ams_refresh_tray (#3206).
+        self._pending_rfid_acks: dict[str, dict | None] = {}
 
         # Acks for the firmware's own gcode files started through the plain
         # gcode_file command (vision encoder calibration, #3127), keyed by the
@@ -2542,6 +2545,25 @@ class BambuMQTTClient:
                 # INFO level so the body lands in support bundles by default.
                 elif cmd == "ams_filament_drying":
                     logger.info("[%s] ams_filament_drying response: %s", self.serial_number, print_data)
+                # RFID re-reads are user-initiated and rare, and a refusal was
+                # invisible until #3206 (X1Plus answering FAIL / ERROR STATE).
+                # gcode_line acks are only of interest when they answer our
+                # M620 R fallback, so those are matched by sequence_id alone.
+                ack_seq = str(print_data.get("sequence_id", ""))
+                if (
+                    cmd in ("ams_get_rfid", "gcode_line")
+                    and ack_seq in self._pending_rfid_acks
+                    and "result" in print_data
+                ):
+                    logger.info(
+                        "[%s] %s response: result=%s reason=%s seq=%s",
+                        self.serial_number,
+                        cmd,
+                        print_data.get("result"),
+                        print_data.get("reason", ""),
+                        ack_seq,
+                    )
+                    self._pending_rfid_acks[ack_seq] = print_data
                 # Check for developer mode probe response
                 if (
                     cmd == "ams_filament_setting"
@@ -8083,8 +8105,18 @@ class BambuMQTTClient:
         logger.info("[%s] AMS control: %s", self.serial_number, action)
         return True
 
-    def ams_refresh_tray(self, ams_id: int, tray_id: int) -> tuple[bool, str]:
+    async def ams_refresh_tray(self, ams_id: int, tray_id: int) -> tuple[bool, str]:
         """Trigger RFID re-read for a specific AMS tray.
+
+        Sends ``ams_get_rfid`` and waits for the printer's answer. Firmware
+        that refuses it (#3206: X1Plus on base 01.08.02.00 answers ``FAIL`` /
+        ``ERROR STATE``) gets the legacy ``M620 R<global tray>`` gcode instead,
+        which is what Bambu Studio sends to printers without the new protocol.
+        The fallback only follows an explicit refusal, so firmware that takes
+        ``ams_get_rfid`` never sees it.
+
+        Success means the printer accepted the request, not that the tag was
+        read: the slot updating in the next push is the only proof of that.
 
         Args:
             ams_id: AMS unit ID (0-3, or 128 for H2D external tray)
@@ -8118,15 +8150,71 @@ class BambuMQTTClient:
         if (_a2l := a2l_lite_wire_ids(ams_id, tray_id)) is not None:
             wire_ams_id, wire_slot_id, _ = _a2l
 
-        # Use ams_get_rfid command to trigger RFID re-read
-        # This command is used by Bambu Studio to re-read the RFID tag
-        command = {
-            "print": {"command": "ams_get_rfid", "ams_id": wire_ams_id, "slot_id": wire_slot_id, "sequence_id": "0"}
-        }
-        self._client.publish(self.topic_publish, json.dumps(command), qos=1)
         logger.info("[%s] Triggering RFID re-read: AMS %s, slot %s", self.serial_number, ams_id, tray_id)
+        refused = await self._send_rfid_command(
+            {"command": "ams_get_rfid", "ams_id": wire_ams_id, "slot_id": wire_slot_id}
+        )
+        if refused is None:
+            return True, f"Refreshing AMS {ams_id} tray {tray_id}"
 
-        return True, f"Refreshing AMS {ams_id} tray {tray_id}"
+        # M620 R only for what Bambu Studio sends it to: a model older than the
+        # newer protocol, on one of the four regular AMS units (the only ones
+        # with a legacy global tray index). Never during a job either: a
+        # gcode_line would be executed inside the running print.
+        from backend.app.utils.printer_models import uses_legacy_rfid_refresh
+
+        if (
+            not 0 <= wire_ams_id <= 3
+            or not uses_legacy_rfid_refresh(self.model)
+            or self.state.state in _ACTIVE_PRINT_STATES
+        ):
+            return False, f"Printer refused the RFID refresh: {refused}"
+
+        logger.info(
+            "[%s] ams_get_rfid refused (%s), falling back to M620 R%s",
+            self.serial_number,
+            refused,
+            wire_ams_id * 4 + wire_slot_id,
+        )
+        legacy_refused = await self._send_rfid_command(
+            {"command": "gcode_line", "param": f"M620 R{wire_ams_id * 4 + wire_slot_id}\n"}
+        )
+        if legacy_refused is None:
+            return True, f"Refreshing AMS {ams_id} tray {tray_id} (legacy command)"
+        return False, f"Printer refused the RFID refresh: {legacy_refused}"
+
+    # The answer to ams_get_rfid was measured at 11ms in #3206's capture.
+    _rfid_ack_timeout: float = 3.0
+
+    async def _send_rfid_command(self, print_command: dict) -> str | None:
+        """Publish one RFID refresh command and wait for the printer's answer.
+
+        Returns the printer's reason when it answered ``FAIL``, else None.
+        No answer within ``_rfid_ack_timeout`` counts as accepted, because
+        silence is not evidence of refusal and older firmware may not answer
+        at all.
+        """
+        timeout = self._rfid_ack_timeout
+        self._sequence_id += 1
+        seq_id = str(self._sequence_id)
+        command = {"print": {**print_command, "sequence_id": seq_id}}
+        self._pending_rfid_acks[seq_id] = None
+        try:
+            self._client.publish(self.topic_publish, json.dumps(command), qos=1)
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                ack = self._pending_rfid_acks.get(seq_id)
+                if ack is not None:
+                    if str(ack.get("result", "")).lower() == "fail":
+                        return str(ack.get("reason", "") or "") or "printer reported failure"
+                    return None
+                await asyncio.sleep(0.05)
+        finally:
+            self._pending_rfid_acks.pop(seq_id, None)
+        logger.info(
+            "[%s] No answer to %s seq=%s within %.1fs", self.serial_number, print_command["command"], seq_id, timeout
+        )
+        return None
 
     def ams_set_filament_setting(
         self,

@@ -578,6 +578,10 @@ GUARDED_BODY_URLS = {
     ("HATestConnectionRequest", "url"),  # homeassistant._validate_url
     ("RESTTestConnectionRequest", "url"),  # rest_smart_plug._validate_url
     ("TestConnectionRequest", "url"),  # obico_detection.test_connection
+    # Manyfold (#1471): manyfold.config.normalize_url applies the LAN tier on
+    # save and test, and ManyfoldService._send re-checks every redirect hop.
+    ("ManyfoldConfigUpdate", "url"),
+    ("ManyfoldTestRequest", "url"),
     ("OIDCProviderCreate", "issuer_url"),  # public tier, via schemas.auth
     ("OIDCProviderCreate", "icon_url"),
     ("OIDCProviderUpdate", "issuer_url"),

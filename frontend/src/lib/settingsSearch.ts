@@ -15,6 +15,7 @@ export type SettingsSearchTab =
   | 'notifications'
   | 'queue'
   | 'filament'
+  | 'camera'
   | 'network'
   | 'apikeys'
   | 'virtual-printer'
@@ -23,7 +24,7 @@ export type SettingsSearchTab =
   | 'files'
   | 'failure-detection';
 
-export type UsersSubTab = 'users' | 'email' | 'ldap' | 'oidc' | 'twofa' | 'security';
+export type UsersSubTab = 'users' | 'printer-access' | 'email' | 'ldap' | 'oidc' | 'twofa' | 'security';
 
 // The Files tab (#3161): the library and the backups, one place for what
 // happens to the files.

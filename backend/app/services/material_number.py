@@ -25,8 +25,11 @@ async def find_material_number_for_product(
 
     Product identity is the (material, subtype, brand, color_name) string
     tuple — the same key FilamentSkuSettings groups by. The most recently
-    updated match wins, so a corrected number beats stale ones. Archived
-    spools count: a product being out of stock doesn't change its number.
+    updated match wins, newest row on a tie. `updated_at` moves on every
+    write, usage included, so this is "most recently touched", not "most
+    recently numbered": when a product's spools disagree, bulk-edit them to
+    one number rather than relying on which one wins. Archived spools count:
+    a product being out of stock doesn't change its number.
     """
     if not material:
         return None
@@ -45,7 +48,7 @@ async def find_material_number_for_product(
             _same(Spool.brand, brand),
             _same(Spool.color_name, color_name),
         )
-        .order_by(Spool.updated_at.desc())
+        .order_by(Spool.updated_at.desc(), Spool.id.desc())
         .limit(1)
     )
     return result.scalars().first()

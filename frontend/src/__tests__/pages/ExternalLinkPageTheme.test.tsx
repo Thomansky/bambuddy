@@ -47,6 +47,7 @@ const THEME = {
   style: expect.any(String),
   background: expect.any(String),
   accent: expect.any(String),
+  canNavigate: true,
 };
 
 describe('ExternalLinkPage theme', () => {

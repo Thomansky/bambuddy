@@ -24,6 +24,7 @@ from backend.app.core.permissions import Permission
 from backend.app.models.settings import Settings
 from backend.app.models.user import User
 from backend.app.schemas.settings import AppSettings, AppSettingsUpdate
+from backend.app.services import camera_light
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +187,8 @@ _BOOL_SETTING_KEYS = frozenset(
         "check_updates",
         "check_printer_firmware",
         "include_beta_updates",
+        "announcements_enabled",
+        "announcements_all_users",
         "virtual_printer_enabled",
         "ftp_retry_enabled",
         "mqtt_enabled",
@@ -229,6 +232,7 @@ _FLOAT_SETTING_KEYS = frozenset(
     {
         "default_filament_cost",
         "energy_cost_per_kwh",
+        "camera_light_delay",
         "ams_temp_good",
         "ams_temp_fair",
         "library_disk_warning_gb",
@@ -456,6 +460,9 @@ async def update_settings(
     # Expire all objects to ensure fresh reads after commit
     db.expire_all()
 
+    if {"camera_light_mode", "camera_light_delay"} & set(update_data.keys()):
+        camera_light.invalidate_settings()
+
     # Reconfigure MQTT relay if any MQTT settings changed
     if mqtt_updated:
         try:
@@ -535,6 +542,7 @@ async def reset_settings(
         await db.delete(setting)
 
     await db.commit()
+    camera_light.invalidate_settings()
 
     return DEFAULT_SETTINGS
 
@@ -892,6 +900,7 @@ async def create_backup_zip(output_path: Path | None = None) -> tuple[Path, str]
             ("plate_calibration", app_settings.plate_calibration_dir),
             ("icons", base_dir / "icons"),
             ("projects", base_dir / "projects"),
+            ("overlay-branding", base_dir / "overlay-branding"),
         ]
 
         for name, src_dir in dirs_to_backup:
@@ -1580,6 +1589,7 @@ async def restore_backup(
                 ("plate_calibration", app_settings.plate_calibration_dir),
                 ("icons", base_dir / "icons"),
                 ("projects", base_dir / "projects"),
+                ("overlay-branding", base_dir / "overlay-branding"),
             ]
 
             skipped_dirs = []

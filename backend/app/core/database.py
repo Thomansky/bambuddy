@@ -37,20 +37,50 @@ def _resolve_pool_kwargs() -> dict:
     """Build the pool kwargs for ``create_async_engine`` (issue #2572).
 
     Dialect-aware defaults, each overridable via env (``DB_POOL_SIZE`` etc.):
-      - PostgreSQL: pool_size 20 + max_overflow 80, ``pool_pre_ping`` (recover
+      - PostgreSQL: pool_size 20 + max_overflow 60, ``pool_pre_ping`` (recover
         server-dropped connections instead of erroring the request) and
         ``pool_recycle`` 1800s. The old hard-coded 10 + 20 exhausted on large
-        farms while printer callbacks held connections.
-      - SQLite: pool_size 20 + max_overflow 200 (unchanged); no pre-ping /
-        recycle — the connection is a local file, not a server socket.
+        farms while printer callbacks held connections. The 80-connection
+        ceiling fits a stock server (max_connections 100, 3 reserved for
+        superusers); 20 + 80 did not, and tripped the startup pool check.
+      - SQLite: pool_size 10 + max_overflow 90 (lowered from 20 + 200, #2883 —
+        see the comment below); no pre-ping / recycle — the connection is a
+        local file, not a server socket.
     """
     if is_sqlite():
-        pool_size = settings.db_pool_size if settings.db_pool_size is not None else 20
-        max_overflow = settings.db_max_overflow if settings.db_max_overflow is not None else 200
+        # SQLite + WAL parks one main-db file descriptor per *closed* overflow
+        # connection: as long as any pooled connection stays open (it always
+        # does), SQLite's unix VFS moves the fd of every closing connection to
+        # its per-inode "unused fd" list instead of close(2)-ing it, to avoid
+        # the POSIX close-drops-advisory-locks trap. Those fds are reused by
+        # later connections but only released when the LAST connection to the
+        # file closes, which in a running server is effectively never. So the
+        # pool's database fds stay at the PEAK concurrency it ever reached.
+        #
+        # An open connection holds two fds (db and -wal; the -shm fd is shared
+        # per file), a parked one holds one. At the old 20 + 200 that is up to
+        # ~441 fds with every connection open and ~221 parked once they close.
+        # That alone does not reach Docker's default 1024 soft nofile; in
+        # #2883 other descriptors made up the rest. But it is the largest
+        # single share, and once the process hits EMFILE every new connection
+        # fails with "disk I/O error" (the WAL/shm open in the connect-time
+        # PRAGMAs), which in #2883 ran for 44h and ended in "database disk
+        # image is malformed". 10 + 90 halves the pool's share (~201 / ~101).
+        # The startup RLIMIT_NOFILE raise in main.py is the other half of the
+        # fix: it lifts the 1024 ceiling itself on every install.
+        #
+        # 20 + 200 came in with b8fa2df36 (March 2026) for QueuePool exhaustion
+        # on a 100+ printer SQLite farm, before PostgreSQL was supported. Since
+        # then #2572 made an authenticated request use one checkout instead of
+        # several, which is why 10 + 90 should cover a farm that size. A large
+        # SQLite farm that still exhausts the pool can raise DB_MAX_OVERFLOW,
+        # but is better served by moving to PostgreSQL.
+        pool_size = settings.db_pool_size if settings.db_pool_size is not None else 10
+        max_overflow = settings.db_max_overflow if settings.db_max_overflow is not None else 90
         kwargs = {"pool_size": pool_size, "max_overflow": max_overflow}
     else:
         pool_size = settings.db_pool_size if settings.db_pool_size is not None else 20
-        max_overflow = settings.db_max_overflow if settings.db_max_overflow is not None else 80
+        max_overflow = settings.db_max_overflow if settings.db_max_overflow is not None else 60
         kwargs = {
             "pool_size": pool_size,
             "max_overflow": max_overflow,
@@ -288,6 +318,7 @@ async def init_db():
         active_print_spoolman,
         ams_history,
         ams_label,
+        announcement,
         api_key,
         archive,
         auth_ephemeral,
@@ -320,6 +351,7 @@ async def init_db():
         print_queue,
         printer,
         printer_ha_sensor,
+        printer_location,
         printer_sensor_history,
         project,
         project_bom,
@@ -1855,6 +1887,17 @@ async def run_migrations(conn):
 
     # Migration: Add is_favorite column to print_archives
     await _safe_execute(conn, "ALTER TABLE print_archives ADD COLUMN is_favorite BOOLEAN DEFAULT 0")
+
+    # Migration: Add OIDC group sync columns (#3107). group_claim defaults to
+    # 'groups'; group_mapping defaults to '{}' (empty JSON object = sync off,
+    # the pre-#3107 behaviour). NOT NULL DEFAULT explicitly so an upgraded
+    # database matches what create_all builds on a fresh install (the model
+    # columns are non-nullable with server defaults) — a bare DEFAULT would
+    # leave the column nullable on the ALTER path and the two installs would
+    # disagree on the schema. Existing rows backfill the default on both
+    # SQLite and PostgreSQL.
+    await _safe_execute(conn, "ALTER TABLE oidc_providers ADD COLUMN group_claim VARCHAR(64) NOT NULL DEFAULT 'groups'")
+    await _safe_execute(conn, "ALTER TABLE oidc_providers ADD COLUMN group_mapping JSON NOT NULL DEFAULT '{}'")
 
     # Migration: Add wallet_charge_skipped column to print_archives so deleted print charges stay deleted
     if is_sqlite():
@@ -5418,6 +5461,12 @@ async def run_migrations(conn):
     # SQLite and Postgres.
     await _safe_execute(conn, "ALTER TABLE spool ADD COLUMN material_number VARCHAR(64)")
 
+    # Migration: the stock alert templates name the colour and subtype (#2955).
+    # The forecast groups by colour, so two colours of one product would
+    # otherwise send the same message. A plain UPDATE guarded on the old text, so
+    # a template an admin has edited is left alone.
+    await _migrate_stock_alert_template_sku_variables(conn)
+
     # Migration: supplier master list + spool assignments (#2988).
     # create_all() covers fresh installs; this covers upgrades.
     await _migrate_create_supplier_tables(conn)
@@ -5530,6 +5579,9 @@ async def run_migrations(conn):
     # Spoolman and the location sync then imported as storage locations.
     await _migrate_drop_ams_slot_locations(conn)
 
+    # Data migration: printer locations as the locations API stores them (#2962).
+    await _migrate_normalize_printer_locations(conn)
+
     # Migration: link a batch to the external record that asked for it (a shop
     # order an integration turned into prints). The unique index is what makes
     # a retried create safe; both columns are new, so no row can violate it.
@@ -5582,6 +5634,54 @@ async def run_migrations(conn):
     # the reason in the user's language. Nullable: rows that failed before this
     # keep showing their English error_message.
     await _safe_execute(conn, "ALTER TABLE scheduled_dryings ADD COLUMN error_code VARCHAR(32)")
+
+    # Migration: per-provider photo attachment opt-out. Defaults TRUE so
+    # existing providers keep attaching snapshots exactly as before. The
+    # backfill covers a table create_all() already gave the column (the ALTER
+    # is then swallowed and existing rows keep NULL, which reads as off).
+    await _safe_execute(conn, "ALTER TABLE notification_providers ADD COLUMN attach_photo BOOLEAN DEFAULT TRUE")
+    async with conn.begin_nested():
+        await conn.execute(
+            text("UPDATE notification_providers SET attach_photo = :on WHERE attach_photo IS NULL"), {"on": True}
+        )
+
+    # Migration: the filament id a slot preset was written with, so the slot
+    # card can tell when something else re-configured the slot (#3216).
+    # Nullable: existing rows have none and keep being shown as before.
+    await _safe_execute(conn, "ALTER TABLE slot_preset_mappings ADD COLUMN tray_info_idx VARCHAR(32)")
+
+    # Migration: printers picked for the chamber light while the camera is in
+    # use (#1655), for camera_light_mode "selected". Off by default, so no
+    # printer's light changes on upgrade. The backfill covers a table
+    # create_all() already gave the column (the ALTER is then swallowed and
+    # existing rows keep NULL).
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN camera_light_auto BOOLEAN DEFAULT FALSE")
+    async with conn.begin_nested():
+        await conn.execute(
+            text("UPDATE printers SET camera_light_auto = :off WHERE camera_light_auto IS NULL"), {"off": False}
+        )
+
+    # Migration: printer-scoped groups (#1727). Defaults off, so no existing
+    # group narrows anyone's printers on upgrade; the group_printers table
+    # itself comes from create_all(). The backfill covers a table create_all()
+    # already gave the column, where the ALTER is swallowed as a duplicate.
+    await _safe_execute(conn, "ALTER TABLE groups ADD COLUMN restrict_printers BOOLEAN DEFAULT FALSE")
+    async with conn.begin_nested():
+        await conn.execute(
+            text("UPDATE groups SET restrict_printers = :off WHERE restrict_printers IS NULL"), {"off": False}
+        )
+
+    # Migration: camera-stream and websocket tokens record who minted them, so
+    # they carry that caller's printer scope (#1727). Camera tokens minted
+    # before this have no principal at all (username NULL; every new one sets
+    # it, "" for API keys and auth-off), and would now resolve to no printers.
+    # They live 60 minutes; dropping them sends the browser to mint a new one.
+    await _safe_execute(conn, "ALTER TABLE auth_ephemeral_tokens ADD COLUMN api_key_id INTEGER")
+    async with conn.begin_nested():
+        await conn.execute(
+            text("DELETE FROM auth_ephemeral_tokens WHERE token_type = :t AND username IS NULL"),
+            {"t": "camera_stream"},
+        )
 
 
 async def _migrate_confirm_prompt_body_template(conn) -> None:
@@ -5825,6 +5925,35 @@ async def _migrate_rename_ha_sensor_alert_template(conn) -> None:
     )
 
 
+_STOCK_ALERT_TEMPLATE_BODIES = {
+    "stock_reorder_alert": (
+        "{material} ({brand}) has reached the reorder point.\nStock: {stock_g}g | Rate: {rate_g_day}g/day | Days left: {days_left}d\nReorder now to avoid a stock break.",
+        "{material} {subtype} {color} ({brand}) has reached the reorder point.\nStock: {stock_g}g | Rate: {rate_g_day}g/day | Days left: {days_left}d\nReorder now to avoid a stock break.",
+    ),
+    "stock_break_alert": (
+        "{material} ({brand}) will run out before replenishment arrives.\nStock: {stock_g}g | Rate: {rate_g_day}g/day | Lead time: {lead_time_days}d\nOnly {days_left}d of stock remaining — order immediately.",
+        "{material} {subtype} {color} ({brand}) will run out before replenishment arrives.\nStock: {stock_g}g | Rate: {rate_g_day}g/day | Lead time: {lead_time_days}d\nOnly {days_left}d of stock remaining — order immediately.",
+    ),
+}
+
+
+async def _migrate_stock_alert_template_sku_variables(conn) -> None:
+    """Give the stock alert templates {subtype} and {color} (#2955).
+
+    Updates a body only while it is still the shipped default, so an admin's own
+    wording is kept.
+    """
+    from sqlalchemy import text
+
+    for event_type, (old, new) in _STOCK_ALERT_TEMPLATE_BODIES.items():
+        await conn.execute(
+            text(
+                "UPDATE notification_templates SET body_template = :new WHERE event_type = :et AND body_template = :old"
+            ),
+            {"new": new, "et": event_type, "old": old},
+        )
+
+
 async def _migrate_location_ha_sensor_unique_binding(conn) -> None:
     """Unique index on location_ha_sensors (location_id, entity_id) (#2824).
 
@@ -5851,6 +5980,31 @@ async def _migrate_location_ha_sensor_unique_binding(conn) -> None:
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_location_ha_sensors_location_entity "
         "ON location_ha_sensors (location_id, entity_id)",
     )
+
+
+async def _migrate_normalize_printer_locations(conn) -> None:
+    """Trim printer locations and store a blank one as NULL (#2962).
+
+    Nothing trimmed ``printers.location`` before, so "Workshop " and "Workshop"
+    could both be stored, and "" sat next to NULL for "no location". The
+    Printer Locations API trims every name it is given, so an untrimmed stored
+    value could never be matched to rename or delete it. Queue items'
+    ``target_location`` is trimmed the same way, so model-based jobs keep
+    matching their printers exactly. Idempotent: only rows that change are
+    touched.
+    """
+    from sqlalchemy import text
+
+    async with conn.begin_nested():
+        for table, column in (("printers", "location"), ("print_queue", "target_location")):
+            await conn.execute(
+                text(f"UPDATE {table} SET {column} = NULL WHERE {column} IS NOT NULL AND TRIM({column}) = ''")  # noqa: S608  # nosec B608 — fixed identifiers
+            )
+            await conn.execute(
+                text(
+                    f"UPDATE {table} SET {column} = TRIM({column}) WHERE {column} IS NOT NULL AND {column} <> TRIM({column})"
+                )  # noqa: S608  # nosec B608 — fixed identifiers
+            )
 
 
 async def _migrate_drop_ams_slot_locations(conn) -> None:
@@ -6211,6 +6365,13 @@ async def seed_notification_templates():
         await session.commit()
 
 
+# Groups holding any of these before #1620 could queue, start or run jobs that
+# went ahead on their own, so the upgrade lets them keep doing that.
+_QUEUE_REVIEW_BACKFILL_FROM = frozenset(
+    {"queue:create", "queue:update_own", "queue:update_all", "printers:control", "pipelines:run"}
+)
+
+
 async def seed_default_groups():
     """Seed default groups and migrate existing users to appropriate groups.
 
@@ -6227,6 +6388,7 @@ async def seed_default_groups():
 
     from backend.app.core.permissions import ALL_PERMISSIONS, DEFAULT_GROUPS
     from backend.app.models.group import Group
+    from backend.app.models.settings import Settings
     from backend.app.models.user import User
 
     logger = logging.getLogger(__name__)
@@ -6400,6 +6562,32 @@ async def seed_default_groups():
                 group.permissions = perms
         await session.commit()
 
+        # Manyfold (#1471) is a second model source beside MakerWorld, so a
+        # group gets the same reach there it already has on MakerWorld. Runs
+        # once: an admin who later takes a Manyfold permission away keeps it
+        # taken away.
+        manyfold_flag = "_backfill_1471_manyfold_permissions_done"
+        flag_row = (await session.execute(select(Settings).where(Settings.key == manyfold_flag))).scalar_one_or_none()
+        if flag_row is None:
+            result = await session.execute(select(Group))
+            for group in result.scalars().all():
+                if not group.permissions:
+                    continue
+                perms = list(group.permissions)
+                added = [
+                    manyfold_perm
+                    for makerworld_perm, manyfold_perm in (
+                        ("makerworld:view", "manyfold:view"),
+                        ("makerworld:import", "manyfold:import"),
+                    )
+                    if makerworld_perm in perms and manyfold_perm not in perms
+                ]
+                if added:
+                    group.permissions = perms + added
+                    logger.info("Added %s to group '%s' (matches its MakerWorld access)", ", ".join(added), group.name)
+            session.add(Settings(key=manyfold_flag, value="true"))
+            await session.commit()
+
         # Backfill: sync the Administrators system group to ALL_PERMISSIONS.
         # Administrators' contract is full access to every feature — fresh
         # installs get that via DEFAULT_GROUPS["Administrators"]["permissions"]
@@ -6507,6 +6695,26 @@ async def seed_default_groups():
             if changed:
                 group.permissions = perms
         await session.commit()
+
+        # queue:start_unreviewed (#1620): jobs of users without it wait for
+        # someone to start them. Granted once to every group that could queue,
+        # start or run jobs before it existed, so nothing changes on upgrade. Once
+        # only, unlike the backfills above: an admin removing it from a group is
+        # the whole point, and a per-boot backfill would hand it straight back.
+        from backend.app.models.settings import Settings
+
+        review_flag = "_backfill_1620_queue_start_unreviewed_done"
+        if (await session.execute(select(Settings).where(Settings.key == review_flag))).scalar_one_or_none() is None:
+            result = await session.execute(select(Group))
+            for group in result.scalars().all():
+                perms = list(group.permissions or [])
+                if "queue:start_unreviewed" in perms:
+                    continue
+                if _QUEUE_REVIEW_BACKFILL_FROM.intersection(perms):
+                    group.permissions = [*perms, "queue:start_unreviewed"]
+                    logger.info("Added queue:start_unreviewed to group '%s' (#1620)", group.name)
+            session.add(Settings(key=review_flag, value="true"))
+            await session.commit()
 
         # Migrate existing users to groups if they're not already in any group
         if groups_created:

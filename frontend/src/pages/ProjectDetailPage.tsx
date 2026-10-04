@@ -51,6 +51,7 @@ import { ProjectModal } from './ProjectsPage';
 import { getCurrencySymbol } from '../utils/currency';
 import { VatBadge } from '../components/VatBadge';
 import { isSlicedLibraryFile } from '../utils/libraryFiles';
+import { NumberInput } from '../components/NumberInput';
 
 function formatFilament(grams: number): string {
   if (grams >= 1000) {
@@ -1224,12 +1225,12 @@ export function ProjectDetailPage() {
                   autoFocus
                 />
                 <div className="flex gap-2">
-                  <input
-                    type="number"
+                  <NumberInput
                     value={newBomQty}
-                    onChange={(e) => setNewBomQty(parseInt(e.target.value) || 1)}
+                    onChange={setNewBomQty}
+                    fallback={1}
                     className="w-20 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-bambu-green"
-                    min="1"
+                    min={1}
                     placeholder={t('projectDetail.bom.qty')}
                   />
                   <input
@@ -1299,12 +1300,12 @@ export function ProjectDetailPage() {
                           autoFocus
                         />
                         <div className="flex gap-2">
-                          <input
-                            type="number"
+                          <NumberInput
                             value={editBomQty}
-                            onChange={(e) => setEditBomQty(parseInt(e.target.value) || 1)}
+                            onChange={setEditBomQty}
+                            fallback={1}
                             className="w-20 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-bambu-green"
-                            min="1"
+                            min={1}
                             placeholder={t('projectDetail.bom.qty')}
                           />
                           <input

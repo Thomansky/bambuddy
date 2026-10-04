@@ -182,6 +182,12 @@ class AppSettings(BaseModel):
     check_updates: bool = Field(default=True, description="Automatically check for updates on startup")
     check_printer_firmware: bool = Field(default=True, description="Check for printer firmware updates from Bambu Lab")
     include_beta_updates: bool = Field(default=False, description="Include beta/prerelease versions in update checks")
+    announcements_enabled: bool = Field(
+        default=True, description="Fetch announcements from the Bambuddy maintainers (a signed file on GitHub)"
+    )
+    announcements_all_users: bool = Field(
+        default=False, description="Show announcements to every signed-in user, not only administrators"
+    )
 
     # Language
     language: str = Field(default="en", description="UI language (en, de, fr, ja, it, pt-BR)")
@@ -429,6 +435,18 @@ class AppSettings(BaseModel):
             "factor. In 'readwrite' a client's writes are held to the same library "
             "permissions the REST routes enforce, and a delete goes to the trash"
         ),
+    )
+
+    # Chamber light while the camera is in use (#1655): "off", "all" printers,
+    # or the "selected" printers (Printer.camera_light_auto). A stored value
+    # outside these reads as off in the service, so it is a plain str here.
+    camera_light_mode: str = Field(
+        default="off",
+        description="Turn the chamber light on while the camera is in use: 'off', 'all' or 'selected' printers",
+    )
+    camera_light_delay: float = Field(
+        default=2.0,
+        description="Seconds an automatic snapshot waits after the chamber light was turned on",
     )
 
     # Camera view settings
@@ -858,6 +876,23 @@ class AppSettings(BaseModel):
         description="JSON object with 'order' key containing array of sidebar item IDs (empty = no default)",
     )
 
+    # The settings page sends every field back on each save, and the update
+    # schema accepts only these values. A stored value outside them would make
+    # every later save fail, so it is read back as what the service treats it as.
+    @field_validator("camera_light_mode", mode="before")
+    @classmethod
+    def _known_camera_light_mode(cls, value):
+        return value if value in ("off", "all", "selected") else "off"
+
+    @field_validator("camera_light_delay", mode="before")
+    @classmethod
+    def _camera_light_delay_in_range(cls, value):
+        try:
+            seconds = float(value)
+        except (TypeError, ValueError):
+            return 2.0
+        return min(max(0.0, seconds), 5.0)
+
 
 class AppSettingsUpdate(BaseModel):
     """Schema for updating settings (all fields optional)."""
@@ -881,6 +916,8 @@ class AppSettingsUpdate(BaseModel):
     check_updates: bool | None = None
     check_printer_firmware: bool | None = None
     include_beta_updates: bool | None = None
+    announcements_enabled: bool | None = None
+    announcements_all_users: bool | None = None
     local_login_enabled: bool | None = None
     language: str | None = None
     notification_language: str | None = None
@@ -939,6 +976,10 @@ class AppSettingsUpdate(BaseModel):
     library_scan_on_open: bool | None = None
     webdav_mode: Literal["off", "read", "readwrite"] | None = None
     camera_view_mode: str | None = None
+    camera_light_mode: Literal["off", "all", "selected"] | None = None
+    # Capped by camera_light.MAX_DELAY_SECONDS: the finish photo's budget
+    # has no more to spare.
+    camera_light_delay: float | None = Field(default=None, ge=0, le=5)
     preferred_slicer: str | None = None
     open_in_slicer: str | None = None
     slice_engine: str | None = None

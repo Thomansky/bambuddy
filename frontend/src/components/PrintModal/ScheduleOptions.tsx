@@ -13,6 +13,7 @@ import {
   type DateFormat,
   type TimeFormat,
 } from '../../utils/date';
+import { NumberInput } from '../NumberInput';
 
 /**
  * Schedule options component for queue items.
@@ -28,6 +29,7 @@ export function ScheduleOptionsPanel({
   showStagger = false,
   printerCount = 0,
   hasGcodeSnippets = false,
+  needsReview = false,
 }: ScheduleOptionsProps) {
   const { t } = useTranslation();
   const [dateValue, setDateValue] = useState('');
@@ -226,8 +228,16 @@ export function ScheduleOptionsPanel({
         </div>
       )}
 
+      {/* Their jobs always wait, so the checkbox would only mislead (#1620) */}
+      {needsReview && (
+        <p className="flex items-start gap-1.5 text-sm text-bambu-gray">
+          <Hand className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+          {t('printModal.awaitingReviewNote')}
+        </p>
+      )}
+
       {/* Manual start */}
-      {options.scheduleType === 'queue' && (
+      {!needsReview && options.scheduleType === 'queue' && (
         <div className="flex items-center gap-2">
           <input
             type="checkbox"
@@ -312,23 +322,23 @@ export function ScheduleOptionsPanel({
               <div className="flex gap-3">
                 <div className="flex-1">
                   <label className="block text-xs text-bambu-gray mb-1">{t('printModal.staggerGroupSize', 'Group size')}</label>
-                  <input
-                    type="number"
+                  <NumberInput
                     min={1}
                     max={printerCount}
                     value={options.staggerGroupSize}
-                    onChange={(e) => onChange({ ...options, staggerGroupSize: Math.max(1, parseInt(e.target.value) || 1) })}
+                    onChange={(v) => onChange({ ...options, staggerGroupSize: v })}
+                    fallback={1}
                     className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:outline-none focus:border-bambu-green"
                   />
                 </div>
                 <div className="flex-1">
                   <label className="block text-xs text-bambu-gray mb-1">{t('printModal.staggerInterval', 'Interval (min)')}</label>
-                  <input
-                    type="number"
+                  <NumberInput
                     min={1}
                     max={60}
                     value={options.staggerIntervalMinutes}
-                    onChange={(e) => onChange({ ...options, staggerIntervalMinutes: Math.max(1, parseInt(e.target.value) || 1) })}
+                    onChange={(v) => onChange({ ...options, staggerIntervalMinutes: v })}
+                    fallback={1}
                     className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:outline-none focus:border-bambu-green"
                   />
                 </div>

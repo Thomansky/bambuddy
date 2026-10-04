@@ -1,17 +1,28 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Layers, Clock, Timer, Printer, Flame, Square, Box } from 'lucide-react';
+import { useOverlayLogo } from '../hooks/useOverlayLogo';
+import { overlayGradient, overlayProgressTextStyle } from '../utils/overlayBranding';
+import { OverlayFrame } from '../components/OverlayFrame';
+import { OVERLAY_DIMENSIONS, type OverlayLayout } from '../utils/overlayLayout';
+import './StreamOverlayPage.css';
+import { UpdatedStreamOverlay } from '../components/UpdatedStreamOverlay';
 import { api, ApiError, withStreamToken } from '../api/client';
 import { formatDuration, formatETA, type TimeFormat } from '../utils/date';
+import { mapModelCode } from '../utils/printerModel';
+import { useOverlayCameraRecovery } from '../hooks/useOverlayCameraRecovery';
 
 type TFunction = (key: string, options?: Record<string, unknown>) => string;
 
 type OverlaySize = 'small' | 'medium' | 'large';
 
 interface OverlayConfig {
+  layout: OverlayLayout | null;
   size: OverlaySize;
+  updatedArtwork: boolean;
+  backgroundTransparency: number;
   fps: number;
   showCamera: boolean;
   showProgress: boolean;
@@ -50,9 +61,18 @@ function parseConfig(params: URLSearchParams): OverlayConfig {
   const cameraParam = params.get('camera');
   const showCamera = cameraParam !== 'false' && cameraParam !== '0';
 
+  const transparencyParam = Number(params.get('backgroundTransparency'));
+  const backgroundTransparency = Number.isFinite(transparencyParam)
+    ? Math.min(100, Math.max(0, transparencyParam))
+    : 0;
+
+  const layout = params.get('layout');
   return {
+    layout: layout === 'portrait' || layout === 'landscape' ? layout : null,
+    backgroundTransparency,
     size: (params.get('size') as OverlaySize) || 'medium',
     fps,
+    updatedArtwork: params.get('artwork') === '2',
     showCamera,
     showProgress: show.includes('progress'),
     showLayers: show.includes('layers'),
@@ -108,7 +128,7 @@ function TempReading({ icon, label, current, target, sizes }: TempReadingProps) 
   return (
     <div className={`flex items-center ${sizes.gap} text-white/70`}>
       {icon}
-      <span className={sizes.text}>
+      <span className={`classic-overlay__text ${sizes.text}`}>
         <span className="mr-1">{label}</span>
         <span className="text-white">{Math.round(current)}°C</span>
         {heating && (
@@ -164,7 +184,6 @@ export function StreamOverlayPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const id = parseInt(printerId || '0', 10);
-  const [imageKey, setImageKey] = useState(Date.now());
 
   const config = useMemo(() => parseConfig(searchParams), [searchParams]);
   const sizes = getSizeClasses(config.size);
@@ -174,6 +193,20 @@ export function StreamOverlayPage() {
   // (status + camera stream) is authenticated by that token instead of a JWT.
   const token = searchParams.get('token');
   const kiosk = token != null && token !== '';
+  const logo = useOverlayLogo(searchParams.get('logo') === '1', token);
+  const progressBackground = overlayGradient(searchParams.get('progressFrom'), searchParams.get('progressTo'));
+  const progressTextStyle = overlayProgressTextStyle(progressBackground);
+  const customLogo = logo ? (
+    <img
+      src={logo}
+      alt={t('streamOverlay.branding.logo')}
+      className="mb-2 object-contain"
+      style={{
+        maxHeight: config.layout ? OVERLAY_DIMENSIONS[config.layout].height * 0.14 : '14vh',
+        maxWidth: config.layout ? OVERLAY_DIMENSIONS[config.layout].width * 0.2 : '20vw',
+      }}
+    />
+  ) : null;
 
   // Kiosk path: one token-authenticated call for name + live status + the one
   // setting the overlay reads. No JWT, so this is the only feed available.
@@ -217,9 +250,10 @@ export function StreamOverlayPage() {
   );
   const printerIdentity = [
     config.showPrinter ? printer?.name : null,
-    config.showModel ? printer?.model : null,
+    config.showModel ? mapModelCode(printer?.model ?? null) : null,
   ].filter(Boolean).join(' · ');
   const status = kiosk ? overlay : statusData;
+  const { imageKey, handleStreamError } = useOverlayCameraRecovery(id > 0 && config.showCamera && status != null);
   const timeFormat: TimeFormat = (kiosk ? overlay?.time_format : settings?.time_format) || 'system';
 
   // WebSocket for real-time updates (JWT-authenticated; skipped in kiosk mode,
@@ -288,13 +322,6 @@ export function StreamOverlayPage() {
     };
   }, [printer, t]);
 
-  // Refresh stream on error
-  const handleStreamError = () => {
-    setTimeout(() => {
-      setImageKey(Date.now());
-    }, 3000);
-  };
-
   if (!id) {
     return (
       <div className="min-h-screen bg-black flex items-center justify-center">
@@ -311,7 +338,7 @@ export function StreamOverlayPage() {
     );
   }
 
-  const isPrinting = status.state === 'RUNNING' || status.state === 'PAUSE';
+  const isPrinting = status.connected && (status.state === 'RUNNING' || status.state === 'PAUSE');
   const progress = status.progress || 0;
 
   // Temperature readings the URL asked for, in a fixed order, skipping any the
@@ -331,7 +358,7 @@ export function StreamOverlayPage() {
     if (nozzle != null) {
       tempReadings.push({
         key: 'nozzle',
-        icon: <Flame className={sizes.icon} />,
+        icon: <Flame className={`classic-overlay__icon ${sizes.icon}`} />,
         label: t('printers.heaterHistory.nozzle', 'Nozzle'),
         current: nozzle,
         target: readTemp(temps, 'nozzle_target'),
@@ -340,7 +367,7 @@ export function StreamOverlayPage() {
     if (nozzle2 != null) {
       tempReadings.push({
         key: 'nozzle_2',
-        icon: <Flame className={sizes.icon} />,
+        icon: <Flame className={`classic-overlay__icon ${sizes.icon}`} />,
         label: t('printers.heaterHistory.nozzle2', 'Nozzle 2'),
         current: nozzle2,
         target: readTemp(temps, 'nozzle_2_target'),
@@ -352,7 +379,7 @@ export function StreamOverlayPage() {
     if (bed != null) {
       tempReadings.push({
         key: 'bed',
-        icon: <Square className={sizes.icon} />,
+        icon: <Square className={`classic-overlay__icon ${sizes.icon}`} />,
         label: t('printers.heaterHistory.bed', 'Bed'),
         current: bed,
         target: readTemp(temps, 'bed_target'),
@@ -364,7 +391,7 @@ export function StreamOverlayPage() {
     if (chamber != null) {
       tempReadings.push({
         key: 'chamber',
-        icon: <Box className={sizes.icon} />,
+        icon: <Box className={`classic-overlay__icon ${sizes.icon}`} />,
         label: t('printers.heaterHistory.chamber', 'Chamber'),
         current: chamber,
         target: readTemp(temps, 'chamber_target'),
@@ -379,8 +406,36 @@ export function StreamOverlayPage() {
     ? `${camPath}&token=${encodeURIComponent(token)}`
     : withStreamToken(camPath);
 
-  return (
-    <div className="min-h-screen bg-black relative overflow-hidden">
+  if (config.updatedArtwork) {
+    const active = status.connected && isPrinting;
+    const remainingTime = status.remaining_time;
+    const hasRemaining = active && config.showEta && remainingTime != null && remainingTime > 0;
+    const artwork = <UpdatedStreamOverlay
+      layout={config.layout ?? undefined}
+      backgroundTransparency={config.backgroundTransparency}
+      customLogo={customLogo}
+      progressBackground={progressBackground}
+      size={config.size}
+      camera={config.showCamera ? { url: streamUrl, rotation: printer?.camera_rotation ?? 0, onError: handleStreamError } : null}
+      name={config.showPrinter ? printer?.name ?? null : null}
+      model={config.showModel ? mapModelCode(printer?.model ?? null) || null : null}
+      filename={config.showFilename && status.current_print ? formatPrintName(status.current_print.replace(/\.gcode\.3mf$|\.3mf$|\.gcode$/i, ''), status.gcode_file, t) : null}
+      status={config.showStatus ? (status.connected ? getStatusText(status, t) : t('streamOverlay.printerOffline')) : null}
+      state={status.connected ? status.state : null}
+      progress={active && config.showProgress ? Math.min(100, Math.max(0, Number.isFinite(progress) ? progress : 0)) : null}
+      layers={active && config.showLayers && status.layer_num != null && status.total_layers != null && status.total_layers > 0 ? `${status.layer_num} / ${status.total_layers}` : null}
+      remaining={hasRemaining ? formatDuration(remainingTime * 60) : null}
+      eta={hasRemaining ? formatETA(remainingTime, timeFormat, t) : null}
+      temperatures={status.connected ? tempReadings : []}
+    />;
+    return config.layout ? <OverlayFrame layout={config.layout}>{artwork}</OverlayFrame> : artwork;
+  }
+
+  const dimensions = config.layout ? OVERLAY_DIMENSIONS[config.layout] : null;
+  const rotation = printer?.camera_rotation ?? 0;
+  const sideways = Math.abs(rotation % 180) === 90;
+  const artwork = (
+    <div className="classic-overlay min-h-screen bg-black relative overflow-hidden" data-layout={config.layout ?? undefined} data-size={config.size}>
       {/* Camera feed - fullscreen background (optional) */}
       {config.showCamera && (
         <img
@@ -388,61 +443,68 @@ export function StreamOverlayPage() {
           src={streamUrl}
           alt={t('streamOverlay.cameraStream')}
           className="absolute inset-0 w-full h-full object-contain"
-          style={printer?.camera_rotation ? { transform: `rotate(${printer.camera_rotation}deg)` } : undefined}
+          style={dimensions ? {
+            left: '50%', top: '50%', maxWidth: 'none',
+            width: sideways ? dimensions.height : dimensions.width,
+            height: sideways ? dimensions.width : dimensions.height,
+            transform: `translate(-50%, -50%) rotate(${rotation}deg)`,
+          } : rotation ? { transform: `rotate(${rotation}deg)` } : undefined}
           onError={handleStreamError}
         />
       )}
 
-      {/* Bambuddy logo - top right */}
-      <a
-        href="https://github.com/maziggy/bambuddy"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="absolute top-4 right-4 z-10"
-      >
-        <img
-          src="/img/bambuddy_logo_dark_transparent.png"
-          alt="Bambuddy"
-          className={`${sizes.logoHeight} object-contain drop-shadow-lg hover:scale-105 transition-transform`}
-        />
-      </a>
+      {/* Channel branding above the Bambuddy mark. */}
+      <div className="absolute top-4 right-4 z-10 flex flex-col items-end">
+        {customLogo}
+        <a
+          href="https://github.com/maziggy/bambuddy"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <img
+            src="/img/bambuddy_logo_dark_transparent.png"
+            alt="Bambuddy"
+            className={`classic-overlay__logo ${sizes.logoHeight} object-contain drop-shadow-lg hover:scale-105 transition-transform`}
+          />
+        </a>
+      </div>
 
       {/* Status overlay - bottom */}
       <div className="absolute bottom-0 left-0 right-0 z-10 bg-gradient-to-t from-black/80 via-black/60 to-transparent">
-        <div className={`${sizes.container}`}>
+        <div className={`classic-overlay__panel ${sizes.container}`}>
           {/* Printer name and model can each be selected independently. */}
           {printerIdentity && (
             <div className={`flex items-center ${sizes.gap} mb-2`}>
-              <Printer className={`${sizes.icon} shrink-0 text-white/70`} />
-              <span className={`${sizes.text} min-w-0 truncate text-white font-medium`}>{printerIdentity}</span>
+              <Printer className={`classic-overlay__icon ${sizes.icon} shrink-0 text-white/70`} />
+              <span className={`classic-overlay__text ${sizes.text} min-w-0 truncate text-white font-medium`}>{printerIdentity}</span>
             </div>
           )}
 
           {/* Filename */}
           {config.showFilename && status.current_print && (
-            <div className={`${sizes.textLarge} text-white font-semibold mb-2 truncate drop-shadow-md`}>
+            <div className={`classic-overlay__filename ${sizes.textLarge} text-white font-semibold mb-2 truncate drop-shadow-md`}>
               {formatPrintName(status.current_print.replace(/\.gcode\.3mf$|\.3mf$|\.gcode$/i, ''), status.gcode_file, t)}
             </div>
           )}
 
           {/* Status text */}
           {config.showStatus && (
-            <div className={`${sizes.text} text-white/70 mb-2`}>
-              {getStatusText(status, t)}
+            <div className={`classic-overlay__text ${sizes.text} text-white/70 mb-2`}>
+              {!status.connected ? t('streamOverlay.printerOffline') : getStatusText(status, t)}
             </div>
           )}
 
           {/* Progress bar */}
           {config.showProgress && isPrinting && (
             <div className="mb-3">
-              <div className={`flex items-center justify-between mb-1 ${sizes.text}`}>
-                <span className="text-white/70">{t('streamOverlay.progress')}</span>
-                <span className="text-white font-bold">{Math.round(progress)}%</span>
+              <div className={`flex items-center justify-between mb-1 classic-overlay__text ${sizes.text}`}>
+                <span className="text-white/70" style={progressTextStyle}>{t('streamOverlay.progress')}</span>
+                <span className="text-white font-bold" style={progressTextStyle}>{Math.round(progress)}%</span>
               </div>
               <div className={`w-full bg-white/20 rounded-full ${sizes.progressHeight}`}>
                 <div
                   className={`bg-bambu-green ${sizes.progressHeight} rounded-full transition-all duration-500`}
-                  style={{ width: `${progress}%` }}
+                  style={{ width: `${progress}%`, background: progressBackground }}
                 />
               </div>
             </div>
@@ -454,8 +516,8 @@ export function StreamOverlayPage() {
               {/* Layers */}
               {config.showLayers && status.layer_num != null && status.total_layers != null && status.total_layers > 0 && (
                 <div className={`flex items-center ${sizes.gap} text-white/70`}>
-                  <Layers className={sizes.icon} />
-                  <span className={sizes.text}>
+                  <Layers className={`classic-overlay__icon ${sizes.icon}`} />
+                  <span className={`classic-overlay__text ${sizes.text}`}>
                     <span className="text-white">{status.layer_num}</span>
                     <span className="mx-1">/</span>
                     <span>{status.total_layers}</span>
@@ -467,27 +529,20 @@ export function StreamOverlayPage() {
               {config.showEta && status.remaining_time != null && status.remaining_time > 0 && (
                 <>
                   <div className={`flex items-center ${sizes.gap} text-white/70`}>
-                    <Timer className={sizes.icon} />
-                    <span className={`${sizes.text} text-white`}>
+                    <Timer className={`classic-overlay__icon ${sizes.icon}`} />
+                    <span className={`classic-overlay__text ${sizes.text} text-white`}>
                       {formatDuration(status.remaining_time * 60)}
                     </span>
                   </div>
 
                   <div className={`flex items-center ${sizes.gap} text-white/70`}>
-                    <Clock className={sizes.icon} />
-                    <span className={`${sizes.text} text-white`}>
+                    <Clock className={`classic-overlay__icon ${sizes.icon}`} />
+                    <span className={`classic-overlay__text ${sizes.text} text-white`}>
                       {t('streamOverlay.eta')} {formatETA(status.remaining_time, timeFormat, t)}
                     </span>
                   </div>
                 </>
               )}
-            </div>
-          )}
-
-          {/* Idle state */}
-          {!isPrinting && (
-            <div className={`${sizes.text} text-white/70 py-2`}>
-              {status.connected ? t('streamOverlay.printerIdle') : t('streamOverlay.printerOffline')}
             </div>
           )}
 
@@ -497,7 +552,7 @@ export function StreamOverlayPage() {
               so a single-nozzle machine shows one nozzle and a model without a
               chamber sensor shows no chamber row even if `chamber` is in
               ?show= (the backend omits the reading entirely for those). */}
-          {tempReadings.length > 0 && (
+          {tempReadings.length > 0 && status.connected && (
             <div className={`flex items-center ${sizes.gap} flex-wrap mt-2`}>
               {tempReadings.map((reading) => (
                 <TempReading
@@ -515,4 +570,5 @@ export function StreamOverlayPage() {
       </div>
     </div>
   );
+  return config.layout ? <OverlayFrame layout={config.layout}>{artwork}</OverlayFrame> : artwork;
 }

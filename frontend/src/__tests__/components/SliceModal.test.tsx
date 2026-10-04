@@ -35,6 +35,7 @@ vi.mock('../../api/client', () => ({
     createSlicerPipeline: vi.fn(),
     getSlicerPrinterModels: vi.fn(),
     getSlicerPresetValues: vi.fn(),
+    getSlicerLoadedSpools: vi.fn(),
   },
 }));
 
@@ -51,6 +52,7 @@ const mockApi = api as unknown as {
   createSlicerPipeline: ReturnType<typeof vi.fn>;
   getSlicerPrinterModels: ReturnType<typeof vi.fn>;
   getSlicerPresetValues: ReturnType<typeof vi.fn>;
+  getSlicerLoadedSpools: ReturnType<typeof vi.fn>;
 };
 
 function makeUnified(overrides: Partial<UnifiedPresetsResponse> = {}): UnifiedPresetsResponse {
@@ -145,6 +147,8 @@ describe('SliceModal', () => {
     });
     // Default: no saved pipelines. Tests opt in by overriding this.
     mockApi.listSlicerPipelines.mockResolvedValue({ pipelines: [] });
+    // Default: no printer online (#3172), so the dialog's filters do nothing.
+    mockApi.getSlicerLoadedSpools.mockResolvedValue({ printers: [] });
   });
 
   it('auto-selects the highest-priority tier per slot on first load', async () => {
@@ -762,6 +766,30 @@ describe('SliceModal', () => {
       // any present value as truthy, so a literal false would arrange every
       // slice — the flag has to travel by absence.
       expect(body).not.toHaveProperty('auto_arrange');
+    });
+  });
+
+  it('starts with auto-arrange ticked for a freshly combined file', async () => {
+    mockApi.sliceLibraryFile.mockResolvedValue({
+      job_id: 42,
+      status: 'pending',
+      status_url: '/api/v1/slice-jobs/42',
+    });
+
+    renderWithTracker({
+      source: { kind: 'libraryFile', id: 100, filename: 'Combined.3mf' },
+      onClose: vi.fn(),
+      defaultAutoArrange: true,
+    });
+
+    await waitFor(() => expect(screen.getByText('My Custom X1C')).toBeDefined());
+    expect(screen.getByRole('checkbox', { name: /Auto-arrange/ })).toBeChecked();
+
+    await userEvent.setup().click(screen.getByRole('button', { name: /^Slice$/ }));
+
+    await waitFor(() => {
+      const [, body] = vi.mocked(mockApi.sliceLibraryFile).mock.calls[0];
+      expect(body).toHaveProperty('auto_arrange', true);
     });
   });
 
@@ -2024,6 +2052,7 @@ describe('SliceModal — process settings in "slice as designed" mode', () => {
     mockApi.getSlicerPresets.mockResolvedValue(fullThreeTier);
     mockApi.getSlicerPresetValues.mockResolvedValue({ resolved: true, values: {}, reason: 'ok' });
     mockApi.listSlicerPipelines.mockResolvedValue({ pipelines: [] });
+    mockApi.getSlicerLoadedSpools.mockResolvedValue({ printers: [] });
     mockApi.getSlicerPrinterModels.mockResolvedValue({});
     mockApi.getLibraryFilePlates.mockResolvedValue({
       file_id: 100,
@@ -2108,6 +2137,7 @@ describe('SliceModal — process settings layout', () => {
     mockApi.getSlicerPresets.mockResolvedValue(fullThreeTier);
     mockApi.getSlicerPresetValues.mockResolvedValue({ resolved: true, values: {}, reason: 'ok' });
     mockApi.listSlicerPipelines.mockResolvedValue({ pipelines: [] });
+    mockApi.getSlicerLoadedSpools.mockResolvedValue({ printers: [] });
     mockApi.getLibraryFilePlates.mockResolvedValue({
       file_id: 100,
       filename: 'Cube.stl',
@@ -2183,6 +2213,7 @@ describe('SliceModal — presets filtered by the selected printer', () => {
     mockApi.getSlicerPresets.mockResolvedValue(presets);
     mockApi.getSlicerPrinterModels.mockResolvedValue({ 'Bambu Lab X1 Carbon': 'X1C' });
     mockApi.listSlicerPipelines.mockResolvedValue({ pipelines: [] });
+    mockApi.getSlicerLoadedSpools.mockResolvedValue({ printers: [] });
     mockApi.getLibraryFilePlates.mockResolvedValue({
       file_id: 100, filename: 'Cube.stl', plates: [], is_multi_plate: false,
     });
@@ -2456,6 +2487,7 @@ describe('SliceModal — material and printer filtering (#2982)', () => {
       'Bambu Lab X1 Carbon': 'X1C',
     });
     mockApi.listSlicerPipelines.mockResolvedValue({ pipelines: [] });
+    mockApi.getSlicerLoadedSpools.mockResolvedValue({ printers: [] });
     mockApi.getLibraryFilePlates.mockResolvedValue({ file_id: 100, filename: 'Plate.3mf', plates: [] });
     mockApi.sliceLibraryFile.mockResolvedValue({
       job_id: 42,

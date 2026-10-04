@@ -228,6 +228,10 @@ export function SpoolBuddyDashboard() {
 
   // Current Spool card state - persists until user closes or new tag detected
   const [displayedTagId, setDisplayedTagId] = useState<string | null>(null);
+  // Block-9 tray UUID of the displayed unknown tag. Kept with the card, like
+  // displayedTagId, so quick-add and link still save it after the spool is
+  // lifted off the reader (#984).
+  const [displayedTrayUuid, setDisplayedTrayUuid] = useState<string | null>(null);
   const [displayedWeight, setDisplayedWeight] = useState<number | null>(null);
   const [hiddenTagId, setHiddenTagId] = useState<string | null>(null);
   const [showLinkModal, setShowLinkModal] = useState(false);
@@ -238,6 +242,7 @@ export function SpoolBuddyDashboard() {
 
   // Track current tag from state
   const currentTagId = sbState.matchedSpool?.tag_uid ?? sbState.unknownTagUid ?? null;
+  const currentTrayUuid = sbState.unknownTagUid ? sbState.unknownTrayUuid : null;
   const currentWeight = sbState.weight;
   const weightStable = sbState.weightStable;
 
@@ -260,6 +265,12 @@ export function SpoolBuddyDashboard() {
     if (!displayedTagId) return null;
     const byTag = spools.find((s) => tagsEquivalent(s.tag_uid, displayedTagId));
     if (byTag) return byTag;
+    // A Bambu spool quick-added or linked in Spoolman mode carries only the tray
+    // UUID: Spoolman has one extra.tag and the UUID wins over the tag UID (#984).
+    if (displayedTrayUuid) {
+      const byTrayUuid = spools.find((s) => s.tray_uuid?.toUpperCase() === displayedTrayUuid);
+      if (byTrayUuid) return byTrayUuid;
+    }
     // When a Bambu tray UUID (32-char) is linked, Spoolman stores it in extra.tag and
     // _map_spoolman_spool routes it to tray_uuid, not tag_uid. tagsEquivalent only
     // compares tag_uid, so it misses this spool until the device re-scans and
@@ -268,7 +279,7 @@ export function SpoolBuddyDashboard() {
     // present in MatchedSpool; AssignToAmsModal is guarded by !justLinkedSpool below.
     if (justLinkedSpool) return justLinkedSpool as unknown as InventorySpool;
     return null;
-  }, [displayedTagId, sbState.matchedSpool, spools, justLinkedSpool]);
+  }, [displayedTagId, displayedTrayUuid, sbState.matchedSpool, spools, justLinkedSpool]);
 
   // Effective spool for the Assign-to-AMS modal: prefer the fully-typed
   // InventorySpool from the local query cache, fall back to the
@@ -321,6 +332,7 @@ export function SpoolBuddyDashboard() {
 
       if (isDifferentTag || (!isHidden && displayedTagId !== currentTagId)) {
         setDisplayedTagId(currentTagId);
+        setDisplayedTrayUuid(currentTrayUuid);
         setDisplayedWeight(null);
         setHiddenTagId(null);
         setJustLinkedSpool(null);
@@ -334,12 +346,13 @@ export function SpoolBuddyDashboard() {
       // Tag removed - clear hidden state so same tag can show when re-placed
       if (hiddenTagId) {
         setDisplayedTagId(null);
+        setDisplayedTrayUuid(null);
         setHiddenTagId(null);
         setDisplayedWeight(null);
         setJustLinkedSpool(null);
       }
     }
-  }, [currentTagId, currentWeight, weightStable, displayedTagId, hiddenTagId]);
+  }, [currentTagId, currentTrayUuid, currentWeight, weightStable, displayedTagId, hiddenTagId]);
 
   // Auto-sync weight once when known spool first detected
 
@@ -351,13 +364,14 @@ export function SpoolBuddyDashboard() {
     if (!displayedTagId) return;
     try {
       if (spoolmanMode) {
-        const tag_uid = sbState.unknownTagUid || undefined;
-        const tray_uuid = (!sbState.unknownTagUid && sbState.unknownTrayUuid) ? sbState.unknownTrayUuid : undefined;
-        if (!tag_uid && !tray_uuid) {
-          showToast(t('spoolman.linkFailed'), 'error');
-          return;
-        }
-        const raw = await api.linkTagToSpoolmanSpool(spool.id, { tray_uuid, tag_uid });
+        // The tray UUID wins when both are sent: it is what the AMS stores in
+        // extra.tag, and the same on both tags of a Bambu spool (#984).
+        // Both come from the card, not the reader: the live tag state is
+        // cleared when the spool is lifted while the dialog is open.
+        const raw = await api.linkTagToSpoolmanSpool(spool.id, {
+          tag_uid: displayedTagId,
+          tray_uuid: displayedTrayUuid || undefined,
+        });
         const updated = raw as InventorySpool | undefined;
         if (!updated) {
           showToast(t('spoolman.linkFailed'), 'error');
@@ -383,7 +397,8 @@ export function SpoolBuddyDashboard() {
       } else {
         await api.linkTagToSpool(spool.id, {
           tag_uid: displayedTagId,
-          tag_type: 'generic',
+          ...(displayedTrayUuid ? { tray_uuid: displayedTrayUuid } : {}),
+          tag_type: displayedTrayUuid ? 'bambulab' : 'generic',
           data_origin: 'nfc_link',
         });
       }
@@ -447,8 +462,8 @@ export function SpoolBuddyDashboard() {
           low_stock_threshold_pct: null,
         } as Parameters<typeof api.createSpoolmanInventorySpool>[0]);
         await api.linkTagToSpoolmanSpool(created.id, {
-          tag_uid: sbState.unknownTagUid || undefined,
-          tray_uuid: (!sbState.unknownTagUid && sbState.unknownTrayUuid) ? sbState.unknownTrayUuid : undefined,
+          tag_uid: displayedTagId,
+          tray_uuid: displayedTrayUuid || undefined,
         });
       } else {
         await api.createSpool({
@@ -472,9 +487,9 @@ export function SpoolBuddyDashboard() {
           last_used: null,
           encode_time: null,
           tag_uid: displayedTagId,
-          tray_uuid: null,
+          tray_uuid: displayedTrayUuid,
           data_origin: 'spoolbuddy',
-          tag_type: 'generic',
+          tag_type: displayedTrayUuid ? 'bambulab' : 'generic',
           cost_per_kg: null,
           last_scale_weight: weight !== null ? Math.round(weight) : null,
           last_weighed_at: weight !== null ? new Date().toISOString() : null,

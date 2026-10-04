@@ -10,17 +10,23 @@ from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from backend.app.api.routes._spoolman_helpers import _map_spoolman_spool
+from backend.app.api.routes._spoolman_helpers import _map_spoolman_spool, spoolman_net_weight
 from backend.app.api.routes.spoolman_inventory import _clear_stale_tag_links
-from backend.app.core.auth import RequirePermissionIfAuthEnabled
+from backend.app.core.auth import (
+    RequestPrinterScope,
+    RequirePermissionIfAuthEnabled,
+    RequirePrinterPermissionIfAuthEnabled,
+)
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
+from backend.app.core.printer_scope import PrinterScope
 from backend.app.models.printer import Printer
 from backend.app.models.settings import Settings
 from backend.app.models.spool_assignment import SpoolAssignment
 from backend.app.models.spoolman_k_profile import SpoolmanKProfile
 from backend.app.models.spoolman_slot_assignment import SpoolmanSlotAssignment
 from backend.app.models.user import User
+from backend.app.services import slot_unlink_grace
 from backend.app.services.printer_manager import printer_manager
 from backend.app.services.slicer_filament_resolver import resolve_slicer_filament
 from backend.app.services.slot_nozzle import resolve_slot_nozzle
@@ -212,7 +218,7 @@ async def disconnect_spoolman(
 async def sync_printer_ams(
     printer_id: int,
     db: AsyncSession = Depends(get_db),
-    _: User | None = RequirePermissionIfAuthEnabled(Permission.FILAMENTS_UPDATE),
+    _: User | None = RequirePrinterPermissionIfAuthEnabled(Permission.FILAMENTS_UPDATE),
 ):
     """Sync AMS data from a specific printer to Spoolman."""
     # Check if Spoolman is enabled and connected
@@ -362,6 +368,7 @@ async def sync_printer_ams(
                 sync_result = await client.sync_ams_tray(
                     tray,
                     printer.name,
+                    db,
                     # Per-print tracking owns weight updates (#1119); manual sync
                     # only refreshes spool metadata + slot assignments here.
                     disable_weight_sync=True,
@@ -447,6 +454,7 @@ async def sync_printer_ams(
 async def sync_all_printers(
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.FILAMENTS_UPDATE),
+    printer_scope: PrinterScope = RequestPrinterScope,
 ):
     """Sync AMS data from all connected printers to Spoolman."""
     # Check if Spoolman is enabled
@@ -468,7 +476,7 @@ async def sync_all_printers(
 
     # Get all active printers
     result = await db.execute(select(Printer).where(Printer.is_active.is_(True)))
-    printers = result.scalars().all()
+    printers = [p for p in result.scalars().all() if printer_scope.allows(p.id)]
 
     total_synced = 0
     all_skipped: list[SkippedSpool] = []
@@ -579,6 +587,7 @@ async def sync_all_printers(
                     sync_result = await client.sync_ams_tray(
                         tray,
                         printer.name,
+                        db,
                         # Per-print tracking owns weight updates (#1119); manual
                         # sync-all only refreshes spool metadata + slot assignments.
                         disable_weight_sync=True,
@@ -803,11 +812,12 @@ async def get_linked_spools(
             # Remove quotes if present (JSON encoded string)
             clean_tag = tag.strip('"').upper()
             if clean_tag:
-                filament = spool.get("filament") or {}
                 linked[clean_tag] = {
                     "id": spool["id"],
                     "remaining_weight": spool.get("remaining_weight"),
-                    "filament_weight": filament.get("weight"),
+                    # The spool's own net weight, falling back to the
+                    # filament's; the key predates initial_weight (#3194).
+                    "filament_weight": spoolman_net_weight(spool),
                 }
 
     return {"linked": linked}
@@ -830,6 +840,7 @@ async def link_spool(
     request: LinkSpoolRequest,
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.FILAMENTS_UPDATE),
+    printer_scope: PrinterScope = RequestPrinterScope,
 ):
     """Link a Spoolman spool to an AMS tag by setting Spoolman extra.tag."""
     sm = await get_spoolman_settings(db)
@@ -867,6 +878,7 @@ async def link_spool(
     # that field is user-managed in Spoolman. Slot assignment is stored locally.
     printer_context: tuple[int, int, int] | None = None
     if request.printer_id is not None and request.ams_id is not None and request.tray_id is not None:
+        printer_scope.ensure(request.printer_id)
         printer_result = await db.execute(select(Printer).where(Printer.id == request.printer_id))
         if not printer_result.scalar_one_or_none():
             raise HTTPException(status_code=404, detail="Printer not found")
@@ -896,6 +908,7 @@ async def link_spool(
                 {"printer_id": p_id, "ams_id": a_id, "tray_id": t_id, "spool_id": spool_id},
             )
             await db.commit()
+            slot_unlink_grace.forget_slot(p_id, a_id, t_id)
         except Exception as e:
             await db.rollback()
             logger.error(
@@ -1224,6 +1237,7 @@ async def create_spool_from_slot(
     req: CreateSpoolFromSlotRequest,
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.FILAMENTS_UPDATE),
+    printer_scope: PrinterScope = RequestPrinterScope,
 ):
     """Explicit user action: create a Spoolman spool from an AMS slot's current tray data.
 
@@ -1245,6 +1259,7 @@ async def create_spool_from_slot(
     if not await client.health_check():
         raise HTTPException(status_code=503, detail="Spoolman is not reachable")
 
+    printer_scope.ensure(req.printer_id)
     result = await db.execute(select(Printer).where(Printer.id == req.printer_id))
     printer = result.scalar_one_or_none()
     if not printer:
@@ -1290,6 +1305,7 @@ async def create_spool_from_slot(
     sync_result = await client.sync_ams_tray(
         tray,
         printer.name,
+        db,
         disable_weight_sync=True,
         auto_add_unknown_rfid=True,
     )
@@ -1318,6 +1334,7 @@ async def create_spool_from_slot(
                 },
             )
             await db.commit()
+            slot_unlink_grace.forget_slot(req.printer_id, req.ams_id, req.tray_id)
         except Exception as exc:
             await db.rollback()
             logger.exception("Failed to persist Spoolman slot assignment")

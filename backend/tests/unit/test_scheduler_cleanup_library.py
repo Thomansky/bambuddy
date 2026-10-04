@@ -718,3 +718,30 @@ async def test_oserror_during_unlink_logs_orphan_path_and_does_not_crash_dispatc
     assert "TRANSIENT_LIBRARY_FILE_ORPHAN" in caplog.text
     assert str(ctx.source_path) in caplog.text
     assert "permission denied" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_lost_k_profiles_are_restored_before_the_print_starts(queue_factory):
+    """A slot reset to the default K must be fixed before the job goes out (#3219)."""
+    ctx = await queue_factory(cleanup=False)
+    order = []
+    reapply = AsyncMock(side_effect=lambda *a, **k: order.append("reapply") or 0)
+    ctx.start_print.side_effect = lambda *a, **k: order.append("start") or True
+
+    with patch.object(scheduler_module.kprofile_drift, "reapply_lost_kprofiles", reapply):
+        await _dispatch_library_item(ctx)
+
+    assert order == ["reapply", "start"]
+    # No stored mapping: every loaded tray is a candidate, and no retry wait.
+    reapply.assert_awaited_once_with(ctx.printer_id, None, throttle=False)
+
+
+@pytest.mark.asyncio
+async def test_a_failing_k_profile_check_does_not_stop_the_print(queue_factory):
+    ctx = await queue_factory(cleanup=False)
+    reapply = AsyncMock(side_effect=RuntimeError("boom"))
+
+    with patch.object(scheduler_module.kprofile_drift, "reapply_lost_kprofiles", reapply):
+        await _dispatch_library_item(ctx)
+
+    ctx.start_print.assert_called_once()

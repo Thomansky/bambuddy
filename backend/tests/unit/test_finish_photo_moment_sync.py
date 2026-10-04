@@ -316,10 +316,11 @@ def _bank_env(monkeypatch, *, state="RUNNING", sub_stage=0, total_layers=10, pri
     monkeypatch.setattr(main_module.printer_manager, "get_client", lambda _pid: client)
     monkeypatch.setattr(main_module, "async_session", lambda: _fake_session(printer))
 
-    counter = {"n": 0}
+    counter = {"n": 0, "light": []}
 
-    async def _capture(_pid, _printer, _logger):
+    async def _capture(_pid, _printer, _logger, *, light=True):
         counter["n"] += 1
+        counter["light"].append(light)
         return f"frame-{counter['n']}".encode()
 
     monkeypatch.setattr(main_module, "_capture_snapshot_for_notification", _capture)
@@ -330,6 +331,14 @@ async def test_bank_stores_frame_while_printing(monkeypatch):
     _bank_env(monkeypatch)
     await main_module._maybe_bank_inprint_frame(3, 5)
     assert main_module._inprint_frame_bank[3] == b"frame-1"
+
+
+async def test_bank_leaves_the_chamber_light_alone(monkeypatch):
+    """#1655: the bank grabs a frame every 25 seconds all through a print, so
+    holding the chamber light for it would make the light flash."""
+    counter = _bank_env(monkeypatch)
+    await main_module._maybe_bank_inprint_frame(3, 5)
+    assert counter["light"] == [False]
 
 
 async def test_bank_throttles_within_interval(monkeypatch):
@@ -729,6 +738,18 @@ async def test_producer_wait_budget_covers_the_restore():
     assert main_module._FINISH_PHOTO_PRODUCER_WAIT_SECONDS > main_module._PLATE_RESTORE_SETTLE_SECONDS + 15
 
 
+def test_producer_wait_budget_covers_the_chamber_light_delay():
+    """#1655: the producer's live grab can first wait for the chamber light.
+    Settle + the longest light delay + a worst-case grab must still fit, or the
+    consumer gives up and its fallback grab races the producer's (#1790)."""
+    from backend.app.services.camera_light import MAX_DELAY_SECONDS
+
+    assert (
+        main_module._FINISH_PHOTO_PRODUCER_WAIT_SECONDS
+        > main_module._PLATE_RESTORE_SETTLE_SECONDS + MAX_DELAY_SECONDS + 15
+    )
+
+
 class TestMaxZResolution:
     """#2547 safety: the height that becomes a Z-move target must provably
     belong to the print that just finished.
@@ -873,3 +894,141 @@ class TestTimelapsePathPlateRestore:
         await on_finish_photo_moment(patched_env.id, {"trigger": "finish_state", "timelapse_was_active": True})
 
         assert moved == []
+
+
+# --- #1655 chamber light for the camera ------------------------------------
+
+
+class _LightClient:
+    def __init__(self):
+        self.state = SimpleNamespace(chamber_light=False)
+        self.calls: list[bool] = []
+        self.mode = "off"  # the camera_light_mode setting
+
+    def set_chamber_light(self, on):
+        self.calls.append(on)
+        self.state.chamber_light = on
+        return True
+
+
+@pytest.fixture
+def light_client(monkeypatch):
+    from backend.app.services import camera_light as light_svc
+
+    client = _LightClient()
+    monkeypatch.setattr(light_svc, "_get_client", lambda _pid: client)
+
+    async def _settings():
+        return client.mode, 0.0
+
+    monkeypatch.setattr(light_svc, "_read_settings", _settings)
+    monkeypatch.setattr(light_svc, "_settings_cache", None)
+    monkeypatch.setattr(light_svc, "_holders", {})
+    monkeypatch.setattr(light_svc, "_lit_at", {})
+    off_tasks: dict = {}
+    monkeypatch.setattr(light_svc, "_off_tasks", off_tasks)
+    yield client
+    for task in off_tasks.values():
+        task.cancel()
+
+
+async def test_finish_photo_live_grab_is_lit_when_the_light_mode_covers_it(patched_env, monkeypatch, light_client):
+    light_client.mode = "all"
+    seen = {}
+
+    async def _live(**_kwargs):
+        seen["light"] = light_client.state.chamber_light
+        return b"\xff\xd8live"
+
+    monkeypatch.setattr("backend.app.services.camera.capture_camera_frame_bytes", _live)
+
+    await on_finish_photo_moment(patched_env.id, {"trigger": "finish_state"})
+
+    assert seen["light"] is True
+    assert light_client.calls == [True]  # off follows after the grace
+
+
+async def test_finish_photo_live_grab_leaves_the_light_alone_by_default(patched_env, monkeypatch, light_client):
+    async def _live(**_kwargs):
+        return b"\xff\xd8live"
+
+    monkeypatch.setattr("backend.app.services.camera.capture_camera_frame_bytes", _live)
+
+    await on_finish_photo_moment(patched_env.id, {"trigger": "finish_state"})
+
+    assert light_client.calls == []
+
+
+async def test_finish_photo_from_the_bank_does_not_turn_the_light_on(patched_env, monkeypatch, light_client):
+    """The banked frame is already taken; lighting the printer for it would
+    only switch the light on and off for nothing."""
+    light_client.mode = "all"
+    print_dispatch_context.mark_pending(patched_env.id)
+    print_dispatch_context.adopt(patched_env.id)
+    main_module._inprint_frame_bank[patched_env.id] = b"\xff\xd8banked"
+
+    await on_finish_photo_moment(patched_env.id, {"trigger": "finish_state"})
+
+    assert main_module._stage22_finish_frames[patched_env.id] == b"\xff\xd8banked"
+    assert light_client.calls == []
+
+
+async def test_notification_snapshot_is_lit_for_a_selected_printer(fake_printer, monkeypatch, light_client):
+    light_client.mode = "selected"
+    fake_printer.camera_light_auto = True
+    seen = {}
+
+    async def _frame(_pid, _printer, _logger):
+        seen["light"] = light_client.state.chamber_light
+        return b"\xff\xd8snap"
+
+    monkeypatch.setattr(main_module, "_capture_snapshot_frame", _frame)
+
+    assert await main_module._capture_snapshot_for_notification(7, fake_printer, logging.getLogger()) == b"\xff\xd8snap"
+    assert seen["light"] is True
+    assert light_client.calls == [True]
+
+
+def test_every_live_capture_in_main_holds_the_light():
+    """#1655: the finish photo's last fallback lives in `_background_finish_photo`,
+    a closure nothing can drive directly (see the rotation guard above). So the
+    source is checked: every live camera grab in main.py runs inside
+    `camera_light(...)`, except in `_capture_snapshot_frame`, whose only caller
+    is the wrapper that holds the light for it.
+    """
+    import ast
+    from pathlib import Path
+
+    main_py = Path(__file__).resolve().parents[2] / "app" / "main.py"
+    tree = ast.parse(main_py.read_text())
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    grabs = {"capture_frame", "capture_camera_frame", "capture_camera_frame_bytes", "capture_finish_photo"}
+
+    def _held(node) -> bool:
+        while node in parents:
+            node = parents[node]
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "_capture_snapshot_frame":
+                return True
+            if isinstance(node, ast.AsyncWith) and any(
+                isinstance(item.context_expr, ast.Call)
+                and getattr(item.context_expr.func, "id", None) == "camera_light"
+                for item in node.items
+            ):
+                return True
+        return False
+
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and (getattr(node.func, "id", None) or getattr(node.func, "attr", None)) in grabs
+    ]
+    assert len(calls) >= 6, "guard found fewer grabs than main.py has; is it parsing the right file?"
+    unlit = [node.lineno for node in calls if not _held(node)]
+    assert not unlit, f"main.py:{unlit} grabs a camera frame without camera_light(...)"
+
+    wrapper_callers = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "_capture_snapshot_frame"
+    ]
+    assert len(wrapper_callers) == 1, f"_capture_snapshot_frame is called from main.py:{wrapper_callers}"

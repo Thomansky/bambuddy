@@ -91,10 +91,17 @@ def _provider_for_source(source_type: str) -> ModelProvider:
     is the *repr* of its argument and would ship the quotes to the client.
     """
     try:
-        return registry.get(source_type)
+        provider = registry.get(source_type)
     except KeyError as exc:
         msg = f"No model provider registered for source_type {source_type!r}"
         raise HTTPException(status_code=400, detail=msg) from exc
+    # A provider that claims no pasted URLs (Manyfold, #1471) is browsed
+    # through routes of its own, which apply its own checks; it must not be
+    # importable through this pasted-URL flow as well.
+    if not provider.host_patterns:
+        msg = f"Model provider {source_type!r} is not imported through this route"
+        raise HTTPException(status_code=400, detail=msg)
+    return provider
 
 
 async def _authorize_for_provider(

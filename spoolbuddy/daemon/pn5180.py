@@ -61,8 +61,9 @@ BAMBU_MASTER_KEY = bytes(
 )
 BAMBU_CONTEXT = b"RFID-A\x00"  # 7 bytes including null terminator
 
-# Blocks to read for Bambu tag data
-BAMBU_BLOCKS = [1, 2, 4, 5]
+# Blocks to read for Bambu tag data. Block 9 (sector 2) holds the tray UUID,
+# the same on both tags of a spool and equal to the AMS's tray_uuid (#984).
+BAMBU_BLOCKS = [1, 2, 4, 5, 9]
 
 
 def hkdf_derive_keys(uid: bytes) -> bytes:

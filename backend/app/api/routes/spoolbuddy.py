@@ -10,13 +10,14 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.auth import RequirePermissionIfAuthEnabled
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
 from backend.app.core.websocket import ws_manager
+from backend.app.models.spool import Spool
 from backend.app.models.spoolbuddy_device import SpoolBuddyDevice
 from backend.app.models.user import User
 from backend.app.schemas.spoolbuddy import (
@@ -42,6 +43,7 @@ from backend.app.schemas.spoolbuddy import (
 )
 from backend.app.services.spool_tag_matcher import get_spool_by_tag
 from backend.app.services.spoolman import SpoolmanClientError, SpoolmanNotFoundError, SpoolmanUnavailableError
+from backend.app.utils.tag_normalization import is_bambu_tray_uuid, normalize_tag_uid, normalize_tray_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -374,6 +376,55 @@ async def device_heartbeat(
 # --- NFC endpoints ---
 
 
+async def _backfill_local_tray_uuid(db: AsyncSession, spool: Spool, tag_uid: str, tray_uuid: str) -> None:
+    """Give a spool matched by its exact tag UID the tray UUID read from that tag.
+
+    Spools added on the kiosk before #984 carry only the UID of the tag that was
+    scanned then, so the spool's other tag and the AMS never found them. The scan
+    read block 9 of this very tag, so the UUID belongs to this spool. Only an
+    exact UID match counts: a fuzzy (suffix or first-byte) match may be another
+    spool's tag and must never write anything. A UUID any other spool carries,
+    archived ones included, is left alone.
+    """
+    if spool.tray_uuid or normalize_tag_uid(spool.tag_uid) != normalize_tag_uid(tag_uid):
+        return
+    try:
+        holder = await db.execute(
+            select(Spool.id).where(func.upper(Spool.tray_uuid) == tray_uuid, Spool.id != spool.id).limit(1)
+        )
+        if holder.scalar_one_or_none() is not None:
+            return
+        spool.tray_uuid = tray_uuid
+        await db.commit()
+        logger.info("SpoolBuddy: saved tray_uuid %s on spool %d, matched by tag %s", tray_uuid, spool.id, tag_uid)
+    except Exception:
+        await db.rollback()
+        logger.exception("SpoolBuddy: could not save tray_uuid %s on spool %d", tray_uuid, spool.id)
+
+
+async def _backfill_spoolman_tray_uuid(client, sm_spool: dict, tag_uid: str, tray_uuid: str) -> None:
+    """Store the tray UUID as the tag of a Spoolman spool matched by its exact tag UID.
+
+    Spoolman has one extra.tag per spool, and the AMS sync keys Bambu spools by
+    the tray UUID there, so the UUID replaces the tag UID. The caller already
+    looked the UUID up among the active spools and found none, the same check
+    the link route makes. See _backfill_local_tray_uuid for why only an exact
+    UID match counts.
+    """
+    extra = sm_spool.get("extra")
+    raw_tag = extra.get("tag") if isinstance(extra, dict) else None
+    stored = raw_tag.strip('"').upper() if isinstance(raw_tag, str) else ""
+    spool_id = sm_spool.get("id")
+    if not isinstance(spool_id, int) or not stored or stored != tag_uid.strip('"').upper():
+        return
+    try:
+        await client.merge_spool_extra(spool_id, {"tag": json.dumps(tray_uuid)})
+        logger.info("SpoolBuddy: stored tray_uuid %s as the tag of Spoolman spool %d", tray_uuid, spool_id)
+        await ws_manager.broadcast({"type": "inventory_changed"})
+    except Exception:
+        logger.exception("SpoolBuddy: could not store tray_uuid %s on Spoolman spool %d", tray_uuid, spool_id)
+
+
 @router.post("/nfc/tag-scanned")
 async def nfc_tag_scanned(
     req: TagScannedRequest,
@@ -393,6 +444,20 @@ async def nfc_tag_scanned(
     """
     from backend.app.api.routes._spoolman_helpers import _map_spoolman_spool
 
+    # Daemons before #984 read the filament type from blocks 4-5 and sent it as
+    # tray_uuid. Drop anything that is not a real tray UUID, so an old daemon
+    # falls back to tag_uid matching and its value is never offered for saving.
+    tray_uuid: str | None = normalize_tray_uuid(req.tray_uuid) or None
+    if tray_uuid and not is_bambu_tray_uuid(tray_uuid):
+        logger.info(
+            "SpoolBuddy %s sent tray_uuid %s for tag %s, which is not a Bambu tray UUID; ignoring it. "
+            "Update the SpoolBuddy daemon.",
+            req.device_id,
+            tray_uuid,
+            req.tag_uid,
+        )
+        tray_uuid = None
+
     # _get_spoolman_client_or_none returns a usable client when spoolman_enabled
     # is true (and the URL passes the SSRF guard), None otherwise — so its
     # return value doubles as the mode discriminator.
@@ -403,8 +468,8 @@ async def nfc_tag_scanned(
         try:
             cached_spools = await client.get_spools()
             sm_spool: dict | None = None
-            if req.tray_uuid:
-                sm_spool = await client.find_spool_by_tag(req.tray_uuid, cached_spools=cached_spools)
+            if tray_uuid:
+                sm_spool = await client.find_spool_by_tag(tray_uuid, cached_spools=cached_spools)
             if sm_spool is None and req.tag_uid:
                 sm_spool = await client.find_spool_by_tag(req.tag_uid, cached_spools=cached_spools)
 
@@ -415,7 +480,7 @@ async def nfc_tag_scanned(
                         "type": "spoolbuddy_tag_matched",
                         "device_id": req.device_id,
                         "tag_uid": req.tag_uid,
-                        "tray_uuid": req.tray_uuid,
+                        "tray_uuid": tray_uuid,
                         "spool": {
                             "id": mapped["id"],
                             "material": mapped["material"],
@@ -439,6 +504,8 @@ async def nfc_tag_scanned(
                     }
                 )
                 logger.info("SpoolBuddy tag matched (Spoolman): %s -> spool %d", req.tag_uid, mapped["id"])
+                if tray_uuid:
+                    await _backfill_spoolman_tray_uuid(client, sm_spool, req.tag_uid, tray_uuid)
                 return {"status": "ok", "matched": True, "spool_id": mapped["id"]}
         except ValueError as exc:
             logger.error(
@@ -481,14 +548,14 @@ async def nfc_tag_scanned(
             return {"status": "ok", "matched": False, "spool_id": None}
     else:
         # Local mode — exclusive lookup, no Spoolman fallback.
-        spool = await get_spool_by_tag(db, req.tag_uid, req.tray_uuid or "")
+        spool = await get_spool_by_tag(db, req.tag_uid, tray_uuid or "")
         if spool:
             await ws_manager.broadcast(
                 {
                     "type": "spoolbuddy_tag_matched",
                     "device_id": req.device_id,
                     "tag_uid": req.tag_uid,
-                    "tray_uuid": req.tray_uuid,
+                    "tray_uuid": tray_uuid,
                     "spool": {
                         "id": spool.id,
                         "material": spool.material,
@@ -508,6 +575,8 @@ async def nfc_tag_scanned(
                 }
             )
             logger.info("SpoolBuddy tag matched (local): %s -> spool %d", req.tag_uid, spool.id)
+            if tray_uuid:
+                await _backfill_local_tray_uuid(db, spool, req.tag_uid, tray_uuid)
             return {"status": "ok", "matched": True, "spool_id": spool.id}
 
     await ws_manager.broadcast(
@@ -515,7 +584,7 @@ async def nfc_tag_scanned(
             "type": "spoolbuddy_unknown_tag",
             "device_id": req.device_id,
             "tag_uid": req.tag_uid,
-            "tray_uuid": req.tray_uuid,
+            "tray_uuid": tray_uuid,
             "sak": req.sak,
             "tag_type": req.tag_type,
         }
@@ -524,8 +593,8 @@ async def nfc_tag_scanned(
         "SpoolBuddy unknown tag: uid=%s (len=%d), tray_uuid=%s (len=%d), type=%s, sak=%s",
         req.tag_uid,
         len(req.tag_uid or ""),
-        req.tray_uuid,
-        len(req.tray_uuid or ""),
+        tray_uuid,
+        len(tray_uuid or ""),
         req.tag_type,
         req.sak,
     )
@@ -891,7 +960,7 @@ async def update_spool_weight(
     update while the Spoolman row the user is actually looking at stayed
     unchanged (#1530). Mirrors the routing already used by ``nfc/tag-scanned``.
     """
-    from backend.app.api.routes._spoolman_helpers import _safe_float
+    from backend.app.api.routes._spoolman_helpers import _safe_float, spoolman_net_weight, spoolman_tare
     from backend.app.models.spool import Spool
 
     sm_client = await _get_spoolman_client_or_none(db)
@@ -920,20 +989,18 @@ async def update_spool_weight(
     async with _translate_spoolbuddy_errors():
         sm_spool = await sm_client.get_spool(req.spool_id)
 
-    filament = sm_spool.get("filament") or {}
-    spool_tare = sm_spool.get("spool_weight")
-    raw_tare = spool_tare if spool_tare is not None else filament.get("spool_weight")
+    core_weight, tare_source = spoolman_tare(sm_spool)
     spool_weight_warning: str | None = None
-    if raw_tare is None:
+    if tare_source == "fallback":
         logger.warning(
-            "Spoolman spool %d has no spool_weight set; using 250g fallback for tare",
+            "Spoolman spool %d has no spool_weight or vendor empty_spool_weight set; using 250g fallback for tare",
             req.spool_id,
         )
         spool_weight_warning = (
-            "spool_weight_not_set: Spoolman filament has no spool_weight configured; weight estimate uses 250g fallback"
+            "spool_weight_not_set: Spoolman spool, filament and vendor have no empty-spool weight configured; "
+            "weight estimate uses 250g fallback"
         )
-    core_weight = _safe_float(raw_tare, 250.0)
-    label_weight = _safe_float(filament.get("weight"), 1000.0)
+    label_weight = _safe_float(spoolman_net_weight(sm_spool), 1000.0)
     remaining_weight = max(0.0, req.weight_grams - core_weight)
 
     async with _translate_spoolbuddy_errors():

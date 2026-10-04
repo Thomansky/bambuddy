@@ -64,6 +64,7 @@ import {
   SlidersHorizontal,
   Check,
   type LucideIcon,
+  Combine,
 } from 'lucide-react';
 import { ApiError, api } from '../api/client';
 import type {
@@ -84,6 +85,7 @@ import { ContextMenu, type ContextMenuItem } from '../components/ContextMenu';
 import { PrintModal } from '../components/PrintModal';
 import { ModelViewerModal } from '../components/ModelViewerModal';
 import { SliceModal } from '../components/SliceModal';
+import { CombineFilesModal } from '../components/CombineFilesModal';
 import { RunWithPipelineModal } from '../components/RunWithPipelineModal';
 import { BulkTagsPickerModal } from '../components/BulkTagsPickerModal';
 import { FileUploadModal } from '../components/FileUploadModal';
@@ -318,6 +320,17 @@ function filterAndSortFiles(
 
 /** The key of the running-number series order folders draw from. */
 const FOLDER_SERIES_KEY = 'library_folder';
+
+// Keep the filename useful when fixed columns consume the available width,
+// and give the header spacer and row checkbox one shared track so every later
+// column stays aligned. min-w-min lets each auth variant size itself to its
+// intrinsic grid width inside the overflow-x-auto wrapper (#3105). Tags get a
+// floor too: with a 0 minimum they took the squeeze the filename used to take,
+// hitting 0px right where the wrapper starts scrolling.
+const fileListGridColumns = (authEnabled: boolean) => authEnabled
+  ? 'grid-cols-[24px_minmax(240px,1fr)_120px_100px_100px_100px_minmax(96px,200px)_252px]'
+  : 'grid-cols-[24px_minmax(240px,1fr)_100px_100px_100px_minmax(96px,200px)_252px]';
+const fileListGridMinWidth = 'min-w-min';
 
 // New Folder Modal
 interface NewFolderModalProps {
@@ -2793,6 +2806,9 @@ export function FileManagerPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'file' | 'folder' | 'bulk'; id: number; count?: number } | null>(null);
   const [printFile, setPrintFile] = useState<LibraryFileListItem | null>(null);
   const [sliceFile, setSliceFile] = useState<LibraryFileListItem | null>(null);
+  const [showCombineModal, setShowCombineModal] = useState(false);
+  // A file just built by "Combine to 3MF", handed straight to the SliceModal.
+  const [sliceCombined, setSliceCombined] = useState<{ id: number; filename: string } | null>(null);
   // Slicer Pipelines (#1425 PR B) — file gets "Run with pipeline" action.
   const [runPipelineFile, setRunPipelineFile] = useState<LibraryFileListItem | null>(null);
   const [renameItem, setRenameItem] = useState<{
@@ -3512,14 +3528,6 @@ export function FileManagerPage() {
     open[kind]();
   }, [hasPermission, navigate]);
 
-  // The toolbar's Preview button acts on one file, so it is offered only for
-  // a single previewable selection.
-  const previewSelection = useMemo(() => {
-    if (!files || selectedFiles.length !== 1) return null;
-    const file = files.find((f) => f.id === selectedFiles[0]);
-    return file && isPreviewableLibraryFile(file) ? file : null;
-  }, [files, selectedFiles]);
-
   // The clicked file's variant group, so printing one member offers the rest
   // without the user re-selecting them (#2570).
   const { data: printFileGroup } = useQuery({
@@ -3536,11 +3544,21 @@ export function FileManagerPage() {
     });
   }, []);
 
+  // In the columns view Select all adds the pane's files to what is ticked, so
+  // a file ticked in an earlier column (still on screen) stays ticked (#3020).
+  // Grid and list replace the selection: a file a search has hidden must not
+  // stay ticked behind the user's back, or a bulk Delete would remove it.
   const handleSelectAll = useCallback(() => {
     if (filteredAndSortedFiles.length > 0) {
-      setSelectedFiles(filteredAndSortedFiles.map((f) => f.id));
+      const paneIds = filteredAndSortedFiles.map((f) => f.id);
+      setSelectedFiles((prev) => (viewMode === 'columns' ? [...new Set([...prev, ...paneIds])] : paneIds));
     }
-  }, [filteredAndSortedFiles]);
+  }, [filteredAndSortedFiles, viewMode]);
+
+  // "Deselect all" once every file of the pane is ticked. The pane's own ids,
+  // not a count: ticks in earlier columns count towards the selection too.
+  const allPaneFilesSelected =
+    filteredAndSortedFiles.length > 0 && filteredAndSortedFiles.every((f) => selectedFiles.includes(f.id));
 
   const handleDeselectAll = useCallback(() => {
     setSelectedFiles([]);
@@ -3927,6 +3945,21 @@ export function FileManagerPage() {
 
   const selectedSlicedFiles = selectedFileObjects.filter(isSlicedLibraryFile);
 
+  // The toolbar's Preview button acts on one file, so it is offered only for
+  // a single previewable selection, wherever in the columns it was ticked.
+  const previewSelection =
+    selectedFileObjects.length === 1 && selectedFiles.length === 1 && isPreviewableLibraryFile(selectedFileObjects[0])
+      ? selectedFileObjects[0]
+      : null;
+
+  // "Combine to 3MF" is offered only when every selected file is an STL, so
+  // the action never silently drops part of the selection (#3162). Resolved
+  // like the rest, so an STL ticked in an earlier column counts too.
+  const selectedStlFiles = (() => {
+    const stls = selectedFileObjects.filter((f) => f.filename.toLowerCase().endsWith('.stl'));
+    return stls.length === selectedFiles.length ? stls : [];
+  })();
+
   // Where the selected files actually live. A file can be ticked in any
   // column, so this is not the same as selectedFolderId — the move dialog
   // needs the files' own folder to know which row is the no-op destination.
@@ -4047,13 +4080,6 @@ export function FileManagerPage() {
   const selectSearchedFolder = (folderId: number) => {
     setSearchQuery('');
     selectFolderFromChrome(folderId);
-  };
-
-  // Double-click / Enter on a file row: sliced output opens in the gcode
-  // viewer, model files in the 3D viewer, anything else has no preview.
-  const openColumnFile = (file: LibraryFileListItem) => {
-    if (isSlicedLibraryFile(file)) navigate(`/gcode-viewer?library_file=${file.id}`);
-    else if (file.file_type === '3mf' || file.file_type === 'stl') setViewerFile(file);
   };
 
   // Focus the columns pane when the view opens so arrow keys work right away,
@@ -4230,8 +4256,9 @@ export function FileManagerPage() {
           }
           break;
         }
+        // Enter on a file opens its preview, the same one a double-click does.
         const file = focusedFileList.find((f) => f.id === columnsFocusedFileId);
-        if (file) openColumnFile(file);
+        if (file) openPreview(file);
         break;
       }
       case ' ': {
@@ -4245,7 +4272,7 @@ export function FileManagerPage() {
 
   return (
     <div
-      className="p-4 md:p-8 min-h-[calc(100vh-64px)] lg:h-[calc(100vh-64px)] flex flex-col relative"
+      className="p-4 md:p-8 min-h-[calc(100vh-64px)] lg:h-screen flex flex-col relative"
       {...dragHandlers}
     >
       {/* Drag & Drop Overlay — page-wide file upload (#1510) */}
@@ -4724,7 +4751,7 @@ export function FileManagerPage() {
               {/* Select all / Deselect all leads the card: the page used to
                   spend a whole bordered bar on this one button. */}
               {filteredAndSortedFiles.length > 0 &&
-                (selectedFiles.length === filteredAndSortedFiles.length && selectedFiles.length > 0 ? (
+                (allPaneFilesSelected ? (
                   <Button variant="secondary" size="sm" onClick={handleDeselectAll}>
                     <Square className="w-4 h-4 sm:mr-1" />
                     <span className="hidden sm:inline">{t('fileManager.deselectAll')}</span>
@@ -4945,6 +4972,18 @@ export function FileManagerPage() {
                     >
                       <Layers className="w-4 h-4 sm:mr-1" />
                       <span className="hidden sm:inline">{t('fileManager.variants.groupAction')}</span>
+                    </Button>
+                  )}
+                  {selectedStlFiles.length >= 1 && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setShowCombineModal(true)}
+                      disabled={!hasPermission('library:upload')}
+                      title={t('fileManager.combine.tooltip')}
+                    >
+                      <Combine className="w-4 h-4 sm:mr-1" />
+                      <span className="hidden sm:inline">{t('fileManager.combine.action')}</span>
                     </Button>
                   )}
                   <Button
@@ -5220,7 +5259,7 @@ export function FileManagerPage() {
                           setColumnsFocusedFileId(f.id);
                           handleFileSelect(f.id);
                         }}
-                        onOpen={openColumnFile}
+                        onOpen={openPreview}
                         actionProps={fileActionProps}
                         t={t}
                       />
@@ -5260,7 +5299,7 @@ export function FileManagerPage() {
                           setColumnsFocusedFileId(f.id);
                           handleFileSelect(f.id);
                         }}
-                        onOpen={openColumnFile}
+                        onOpen={openPreview}
                         actionProps={fileActionProps}
                         t={t}
                       />
@@ -5409,7 +5448,10 @@ export function FileManagerPage() {
                     grids that compute `min-content` independently — the header's empty
                     trailing div resolved to 0px, leaving body columns shifted left of
                     their headers. Fixed width keeps header and body in lockstep. */}
-                <div className={`hidden sm:grid ${authEnabled ? 'grid-cols-[auto_1fr_120px_100px_100px_100px_minmax(0,200px)_252px]' : 'grid-cols-[auto_1fr_100px_100px_100px_minmax(0,200px)_252px]'} gap-4 px-4 py-2 bg-bambu-dark-secondary border-b border-bambu-dark-tertiary text-xs text-bambu-gray font-medium`}>
+                <div
+                  data-testid="file-list-grid-header"
+                  className={`hidden sm:grid ${fileListGridColumns(authEnabled)} ${fileListGridMinWidth} gap-4 px-4 py-2 bg-bambu-dark-secondary border-b border-bambu-dark-tertiary text-xs text-bambu-gray font-medium`}
+                >
                   <div className="w-6" />
                   <div>{t('common.name')}</div>
                   {authEnabled && <div>{t('fileManager.uploadedBy', { defaultValue: 'Uploaded By' })}</div>}
@@ -5471,7 +5513,8 @@ export function FileManagerPage() {
                 {filteredAndSortedFiles.map((file) => (
                   <div
                     key={file.id}
-                    className={`grid ${authEnabled ? 'grid-cols-[auto_1fr_120px_100px_100px_100px_minmax(0,200px)_252px]' : 'grid-cols-[auto_1fr_100px_100px_100px_minmax(0,200px)_252px]'} gap-4 px-4 py-3 items-center border-b border-bambu-dark-tertiary last:border-b-0 cursor-pointer hover:bg-bambu-dark/50 transition-colors ${
+                    data-testid="file-list-grid-row"
+                    className={`grid ${fileListGridColumns(authEnabled)} ${fileListGridMinWidth} gap-4 px-4 py-3 items-center border-b border-bambu-dark-tertiary last:border-b-0 cursor-pointer hover:bg-bambu-dark/50 transition-colors ${
                       selectedFiles.includes(file.id) ? 'bg-bambu-green/10' : ''
                     }`}
                     onClick={() => handleFileSelect(file.id)}
@@ -5578,9 +5621,9 @@ export function FileManagerPage() {
                     {/* Prints */}
                     <div className="text-sm text-bambu-gray">{file.print_count > 0 ? `${file.print_count}x` : '-'}</div>
                     {/* Tags (#1268) — clickable chips push into the active
-                        filter; minmax(0,200px) on the column lets the cell
-                        shrink/wrap on narrow viewports without pushing the
-                        Actions cell off-screen. */}
+                        filter; minmax(96px,200px) on the column lets the cell
+                        shrink/wrap on narrow viewports, and the 96px floor
+                        keeps chips readable once the wrapper scrolls (#3105). */}
                     <div className="min-w-0" {...stopRowActivation}>
                       {!file.tags || file.tags.length === 0 ? (
                         <span className="text-xs text-bambu-gray/50">-</span>
@@ -5744,6 +5787,30 @@ export function FileManagerPage() {
         <SliceModal
           source={{ kind: 'libraryFile', id: sliceFile.id, filename: sliceFile.filename }}
           onClose={() => setSliceFile(null)}
+        />
+      )}
+
+      {showCombineModal && selectedStlFiles.length > 0 && (
+        <CombineFilesModal
+          files={selectedStlFiles}
+          folderId={selectedFolderId}
+          // canSlice() also covers the desktop-slicer handoff; "open the
+          // slicer next" means the in-app SliceModal, so the sidecar must be on.
+          canSlice={!!settings?.use_slicer_api && canSlice()}
+          onClose={() => setShowCombineModal(false)}
+          onCombined={(result, sliceNext) => {
+            setShowCombineModal(false);
+            setSelectedFiles([]);
+            if (sliceNext) setSliceCombined({ id: result.id, filename: result.filename });
+          }}
+        />
+      )}
+
+      {sliceCombined && (
+        <SliceModal
+          source={{ kind: 'libraryFile', id: sliceCombined.id, filename: sliceCombined.filename }}
+          onClose={() => setSliceCombined(null)}
+          defaultAutoArrange
         />
       )}
 
