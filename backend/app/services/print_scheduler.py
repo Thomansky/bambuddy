@@ -1381,6 +1381,10 @@ class PrintScheduler:
         # merged into check_queue's busy set: the printer may still report IDLE
         # for a few seconds after the command, like it does after project_file.
         self._calibrating_printer_ids: set[int] = set()
+        # Printers whose aux and exhaust fans assisted cooling switched on for a
+        # calibration run waiting on its bed (#3127), with that run's id. Only
+        # in memory: after a restart the next pass switches them on again.
+        self._assisted_cooling: dict[int, int] = {}
         # Defensive in-memory dispatch hold (#1157): a printer that just received
         # a project_file command must not get a second dispatch until either it
         # transitions out of pre_state OR the hard timeout expires. The H2D Pro
@@ -6756,6 +6760,31 @@ class PrintScheduler:
                 horizons[printer_id] = next_at
         return horizons
 
+    def _start_assisted_cooling(self, printer_id: int, run_id: int) -> bool:
+        """Aux and exhaust fan to full for a run waiting on its bed (#3127).
+
+        Sent once per run, not on every pass: somebody who turns the fans
+        down on the printer meanwhile is not overruled. False when the
+        command could not be sent.
+        """
+        if self._assisted_cooling.get(printer_id) == run_id:
+            return True
+        if not printer_manager.set_assisted_cooling(printer_id, True):
+            return False
+        self._assisted_cooling[printer_id] = run_id
+        logger.info(
+            "Maintenance run %d: aux and exhaust fan on to cool the bed of printer %d faster", run_id, printer_id
+        )
+        return True
+
+    def _stop_assisted_cooling(self, printer_id: int) -> None:
+        """Both fans off again, if assisted cooling switched them on (#3127)."""
+        run_id = self._assisted_cooling.pop(printer_id, None)
+        if run_id is None:
+            return
+        if printer_manager.set_assisted_cooling(printer_id, False):
+            logger.info("Maintenance run %d: aux and exhaust fan off again on printer %d", run_id, printer_id)
+
     async def _check_maintenance_runs(
         self,
         db: AsyncSession,
@@ -6770,7 +6799,9 @@ class PrintScheduler:
         ``maintenance_actions.head_runs`` for the order), the printer being
         offline, a drying run holding it, the print queue having claimed it
         (``queue_reserved``), it not being idle, or its bed still being at or
-        above the item's ``bed_temp_below`` threshold. Unlike drying,
+        above the item's ``bed_temp_below`` threshold -- with the item's
+        assisted cooling on, the aux and exhaust fans run while it waits for
+        the bed and go off before the run goes out. Unlike drying,
         the plate-clear gate is honoured here when the setting is on -- bed
         levelling with parts on the plate is a crash -- so "Saturday, as soon as
         the plate is released" is literally what a scheduled run waits for.
@@ -6809,6 +6840,8 @@ class PrintScheduler:
         # while the head is running, rather than as a plain "printer busy".
         heads = maintenance_actions.head_runs(rows, now)
         recently_dispatched: set[int] = set()
+        # Printers whose head run waits on its bed with the fans helping.
+        cooling: set[int] = set()
         for row in rows:
             if row.status == "running":
                 if row.started_at and now - row.started_at < maintenance_actions.DISPATCH_BUSY_WINDOW:
@@ -6871,8 +6904,20 @@ class PrintScheduler:
                 maintenance_actions.current_bed_temperature(state),
             )
             if bed_wait is not None:
-                maintenance_actions.set_waiting(row, *bed_wait)
+                reason, detail = bed_wait
+                if (
+                    reason == maintenance_actions.WAIT_BED_TOO_WARM
+                    and maintenance_actions.assisted_cooling(row.printer_maintenance.action_options)
+                    and self._start_assisted_cooling(printer_id, row.id)
+                ):
+                    cooling.add(printer_id)
+                    detail = {**(detail or {}), "cooling": True}
+                maintenance_actions.set_waiting(row, reason, detail)
                 continue
+
+            # The bed is cool enough: the fans that helped go off before
+            # anything else is asked of the printer.
+            self._stop_assisted_cooling(printer_id)
 
             if needs_own_plate and row.plate_requested_at is None:
                 # Nobody has confirmed the vision encoder plate for this run:
@@ -6941,6 +6986,15 @@ class PrintScheduler:
                 recently_dispatched.add(printer_id)
             else:
                 maintenance_actions.set_waiting(row, "printer_offline")
+
+        # Fans still on for a run that no longer waits on its bed -- cancelled,
+        # switched off, or the printer taken for something else. On an idle
+        # printer they go off; a job that took the printer runs its own fans.
+        for printer_id in [pid for pid in self._assisted_cooling if pid not in cooling]:
+            if self._is_printer_idle(printer_id, require_plate_clear=False):
+                self._stop_assisted_cooling(printer_id)
+            else:
+                self._assisted_cooling.pop(printer_id, None)
 
         self._calibrating_printer_ids = recently_dispatched
         await db.commit()

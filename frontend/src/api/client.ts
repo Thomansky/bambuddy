@@ -4471,18 +4471,58 @@ export type CalibrationOption =
   | 'high_temp_heatbed'
   | 'nozzle_clumping';
 // The flags plus the start condition both actions share: bed_temp_below in
-// °C, absent = no condition. Sent back whole on every change.
-export type CalibrationOptions = Partial<Record<CalibrationOption, boolean>> & { bed_temp_below?: number | null };
+// °C, absent = no condition, and assisted_cooling: the aux and exhaust fans
+// help the bed cool down to it. Sent back whole on every change.
+export type CalibrationOptions = Partial<Record<CalibrationOption, boolean>> & {
+  bed_temp_below?: number | null;
+  assisted_cooling?: boolean;
+};
 export type MaintenanceRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 export type MaintenanceRunSource = 'manual' | 'due' | 'schedule';
 
 // Figures behind a waiting_reason that has any: bed_too_warm carries the
-// bed temperature and the threshold it has to fall below; after_other_run
-// carries the stored type name of the run ahead on the same printer.
+// bed temperature and the threshold it has to fall below, and cooling while
+// the aux and exhaust fans help; after_other_run carries the stored type name
+// of the run ahead on the same printer.
 export interface MaintenanceRunWaitingDetail {
   bed_temp?: number;
   threshold?: number;
+  cooling?: boolean;
   item?: string;
+}
+
+/** Where a running calibration is, from the printer's own stage report. */
+export interface MaintenanceRunStage {
+  /** 1-based place of the current stage in the printer's list, if it is in it. */
+  index: number | null;
+  count: number | null;
+  current: string;
+  next: string | null;
+}
+
+/** A pending or running calibration run, as a printer card shows it (#3127). */
+export interface ActiveMaintenanceRun {
+  id: number;
+  printer_id: number;
+  item_id: number;
+  /** The stored type name; seeded ones go through maintenanceTypeLabel. */
+  type_name: string;
+  action: MaintenanceAction | null;
+  status: MaintenanceRunStatus;
+  source: MaintenanceRunSource;
+  waiting_reason: string | null;
+  waiting_detail: MaintenanceRunWaitingDetail | null;
+  /** A vision encoder run whose plate has been asked for. */
+  plate_requested_at: string | null;
+  start_after: string | null;
+  created_at: string | null;
+  started_at: string | null;
+  /** The item's start condition, and whether the fans help the bed get there. */
+  bed_temp_below: number | null;
+  assisted_cooling: boolean;
+  /** 0 for the run that goes out first on its printer. */
+  position: number;
+  stage: MaintenanceRunStage | null;
 }
 
 export interface MaintenanceRun {
@@ -7725,6 +7765,7 @@ export const api = {
     request<MaintenanceRun>(`/maintenance/items/${itemId}/run`, { method: 'POST' }),
   getMaintenanceRuns: (itemId: number, limit = 20) =>
     request<MaintenanceRun[]>(`/maintenance/items/${itemId}/runs?limit=${limit}`),
+  getActiveMaintenanceRuns: () => request<ActiveMaintenanceRun[]>('/maintenance/runs/active'),
   cancelMaintenanceRun: (runId: number) =>
     request<{ status: string; id: number }>(`/maintenance/runs/${runId}`, { method: 'DELETE' }),
   performMaintenance: (itemId: number, notes?: string) =>

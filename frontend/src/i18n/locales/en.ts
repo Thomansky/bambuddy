@@ -683,6 +683,22 @@ export default {
       customSubnetNote: 'Use a custom subnet if your printer is on a different network than this server. The FTP (990) and MQTT (8883) ports must be reachable across the routing boundary.',
     },
     // AMS Drying
+    // A calibration run on the printer card (#3127)
+    maintenanceRun: {
+      open: 'Open maintenance',
+      running: 'running',
+      runningSince: 'running since {{time}}',
+      startsAt: 'starts at {{time}} at the earliest',
+      bedCooling: 'Waiting: bed cooling down, {{temp}} °C, starts below {{target}} °C',
+      stage: 'Step {{index}} of {{count}}: {{stage}}',
+      stageOnly: 'Step: {{stage}}',
+      next: 'Next: {{step}}',
+      then: 'After that: {{name}}',
+      stepVisionPlate: 'put in the vision encoder plate and release the plate',
+      stepCoolBed: 'the bed cools down below {{target}} °C',
+      stepCoolBedFans: 'the bed cools down below {{target}} °C, helped by the aux and exhaust fan',
+      stepStart: 'the calibration starts by itself',
+    },
     drying: {
       start: 'Start Drying',
       stop: 'Stop Drying',
@@ -2035,6 +2051,9 @@ export default {
       bedTempBelowValue: 'Bed temperature threshold (°C)',
       bedTempUnit: '°C',
       bedTempBelowSuffix: '',
+      assistedCooling: 'Assisted cooling: aux and exhaust fan run until the bed is cool enough',
+      assistedCoolingHint: 'While the run waits for the bed, Bambuddy switches the aux and the exhaust fan to full speed, and off again before the calibration starts.',
+      fansRunning: 'aux and exhaust fan running',
       trigger: 'Trigger',
       triggerManual: 'Manual',
       triggerWhenDue: 'When due',

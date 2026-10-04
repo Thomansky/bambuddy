@@ -679,6 +679,22 @@ export default {
       customSubnetNote: 'Wähle ein eigenes Subnetz, wenn dein Drucker in einem anderen Netzwerk als dieser Server steht. Die Ports FTP (990) und MQTT (8883) müssen über die Routinggrenze erreichbar sein.',
     },
     // AMS Drying
+    // Ein Kalibrierlauf auf der Druckerkarte (#3127)
+    maintenanceRun: {
+      open: 'Zur Wartung',
+      running: 'läuft',
+      runningSince: 'läuft seit {{time}}',
+      startsAt: 'startet frühestens {{time}}',
+      bedCooling: 'Wartet: Druckbett kühlt ab, {{temp}} °C, Start unter {{target}} °C',
+      stage: 'Schritt {{index}} von {{count}}: {{stage}}',
+      stageOnly: 'Schritt: {{stage}}',
+      next: 'Als Nächstes: {{step}}',
+      then: 'Danach: {{name}}',
+      stepVisionPlate: 'Vision-Encoder-Platte einlegen und Druckplatte freigeben',
+      stepCoolBed: 'Druckbett kühlt auf unter {{target}} °C ab',
+      stepCoolBedFans: 'Druckbett kühlt mit Hilfs- und Abluftlüfter auf unter {{target}} °C ab',
+      stepStart: 'Kalibrierung startet von selbst',
+    },
     drying: {
       start: 'Trocknung starten',
       stop: 'Trocknung stoppen',
@@ -2016,6 +2032,9 @@ export default {
       bedTempBelowValue: 'Schwellwert Druckbetttemperatur (°C)',
       bedTempUnit: '°C',
       bedTempBelowSuffix: 'ist',
+      assistedCooling: 'Unterstützte Abkühlung: Hilfs- und Abluftlüfter laufen, bis das Druckbett kalt genug ist',
+      assistedCoolingHint: 'Solange der Lauf auf das Druckbett wartet, schaltet Bambuddy Hilfs- und Abluftlüfter auf volle Leistung und vor dem Start der Kalibrierung wieder aus.',
+      fansRunning: 'Hilfs- und Abluftlüfter laufen',
       trigger: 'Auslöser',
       triggerManual: 'Manuell',
       triggerWhenDue: 'Bei Fälligkeit',

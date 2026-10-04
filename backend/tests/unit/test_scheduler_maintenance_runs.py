@@ -515,6 +515,118 @@ async def test_a_later_reason_clears_the_temperature_detail(scheduler, db_sessio
     assert run.waiting_detail is None
 
 
+# ============== Assisted cooling ==============
+
+
+async def _cooling_item(db_session, printer_factory, **options):
+    return await _make_item(
+        db_session,
+        printer_factory,
+        action="motion_precision",
+        model="H2S",
+        action_options={"bed_temp_below": 33, "assisted_cooling": True, **options},
+    )
+
+
+def _h2s_with_bed(bed_temp):
+    state = _state_with_bed(bed_temp)
+    state.internal_gcode_dir = "O1S"
+    return state
+
+
+@pytest.mark.asyncio
+async def test_assisted_cooling_runs_the_fans_while_the_bed_is_too_warm(scheduler, db_session, printer_factory):
+    item = await _cooling_item(db_session, printer_factory)
+    run = await _make_run(db_session, item)
+
+    mock_pm = await _run_idle_pass(scheduler, db_session, _h2s_with_bed(36.0))
+    mock_pm.set_assisted_cooling.assert_called_once_with(item.printer_id, True)
+    mock_pm.start_internal_gcode_file.assert_not_called()
+    await db_session.refresh(run)
+    assert run.waiting_reason == "bed_too_warm"
+    assert run.waiting_detail == {"bed_temp": 36.0, "threshold": 33.0, "cooling": True}
+
+    # Still warm on the next pass: the fans are not switched on again, so a
+    # person who turned them down on the printer is not overruled.
+    mock_pm = await _run_idle_pass(scheduler, db_session, _h2s_with_bed(34.5))
+    mock_pm.set_assisted_cooling.assert_not_called()
+    await db_session.refresh(run)
+    assert run.waiting_detail == {"bed_temp": 34.5, "threshold": 33.0, "cooling": True}
+
+
+@pytest.mark.asyncio
+async def test_the_fans_go_off_before_the_calibration_starts(scheduler, db_session, printer_factory):
+    item = await _cooling_item(db_session, printer_factory)
+    run = await _make_run(db_session, item)
+    await _run_idle_pass(scheduler, db_session, _h2s_with_bed(36.0))
+
+    mock_pm = await _run_idle_pass(scheduler, db_session, _h2s_with_bed(32.5))
+    sent = [c for c in mock_pm.method_calls if c[0] in ("set_assisted_cooling", "start_internal_gcode_file")]
+    assert [c[0] for c in sent] == ["set_assisted_cooling", "start_internal_gcode_file"]
+    assert sent[0].args == (item.printer_id, False)
+    await db_session.refresh(run)
+    assert run.status == "running"
+    assert scheduler._assisted_cooling == {}
+
+
+@pytest.mark.asyncio
+async def test_without_assisted_cooling_the_fans_are_left_alone(scheduler, db_session, printer_factory):
+    item = await _make_item(
+        db_session, printer_factory, action="motion_precision", model="H2S", action_options={"bed_temp_below": 33}
+    )
+    run = await _make_run(db_session, item)
+    mock_pm = await _run_idle_pass(scheduler, db_session, _h2s_with_bed(36.0))
+    mock_pm.set_assisted_cooling.assert_not_called()
+    await db_session.refresh(run)
+    assert run.waiting_detail == {"bed_temp": 36.0, "threshold": 33.0}
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_run_switches_the_fans_off(scheduler, db_session, printer_factory):
+    item = await _cooling_item(db_session, printer_factory)
+    run = await _make_run(db_session, item)
+    await _run_idle_pass(scheduler, db_session, _h2s_with_bed(36.0))
+    run.status = "cancelled"
+    await db_session.commit()
+
+    mock_pm = await _run_idle_pass(scheduler, db_session, _h2s_with_bed(35.0))
+    mock_pm.set_assisted_cooling.assert_called_once_with(item.printer_id, False)
+    assert scheduler._assisted_cooling == {}
+
+
+@pytest.mark.asyncio
+async def test_switching_assisted_cooling_off_switches_the_fans_off(scheduler, db_session, printer_factory):
+    item = await _cooling_item(db_session, printer_factory)
+    run = await _make_run(db_session, item)
+    await _run_idle_pass(scheduler, db_session, _h2s_with_bed(36.0))
+    item.action_options = {"bed_temp_below": 33}
+    await db_session.commit()
+
+    mock_pm = await _run_idle_pass(scheduler, db_session, _h2s_with_bed(35.0))
+    mock_pm.set_assisted_cooling.assert_called_once_with(item.printer_id, False)
+    await db_session.refresh(run)
+    assert run.waiting_detail == {"bed_temp": 35.0, "threshold": 33.0}
+
+
+@pytest.mark.asyncio
+async def test_a_job_that_takes_the_printer_keeps_its_own_fans(scheduler, db_session, printer_factory):
+    item = await _cooling_item(db_session, printer_factory)
+    run = await _make_run(db_session, item)
+    await _run_idle_pass(scheduler, db_session, _h2s_with_bed(36.0))
+
+    with (
+        patch("backend.app.services.print_scheduler.printer_manager") as mock_pm,
+        patch.object(scheduler, "_is_printer_idle", return_value=False),
+    ):
+        mock_pm.get_status.return_value = _state_with_bed(60.0, "RUNNING")
+        mock_pm.is_awaiting_plate_clear.return_value = False
+        await scheduler._check_maintenance_runs(db_session, True)
+    mock_pm.set_assisted_cooling.assert_not_called()
+    assert scheduler._assisted_cooling == {}
+    await db_session.refresh(run)
+    assert run.waiting_reason == "printer_busy"
+
+
 # ============== Triggers ==============
 
 

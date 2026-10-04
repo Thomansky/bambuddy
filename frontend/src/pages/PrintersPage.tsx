@@ -192,6 +192,7 @@ import { AssignSpoolModal } from '../components/AssignSpoolModal';
 import { ConfigureAmsSlotModal } from '../components/ConfigureAmsSlotModal';
 import { PaCalibrationModal } from '../components/PaCalibrationModal';
 import { PaCalibrationCard } from '../components/PaCalibrationCard';
+import { MaintenanceRunBanner } from '../components/MaintenanceRunBanner';
 import { paCalibrationBlockedKey, supportsPaCalibration } from '../utils/paCalibration';
 import { useToast } from '../contexts/ToastContext';
 import { ChamberLight } from '../components/icons/ChamberLight';
@@ -6827,6 +6828,10 @@ function PrinterCard({
           dryingActive={amsData.some(a => (a.dry_time ?? 0) > 0)}
           timeFormat={timeFormat}
         />
+
+        {/* A calibration run (#3127): what runs or waits on this printer --
+            the bed cooling down with its live temperature -- and what is next. */}
+        <MaintenanceRunBanner printerId={printer.id} bedTemp={status?.temperatures?.bed} timeFormat={timeFormat} />
 
         {/* A flow-dynamics run outlives the modal that started it: seven
             minutes of printing and then a wait for a person, so the card polls

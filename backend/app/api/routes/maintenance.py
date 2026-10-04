@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func as sa_func, select
+from sqlalchemy import and_, func as sa_func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -18,6 +18,7 @@ from backend.app.models.maintenance import MaintenanceHistory, MaintenanceRun, M
 from backend.app.models.printer import Printer
 from backend.app.models.user import User
 from backend.app.schemas.maintenance import (
+    ActiveMaintenanceRun,
     CurrentRun,
     DeletedMaintenanceTypeResponse,
     MaintenanceHistoryResponse,
@@ -1064,6 +1065,65 @@ async def list_maintenance_runs(
         .limit(limit)
     )
     return list(result.scalars().all())
+
+
+@router.get("/runs/active", response_model=list[ActiveMaintenanceRun])
+async def list_active_maintenance_runs(
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.MAINTENANCE_READ),
+):
+    """Every pending or running calibration run, by printer in the order the
+    runs go out, with what each waits for -- what the printer cards show.
+
+    A running run comes with the printer's own stage report. A pending run
+    of an item switched off, or of a hidden type, is left out: the scheduler
+    cancels it on its next pass. A running one is always in.
+    """
+    result = await db.execute(
+        select(MaintenanceRun)
+        .join(MaintenanceRun.printer_maintenance)
+        .join(PrinterMaintenance.maintenance_type)
+        .where(MaintenanceRun.status.in_(maintenance_actions.RUN_ACTIVE_STATUSES))
+        .where(
+            or_(
+                MaintenanceRun.status == "running",
+                and_(PrinterMaintenance.enabled.is_(True), MaintenanceType.is_deleted.is_(False)),
+            )
+        )
+        .options(selectinload(MaintenanceRun.printer_maintenance).selectinload(PrinterMaintenance.maintenance_type))
+    )
+    runs = maintenance_actions.active_runs_in_line_order(list(result.scalars().all()))
+    positions: dict[int, int] = {}
+    out: list[ActiveMaintenanceRun] = []
+    for run in runs:
+        item = run.printer_maintenance
+        position = positions.get(run.printer_id, 0)
+        positions[run.printer_id] = position + 1
+        stage = None
+        if run.status == "running":
+            stage = maintenance_actions.run_stage_progress(printer_manager.get_status(run.printer_id))
+        out.append(
+            ActiveMaintenanceRun(
+                id=run.id,
+                printer_id=run.printer_id,
+                item_id=item.id,
+                type_name=item.maintenance_type.name,
+                action=item.maintenance_type.action,
+                status=run.status,
+                source=run.source,
+                waiting_reason=run.waiting_reason,
+                waiting_detail=run.waiting_detail,
+                plate_requested_at=run.plate_requested_at,
+                start_after=run.start_after,
+                created_at=run.created_at,
+                started_at=run.started_at,
+                bed_temp_below=maintenance_actions.bed_temp_below(item.action_options),
+                assisted_cooling=maintenance_actions.assisted_cooling(item.action_options),
+                position=position,
+                stage=stage,
+            )
+        )
+    return out
 
 
 def _printer_is_running_action(printer_id: int, action: str | None) -> bool:

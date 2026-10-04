@@ -105,6 +105,12 @@ BED_TEMP_BELOW_MAX = 120.0
 WAIT_BED_TOO_WARM = "bed_too_warm"
 WAIT_BED_TEMP_UNKNOWN = "bed_temp_unknown"
 
+# Assisted cooling, next to the start condition in ``action_options``: while a
+# run waits for its bed to cool, the aux and the exhaust (chamber) fan run at
+# full speed, and they go off again once the bed is cool enough or the run no
+# longer waits for it. Only meaningful together with ``bed_temp_below``.
+ASSISTED_COOLING_KEY = "assisted_cooling"
+
 # Runs on one printer go out one at a time, in a fixed order (#3127): the
 # levelling calibration before the vision encoder one -- it heats the bed,
 # and the cold-bed condition then holds the vision encoder run back on its
@@ -220,21 +226,36 @@ def bed_temp_below(options: dict | None) -> float | None:
         return None
 
 
+def assisted_cooling(options: dict | None) -> bool:
+    """Should the fans help the bed cool down for a waiting run?
+
+    Only with a start condition to cool down to; on its own the option is
+    stored but does nothing.
+    """
+    return (
+        isinstance(options, dict) and options.get(ASSISTED_COOLING_KEY) is True and bed_temp_below(options) is not None
+    )
+
+
 def stored_action_options(action: str | None, options: dict) -> dict:
     """What a PATCH stores for ``action`` from a validated option payload.
 
     The calibration flags are filled in for the action that has them; the
-    start condition is kept when set and dropped when null or absent.
+    start condition is kept when set and dropped when null or absent, and
+    assisted cooling is kept when on.
     """
     stored: dict = normalize_calibration_options(options) if has_options(action) else {}
     threshold = normalize_bed_temp_below(options.get(BED_TEMP_BELOW_KEY))
     if threshold is not None:
         stored[BED_TEMP_BELOW_KEY] = threshold
+    if options.get(ASSISTED_COOLING_KEY) is True:
+        stored[ASSISTED_COOLING_KEY] = True
     return stored
 
 
 def response_action_options(action: str | None, options: dict | None) -> dict | None:
-    """The option set the overview reports: flags plus the start condition.
+    """The option set the overview reports: flags, the start condition and
+    assisted cooling.
 
     None for an action without options and without a condition, so a card
     that has nothing to show gets nothing.
@@ -243,6 +264,8 @@ def response_action_options(action: str | None, options: dict | None) -> dict | 
     threshold = bed_temp_below(options)
     if threshold is not None:
         out[BED_TEMP_BELOW_KEY] = threshold
+    if isinstance(options, dict) and options.get(ASSISTED_COOLING_KEY) is True:
+        out[ASSISTED_COOLING_KEY] = True
     return out or None
 
 
@@ -317,6 +340,37 @@ def head_runs(runs: list[MaintenanceRun], now: datetime) -> dict[int, Maintenanc
         if run.status == "pending" and (run.start_after is None or run.start_after <= now):
             heads.setdefault(run.printer_id, run)
     return heads
+
+
+def active_runs_in_line_order(runs: list[MaintenanceRun]) -> list[MaintenanceRun]:
+    """Active runs by printer as they will go out: a running run first, then
+    :func:`run_order_key` order. ``printer_maintenance.maintenance_type`` loaded."""
+    return sorted(runs, key=lambda run: (run.printer_id, run.status != "running", run_order_key(run)))
+
+
+def run_stage_progress(state: object) -> dict | None:
+    """Where a running calibration is, from the printer's own stage report.
+
+    The printer sends the stages it will go through (``stg``) and the one it
+    is in (``stg_cur``): {"index": 3, "count": 5, "current": "Measuring
+    motion precision", "next": "Enhancing motion precision"}. The index is
+    1-based, and None -- with no next stage -- when the current stage is not
+    in the list. None while the printer reports no stage.
+    """
+    from backend.app.services.bambu_mqtt import get_stage_name
+
+    current = getattr(state, "stg_cur", -1)
+    if not isinstance(current, int) or isinstance(current, bool) or current < 0:
+        return None
+    stages = [stage for stage in (getattr(state, "stg", None) or []) if isinstance(stage, int)]
+    index = stages.index(current) if current in stages else None
+    next_stage = stages[index + 1] if index is not None and index + 1 < len(stages) else None
+    return {
+        "index": index + 1 if index is not None else None,
+        "count": len(stages) or None,
+        "current": get_stage_name(current),
+        "next": get_stage_name(next_stage) if next_stage is not None else None,
+    }
 
 
 # ============== Holds on the print queue ==============

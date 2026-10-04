@@ -59,6 +59,7 @@ import type {
 } from '../api/client';
 import { getMaintenanceWikiUrl } from '../utils/maintenanceWikiUrls';
 import { maintenanceTypeLabel } from '../utils/maintenanceTypeLabels';
+import { MAINTENANCE_WAITING_REASON_KEYS } from '../utils/maintenanceRunText';
 import {
   MAINTENANCE_KIND_BADGE_CLASS,
   MAINTENANCE_KIND_LABEL_KEYS,
@@ -199,17 +200,6 @@ const CALIBRATION_OPTION_ORDER: CalibrationOption[] = [
   'nozzle_clumping',
 ];
 
-const WAITING_REASON_KEYS: Record<string, string> = {
-  printer_offline: 'maintenance.calibration.waitingPrinterOffline',
-  printer_busy: 'maintenance.calibration.waitingPrinterBusy',
-  awaiting_plate_clear: 'maintenance.calibration.waitingPlateClear',
-  already_drying: 'maintenance.calibration.waitingAlreadyDrying',
-  bed_too_warm: 'maintenance.calibration.waitingBedTooWarm',
-  bed_temp_unknown: 'maintenance.calibration.waitingBedTempUnknown',
-  after_other_run: 'maintenance.calibration.waitingAfterOtherRun',
-  vision_encoder_plate: 'maintenance.calibration.waitingVisionPlate',
-};
-
 // Start condition "only when the bed is below N °C" (#3127): the value the
 // box is first ticked with, and the range the backend accepts.
 const DEFAULT_BED_TEMP_BELOW = 30;
@@ -286,10 +276,19 @@ function CalibrationActionPanel({
     if (bedTempBelow != null) {
       const rest: CalibrationOptions = { ...options };
       delete rest.bed_temp_below;
+      // Without a temperature to cool down to the fans have no job either.
+      delete rest.assisted_cooling;
       onUpdate(item.id, { action_options: rest });
     } else {
       onUpdate(item.id, { action_options: { ...options, bed_temp_below: DEFAULT_BED_TEMP_BELOW } });
     }
+  };
+
+  const toggleAssistedCooling = () => {
+    const rest: CalibrationOptions = { ...options };
+    if (options.assisted_cooling) delete rest.assisted_cooling;
+    else rest.assisted_cooling = true;
+    onUpdate(item.id, { action_options: rest });
   };
 
   const commitBedTemp = () => {
@@ -328,7 +327,7 @@ function CalibrationActionPanel({
       return { text: t('maintenance.calibration.runningSince', { time: formatDate(run.started_at) }), tone: 'text-bambu-green' };
     }
     if (run) {
-      const key = run.waiting_reason ? WAITING_REASON_KEYS[run.waiting_reason] : null;
+      const key = run.waiting_reason ? MAINTENANCE_WAITING_REASON_KEYS[run.waiting_reason] : null;
       if (key) {
         const temp = run.waiting_detail?.bed_temp;
         const text = t(key, {
@@ -336,7 +335,9 @@ function CalibrationActionPanel({
           // The run ahead on the same printer, under its translated name
           item: maintenanceTypeLabel(run.waiting_detail?.item ?? '', t),
         });
-        return { text, tone: 'text-amber-700 dark:text-amber-400' };
+        // Assisted cooling has the fans on while the bed cools down
+        const fans = run.waiting_detail?.cooling ? ` · ${t('maintenance.calibration.fansRunning')}` : '';
+        return { text: `${text}${fans}`, tone: 'text-amber-700 dark:text-amber-400' };
       }
       if (run.waiting_reason) {
         return { text: t('maintenance.calibration.waitingOther', { reason: run.waiting_reason }), tone: 'text-amber-700 dark:text-amber-400' };
@@ -419,6 +420,22 @@ function CalibrationActionPanel({
           </>
         )}
       </div>
+      {/* With a condition: the aux and exhaust fans help the bed get there */}
+      {bedTempBelow != null && (
+        <label
+          className="flex items-center gap-1.5 pl-5 text-xs text-bambu-gray-light cursor-pointer"
+          title={t('maintenance.calibration.assistedCoolingHint')}
+        >
+          <input
+            type="checkbox"
+            checked={!!options.assisted_cooling}
+            onChange={toggleAssistedCooling}
+            disabled={!canUpdate || !item.enabled}
+            className="accent-bambu-green"
+          />
+          {t('maintenance.calibration.assistedCooling')}
+        </label>
+      )}
 
       {/* Trigger + schedule */}
       <div className="flex flex-wrap items-center gap-2">

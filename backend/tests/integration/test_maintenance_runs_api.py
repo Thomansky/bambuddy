@@ -678,6 +678,111 @@ class TestBedTempBelowSetting:
         assert item["last_run"]["waiting_detail"] is None
 
 
+class TestAssistedCoolingSetting:
+    """The fans help the bed cool down to the start condition (#3127)."""
+
+    async def test_set_next_to_the_condition_and_read_back(self, async_client, printer_factory):
+        printer = await printer_factory(model="H2S")
+        item = await _motion_item(async_client, printer.id)
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}",
+            json={"action_options": {"bed_temp_below": 33, "assisted_cooling": True}},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["action_options"] == {"bed_temp_below": 33.0, "assisted_cooling": True}
+        item = await _motion_item(async_client, printer.id)
+        assert item["action_options"] == {"bed_temp_below": 33.0, "assisted_cooling": True}
+
+        # Left out, it is off again, like the condition
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}", json={"action_options": {"bed_temp_below": 33}}
+        )
+        assert response.json()["action_options"] == {"bed_temp_below": 33.0}
+
+    async def test_something_that_is_no_boolean_is_a_422(self, async_client, printer_factory):
+        printer = await printer_factory(model="H2S")
+        item = await _motion_item(async_client, printer.id)
+        response = await async_client.patch(
+            f"/api/v1/maintenance/items/{item['id']}",
+            json={"action_options": {"bed_temp_below": 33, "assisted_cooling": "abc"}},
+        )
+        assert response.status_code == 422, response.text
+
+
+class TestActiveRunsForThePrinterCards:
+    """GET /maintenance/runs/active: what a printer card shows of its runs (#3127)."""
+
+    async def test_a_printers_runs_in_the_order_they_go_out(self, async_client, printer_factory, db_session):
+        printer = await printer_factory(model="H2S")
+        calibration = await _calibration_item(async_client, printer.id)
+        vision = await _motion_item(async_client, printer.id)
+        await async_client.patch(
+            f"/api/v1/maintenance/items/{vision['id']}",
+            json={"action_options": {"bed_temp_below": 33, "assisted_cooling": True}},
+        )
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        db_session.add_all(
+            [
+                MaintenanceRun(
+                    printer_maintenance_id=vision["id"],
+                    printer_id=printer.id,
+                    status="pending",
+                    source="schedule",
+                    waiting_reason="after_other_run",
+                    waiting_detail={"item": "Printer Calibration"},
+                ),
+                MaintenanceRun(
+                    printer_maintenance_id=calibration["id"],
+                    printer_id=printer.id,
+                    status="running",
+                    source="schedule",
+                    started_at=now - timedelta(minutes=5),
+                ),
+            ]
+        )
+        await db_session.commit()
+
+        state = SimpleNamespace(stg_cur=47, stg=[13, 73, 65, 50, 47, 25, 3, 48])
+        with patch("backend.app.api.routes.maintenance.printer_manager") as mock_pm:
+            mock_pm.get_status.return_value = state
+            response = await async_client.get("/api/v1/maintenance/runs/active")
+
+        assert response.status_code == 200, response.text
+        runs = response.json()
+        assert [(run["type_name"], run["status"], run["position"]) for run in runs] == [
+            ("Printer Calibration", "running", 0),
+            ("Vision Encoder Calibration", "pending", 1),
+        ]
+        assert runs[0]["stage"] == {
+            "index": 5,
+            "count": 8,
+            "current": "Auto bed leveling - phase 1",
+            "next": "Motor noise cancellation",
+        }
+        assert runs[0]["started_at"].endswith("Z")
+        assert runs[1]["stage"] is None
+        assert runs[1]["action"] == "motion_precision"
+        assert (runs[1]["bed_temp_below"], runs[1]["assisted_cooling"]) == (33.0, True)
+        assert runs[1]["waiting_detail"] == {"item": "Printer Calibration"}
+
+    async def test_finished_runs_and_switched_off_items_are_left_out(self, async_client, printer_factory, db_session):
+        printer = await printer_factory()
+        item = await _calibration_item(async_client, printer.id)
+        db_session.add(
+            MaintenanceRun(printer_maintenance_id=item["id"], printer_id=printer.id, status="completed", source="due")
+        )
+        db_session.add(
+            MaintenanceRun(printer_maintenance_id=item["id"], printer_id=printer.id, status="pending", source="due")
+        )
+        await db_session.commit()
+        await async_client.patch(f"/api/v1/maintenance/items/{item['id']}", json={"enabled": False})
+
+        response = await async_client.get("/api/v1/maintenance/runs/active")
+
+        assert response.status_code == 200, response.text
+        assert response.json() == []
+
+
 class TestNotificationToggle:
     """The bell on every card (#3127): notifications_enabled per item."""
 

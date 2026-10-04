@@ -1,6 +1,7 @@
 """Unit tests for the actionable-maintenance helpers (#3127)."""
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,6 +10,7 @@ from backend.app.services.maintenance_actions import (
     ACTION_MOTION_PRECISION,
     CALIBRATION_CANCELLED_PRINT_ERROR,
     CALIBRATION_FLAGS,
+    assisted_cooling,
     available_calibration_options,
     bed_condition_wait,
     bed_temp_below,
@@ -23,6 +25,7 @@ from backend.app.services.maintenance_actions import (
     resolve_run_outcome,
     response_action_options,
     run_options,
+    run_stage_progress,
     selected_calibration_flags,
     stored_action_options,
 )
@@ -337,3 +340,53 @@ class TestActionJobs:
         assert job_names_for_action(None) == frozenset()
         assert not matches_action(None, "/usr/etc/print/O1S/calibrate_motion_precision.gcode", None)
         assert not matches_action("pressure_advance", "", "auto_pa_line_calib_mode")
+
+
+class TestAssistedCooling:
+    """The fans help the bed cool down to the start condition."""
+
+    def test_only_together_with_a_start_condition(self):
+        assert assisted_cooling({"bed_temp_below": 33.0, "assisted_cooling": True}) is True
+        assert assisted_cooling({"assisted_cooling": True}) is False
+        assert assisted_cooling({"bed_temp_below": 33.0}) is False
+        assert assisted_cooling({"bed_temp_below": 33.0, "assisted_cooling": "yes"}) is False
+        assert assisted_cooling(None) is False
+
+    def test_stored_when_on_and_dropped_when_off(self):
+        on = stored_action_options(ACTION_MOTION_PRECISION, {"bed_temp_below": 33, "assisted_cooling": True})
+        off = stored_action_options(ACTION_MOTION_PRECISION, {"bed_temp_below": 33, "assisted_cooling": False})
+        assert on == {"bed_temp_below": 33.0, "assisted_cooling": True}
+        assert off == {"bed_temp_below": 33.0}
+
+    def test_reported_next_to_the_flags(self):
+        options = response_action_options(ACTION_CALIBRATION, {"bed_leveling": True, "assisted_cooling": True})
+        assert options["assisted_cooling"] is True
+        assert options["bed_leveling"] is True
+        assert response_action_options(ACTION_MOTION_PRECISION, {"assisted_cooling": True}) == {
+            "assisted_cooling": True
+        }
+
+
+class TestRunStageProgress:
+    """Where a running calibration is, from the printer's stage report."""
+
+    def test_the_current_stage_its_place_and_the_next_one(self):
+        state = SimpleNamespace(stg_cur=36, stg=[13, 54, 36, 37, 38])
+        assert run_stage_progress(state) == {
+            "index": 3,
+            "count": 5,
+            "current": "Measuring motion precision",
+            "next": "Enhancing motion precision",
+        }
+
+    def test_the_last_stage_has_no_next(self):
+        state = SimpleNamespace(stg_cur=38, stg=[13, 54, 36, 37, 38])
+        assert run_stage_progress(state)["next"] is None
+
+    def test_a_stage_outside_the_list_is_named_without_a_place(self):
+        state = SimpleNamespace(stg_cur=13, stg=[])
+        assert run_stage_progress(state) == {"index": None, "count": None, "current": "Homing toolhead", "next": None}
+
+    def test_no_stage_reported(self):
+        assert run_stage_progress(SimpleNamespace(stg_cur=-1, stg=[13])) is None
+        assert run_stage_progress(None) is None

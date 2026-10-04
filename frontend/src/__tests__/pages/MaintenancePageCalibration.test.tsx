@@ -463,6 +463,66 @@ describe('MaintenancePage calibration card', () => {
     expect(within(motionPanel).getByText('Waiting: bed temperature unknown')).toBeInTheDocument();
   });
 
+  it('offers assisted cooling with the bed condition and saves it next to it', async () => {
+    server.use(
+      http.get('/api/v1/maintenance/overview', () =>
+        HttpResponse.json(overviewWith({}, [{ ...motionItem, action_options: { bed_temp_below: 33 } }]))
+      )
+    );
+    await expandPrinter();
+    const panel = await screen.findByTestId('calibration-panel-9');
+    const fans = within(panel).getByLabelText(/Assisted cooling/);
+    expect(fans).not.toBeChecked();
+    fireEvent.click(fans);
+    await waitFor(() => expect(patches).toHaveLength(1));
+    expect(patches[0]).toEqual({ action_options: { bed_temp_below: 33, assisted_cooling: true } });
+  });
+
+  it('without the bed condition there is no assisted cooling, and unticking it takes the fans along', async () => {
+    server.use(
+      http.get('/api/v1/maintenance/overview', () =>
+        HttpResponse.json(
+          overviewWith({}, [{ ...motionItem, action_options: { bed_temp_below: 33, assisted_cooling: true } }])
+        )
+      )
+    );
+    const levelling = await expandPrinter();
+    expect(within(levelling).queryByLabelText(/Assisted cooling/)).toBeNull();
+    const panel = await screen.findByTestId('calibration-panel-9');
+    expect(within(panel).getByLabelText(/Assisted cooling/)).toBeChecked();
+    fireEvent.click(within(panel).getByLabelText('Only when the bed is below'));
+    await waitFor(() => expect(patches).toHaveLength(1));
+    expect(patches[0]).toEqual({ action_options: {} });
+  });
+
+  it('a run cooling with the fans says so', async () => {
+    server.use(
+      http.get('/api/v1/maintenance/overview', () =>
+        HttpResponse.json(
+          overviewWith({}, [
+            {
+              ...motionItem,
+              action_options: { bed_temp_below: 33, assisted_cooling: true },
+              current_run: {
+                id: 46,
+                status: 'pending',
+                source: 'schedule',
+                waiting_reason: 'bed_too_warm',
+                waiting_detail: { bed_temp: 35.5, threshold: 33, cooling: true },
+                started_at: null,
+              },
+            },
+          ])
+        )
+      )
+    );
+    await expandPrinter();
+    const panel = await screen.findByTestId('calibration-panel-9');
+    expect(
+      within(panel).getByText('Waiting: bed still warm (35.5 °C) · aux and exhaust fan running')
+    ).toBeInTheDocument();
+  });
+
   it('names the idle gate on the automatic triggers while plate-clear confirmation is off', async () => {
     const panel = await expandPrinter();
     const select = within(panel).getByRole('combobox', { name: 'Trigger' });

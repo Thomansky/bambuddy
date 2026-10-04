@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, TypeAdapter, ValidationError, ValidationI
 
 from backend.app.schemas.print_queue import UTCDatetime
 from backend.app.services.maintenance_actions import (
+    ASSISTED_COOLING_KEY,
     BED_TEMP_BELOW_KEY,
     CALIBRATION_FLAGS,
     KNOWN_ACTIONS,
@@ -16,7 +17,8 @@ from backend.app.services.maintenance_actions import (
 )
 
 # Calibration flags (bool) plus the bed_temp_below start condition (float,
-# degrees C), as stored on the item and reported by the overview (#3127).
+# degrees C) and assisted_cooling (bool), as stored on the item and reported
+# by the overview (#3127).
 ActionOptions = dict[str, bool | float]
 
 # Flags go through pydantic's own bool parsing so "false"/0 still read as
@@ -152,7 +154,8 @@ class PrinterMaintenanceUpdate(BaseModel):
     # where the stored values fill in whatever the PATCH leaves out.
     # action_options is the whole new set: the flags the client sends (the
     # route fills the rest in as off) plus bed_temp_below, where null or a
-    # missing key clears the condition.
+    # missing key clears the condition, and assisted_cooling (fans help the
+    # bed cool down to it), where false or a missing key turns it off.
     action_options: dict[str, Any] | None = None
     trigger_mode: str | None = Field(default=None, pattern=f"^({'|'.join(TRIGGER_MODES)})$")
     schedule_days: list[int] | None = None
@@ -166,12 +169,14 @@ class PrinterMaintenanceUpdate(BaseModel):
     def _known_options_only(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
         if value is None:
             return None
-        unknown = sorted(set(value) - set(CALIBRATION_FLAGS) - {BED_TEMP_BELOW_KEY})
+        unknown = sorted(set(value) - set(CALIBRATION_FLAGS) - {BED_TEMP_BELOW_KEY, ASSISTED_COOLING_KEY})
         if unknown:
             raise ValueError(f"Unknown calibration option(s): {', '.join(unknown)}")
         checked: dict[str, Any] = {flag: _parse_flag(flag, value[flag]) for flag in CALIBRATION_FLAGS if flag in value}
         if BED_TEMP_BELOW_KEY in value:
             checked[BED_TEMP_BELOW_KEY] = normalize_bed_temp_below(value[BED_TEMP_BELOW_KEY])
+        if ASSISTED_COOLING_KEY in value:
+            checked[ASSISTED_COOLING_KEY] = _parse_flag(ASSISTED_COOLING_KEY, value[ASSISTED_COOLING_KEY])
         return checked
 
     @field_validator("enabled", "notifications_enabled", "reserve_before_schedule")
@@ -256,6 +261,43 @@ class CurrentRun(BaseModel):
     waiting_reason: str | None
     waiting_detail: dict[str, Any] | None = None
     started_at: UTCDatetime
+
+
+class RunStageProgress(BaseModel):
+    """Where a running calibration is, from the printer's own stage report."""
+
+    index: int | None = Field(description="1-based position of the current stage in the printer's list")
+    count: int | None = Field(description="How many stages the printer announced")
+    current: str = Field(description='The current stage, e.g. "Measuring motion precision"')
+    next: str | None = Field(description="The stage after it, if the printer announced one")
+
+
+class ActiveMaintenanceRun(BaseModel):
+    """A pending or running calibration run as the printer card shows it:
+    what it is, what it waits for and what its item asks of the printer."""
+
+    id: int
+    printer_id: int
+    item_id: int
+    # The stored type name; the client translates the seeded ones.
+    type_name: str
+    action: str | None
+    status: str
+    source: str
+    waiting_reason: str | None
+    # {"bed_temp", "threshold", "cooling"} for bed_too_warm, {"item"} for after_other_run
+    waiting_detail: dict[str, Any] | None = None
+    # A vision encoder run whose plate has been asked for (and maybe released)
+    plate_requested_at: UTCDatetime = None
+    start_after: UTCDatetime = None
+    created_at: UTCDatetime = None
+    started_at: UTCDatetime = None
+    # The item's start condition and whether the fans help the bed get there
+    bed_temp_below: float | None = None
+    assisted_cooling: bool = False
+    # 0 for the run that goes out first on its printer
+    position: int = 0
+    stage: RunStageProgress | None = None
 
 
 # Maintenance History schemas

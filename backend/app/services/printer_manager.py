@@ -1006,6 +1006,18 @@ class PrinterManager:
             return await self._clients[printer_id].await_internal_gcode_ack(path, timeout)
         return (True, "no acknowledgement from printer")
 
+    def set_assisted_cooling(self, printer_id: int, on: bool) -> bool:
+        """Aux and exhaust (chamber) fan to full speed, or both off again: a
+        warm bed cools down faster for a calibration waiting on it (#3127).
+        False when the printer is not connected or a command was not sent."""
+        client = self._clients.get(printer_id)
+        if client is None or not client.state.connected:
+            return False
+        speed = 255 if on else 0
+        aux = client.set_aux_fan(speed)
+        exhaust = client.set_chamber_fan(speed)
+        return aux and exhaust
+
     async def wait_for_cooldown(
         self,
         printer_id: int,
