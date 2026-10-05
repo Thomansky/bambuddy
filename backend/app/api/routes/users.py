@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Annotated
 
 import jwt as _jwt
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +17,7 @@ from backend.app.core.auth import (
     RequirePermissionIfAuthEnabled,
     get_current_user_optional,
     get_password_hash,
+    require_auth_if_enabled,
     revoke_jti,
     security,
     verify_password,
@@ -631,7 +632,9 @@ async def change_own_password(
 @router.put("/me/language", response_model=UserResponse)
 async def set_own_language(
     body: UserLanguageUpdate,
+    current_user: User | None = Depends(require_auth_if_enabled),
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)] = None,
+    x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Save the UI language the signed-in user picked.
@@ -641,17 +644,16 @@ async def set_own_language(
     settings permission is needed, unlike for the server-wide language.
     ``null`` clears it and each device follows its browser again.
     """
-    # An API key stands for an integration or a kiosk, not a person at a
-    # browser. Refuse it with 403: the JWT check below would answer 401
-    # "Could not validate credentials", which the SPA takes for a dead
-    # session and drops the kiosk's key.
-    if credentials is not None and credentials.credentials.startswith("bb_"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="An API key has no account language",
-        )
-    current_user = await get_current_user_optional(credentials)
     if not current_user:
+        # A valid API key passes the dependency without a user. It stands for
+        # an integration or a kiosk, not a person at a browser, so it has no
+        # account language: 403, not the 401 the SPA would take for a dead
+        # session and answer by dropping the kiosk's key.
+        if x_api_key or (credentials is not None and credentials.credentials.startswith("bb_")):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="An API key has no account language",
+            )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required to save a language",
