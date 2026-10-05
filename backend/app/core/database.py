@@ -4688,6 +4688,11 @@ async def run_migrations(conn):
     else:
         await _safe_execute(conn, "ALTER TABLE users ADD COLUMN IF NOT EXISTS cloud_token_invalid_at TIMESTAMP")
 
+    # Migration: the UI language a user picked, so it follows them to every
+    # device they sign in on instead of living in one browser's storage.
+    # Nullable: existing users have none and their devices keep their language.
+    await _safe_execute(conn, "ALTER TABLE users ADD COLUMN language VARCHAR(10)")
+
     # Data migration: drop the embedded 3MF Title (`print_name`) from library
     # file metadata so the FileManager displays the filename, not the title (#1489).
     await _migrate_drop_library_print_name(conn)

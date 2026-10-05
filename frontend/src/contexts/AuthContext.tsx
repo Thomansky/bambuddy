@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, api, getAuthToken, setAuthToken } from '../api/client';
 import type { LoginResponse, Permission, TokenPersistence, UserResponse } from '../api/client';
+import i18n, { isSupportedLanguage } from '../i18n';
 
 interface AuthContextType {
   user: UserResponse | null;
@@ -15,6 +16,12 @@ interface AuthContextType {
   logout: () => void;
   refreshUser: () => Promise<void>;
   refreshAuth: () => Promise<void>;
+  /**
+   * Switch the UI language. Signed in, it is also saved to the account, so
+   * every device the user signs in on follows it. Rejects when that save fails;
+   * the language has changed on this device by then.
+   */
+  saveLanguage: (language: string) => Promise<void>;
   hasPermission: (permission: Permission) => boolean;
   hasAnyPermission: (...permissions: Permission[]) => boolean;
   hasAllPermissions: (...permissions: Permission[]) => boolean;
@@ -208,6 +215,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await checkAuthStatus();
   };
 
+  // The account's language follows the user to every device they sign in on.
+  // Without one saved, the device keeps what its browser or picker chose.
+  const accountLanguage = user?.language;
+  useEffect(() => {
+    if (isSupportedLanguage(accountLanguage) && accountLanguage !== i18n.language) {
+      void i18n.changeLanguage(accountLanguage);
+    }
+  }, [accountLanguage]);
+
+  const saveLanguage = useCallback(async (language: string) => {
+    await i18n.changeLanguage(language);
+    if (!authEnabled || !user) return;
+    const updated = await api.setOwnLanguage(language);
+    if (mountedRef.current) {
+      setUser(updated);
+    }
+  }, [authEnabled, user]);
+
   // Memoize permission set for efficient lookups
   const permissionSet = useMemo(() => {
     return new Set(user?.permissions ?? []);
@@ -276,6 +301,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         logout,
         refreshUser,
         refreshAuth,
+        saveLanguage,
         hasPermission,
         hasAnyPermission,
         hasAllPermissions,

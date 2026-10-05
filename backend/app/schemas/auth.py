@@ -88,9 +88,20 @@ class UserResponse(BaseModel):
     groups: list[GroupBrief] = []
     permissions: list[str] = []  # All permissions from groups
     created_at: str
+    # UI language the user picked; None = each device follows its browser.
+    language: str | None = None
 
     class Config:
         from_attributes = True
+
+
+class UserLanguageUpdate(BaseModel):
+    """The UI language a user saves to their account (PUT /users/me/language)."""
+
+    # A frontend locale code ("de", "pt-BR", "zh-TW"), or null to go back to
+    # each device following its browser. Required, so an empty body cannot
+    # clear the choice by accident.
+    language: str | None = Field(..., max_length=10, pattern=r"^[a-z]{2,3}(-[A-Za-z]{2,4})?$")
 
 
 class UserSlim(BaseModel):

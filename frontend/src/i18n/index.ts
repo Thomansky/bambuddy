@@ -40,6 +40,11 @@ const resources = {
 const SUPPORTED_LNGS = ['en', 'de', 'es', 'fr', 'ja', 'it', 'ko', 'nl', 'pt-BR', 'ru', 'sv', 'tr', 'uk', 'zh-CN', 'zh-TW'];
 const APPLIANCE_CONSUMED_KEY = 'bambuddy_appliance_locale_consumed';
 
+/** Whether the UI ships this language, e.g. one saved to a user's account. */
+export function isSupportedLanguage(code: string | null | undefined): code is string {
+  return !!code && SUPPORTED_LNGS.includes(code);
+}
+
 i18n
   .use(LanguageDetector)
   .use(initReactI18next)
