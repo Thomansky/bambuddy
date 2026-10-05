@@ -74,7 +74,7 @@ import { getCurrencySymbol } from '../utils/currency';
 import { VatBadge } from '../components/VatBadge';
 import { getBedTypeInfo } from '../utils/bedType';
 import { invalidateArchiveAndProjectViews } from '../utils/projectQueries';
-import { assignableProjects } from '../utils/projectTree';
+import { assignableProjects, projectChoices, projectText } from '../utils/projectTree';
 import { verdictSourceKey } from '../utils/verdictSource';
 import { usePageFileDrop } from '../hooks/usePageFileDrop';
 import type { Archive, PrintLogEntry, ProjectListItem } from '../api/client';
@@ -299,6 +299,14 @@ async function openInSlicerWithToken(
   }
 }
 
+/** The project an archive is filed under, with its running number and, for a
+ *  sub-project, what it belongs to ("RAFI Group › 4019 RAFI"). Just the name
+ *  while the project list is still loading. */
+function filedProjectPath(archive: Archive, projects: ProjectListItem[] | undefined): string | null {
+  const project = projects?.find((p) => p.id === archive.project_id);
+  return project && projects ? projectChoices([project], projects)[0].path : archive.project_name;
+}
+
 function ArchiveCard({
   archive,
   printerName,
@@ -342,6 +350,7 @@ function ArchiveCard({
   const { showToast } = useToast();
   const { hasPermission, canModify } = useAuth();
   const navigate = useNavigate();
+  const filedProject = projects?.find((p) => p.id === archive.project_id);
   // Name of the printer this archive's saved slicer AMS mapping was resolved
   // against, or undefined when there is none. Undefined also when the printer
   // has since been deleted — a mapping whose printer is gone can never be
@@ -820,7 +829,7 @@ function ArchiveCard({
       onClick: () => setShowPrintLog(true),
     },
     ...(archive.project_id && archive.project_name ? [{
-      label: t('archives.menu.goToProject', { name: archive.project_name }),
+      label: t('archives.menu.goToProject', { name: filedProjectPath(archive, projects) }),
       icon: <FolderKanban className="w-4 h-4 text-bambu-green" />,
       onClick: () => window.location.href = '/projects',
     }] : []),
@@ -860,8 +869,9 @@ function ArchiveCard({
           // project is ordinary (#2888). The archive's own project is kept
           // whatever its status -- it is disabled below, and dropping it
           // would leave the menu unable to say where the archive already is.
-          const assignable = assignableProjects(projects, archive.project_id)
-            .sort((a, b) => a.name.localeCompare(b.name));
+          // Sub-projects follow their parent and read "RAFI Group › 4019
+          // RAFI", which the submenu search matches on as well.
+          const assignable = projectChoices(assignableProjects(projects, archive.project_id), projects);
           if (assignable.length === 0) {
             items.push({
               label: t('archives.menu.noProjectsAvailable'),
@@ -870,9 +880,9 @@ function ArchiveCard({
               disabled: true,
             });
           } else {
-            assignable.forEach(p => {
+            assignable.forEach(({ project: p, path }) => {
               items.push({
-                label: p.name,
+                label: path,
                 icon: <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: p.color || '#888' }} />,
                 onClick: () => assignProjectMutation.mutate(p.id),
                 disabled: archive.project_id === p.id || !canModify('archives', 'update', archive.created_by_id),
@@ -1250,12 +1260,12 @@ function ArchiveCard({
             <span
               className="text-xs px-1.5 py-0.5 rounded-full truncate max-w-[120px]"
               style={{
-                backgroundColor: `${projects?.find(p => p.id === archive.project_id)?.color || '#6b7280'}20`,
-                color: projects?.find(p => p.id === archive.project_id)?.color || '#6b7280'
+                backgroundColor: `${filedProject?.color || '#6b7280'}20`,
+                color: filedProject?.color || '#6b7280'
               }}
-              title={t('archives.card.project', { name: archive.project_name })}
+              title={t('archives.card.project', { name: filedProjectPath(archive, projects) })}
             >
-              {archive.project_name}
+              {filedProject ? projectText(filedProject) : archive.project_name}
             </span>
           )}
           {archive.run_count > 1 && (
@@ -2312,7 +2322,7 @@ function ArchiveListRow({
       onClick: () => setShowPrintLog(true),
     },
     ...(archive.project_id && archive.project_name ? [{
-      label: t('archives.menu.goToProject', { name: archive.project_name }),
+      label: t('archives.menu.goToProject', { name: filedProjectPath(archive, projects) }),
       icon: <FolderKanban className="w-4 h-4 text-bambu-green" />,
       onClick: () => window.location.href = '/projects',
     }] : []),
@@ -2345,8 +2355,7 @@ function ArchiveListRow({
           // project is ordinary (#2888). The archive's own project is kept
           // whatever its status -- it is disabled below, and dropping it
           // would leave the menu unable to say where the archive already is.
-          const assignable = assignableProjects(projects, archive.project_id)
-            .sort((a, b) => a.name.localeCompare(b.name));
+          const assignable = projectChoices(assignableProjects(projects, archive.project_id), projects);
           if (assignable.length === 0) {
             items.push({
               label: t('archives.menu.noProjectsAvailable'),
@@ -2355,9 +2364,9 @@ function ArchiveListRow({
               disabled: true,
             });
           } else {
-            assignable.forEach(p => {
+            assignable.forEach(({ project: p, path }) => {
               items.push({
-                label: p.name,
+                label: path,
                 icon: <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: p.color || '#888' }} />,
                 onClick: () => assignProjectMutation.mutate(p.id),
                 disabled: archive.project_id === p.id,

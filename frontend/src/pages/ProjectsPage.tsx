@@ -34,7 +34,7 @@ import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { getCurrencySymbol } from '../utils/currency';
 import { VatBadge } from '../components/VatBadge';
-import { eligibleParents } from '../utils/projectTree';
+import { eligibleParents, projectChoices } from '../utils/projectTree';
 
 const PROJECT_COLORS = [
   '#ef4444', // red
@@ -84,7 +84,7 @@ export function ProjectModal({ project, onClose, onSave, isLoading, currencySymb
     queryKey: ['projects', undefined],
     queryFn: () => api.getProjects(),
   });
-  const parentOptions = eligibleParents(allProjects || [], project?.id);
+  const parentOptions = projectChoices(eligibleParents(allProjects || [], project?.id), allProjects || []);
   const [coverImageFilename, setCoverImageFilename] = useState(project?.cover_image_filename || null);
   const coverFileInputRef = useRef<HTMLInputElement>(null);
   const [coverUploading, setCoverUploading] = useState(false);
@@ -242,9 +242,9 @@ export function ProjectModal({ project, onClose, onSave, isLoading, currencySymb
               className="w-full bg-bambu-dark border border-bambu-dark-tertiary rounded px-3 py-2 text-white focus:outline-none focus:border-bambu-green"
             >
               <option value="">{t('projects.parentNone')}</option>
-              {parentOptions.map((option) => (
+              {parentOptions.map(({ project: option, path }) => (
                 <option key={option.id} value={option.id}>
-                  {option.name}
+                  {path}
                 </option>
               ))}
             </select>

@@ -7,7 +7,7 @@ import { Card, CardContent } from './Card';
 import { Button } from './Button';
 import { useToast } from '../contexts/ToastContext';
 import { invalidateArchiveAndProjectViews } from '../utils/projectQueries';
-import { assignableProjects } from '../utils/projectTree';
+import { assignableProjects, projectChoices, projectText } from '../utils/projectTree';
 
 interface BatchProjectModalProps {
   selectedIds: number[];
@@ -26,15 +26,16 @@ export function BatchProjectModal({ selectedIds, onClose }: BatchProjectModalPro
   });
 
   // Assigning in bulk, so nothing here has a project to preserve: archived
-  // ones drop off outright (#2888).
+  // ones drop off outright (#2888). Sub-projects follow their parent, and the
+  // search matches number, name and parent alike.
   const sortedProjects = useMemo(
-    () => (projects ? assignableProjects([...projects].sort((a, b) => a.name.localeCompare(b.name))) : undefined),
+    () => (projects ? projectChoices(assignableProjects(projects), projects) : undefined),
     [projects],
   );
 
   const trimmed = query.trim().toLowerCase();
   const visibleProjects = trimmed
-    ? sortedProjects?.filter((p) => p.name.toLowerCase().includes(trimmed))
+    ? sortedProjects?.filter((choice) => choice.path.toLowerCase().includes(trimmed))
     : sortedProjects;
   const showSearch = (sortedProjects?.length ?? 0) > 5;
 
@@ -60,7 +61,7 @@ export function BatchProjectModal({ selectedIds, onClose }: BatchProjectModalPro
     onSuccess: (projectId) => {
       const project = projects?.find(p => p.id === projectId);
       invalidateProjectQueries();
-      showToast(`Added ${selectedIds.length} archive${selectedIds.length !== 1 ? 's' : ''} to "${project?.name}"`);
+      showToast(`Added ${selectedIds.length} archive${selectedIds.length !== 1 ? 's' : ''} to "${project ? projectText(project) : ''}"`);
       onClose();
     },
     onError: () => {
@@ -163,12 +164,13 @@ export function BatchProjectModal({ selectedIds, onClose }: BatchProjectModalPro
                 )}
 
                 {/* Project list */}
-                {visibleProjects?.map((project) => (
+                {visibleProjects?.map(({ project, depth, parentPath }) => (
                   <button
                     key={project.id}
                     onClick={() => assignMutation.mutate(project.id)}
                     disabled={isPending}
                     className="w-full flex items-center gap-3 p-3 rounded-lg bg-bambu-dark hover:bg-bambu-dark-tertiary border border-bambu-dark-tertiary transition-colors text-left disabled:opacity-50"
+                    style={depth && !trimmed ? { marginLeft: `${depth * 1.5}rem`, width: `calc(100% - ${depth * 1.5}rem)` } : undefined}
                   >
                     <div
                       className="w-8 h-8 rounded-full flex items-center justify-center shrink-0"
@@ -180,7 +182,20 @@ export function BatchProjectModal({ selectedIds, onClose }: BatchProjectModalPro
                       />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="text-white font-medium truncate">{project.name}</p>
+                      <div className="flex items-center gap-2 min-w-0">
+                        {project.number && (
+                          <span
+                            className="text-xs font-mono px-1.5 py-0.5 rounded bg-bambu-dark-secondary text-bambu-gray whitespace-nowrap flex-shrink-0"
+                            title={t('projects.number')}
+                          >
+                            {project.number}
+                          </span>
+                        )}
+                        <p className="text-white font-medium truncate">{project.name}</p>
+                      </div>
+                      {parentPath && (
+                        <p className="text-xs text-bambu-gray truncate">{t('projects.partOf', { name: parentPath })}</p>
+                      )}
                       <p className="text-sm text-bambu-gray truncate">
                         {project.archive_count} archive{project.archive_count !== 1 ? 's' : ''}
                         {project.status && ` • ${project.status}`}

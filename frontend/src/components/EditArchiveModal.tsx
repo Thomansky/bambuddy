@@ -7,7 +7,7 @@ import type { Archive } from '../api/client';
 import { Button } from './Button';
 import { PrintLogTable } from './PrintLogTable';
 import { invalidateArchiveAndProjectViews } from '../utils/projectQueries';
-import { assignableProjects } from '../utils/projectTree';
+import { assignableProjects, projectChoices } from '../utils/projectTree';
 import { verdictSourceKey } from '../utils/verdictSource';
 import { NumberInput } from './NumberInput';
 
@@ -117,15 +117,15 @@ export function EditArchiveModal({ archive, onClose, existingTags = [] }: EditAr
   const { data: projects } = useQuery({
     queryKey: ['projects'],
     queryFn: () => api.getProjects(),
-    select: (rows) => [...rows].sort((a, b) => a.name.localeCompare(b.name)),
   });
 
   // Archived projects drop off the list, except the one this archive is
   // already filed under. That one has to stay: a select holding a value with
   // no matching option resets to the first one, so the field would read
-  // "No project" for an archive that is in one (#2888).
+  // "No project" for an archive that is in one (#2888). Sub-projects follow
+  // their parent and read "RAFI Group › 4019 RAFI".
   const projectOptions = useMemo(
-    () => assignableProjects(projects ?? [], archive.project_id),
+    () => projectChoices(assignableProjects(projects ?? [], archive.project_id), projects ?? []),
     [projects, archive.project_id],
   );
 
@@ -362,9 +362,9 @@ export function EditArchiveModal({ archive, onClose, existingTags = [] }: EditAr
               className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
             >
               <option value="">{t('editArchive.noProject')}</option>
-              {projectOptions.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
+              {projectOptions.map(({ project, path }) => (
+                <option key={project.id} value={project.id}>
+                  {path}
                 </option>
               ))}
             </select>

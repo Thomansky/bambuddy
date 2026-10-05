@@ -564,6 +564,28 @@ describe('ArchivesPage', () => {
       await screen.findByText('Shipped Last Month');
       expect(screen.queryByText('Season 2025')).not.toBeInTheDocument();
     });
+
+    it('names a sub-project with its number and its parent, in the menu and on the card', async () => {
+      // Reported on "RAFI Group" and its sub-project "RAFI" (4019): both the
+      // menu and the card showed "RAFI" alone.
+      server.use(
+        http.get('/api/v1/projects/', () =>
+          HttpResponse.json([
+            { id: 6, name: 'RAFI Group', number: null, parent_id: null, color: '#00ae42', status: 'active' },
+            { id: 5, name: 'RAFI', number: '4019', parent_id: 6, color: '#0088ff', status: 'completed' },
+          ]),
+        ),
+        http.get('/api/v1/archives/', () =>
+          HttpResponse.json([mockArchives[0], { ...mockArchives[1], project_id: 5, project_name: 'RAFI' }]),
+        ),
+      );
+      render(<ArchivesPage />);
+
+      const badge = await screen.findByTitle('Project: RAFI Group › 4019 RAFI');
+      expect(badge).toHaveTextContent('4019 RAFI');
+      await openSubmenu();
+      expect(await screen.findByText('RAFI Group › 4019 RAFI')).toBeInTheDocument();
+    });
   });
 
   describe('Not Printed / Printed collections', () => {

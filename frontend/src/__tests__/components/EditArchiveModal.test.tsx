@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { render } from '../utils';
 import { EditArchiveModal } from '../../components/EditArchiveModal';
@@ -497,6 +497,32 @@ describe('EditArchiveModal', () => {
 
       const option = await screen.findByRole('option', { name: 'Last Year' });
       expect((option as HTMLOptionElement).selected).toBe(true);
+    });
+
+    it('names a sub-project with its number and the project it belongs to', async () => {
+      // Reported on "RAFI Group" and its sub-projects: the picker showed
+      // "RAFI" sorted in among everything else, with no number and nothing
+      // saying it is part of "RAFI Group".
+      withStatuses([
+        { id: 1, name: 'Zubehör', number: null, parent_id: null, color: '#00ae42', status: 'active' },
+        { id: 5, name: 'RAFI', number: '4019', parent_id: 6, color: '#00ae42', status: 'completed' },
+        { id: 6, name: 'RAFI Group', number: null, parent_id: null, color: '#00ae42', status: 'active' },
+        { id: 7, name: 'Armpolster', number: '4020', parent_id: 6, color: '#00ae42', status: 'completed' },
+      ]);
+      const filed = { ...mockArchive, project_id: 5 };
+
+      render(<EditArchiveModal archive={filed} onClose={mockOnClose} onSave={mockOnSave} />);
+
+      const option = await screen.findByRole('option', { name: 'RAFI Group › 4019 RAFI' });
+      expect((option as HTMLOptionElement).selected).toBe(true);
+      const picker = option.closest('select') as HTMLSelectElement;
+      expect(within(picker).getAllByRole('option').map((o) => o.textContent)).toEqual([
+        'No project',
+        'RAFI Group',
+        'RAFI Group › 4019 RAFI',
+        'RAFI Group › 4020 Armpolster',
+        'Zubehör',
+      ]);
     });
 
     it('saves the project it was already in when nothing else is touched', async () => {

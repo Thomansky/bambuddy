@@ -9,7 +9,7 @@ import { Button } from './Button';
 import { useToast } from '../contexts/ToastContext';
 import { ConfirmModal } from './ConfirmModal';
 import { formatFileSize } from '../utils/file';
-import { assignableProjects } from '../utils/projectTree';
+import { assignableProjects, projectChoices, type ProjectChoice } from '../utils/projectTree';
 
 function formatTimeAgo(dateStr: string): string {
   const date = new Date(dateStr);
@@ -27,7 +27,7 @@ function formatTimeAgo(dateStr: string): string {
 
 interface PendingUploadItemProps {
   upload: PendingUpload;
-  projects: ProjectListItem[];
+  projects: ProjectChoice<ProjectListItem>[];
   onArchive: (id: number, data?: { tags?: string; notes?: string; project_id?: number }) => void;
   onDiscard: (id: number) => void;
   isArchiving: boolean;
@@ -155,9 +155,9 @@ function PendingUploadItem({
                 className="w-full bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-md px-3 py-2 text-white text-sm"
               >
                 <option value="">No project</option>
-                {projects.map((project) => (
+                {projects.map(({ project, path }) => (
                   <option key={project.id} value={project.id}>
-                    {project.name}
+                    {path}
                   </option>
                 ))}
               </select>
@@ -189,7 +189,8 @@ export function PendingUploadsPanel() {
   const { data: projects } = useQuery({
     queryKey: ['projects'],
     queryFn: () => api.getProjects(),
-    select: (rows) => assignableProjects([...rows].sort((a, b) => a.name.localeCompare(b.name))),
+    // Sub-projects follow their parent and read "RAFI Group › 4019 RAFI".
+    select: (rows) => projectChoices(assignableProjects(rows), rows),
   });
 
   // Archive mutation

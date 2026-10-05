@@ -102,7 +102,7 @@ import { formatDuration, parseUTCDate, formatDate } from '../utils/date';
 import { formatFileSize } from '../utils/file';
 import { folderLabel, folderText } from '../utils/folder';
 import { fitPathCrumbs } from '../utils/pathBarFit';
-import { assignableProjects } from '../utils/projectTree';
+import { assignableProjects, projectChoices } from '../utils/projectTree';
 import { openInSlicer, resolveDesktopSlicer, type SlicerType } from '../utils/slicer';
 import { isSlicedLibraryFile, isSliceableLibraryFile } from '../utils/libraryFiles';
 
@@ -790,8 +790,8 @@ function LinkFolderModal({ folder, onClose, onLink, isLoading, t }: LinkFolderMo
   const { data: projects } = useQuery({
     queryKey: ['projects'],
     queryFn: () => api.getProjects(),
-    select: (rows) =>
-      assignableProjects([...rows].sort((a, b) => a.name.localeCompare(b.name)), folder.project_id),
+    // Sub-projects follow their parent and read "RAFI Group › 4019 RAFI".
+    select: (rows) => projectChoices(assignableProjects(rows, folder.project_id), rows),
   });
 
   const { data: archives } = useQuery({
@@ -870,7 +870,7 @@ function LinkFolderModal({ folder, onClose, onLink, isLoading, t }: LinkFolderMo
           <div className="flex-1 min-h-0 max-h-[min(60vh,32rem)] overflow-y-auto space-y-1 bg-bambu-dark rounded-lg p-2">
             {linkType === 'project' ? (
               projects && projects.length > 0 ? (
-                projects.map((project) => (
+                projects.map(({ project, path }) => (
                   <button
                     key={project.id}
                     onClick={() => setSelectedId(project.id)}
@@ -884,7 +884,7 @@ function LinkFolderModal({ folder, onClose, onLink, isLoading, t }: LinkFolderMo
                       className="w-3 h-3 rounded-full flex-shrink-0"
                       style={{ backgroundColor: project.color || '#00ae42' }}
                     />
-                    <span className="truncate">{project.name}</span>
+                    <span className="truncate">{path}</span>
                   </button>
                 ))
               ) : (
