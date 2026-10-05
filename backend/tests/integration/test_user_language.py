@@ -152,7 +152,8 @@ async def test_requires_a_signed_in_user(async_client: AsyncClient):
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_an_api_key_gets_403_not_the_401_that_ends_a_session(async_client: AsyncClient, db_session):
+@pytest.mark.parametrize("header", ["bearer", "x-api-key"])
+async def test_an_api_key_gets_403_not_the_401_that_ends_a_session(async_client: AsyncClient, db_session, header):
     """A kiosk signed in with a key must keep its key when someone picks a language."""
     await _setup(async_client)
     owner = (await db_session.execute(select(User).where(User.username == ADMIN["username"]))).scalar_one()
@@ -169,7 +170,12 @@ async def test_an_api_key_gets_403_not_the_401_that_ends_a_session(async_client:
     )
     await db_session.commit()
 
-    response = await _put(async_client, full_key, {"language": "de"})
+    if header == "bearer":
+        response = await _put(async_client, full_key, {"language": "de"})
+    else:
+        response = await async_client.put(
+            "/api/v1/users/me/language", headers={"X-API-Key": full_key}, json={"language": "de"}
+        )
 
     assert response.status_code == 403
     await db_session.refresh(owner)
