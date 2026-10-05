@@ -5172,6 +5172,7 @@ export interface UserResponse {
   groups: GroupBrief[];
   permissions: Permission[];  // All permissions from groups
   created_at: string;
+  language?: string | null;  // UI language saved to the account; null = each device follows its browser
 }
 
 /**
@@ -5641,6 +5642,11 @@ export const api = {
     request<{ message: string }>('/users/me/change-password', {
       method: 'POST',
       body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    }),
+  setOwnLanguage: (language: string | null) =>
+    request<UserResponse>('/users/me/language', {
+      method: 'PUT',
+      body: JSON.stringify({ language }),
     }),
 
   // User Email Notifications

@@ -204,6 +204,7 @@ def _user_to_response(user: User) -> UserResponse:
         groups=[GroupBrief(id=g.id, name=g.name) for g in user.groups],
         permissions=sorted(user.get_permissions()),
         created_at=user.created_at.isoformat(),
+        language=user.language,
     )
 
 

@@ -276,7 +276,7 @@ export function SettingsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { t, i18n } = useTranslation();
   const { showToast } = useToast();
-  const { authEnabled, user, isAdmin, refreshAuth, hasPermission, loading: authLoading } = useAuth();
+  const { authEnabled, user, isAdmin, refreshAuth, hasPermission, saveLanguage, loading: authLoading } = useAuth();
   // The migration's plan is kept in component state rather than a query: it is
   // a snapshot the user is deciding on, and re-fetching it under them while
   // they read a collision would change what the button they are about to press
@@ -1956,15 +1956,19 @@ export function SettingsPage() {
                     value={i18n.language}
                     onChange={(e) => {
                       const newLang = e.target.value;
-                      // Block server persist if the user lacks settings:update —
-                      // without this guard the fire-and-forget api.updateSettings
-                      // call below would 403 silently while a success toast flashed.
-                      if (authEnabled && !hasPermission('settings:update')) {
-                        showToast(t('settings.toast.noPermissionUpdate'), 'error');
-                        return;
+                      // Signed in, the language is saved to the account, so
+                      // every device follows it; that needs no settings permission.
+                      saveLanguage(newLang).catch(() => {
+                        // i18n.t, not t: t still speaks the language the page
+                        // rendered in, the device has switched by now.
+                        showToast(i18n.t('settings.toast.languageNotSaved'), 'error');
+                      });
+                      // The server-wide language (what SpoolBuddy kiosks show)
+                      // still follows the picker for whoever may change settings.
+                      // Others skip it: the call would 403 behind a success toast.
+                      if (!authEnabled || hasPermission('settings:update')) {
+                        updateMutation.mutate({ language: newLang });
                       }
-                      i18n.changeLanguage(newLang);
-                      updateMutation.mutate({ language: newLang });
                     }}
                     className="w-full px-3 py-2 pr-10 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none appearance-none cursor-pointer"
                   >
@@ -1977,7 +1981,9 @@ export function SettingsPage() {
                   <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-bambu-gray pointer-events-none" />
                 </div>
                 <p className="text-xs text-bambu-gray mt-1">
-                  {t('settings.languageDescription')}
+                  {authEnabled && user
+                    ? t('settings.languageAccountDescription')
+                    : t('settings.languageDescription')}
                 </p>
               </div>
               <div>

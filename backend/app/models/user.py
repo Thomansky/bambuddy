@@ -39,6 +39,11 @@ class User(Base):
     # issued before the change (M-R7-B).  NULL means no password change recorded yet.
     password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # UI language the user picked, as a frontend locale code ("de", "pt-BR").
+    # Every device they sign in on switches to it; NULL means no choice yet,
+    # so each device keeps following its browser.
+    language: Mapped[str | None] = mapped_column(String(10), nullable=True, default=None)
+
     # Per-user Bambu Cloud credentials (when auth is enabled, each user has their own)
     cloud_token: Mapped[str | None] = mapped_column(String(500), nullable=True, default=None)
     cloud_email: Mapped[str | None] = mapped_column(String(255), nullable=True, default=None)

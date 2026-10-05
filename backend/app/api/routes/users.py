@@ -42,6 +42,7 @@ from backend.app.schemas.auth import (
     ChangePasswordRequest,
     GroupBrief,
     UserCreate,
+    UserLanguageUpdate,
     UserResponse,
     UserSlim,
     UserUpdate,
@@ -71,6 +72,7 @@ def _user_to_response(user: User) -> UserResponse:
         groups=[GroupBrief(id=g.id, name=g.name) for g in user.groups],
         permissions=sorted(user.get_permissions()),
         created_at=user.created_at.isoformat(),
+        language=user.language,
     )
 
 
@@ -624,3 +626,45 @@ async def change_own_password(
             pass  # Decode failure is harmless — token is already invalidated by password_changed_at
 
     return {"message": "Password changed successfully"}
+
+
+@router.put("/me/language", response_model=UserResponse)
+async def set_own_language(
+    body: UserLanguageUpdate,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Save the UI language the signed-in user picked.
+
+    Every device they sign in on switches to it, so the language is chosen
+    once instead of in every browser. It is the user's own preference, so no
+    settings permission is needed, unlike for the server-wide language.
+    ``null`` clears it and each device follows its browser again.
+    """
+    # An API key stands for an integration or a kiosk, not a person at a
+    # browser. Refuse it with 403: the JWT check below would answer 401
+    # "Could not validate credentials", which the SPA takes for a dead
+    # session and drops the kiosk's key.
+    if credentials is not None and credentials.credentials.startswith("bb_"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="An API key has no account language",
+        )
+    current_user = await get_current_user_optional(credentials)
+    if not current_user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required to save a language",
+        )
+
+    result = await db.execute(select(User).where(User.id == current_user.id).options(selectinload(User.groups)))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+    user.language = body.language
+    await db.commit()
+    result = await db.execute(select(User).where(User.id == user.id).options(selectinload(User.groups)))
+    return _user_to_response(result.scalar_one())
