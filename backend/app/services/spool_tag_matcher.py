@@ -450,6 +450,67 @@ async def link_tag_to_inventory_spool(db: AsyncSession, spool: Spool, tray_data:
     )
 
 
+# ISO/IEC 14443-3 cascade tag. A tag whose UID is longer than four bytes
+# answers cascade level 1 with 0x88 followed by its first three UID bytes. The
+# value is reserved for that, so it never begins a real 4-byte UID.
+_CASCADE_TAG = "88"
+
+
+async def _spool_by_cascade_level(db: AsyncSession, uid: str) -> Spool | None:
+    """The spool whose 7-byte tag UID was stored as read to the other depth.
+
+    A reader that stops after cascade level 1 reports an NTAG or Ultralight
+    UID as ``88`` plus its first three bytes: the SpoolBuddy daemon's PN5180
+    driver does, while the ESP SpoolBuddy and phones report all seven bytes.
+    The same tag then never matched between the two. A level-1 read finds the
+    one stored 7-byte UID it begins; a full read finds a spool linked from a
+    level-1 read. Two stored UIDs with the same first three bytes are left
+    unmatched rather than guessed between.
+    """
+    loads = (selectinload(Spool.k_profiles), selectinload(Spool.assignments))
+    if len(uid) == 8 and uid.startswith(_CASCADE_TAG):
+        start = uid[len(_CASCADE_TAG) :]
+        result = await db.execute(
+            select(Spool)
+            .options(*loads)
+            .where(func.upper(Spool.tag_uid).like(f"{start}%"), Spool.archived_at.is_(None))
+            .limit(10)
+        )
+        matches = [
+            spool
+            for spool in result.scalars().all()
+            if len(stored := _normalize_tag_uid(spool.tag_uid)) == 14 and stored.startswith(start)
+        ]
+        if len(matches) == 1:
+            logger.info(
+                "Matched spool %d by cascade level 1: scanned=%s, stored=%s",
+                matches[0].id,
+                uid,
+                matches[0].tag_uid,
+            )
+            return matches[0]
+        if matches:
+            logger.warning(
+                "Tag %s is cascade level 1 of the UIDs of spools %s; not guessing between them",
+                uid,
+                [spool.id for spool in matches],
+            )
+        return None
+    if len(uid) == 14:
+        level1 = _CASCADE_TAG + uid[:6]
+        result = await db.execute(
+            select(Spool)
+            .options(*loads)
+            .where(func.upper(Spool.tag_uid) == level1, Spool.archived_at.is_(None))
+            .limit(1)
+        )
+        spool = result.scalar_one_or_none()
+        if spool:
+            logger.info("Matched spool %d by cascade level 1: scanned=%s, stored=%s", spool.id, uid, level1)
+        return spool
+    return None
+
+
 async def get_spool_by_tag(db: AsyncSession, tag_uid: str, tray_uuid: str) -> Spool | None:
     """Look up an active spool by RFID tag UID or Bambu Lab tray UUID.
 
@@ -479,6 +540,10 @@ async def get_spool_by_tag(db: AsyncSession, tag_uid: str, tray_uuid: str) -> Sp
             .limit(1)
         )
         spool = result.scalar_one_or_none()
+        if spool:
+            return spool
+
+        spool = await _spool_by_cascade_level(db, tag_uid_norm)
         if spool:
             return spool
 
