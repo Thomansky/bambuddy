@@ -570,8 +570,10 @@ describe('FileManagerPage', () => {
       // Root files render in the files pane.
       expect(columns.getByText('Benchy')).toBeInTheDocument();
 
-      // Descend: clicking a folder opens its child column, and the level the
-      // user just left keeps listing its own files.
+      // Descend: clicking a folder opens its column, which lists its
+      // subfolders and then its own files, the way Explorer shows a folder.
+      // In a pane further right they read as the last subfolder's content.
+      // The level the user just left keeps listing its own files.
       await user.click(columns.getByText('Functional Parts'));
       await waitFor(() => {
         expect(columns.getByText('Brackets')).toBeInTheDocument();
@@ -579,13 +581,136 @@ describe('FileManagerPage', () => {
       await waitFor(() => {
         expect(columns.getByText('Benchy')).toBeInTheDocument();
       });
-      expect(within(screen.getByTestId('columns-files-pane')).getByText('Spacer')).toBeInTheDocument();
+      const folderColumn = columns.getByText('Brackets').closest('[data-testid^="columns-level-"]') as HTMLElement;
+      const spacer = await within(folderColumn).findByText('Spacer');
+      expect(columns.getByText('Brackets').compareDocumentPosition(spacer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(screen.queryByTestId('columns-files-pane')).not.toBeInTheDocument();
 
       // Leaf folder: selecting it adds no further column and the pane swaps to
       // its contents.
       await user.click(columns.getByText('Brackets'));
       await waitFor(() => {
         expect(within(screen.getByTestId('columns-files-pane')).getByText('clamp.stl')).toBeInTheDocument();
+      });
+    });
+
+    describe('a folder with subfolders and files of its own', () => {
+      // The folder from the report: two order subfolders next to the enquiry's
+      // own files. Explorer lists all seven in one place; the columns view put
+      // the five files in a pane right of the subfolders, where they read as
+      // the content of "B.70922849 - 10".
+      const file = (id: number, filename: string, folderId: number) => ({
+        id,
+        filename,
+        file_path: `/library/${filename}`,
+        file_size: 4096,
+        file_type: filename.split('.').pop()!.toLowerCase(),
+        folder_id: folderId,
+        thumbnail_path: null,
+        print_name: null,
+        print_time_seconds: null,
+        print_count: 0,
+        duplicate_count: 0,
+        created_at: '2026-10-06T11:04:00Z',
+      });
+      const enquiryFiles = [
+        file(501, 'Anfr._7200089933.xlsx', 40),
+        file(502, 'Anfr__7200089933.msg', 40),
+        file(503, 'Anfrage 7200089933.msg', 40),
+        file(504, 'Anfrage Nummer 7200089933.msg', 40),
+        file(505, 'Anfrage_ 7200089933.PDF', 40),
+      ];
+      const orderFiles = [file(511, 'Zeichnung 10.pdf', 41)];
+
+      beforeEach(() => {
+        const subfolder = (id: number, name: string) => ({
+          id,
+          name,
+          parent_id: 40,
+          file_count: 1,
+          project_id: null,
+          archive_id: null,
+          project_name: null,
+          archive_name: null,
+          latest_activity_at: null,
+          children: [],
+        });
+        server.use(
+          http.get('/api/v1/library/folders', () =>
+            HttpResponse.json([
+              {
+                id: 40,
+                name: '4023',
+                parent_id: null,
+                file_count: 5,
+                project_id: null,
+                archive_id: null,
+                project_name: null,
+                archive_name: null,
+                latest_activity_at: null,
+                children: [subfolder(41, 'B.70922849 - 10'), subfolder(42, 'B.70922850 - 20')],
+              },
+            ]),
+          ),
+          http.get('/api/v1/library/files', ({ request }) => {
+            const folderId = new URL(request.url).searchParams.get('folder_id');
+            if (folderId === '40') return HttpResponse.json(enquiryFiles);
+            if (folderId === '41') return HttpResponse.json(orderFiles);
+            return HttpResponse.json([]);
+          }),
+        );
+      });
+
+      async function openEnquiry() {
+        const user = userEvent.setup();
+        render(<FileManagerPage />);
+        await user.click(await screen.findByTitle('Column view'));
+        const columns = within(screen.getByTestId('columns-view'));
+        await user.click(await columns.findByText('4023'));
+        await columns.findByText('Anfrage Nummer 7200089933.msg');
+        return { user, columns };
+      }
+
+      it('lists the subfolders and then the files in one column, as Explorer does', async () => {
+        const { columns } = await openEnquiry();
+
+        const column = columns.getByText('B.70922849 - 10').closest('[data-testid^="columns-level-"]') as HTMLElement;
+        const inColumn = within(column);
+        for (const name of enquiryFiles.map((f) => f.filename)) {
+          expect(inColumn.getByText(name)).toBeInTheDocument();
+        }
+        const lastFolder = inColumn.getByText('B.70922850 - 20');
+        const firstFile = column.querySelector('[data-file-id]') as HTMLElement;
+        expect(lastFolder.compareDocumentPosition(firstFile) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(screen.queryByTestId('columns-files-pane')).not.toBeInTheDocument();
+      });
+
+      it('keeps the files in that column when a subfolder opens to the right', async () => {
+        const { user, columns } = await openEnquiry();
+
+        await user.click(columns.getByText('B.70922849 - 10'));
+
+        const pane = within(await screen.findByTestId('columns-files-pane'));
+        expect(await pane.findByText('Zeichnung 10.pdf')).toBeInTheDocument();
+        expect(pane.queryByText('Anfrage Nummer 7200089933.msg')).not.toBeInTheDocument();
+        const column = columns.getByText('B.70922849 - 10').closest('[data-testid^="columns-level-"]') as HTMLElement;
+        expect(await within(column).findByText('Anfrage Nummer 7200089933.msg')).toBeInTheDocument();
+      });
+
+      it('goes up from the first file onto the last subfolder above it', async () => {
+        const { user, columns } = await openEnquiry();
+        const column = columns.getByText('B.70922849 - 10').closest('[data-testid^="columns-level-"]') as HTMLElement;
+        const firstFileRow = column.querySelector('[data-file-id]') as HTMLElement;
+
+        // The row itself, not a button of its action strip.
+        await user.click(firstFileRow);
+        await user.keyboard('{ArrowUp}');
+
+        await waitFor(() => {
+          expect(columns.getByText('B.70922850 - 20').closest('[data-folder-id]')?.className).toContain(
+            'bg-bambu-green/20',
+          );
+        });
       });
     });
 

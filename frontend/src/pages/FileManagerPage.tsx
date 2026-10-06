@@ -3868,14 +3868,26 @@ export function FileManagerPage() {
   // hide them and let the files pane take the full width.
   const columnsFilterActive = searchQuery.trim().length > 0 || selectedTagIds.length > 0;
 
+  // The selected folder's own column, when it has one (it has subfolders).
+  // Like Explorer and Finder it lists that folder's whole content, the
+  // subfolders and then the files, instead of the files sitting in the pane
+  // further right, where they read as the content of the last subfolder. The
+  // top level keeps its pane: what it lists follows the root view (recent,
+  // all files) rather than being that level's own files.
+  const selectedFolderColumn =
+    viewMode === 'columns' && !columnsFilterActive && selectedFolderId !== null
+      ? folderColumns.find((col) => col.folderId === selectedFolderId)
+      : undefined;
+
   // Every column lists its own level's files, not just the rightmost pane: a
   // folder that holds files and no subfolders used to look empty until it was
   // the selection. One query per rendered level, keyed on that level's folder
   // id so walking back up a path is instant. Only levels the view actually
   // renders are fetched, and the level that IS the current selection is
-  // skipped — the pane on the right already lists exactly those files. The
-  // exception is the folders-first root, where that pane lists nothing at all:
-  // its column keeps its own files, which are only the unfoldered ones.
+  // skipped — its files are the main query's, shown in its own column or, for
+  // a folder without subfolders, in the pane. The exception is the
+  // folders-first root, where that pane lists nothing at all: its column keeps
+  // its own files, which are only the unfoldered ones.
   const columnFileLevels = useMemo(() => {
     if (viewMode !== 'columns' || columnsFilterActive) return [];
     return folderColumns
@@ -4185,6 +4197,11 @@ export function FileManagerPage() {
             // Off the top of a column's files: back onto that same column's
             // folders, which is where ArrowDown came from.
             setColumnsFocusedFileId(null);
+          } else if (dir === -1 && idx === 0 && selectedFolderColumn) {
+            // Off the top of the selected folder's files: onto its last
+            // subfolder, the row right above them in the same column.
+            setColumnsFocusedFileId(null);
+            setSelectedFolderId(selectedFolderColumn.items[selectedFolderColumn.items.length - 1].id);
           }
         } else if (selectedFolderId === null) {
           if (dir === 1 && folderColumns[0].items.length > 0) {
@@ -4269,6 +4286,26 @@ export function FileManagerPage() {
       }
     }
   };
+
+  // A row of the selected folder's files, wherever the columns view puts
+  // them: in that folder's own column, or in the pane when it has none.
+  const renderSelectedFolderFile = (file: LibraryFileListItem) => (
+    <ColumnFileRow
+      key={file.id}
+      file={file}
+      isSelected={selectedFiles.includes(file.id)}
+      isFocused={columnsFocusedFileId === file.id}
+      showModified={showModified}
+      thumbnailVersion={thumbnailVersions[file.id]}
+      onSelect={(f) => {
+        setColumnsFocusedFileId(f.id);
+        handleFileSelect(f.id);
+      }}
+      onOpen={openPreview}
+      actionProps={fileActionProps}
+      t={t}
+    />
+  );
 
   return (
     <div
@@ -5145,10 +5182,11 @@ export function FileManagerPage() {
             </div>
           ) : viewMode === 'columns' ? (
             /* Miller columns (macOS-Finder style): one column per folder level,
-               the rightmost pane lists the selected folder's files. Unlike the
-               grid/list branches this renders even for an "empty" folder — an
-               empty files pane next to navigable folder columns is the whole
-               point of the view. */
+               each listing its subfolders and then its files; a selected folder
+               without subfolders shows its files in the pane on the right.
+               Unlike the grid/list branches this renders even for an "empty"
+               folder — an empty files pane next to navigable folder columns is
+               the whole point of the view. */
             <div
               ref={columnsViewRef}
               tabIndex={0}
@@ -5159,6 +5197,9 @@ export function FileManagerPage() {
             >
               <div className="h-full min-h-[16rem] flex divide-x divide-bambu-dark-tertiary">
                 {!columnsFilterActive && folderColumns.map((col) => {
+                  // The selected folder's column holds its files itself and
+                  // takes the pane's place and width at the right.
+                  const isSelectedLevel = col === selectedFolderColumn;
                   const level = columnFiles.get(col.key);
                   // A column carrying file rows needs the room the files pane
                   // has: checkbox, thumbnail and the eight-icon action strip
@@ -5169,7 +5210,9 @@ export function FileManagerPage() {
                   <div
                     key={col.key}
                     data-testid={`columns-level-${col.key}`}
-                    className={`${wide ? 'w-[26rem]' : 'w-64'} flex-shrink-0 overflow-y-auto py-1`}
+                    className={`${
+                      isSelectedLevel ? 'flex-1 min-w-[28rem]' : `${wide ? 'w-[26rem]' : 'w-64'} flex-shrink-0`
+                    } overflow-y-auto py-1`}
                   >
                     {col.items.map((folder) => {
                       const isSelectedFolder = selectedFolderId === folder.id;
@@ -5264,11 +5307,23 @@ export function FileManagerPage() {
                         t={t}
                       />
                     ))}
+                    {isSelectedLevel &&
+                      (filesLoading ? (
+                        <div className="flex justify-center py-3">
+                          <Loader2 className="w-5 h-5 animate-spin text-bambu-green" />
+                        </div>
+                      ) : filteredAndSortedFiles.length === 0 && (files?.length ?? 0) > 0 ? (
+                        <div className="px-3 py-2 text-sm text-bambu-gray">{t('fileManager.noMatchingFiles')}</div>
+                      ) : (
+                        filteredAndSortedFiles.map(renderSelectedFolderFile)
+                      ))}
                   </div>
                   );
                 })}
-                {/* Files pane — still the selected folder's contents, so a
-                    leaf folder's column layout is exactly what it was. */}
+                {/* Files pane: the selected folder's files when it has no
+                    subfolders and so no column of its own, the top level's
+                    root view, or every match while a filter is on. */}
+                {!selectedFolderColumn && (
                 <div className="flex-1 min-w-[28rem] overflow-y-auto py-1" data-testid="columns-files-pane">
                   {filesLoading ? (
                     <div className="h-full flex items-center justify-center">
@@ -5287,24 +5342,10 @@ export function FileManagerPage() {
                               : t('fileManager.noFilesYet')}
                     </div>
                   ) : (
-                    filteredAndSortedFiles.map((file) => (
-                      <ColumnFileRow
-                        key={file.id}
-                        file={file}
-                        isSelected={selectedFiles.includes(file.id)}
-                        isFocused={columnsFocusedFileId === file.id}
-                        showModified={showModified}
-                        thumbnailVersion={thumbnailVersions[file.id]}
-                        onSelect={(f) => {
-                          setColumnsFocusedFileId(f.id);
-                          handleFileSelect(f.id);
-                        }}
-                        onOpen={openPreview}
-                        actionProps={fileActionProps}
-                        t={t}
-                      />
-                    ))                  )}
+                    filteredAndSortedFiles.map(renderSelectedFolderFile)
+                  )}
                 </div>
+                )}
               </div>
             </div>
           ) : files?.length === 0 && !showFolderTiles && !showNoFolderEntry && folderSearchMatches.length === 0 ? (
