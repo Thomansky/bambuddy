@@ -613,6 +613,11 @@ const columnSortValues: Record<
   // Sorts linked records together by group id; unlinked spools sort last.
   linked: (s) => s.filament_group_id ?? Number.MAX_SAFE_INTEGER,
   data_origin: (s) => (s.data_origin || '').toLowerCase(),
+  // The tag the column shows. Spools without one sort first, so the ones
+  // still to be scanned head the list; reversed, the tagged ones come first.
+  // Tagged spools order by their tag, which also puts two spools sharing one
+  // next to each other.
+  tag_id: (s) => (s.tag_uid || s.tray_uuid || '').toUpperCase(),
   tag_type: (s) => (s.tag_type || '').toLowerCase(),
   stock: (s) => s.slicer_filament ? 1 : 0,
   spool_name: (s) => s.core_weight_catalog_id ?? 0,
