@@ -132,6 +132,8 @@ class IntakeIn(BaseModel):
     price_vat_included: bool = True
     location_id: int | None = None
     note: str | None = Field(default=None, max_length=500)
+    # Booked in from this reorder-list line: it is ticked off first.
+    order_id: int | None = None
 
 
 class ArticleOut(BaseModel):
@@ -594,6 +596,7 @@ async def intake_variant(
             price_vat_included=data.price_vat_included,
             location_id=data.location_id,
             note=data.note,
+            order_id=data.order_id,
         )
     except ProductError as exc:
         raise HTTPException(400, str(exc)) from exc

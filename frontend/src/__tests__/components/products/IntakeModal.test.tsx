@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { render } from '../../utils';
@@ -90,11 +90,23 @@ describe('IntakeModal — the standard size', () => {
     expect(screen.getByRole('button', { name: /^1 kg$/ })).not.toHaveClass('border-bambu-green');
   });
 
-  it('opens a delivery from the reorder list on its combination and quantity', async () => {
-    render(<IntakeModal onClose={vi.fn()} initialOrder={{ productId: 1, variantId: 30, quantity: 3 }} />);
+  it('opens a delivery from the reorder list on its combination and quantity, and books in that line', async () => {
+    const posted: unknown[] = [];
+    server.use(
+      http.post('/api/v1/inventory/products/variants/30/intake', async ({ request }) => {
+        posted.push(await request.json());
+        return HttpResponse.json({ spool_ids: [1, 2, 3], cost_per_kg: 26.67, orders_settled: 3 });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<IntakeModal onClose={vi.fn()} initialOrder={{ productId: 1, variantId: 30, quantity: 3, lineId: 77 }} />);
 
     expect(await screen.findByText('Black · 1 kg')).toBeInTheDocument();
     expect(screen.getByDisplayValue('3')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Create 3 spools' }));
+
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]).toMatchObject({ quantity: 3, order_id: 77 });
   });
 
   it('leaves the choice open without a standard size', async () => {

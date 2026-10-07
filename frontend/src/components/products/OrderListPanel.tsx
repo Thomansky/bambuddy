@@ -9,7 +9,7 @@ import { useToast } from '../../contexts/ToastContext';
 import { FilamentSwatch } from '../FilamentSwatch';
 import { getCurrencySymbol } from '../../utils/currency';
 import { formatDateOnly } from '../../utils/date';
-import { formatMoney, formatSizeLabel, ORDER_QUERY_KEYS } from './productUtils';
+import { formatMoney, formatSizeLabel, ORDER_LINES_KEY, ORDER_QUERY_KEYS } from './productUtils';
 
 interface OrderListPanelProps {
   /** Book a delivered line in through goods-in. */
@@ -115,45 +115,55 @@ function ReferenceField({ value, disabled, onCommit, placeholder }: {
 export function OrderListPanel({ onBookIn }: OrderListPanelProps) {
   const { t } = useTranslation();
   const { showToast } = useToast();
-  const { hasAnyPermission } = useAuth();
+  const { hasPermission, hasAnyPermission } = useAuth();
   const queryClient = useQueryClient();
   const canWrite = hasAnyPermission('inventory:update', 'inventory:forecast_write');
+  // Goods-in creates spools, which takes more than changing the list.
+  const canBookIn = hasPermission('inventory:update');
   const refillWord = t('inventory.products.refill');
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.getSettings });
   const currency = getCurrencySymbol(settings?.currency || 'USD');
   const { data: lines = [], isLoading, isError } = useQuery({
-    queryKey: ['product-orders'],
+    queryKey: ORDER_LINES_KEY,
     queryFn: api.getProductOrders,
   });
+  // Bumped when a change fails, so the fields drop what they were showing
+  // and start again from the line as saved.
+  const [failures, setFailures] = useState(0);
 
-  const invalidate = () => {
-    for (const queryKey of ORDER_QUERY_KEYS) queryClient.invalidateQueries({ queryKey });
-  };
+  // Resolves once the list has been fetched again, so a mutation stays
+  // pending (and its buttons disabled) until the line has moved.
+  const invalidate = () =>
+    Promise.all(ORDER_QUERY_KEYS.map((queryKey) => queryClient.invalidateQueries({ queryKey })));
 
   const updateMutation = useMutation({
     mutationFn: ({ id, changes }: { id: number; changes: ProductOrderUpdate }) => api.updateProductOrder(id, changes),
-    onSuccess: invalidate,
+    onSuccess: () => invalidate(),
     onError: (err) => {
       console.error('OrderListPanel.update failed:', err);
       showToast(t('inventory.products.orders.updateFailed'), 'error');
+      setFailures((n) => n + 1);
       invalidate();
     },
   });
 
   const removeMutation = useMutation({
     mutationFn: (id: number) => api.removeFromShoppingList(id),
-    onSuccess: invalidate,
+    onSuccess: () => invalidate(),
     onError: (err) => {
       console.error('OrderListPanel.remove failed:', err);
       showToast(t('inventory.products.orders.removeFailed'), 'error');
     },
   });
 
-  const busyId = updateMutation.isPending
-    ? updateMutation.variables?.id
-    : removeMutation.isPending
-      ? removeMutation.variables
-      : undefined;
+  // Only a move or a removal holds the line's buttons: saving a quantity or a
+  // purpose on blur must not swallow the click that caused the blur.
+  const busyId =
+    updateMutation.isPending && updateMutation.variables?.changes.status !== undefined
+      ? updateMutation.variables.id
+      : removeMutation.isPending
+        ? removeMutation.variables
+        : undefined;
 
   const change = (line: ProductOrderLine, changes: ProductOrderUpdate) => updateMutation.mutate({ id: line.id, changes });
 
@@ -229,6 +239,7 @@ export function OrderListPanel({ onBookIn }: OrderListPanelProps) {
           <div className="flex items-center gap-1 shrink-0">
             {canWrite ? (
               <QuantityField
+                key={`quantity-${failures}`}
                 value={line.quantity}
                 disabled={busy}
                 label={t('inventory.products.orders.quantityLabel')}
@@ -243,6 +254,7 @@ export function OrderListPanel({ onBookIn }: OrderListPanelProps) {
 
         {canWrite ? (
           <ReferenceField
+            key={`reference-${failures}`}
             value={line.reference}
             disabled={busy}
             placeholder={t('inventory.products.orders.referencePlaceholder')}
@@ -317,7 +329,12 @@ export function OrderListPanel({ onBookIn }: OrderListPanelProps) {
                   {t('inventory.products.orders.markOrdered')}
                 </button>
               )}
-              {line.status === 'purchased' && (
+              {line.status === 'purchased' && line.variant_id === null && (
+                <span className="text-xs text-bambu-gray" title={t('inventory.products.orders.plainReceiveHint')}>
+                  {t('inventory.products.orders.plainReceive')}
+                </span>
+              )}
+              {line.status === 'purchased' && line.variant_id !== null && (
                 <button
                   onClick={() => change(line, { status: 'received' })}
                   disabled={busy}
@@ -327,27 +344,27 @@ export function OrderListPanel({ onBookIn }: OrderListPanelProps) {
                   {t('inventory.products.orders.markArrived')}
                 </button>
               )}
-              {line.status === 'received' &&
-                (line.variant_id !== null && line.product_id !== null ? (
-                  <button
-                    onClick={() => onBookIn(line)}
-                    disabled={busy}
-                    className="px-2.5 py-1 rounded bg-bambu-green text-white hover:bg-bambu-green/80 text-xs flex items-center gap-1 disabled:opacity-50"
-                  >
-                    <PackagePlus className="w-3.5 h-3.5" />
-                    {t('inventory.products.orders.bookIn')}
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => removeMutation.mutate(line.id)}
-                    disabled={busy}
-                    className="px-2.5 py-1 rounded bg-bambu-green/20 text-bambu-green hover:bg-bambu-green/30 text-xs flex items-center gap-1 disabled:opacity-50"
-                    title={t('inventory.products.orders.doneTitle')}
-                  >
-                    <Check className="w-3.5 h-3.5" />
-                    {t('inventory.products.orders.done')}
-                  </button>
-                ))}
+              {line.status === 'received' && line.variant_id !== null && line.product_id !== null && canBookIn && (
+                <button
+                  onClick={() => onBookIn(line)}
+                  disabled={busy}
+                  className="px-2.5 py-1 rounded bg-bambu-green text-white hover:bg-bambu-green/80 text-xs flex items-center gap-1 disabled:opacity-50"
+                >
+                  <PackagePlus className="w-3.5 h-3.5" />
+                  {t('inventory.products.orders.bookIn')}
+                </button>
+              )}
+              {line.status === 'received' && (line.variant_id === null || line.product_id === null) && (
+                <button
+                  onClick={() => removeMutation.mutate(line.id)}
+                  disabled={busy}
+                  className="px-2.5 py-1 rounded bg-bambu-green/20 text-bambu-green hover:bg-bambu-green/30 text-xs flex items-center gap-1 disabled:opacity-50"
+                  title={t('inventory.products.orders.doneTitle')}
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  {t('inventory.products.orders.done')}
+                </button>
+              )}
             </div>
           </div>
         )}

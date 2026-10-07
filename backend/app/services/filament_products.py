@@ -627,6 +627,7 @@ async def intake(
     location_id: int | None = None,
     note: str | None = None,
     settle_orders: bool = True,
+    order_id: int | None = None,
 ) -> IntakeResult:
     """Create ``quantity`` full spools of a variant, filled in completely.
 
@@ -635,7 +636,8 @@ async def intake(
     copied onto the spools as cost per kg. It is not linked: a later price
     change reaches only spools created after it. With ``settle_orders`` the
     delivery also ticks off what the shopping list was waiting for of this
-    variant. The caller commits.
+    variant — the line ``order_id`` first when the delivery is booked in from
+    it. The caller commits.
     """
     if not 1 <= quantity <= MAX_INTAKE_QUANTITY:
         raise ProductError(f"Quantity must be between 1 and {MAX_INTAKE_QUANTITY}")
@@ -660,16 +662,18 @@ async def intake(
     await db.flush()
     for spool in spools:
         await apply_supplier_inheritance(db, spool)
-    settled = await settle_orders_for(db, variant.id, quantity) if settle_orders else 0
+    settled = await settle_orders_for(db, variant.id, quantity, first_id=order_id) if settle_orders else 0
     logger.info("Intake: %d spool(s) of variant %d at %s/kg", quantity, variant.id, cost)
     return IntakeResult(spool_ids=[spool.id for spool in spools], cost_per_kg=cost, orders_settled=settled)
 
 
-async def settle_orders_for(db: AsyncSession, variant_id: int, quantity: int) -> int:
-    """Tick a delivery off the shopping list: lines already delivered and
-    waiting to be booked in first, then those bought, then the oldest. A line
-    that is fully delivered leaves the list, the way booking in from the list
-    removes it; a partial delivery lowers it."""
+async def settle_orders_for(db: AsyncSession, variant_id: int, quantity: int, *, first_id: int | None = None) -> int:
+    """Tick a delivery off the shopping list: the line it was booked in from
+    (``first_id``) first, then lines already delivered and waiting to be
+    booked in, then those bought, then the oldest. A line that is fully
+    delivered leaves the list, the way booking in from the list removes it; a
+    partial delivery lowers it. A ``first_id`` of another combination is
+    simply not among the lines."""
     rows = list(
         (
             await db.execute(
@@ -681,7 +685,7 @@ async def settle_orders_for(db: AsyncSession, variant_id: int, quantity: int) ->
         .scalars()
         .all()
     )
-    rows.sort(key=lambda row: (-OPEN_ORDER_STATUSES.index(row.status), row.id))
+    rows.sort(key=lambda row: (row.id != first_id, -OPEN_ORDER_STATUSES.index(row.status), row.id))
     left = quantity
     settled = 0
     for row in rows:

@@ -5504,6 +5504,8 @@ export default {
         remove: 'Entfernen',
         total: 'Summe',
         plainLine: 'Position ohne Artikel',
+        plainReceive: 'In der Prognose einbuchen',
+        plainReceiveHint: 'Eine Position ohne Artikel wird unter Bestandsprognose → Einkaufsliste eingebucht; dort entstehen auch ihre Spulen.',
         updateFailed: 'Position konnte nicht geändert werden',
         removeFailed: 'Position konnte nicht entfernt werden',
         loadFailed: 'Die Nachbestellliste konnte nicht geladen werden.',

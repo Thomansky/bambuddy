@@ -4348,6 +4348,8 @@ export interface ProductIntakeInput {
   price_vat_included: boolean;
   location_id: number | null;
   note?: string | null;
+  /** Booked in from this reorder-list line: it is ticked off first. */
+  order_id?: number | null;
 }
 
 // ── Suppliers (#2988) ──────────────────────────────────────────────────────

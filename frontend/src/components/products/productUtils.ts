@@ -229,6 +229,10 @@ export function mergeColumnConfig(stored: ColumnConfig[] | null, defaults: Colum
   return merged;
 }
 
-/** Invalidated whenever the reorder list changes: the list itself and what
- *  shows how much is on order. */
-export const ORDER_QUERY_KEYS = [['product-orders'], ['filament-products'], ['shopping-list'], ['filament-products-reorder']];
+/** The reorder list's lines. Under the shopping list's key, since they are
+ *  its rows: whatever refreshes the shopping list refreshes them too. */
+export const ORDER_LINES_KEY = ['shopping-list', 'orders'];
+
+/** Invalidated whenever the reorder list changes: the list itself (and the
+ *  forecast's shopping list) and what shows how much is on order. */
+export const ORDER_QUERY_KEYS = [['shopping-list'], ['filament-products'], ['filament-products-reorder'], ['reorder-line']];

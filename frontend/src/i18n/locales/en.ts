@@ -5543,6 +5543,8 @@ export default {
         remove: 'Remove',
         total: 'Total',
         plainLine: 'Line without a product',
+        plainReceive: 'Receive in the forecast',
+        plainReceiveHint: 'A line without a product is received under Stock forecast → Shopping list, which also creates its spools.',
         updateFailed: 'Could not change the line',
         removeFailed: 'Could not remove the line',
         loadFailed: 'Could not load the reorder list.',

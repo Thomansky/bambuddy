@@ -503,6 +503,35 @@ class TestOrderList:
         assert sorted(line["status"] for line in await _orders(async_client)) == ["pending", "purchased"]
 
     @pytest.mark.asyncio
+    async def test_booking_in_from_a_line_ticks_off_that_line(self, async_client: AsyncClient):
+        product = await _product(async_client)
+        black = _variant(product, "Black", 1000)["id"]
+        await _order(async_client, black, 2, reference="RAFI")
+        await _order(async_client, black, 1, reference="Armpolster")
+        for line in await _orders(async_client):
+            await _change(async_client, line["id"], status="received")
+        armpolster = next(line for line in await _orders(async_client) if line["reference"] == "Armpolster")
+
+        result = await _intake(async_client, black, 1, order_id=armpolster["id"])
+
+        assert result["orders_settled"] == 1
+        lines = {line["reference"]: line["quantity"] for line in await _orders(async_client)}
+        assert lines == {"RAFI": 2}
+
+    @pytest.mark.asyncio
+    async def test_a_line_of_another_combination_does_not_steer_the_settling(self, async_client: AsyncClient):
+        product = await _product(async_client)
+        black = _variant(product, "Black", 1000)["id"]
+        white = _variant(product, "White", 1000)["id"]
+        await _order(async_client, black, 1)
+        await _order(async_client, white, 1)
+        white_line = next(line for line in await _orders(async_client) if line["variant_id"] == white)
+
+        await _intake(async_client, black, 1, order_id=white_line["id"])
+
+        assert [line["variant_id"] for line in await _orders(async_client)] == [white]
+
+    @pytest.mark.asyncio
     async def test_quantity_supplier_and_reference_can_be_corrected(self, async_client: AsyncClient):
         shop = await _supplier(async_client, "Filament Shop")
         other = await _supplier(async_client, "Other Shop")

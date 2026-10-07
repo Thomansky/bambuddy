@@ -205,6 +205,58 @@ describe('OrderListPanel', () => {
     expect(patched).toEqual([]);
   });
 
+  it('goes back to the saved quantity when the change fails', async () => {
+    server.use(
+      http.patch('/api/v1/inventory/products/orders/:id', () =>
+        HttpResponse.json({ detail: 'Server error' }, { status: 500 }),
+      ),
+    );
+    const user = userEvent.setup();
+    render(<OrderListPanel onBookIn={vi.fn()} />);
+    await screen.findByRole('region', { name: 'To order' });
+    const line = screen.getByTestId('order-line-1');
+
+    const quantity = within(line).getByRole('textbox', { name: 'Number of spools' });
+    await user.clear(quantity);
+    await user.type(quantity, '5{Enter}');
+
+    await waitFor(() =>
+      expect(within(line).getByRole('textbox', { name: 'Number of spools' })).toHaveValue('2'),
+    );
+  });
+
+  it('saves an edited quantity and still moves the line on the click that ended the edit', async () => {
+    const user = userEvent.setup();
+    render(<OrderListPanel onBookIn={vi.fn()} />);
+    await screen.findByRole('region', { name: 'To order' });
+    const line = screen.getByTestId('order-line-1');
+
+    const quantity = within(line).getByRole('textbox', { name: 'Number of spools' });
+    await user.clear(quantity);
+    await user.type(quantity, '5');
+    await user.click(within(line).getByRole('button', { name: 'Ordered' }));
+
+    await waitFor(() =>
+      expect(patched).toEqual([
+        { id: '1', body: { quantity: 5 } },
+        { id: '1', body: { status: 'purchased' } },
+      ]),
+    );
+  });
+
+  it('sends a line without a product to the forecast to be received', async () => {
+    server.use(
+      http.get('/api/v1/inventory/products/orders', () =>
+        HttpResponse.json([{ ...LINES[4], status: 'purchased', received_at: null }]),
+      ),
+    );
+    render(<OrderListPanel onBookIn={vi.fn()} />);
+
+    const line = await screen.findByTestId('order-line-5');
+    expect(within(line).queryByRole('button', { name: 'Arrived' })).not.toBeInTheDocument();
+    expect(within(line).getByText('Receive in the forecast')).toBeInTheDocument();
+  });
+
   it('removes a line', async () => {
     const user = userEvent.setup();
     render(<OrderListPanel onBookIn={vi.fn()} />);

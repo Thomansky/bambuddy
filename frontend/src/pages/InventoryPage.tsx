@@ -30,6 +30,7 @@ import { ConversionModal } from '../components/products/ConversionModal';
 import { ReorderModal } from '../components/products/ReorderModal';
 import { ReorderLineModal } from '../components/products/ReorderLineModal';
 import { OrderListPanel } from '../components/products/OrderListPanel';
+import { ORDER_LINES_KEY } from '../components/products/productUtils';
 import { BulkEditSpoolsModal } from '../components/BulkEditSpoolsModal';
 import { SpoolGroupLinkModal } from '../components/SpoolGroupLinkModal';
 import { useToast } from '../contexts/ToastContext';
@@ -716,7 +717,12 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
   // The reorder list: the combination being put on it, and the delivery
   // being booked in from it.
   const [reorderVariantId, setReorderVariantId] = useState<number | null>(null);
-  const [intakeOrder, setIntakeOrder] = useState<{ productId: number; variantId: number; quantity: number } | null>(null);
+  const [intakeOrder, setIntakeOrder] = useState<{
+    productId: number;
+    variantId: number;
+    quantity: number;
+    lineId: number;
+  } | null>(null);
 
   // Filter state
   const [archiveFilter, setArchiveFilter] = useState<ArchiveFilter>('active');
@@ -860,7 +866,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
   );
   // The reorder list's lines, for the count on its tab.
   const { data: orderLines } = useQuery({
-    queryKey: ['product-orders'],
+    queryKey: ORDER_LINES_KEY,
     queryFn: api.getProductOrders,
     enabled: !spoolmanMode,
   });
@@ -2530,7 +2536,12 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
         <OrderListPanel
           onBookIn={(line) => {
             if (line.product_id !== null && line.variant_id !== null) {
-              setIntakeOrder({ productId: line.product_id, variantId: line.variant_id, quantity: line.quantity });
+              setIntakeOrder({
+                productId: line.product_id,
+                variantId: line.variant_id,
+                quantity: line.quantity,
+                lineId: line.id,
+              });
             }
           }}
         />

@@ -29,6 +29,9 @@ export function ReorderLineModal({ variantId, onClose }: ReorderLineModalProps) 
   const { data: line, isLoading, isError } = useQuery({
     queryKey: ['reorder-line', variantId],
     queryFn: () => api.getVariantReorderLine(variantId),
+    // Stock and what is on order change all the time; never show old ones.
+    refetchOnMount: 'always',
+    gcTime: 0,
   });
   const [quantity, setQuantity] = useState('1');
   // undefined = not touched yet: the usual supplier once the line has loaded.
@@ -135,7 +138,11 @@ export function ReorderLineModal({ variantId, onClose }: ReorderLineModalProps) 
                     className={`${inputClass} text-center`}
                     inputMode="numeric"
                     value={quantity}
-                    onChange={(e) => setQuantity(e.target.value.replace(/[^0-9]/g, ''))}
+                    onChange={(e) => {
+                      // What the field shows is what is sent: at most 100.
+                      const digits = e.target.value.replace(/[^0-9]/g, '');
+                      setQuantity(digits === '' ? '' : String(Math.min(parseInt(digits, 10), MAX_QUANTITY)));
+                    }}
                     autoFocus
                   />
                 </label>

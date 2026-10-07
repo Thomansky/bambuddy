@@ -93,6 +93,18 @@ describe('ReorderLineModal', () => {
     );
   });
 
+  it('shows the most it takes instead of a bigger number it would not send', async () => {
+    const user = userEvent.setup();
+    render(<ReorderLineModal variantId={12} onClose={vi.fn()} />);
+    await screen.findByText('Bambu Lab PLA Matte');
+
+    const quantity = screen.getByRole('textbox', { name: /^Spools/ });
+    await user.clear(quantity);
+    await user.type(quantity, '250');
+
+    expect(quantity).toHaveValue('100');
+  });
+
   it('will not add a line of zero spools', async () => {
     const user = userEvent.setup();
     render(<ReorderLineModal variantId={12} onClose={vi.fn()} />);

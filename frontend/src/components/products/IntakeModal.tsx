@@ -24,8 +24,9 @@ interface IntakeModalProps {
   /** Open straight on the picker for this product (from the product list). */
   initialProductId?: number | null;
   /** Open straight on the confirm step for a delivery on the reorder list:
-   *  its combination and quantity, the rest still to fill in. */
-  initialOrder?: { productId: number; variantId: number; quantity: number } | null;
+   *  its combination and quantity, the rest still to fill in. Booking it in
+   *  ticks off that line (lineId) first. */
+  initialOrder?: { productId: number; variantId: number; quantity: number; lineId: number } | null;
 }
 
 type Step = 'scan' | 'pick' | 'confirm' | 'done';
@@ -96,6 +97,8 @@ export function IntakeModal({ onClose, initialProductId = null, initialOrder = n
   // A delivery from the reorder list opens on its combination once the
   // products have loaded, with the quantity that arrived.
   const orderApplied = useRef(false);
+  // The reorder-list line the first booking is for; the next scans are not.
+  const orderLineId = useRef<number | null>(initialOrder?.lineId ?? null);
   useEffect(() => {
     if (!initialOrder || orderApplied.current) return;
     const target = products.find((p) => p.id === initialOrder.productId);
@@ -168,7 +171,9 @@ export function IntakeModal({ onClose, initialProductId = null, initialOrder = n
         price_vat_included: vatIncluded,
         location_id: locationId,
         note: note.trim() || null,
+        order_id: orderLineId.current,
       });
+      orderLineId.current = null;
       setCreated({
         ids: result.spool_ids,
         label: `${product.label} · ${colorLabel(parts.color)} · ${sizeText(parts.size)}`,
@@ -180,7 +185,6 @@ export function IntakeModal({ onClose, initialProductId = null, initialOrder = n
       if (result.orders_settled) {
         queryClient.invalidateQueries({ queryKey: ['shopping-list'] });
         queryClient.invalidateQueries({ queryKey: ['filament-products-reorder'] });
-        queryClient.invalidateQueries({ queryKey: ['product-orders'] });
       }
     } catch (err) {
       console.error('IntakeModal.handleCreate failed:', err);
