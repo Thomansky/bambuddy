@@ -5634,6 +5634,13 @@ async def run_migrations(conn):
     await _safe_execute(
         conn, "CREATE INDEX IF NOT EXISTS ix_filament_shopping_list_variant_id ON filament_shopping_list (variant_id)"
     )
+    # The reorder list: when a delivery arrived and is waiting to be booked
+    # in, and what an order is for (#3165).
+    if is_sqlite():
+        await _safe_execute(conn, "ALTER TABLE filament_shopping_list ADD COLUMN received_at DATETIME")
+    else:
+        await _safe_execute(conn, "ALTER TABLE filament_shopping_list ADD COLUMN IF NOT EXISTS received_at TIMESTAMP")
+    await _safe_execute(conn, "ALTER TABLE filament_shopping_list ADD COLUMN reference VARCHAR(200)")
 
     # Migration: a code for why a scheduled drying failed, so the card can show
     # the reason in the user's language. Nullable: rows that failed before this

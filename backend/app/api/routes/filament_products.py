@@ -2,6 +2,7 @@
 codes learnt at intake, and spools created from a variant."""
 
 from datetime import date
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -32,14 +33,17 @@ from backend.app.services.filament_products import (
     intake,
     load_product,
     load_products,
+    order_lines,
     plan_conversion,
     price_to_cost_per_kg,
     product_label,
     product_labels,
     receive_order,
+    reorder_line_for,
     reorder_lines,
     save_product,
     shortfall,
+    update_order,
     variant_on_order,
     variant_stock,
 )
@@ -168,10 +172,22 @@ class ReorderItemIn(BaseModel):
     variant_id: int
     quantity: int = Field(ge=1, le=100)
     supplier_id: int | None = None
+    # What the order is for (a job, a customer); keeps it apart from other
+    # orders of the same combination.
+    reference: str | None = Field(default=None, max_length=200)
 
 
 class ReorderIn(BaseModel):
     items: list[ReorderItemIn] = Field(min_length=1, max_length=500)
+
+
+class OrderUpdateIn(BaseModel):
+    """A change to a reorder line; only the fields sent are changed."""
+
+    status: Literal["pending", "purchased", "received"] | None = None
+    quantity: int | None = Field(default=None, ge=1, le=100)
+    supplier_id: int | None = None
+    reference: str | None = Field(default=None, max_length=200)
 
 
 def _product_out(
@@ -320,6 +336,62 @@ async def order_reorder_lines(
         raise HTTPException(400, str(exc)) from exc
     await db.commit()
     return result
+
+
+@router.get("/orders")
+async def list_orders(
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequireAnyPermissionIfAuthEnabled(Permission.INVENTORY_READ, Permission.INVENTORY_FORECAST_READ),
+):
+    """The reorder list: every line of the shopping list, oldest first, with
+    its status — to order (pending), ordered (purchased) or delivered and
+    still to be booked in (received) — and its combination spelled out where
+    it has one."""
+    return await order_lines(db)
+
+
+@router.patch("/orders/{item_id}")
+async def change_order(
+    item_id: int,
+    data: OrderUpdateIn,
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequireAnyPermissionIfAuthEnabled(
+        Permission.INVENTORY_FORECAST_WRITE, Permission.INVENTORY_UPDATE
+    ),
+):
+    """Move a reorder line to another column, or change its quantity,
+    supplier or reference. Only the fields sent are changed; send
+    ``supplier_id`` or ``reference`` as null to clear them."""
+    item = (await db.execute(select(ShoppingListItem).where(ShoppingListItem.id == item_id))).scalar_one_or_none()
+    if item is None:
+        raise HTTPException(404, "Item not found")
+    sent = data.model_fields_set
+    changes = {}
+    if "supplier_id" in sent:
+        changes["supplier_id"] = data.supplier_id
+    if "reference" in sent:
+        changes["reference"] = data.reference
+    try:
+        await update_order(db, item, status=data.status, quantity=data.quantity, **changes)
+    except ProductError as exc:
+        await db.rollback()
+        raise HTTPException(400, str(exc)) from exc
+    await db.commit()
+    return next(line for line in await order_lines(db) if line["id"] == item_id)
+
+
+@router.get("/variants/{variant_id}/reorder-line")
+async def get_reorder_line(
+    variant_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_READ),
+):
+    """One combination as the reorder dialog offers it, whatever its target:
+    what it is, its price, stock and what is on order, and its suppliers."""
+    line = await reorder_line_for(db, variant_id)
+    if line is None:
+        raise HTTPException(404, "Combination not found")
+    return line
 
 
 @router.post("/orders/{item_id}/receive")

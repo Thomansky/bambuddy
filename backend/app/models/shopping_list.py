@@ -25,4 +25,9 @@ class ShoppingListItem(Base):
     # Goods-in of that variant ticks the line off.
     variant_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     supplier_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The reorder list's own fields: when the delivery arrived (status
+    # "received" = here, still to be booked in), and what the order is for —
+    # a job or a customer — so two orders of one combination stay apart.
+    received_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reference: Mapped[str | None] = mapped_column(String(200), nullable=True)
     added_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

@@ -387,3 +387,188 @@ class TestShoppingList:
         [line] = (await async_client.get(SHOPPING)).json()
         assert line["variant_id"] is None
         assert line["color_name"] == "White"
+
+
+ORDERS = f"{API}/orders"
+
+
+async def _orders(client: AsyncClient) -> list[dict]:
+    response = await client.get(ORDERS)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+async def _order(client: AsyncClient, variant_id: int, quantity: int = 1, **extra) -> None:
+    response = await client.post(
+        f"{API}/reorder", json={"items": [{"variant_id": variant_id, "quantity": quantity, **extra}]}
+    )
+    assert response.status_code == 200, response.text
+
+
+async def _change(client: AsyncClient, item_id: int, **changes):
+    return await client.patch(f"{ORDERS}/{item_id}", json=changes)
+
+
+class TestOrderList:
+    """The reorder list: any combination can be put on it on purpose, and each
+    line moves through three columns — to order, ordered, delivered and still
+    to be booked in — until goods-in books it."""
+
+    @pytest.mark.asyncio
+    async def test_the_list_spells_out_each_line(self, async_client: AsyncClient):
+        shop = await _supplier(async_client, "Filament Shop")
+        product = await _product(async_client, suppliers=[{"supplier_id": shop, "preferred": True}])
+        big = _variant(product, "Black", 5000)
+
+        await _order(async_client, big["id"], 3, supplier_id=shop, reference="RAFI 4019")
+
+        [line] = await _orders(async_client)
+        assert line["status"] == "pending"
+        assert line["quantity"] == 3
+        assert line["reference"] == "RAFI 4019"
+        assert line["variant_id"] == big["id"]
+        assert line["product_id"] == product["id"]
+        assert line["product_label"] == "Bambu Lab PLA Matte"
+        assert line["material_number"] == "52"
+        assert (line["color_name"], line["rgba"], line["label_weight"]) == ("Black", "000000FF", 5000)
+        assert (line["supplier_id"], line["supplier_name"]) == (shop, "Filament Shop")
+        assert line["list_price"] == 90.0
+        assert line["suppliers"] == [{"supplier_id": shop, "supplier_name": "Filament Shop", "preferred": True}]
+        assert (line["purchased_at"], line["received_at"]) == (None, None)
+
+    @pytest.mark.asyncio
+    async def test_a_combination_without_a_target_can_be_ordered(self, async_client: AsyncClient):
+        product = await _product(async_client)
+        big = _variant(product, "Black", 5000)
+
+        response = await async_client.get(f"{API}/variants/{big['id']}/reorder-line")
+
+        assert response.status_code == 200, response.text
+        offer = response.json()
+        assert (offer["min_stock"], offer["shortfall"], offer["label_weight"]) == (None, 0, 5000)
+        await _order(async_client, big["id"], 2)
+        assert [line["variant_id"] for line in await _orders(async_client)] == [big["id"]]
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_combination_has_no_reorder_line(self, async_client: AsyncClient):
+        response = await async_client.get(f"{API}/variants/999999/reorder-line")
+
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_a_line_moves_through_the_three_columns_and_back(self, async_client: AsyncClient):
+        product = await _product(async_client)
+        await _order(async_client, _variant(product, "Black", 1000)["id"])
+        [line] = await _orders(async_client)
+
+        ordered = (await _change(async_client, line["id"], status="purchased")).json()
+        assert ordered["status"] == "purchased"
+        assert ordered["purchased_at"] is not None and ordered["received_at"] is None
+
+        arrived = (await _change(async_client, line["id"], status="received")).json()
+        assert arrived["status"] == "received"
+        assert arrived["purchased_at"] == ordered["purchased_at"]
+        assert arrived["received_at"] is not None
+
+        back = (await _change(async_client, line["id"], status="purchased")).json()
+        assert back["received_at"] is None and back["purchased_at"] == ordered["purchased_at"]
+
+        reset = (await _change(async_client, line["id"], status="pending")).json()
+        assert (reset["purchased_at"], reset["received_at"]) == (None, None)
+
+    @pytest.mark.asyncio
+    async def test_a_delivered_line_still_counts_as_coming(self, async_client: AsyncClient):
+        product = await _product(async_client)
+        black = _variant(product, "Black", 1000)
+        await _order(async_client, black["id"], 2)
+        [line] = await _orders(async_client)
+
+        await _change(async_client, line["id"], status="received")
+
+        black = _variant(await _fetch(async_client, product["id"]), "Black", 1000)
+        assert (black["on_order"], black["shortfall"]) == (2, 0)
+        assert [line["color_name"] for line in await _reorder(async_client)] == ["White"]
+
+    @pytest.mark.asyncio
+    async def test_goods_in_books_the_delivered_line_first(self, async_client: AsyncClient, db_session: AsyncSession):
+        product = await _product(async_client)
+        black = _variant(product, "Black", 1000)
+        for status in ("pending", "purchased", "received"):
+            db_session.add(ShoppingListItem(material="PLA", quantity_spools=1, status=status, variant_id=black["id"]))
+        await db_session.commit()
+
+        result = await _intake(async_client, black["id"], 1)
+
+        assert result["orders_settled"] == 1
+        assert sorted(line["status"] for line in await _orders(async_client)) == ["pending", "purchased"]
+
+    @pytest.mark.asyncio
+    async def test_quantity_supplier_and_reference_can_be_corrected(self, async_client: AsyncClient):
+        shop = await _supplier(async_client, "Filament Shop")
+        other = await _supplier(async_client, "Other Shop")
+        product = await _product(
+            async_client, suppliers=[{"supplier_id": shop, "preferred": True}, {"supplier_id": other}]
+        )
+        await _order(async_client, _variant(product, "Black", 1000)["id"], supplier_id=shop, reference="A")
+        [line] = await _orders(async_client)
+
+        changed = await _change(async_client, line["id"], quantity=5, supplier_id=other, reference="B")
+
+        assert changed.status_code == 200, changed.text
+        body = changed.json()
+        assert (body["quantity"], body["supplier_name"], body["reference"]) == (5, "Other Shop", "B")
+        assert body["note"] == "1 kg · Other Shop"
+        cleared = (await _change(async_client, line["id"], supplier_id=None, reference=None)).json()
+        assert (cleared["supplier_id"], cleared["reference"], cleared["note"]) == (None, None, "1 kg")
+        # Only what was sent changes.
+        assert cleared["quantity"] == 5
+
+    @pytest.mark.asyncio
+    async def test_a_supplier_that_does_not_carry_the_product_is_refused_on_change(self, async_client: AsyncClient):
+        stranger = await _supplier(async_client, "Somebody Else")
+        product = await _product(async_client)
+        await _order(async_client, _variant(product, "Black", 1000)["id"])
+        [line] = await _orders(async_client)
+
+        response = await _change(async_client, line["id"], supplier_id=stranger)
+
+        assert response.status_code == 400
+        assert (await _orders(async_client))[0]["supplier_id"] is None
+
+    @pytest.mark.asyncio
+    async def test_orders_for_different_references_stay_apart(self, async_client: AsyncClient):
+        product = await _product(async_client)
+        black = _variant(product, "Black", 1000)["id"]
+
+        await _order(async_client, black, 2, reference="RAFI")
+        await _order(async_client, black, 1, reference="Armpolster")
+        await _order(async_client, black, 1, reference="RAFI")
+
+        lines = {line["reference"]: line["quantity"] for line in await _orders(async_client)}
+        assert lines == {"RAFI": 3, "Armpolster": 1}
+
+    @pytest.mark.asyncio
+    async def test_a_plain_line_keeps_its_own_text(self, async_client: AsyncClient, db_session: AsyncSession):
+        db_session.add(ShoppingListItem(material="PETG", brand="Prusament", color_name="Galaxy", quantity_spools=2))
+        await db_session.commit()
+
+        [line] = await _orders(async_client)
+
+        assert (line["variant_id"], line["product_label"]) == (None, None)
+        assert (line["material"], line["brand"], line["color_name"], line["quantity"]) == (
+            "PETG",
+            "Prusament",
+            "Galaxy",
+            2,
+        )
+
+    @pytest.mark.asyncio
+    async def test_bad_changes_are_refused(self, async_client: AsyncClient):
+        product = await _product(async_client)
+        await _order(async_client, _variant(product, "Black", 1000)["id"])
+        [line] = await _orders(async_client)
+
+        assert (await _change(async_client, line["id"], status="done")).status_code == 422
+        assert (await _change(async_client, line["id"], quantity=0)).status_code == 422
+        assert (await _change(async_client, line["id"], reference="x" * 201)).status_code == 422
+        assert (await _change(async_client, 999999, status="purchased")).status_code == 404

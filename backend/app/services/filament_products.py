@@ -55,9 +55,12 @@ SIZE_SPOOL_FIELDS = ("label_weight", "core_weight", "core_weight_catalog_id")
 MAX_INTAKE_QUANTITY = 100
 # How well a support material worked with a product: 1 (poor) to 4 (very good).
 MAX_SUPPORT_RATING = 4
-# Shopping-list lines that are still coming: not yet bought, or bought and
-# not yet booked in.
-OPEN_ORDER_STATUSES = ("pending", "purchased")
+# Shopping-list lines that are still coming: not yet bought, bought, or
+# delivered and waiting to be booked in. They are also the reorder list's
+# three columns, in this order.
+OPEN_ORDER_STATUSES = ("pending", "purchased", "received")
+# What a reorder line may say it is for (a job, a customer).
+MAX_ORDER_REFERENCE = 200
 DEFAULT_LOW_STOCK_THRESHOLD = 20.0
 
 
@@ -663,9 +666,10 @@ async def intake(
 
 
 async def settle_orders_for(db: AsyncSession, variant_id: int, quantity: int) -> int:
-    """Tick a delivery off the shopping list: lines already bought first,
-    then the oldest. A line that is fully delivered leaves the list, the way
-    booking in from the list removes it; a partial delivery lowers it."""
+    """Tick a delivery off the shopping list: lines already delivered and
+    waiting to be booked in first, then those bought, then the oldest. A line
+    that is fully delivered leaves the list, the way booking in from the list
+    removes it; a partial delivery lowers it."""
     rows = list(
         (
             await db.execute(
@@ -677,7 +681,7 @@ async def settle_orders_for(db: AsyncSession, variant_id: int, quantity: int) ->
         .scalars()
         .all()
     )
-    rows.sort(key=lambda row: (row.status != "purchased", row.id))
+    rows.sort(key=lambda row: (-OPEN_ORDER_STATUSES.index(row.status), row.id))
     left = quantity
     settled = 0
     for row in rows:
@@ -823,26 +827,48 @@ async def reorder_lines(db: AsyncSession) -> list[dict]:
     return lines
 
 
+def _clean_reference(value: str | None) -> str | None:
+    text = (value or "").strip()
+    if len(text) > MAX_ORDER_REFERENCE:
+        raise ProductError(f"The reference can be at most {MAX_ORDER_REFERENCE} characters")
+    return text or None
+
+
+def _order_note(variant: FilamentVariant, supplier_name: str | None) -> str:
+    """Size and supplier as text: the shopping list's own columns have
+    neither, and the forecast's list shows a line by its note."""
+    return " · ".join(part for part in (size_label(variant.size), supplier_name) if part)
+
+
+def _product_supplier(product: FilamentProduct, supplier_id: int | None):
+    """The product's supplier row for ``supplier_id``; None for no supplier.
+    A supplier the product has never been bought from is refused."""
+    if supplier_id is None:
+        return None
+    row = next((row for row in product.suppliers if row.supplier_id == supplier_id), None)
+    if row is None:
+        raise ProductError("The supplier does not carry this product")
+    return row
+
+
 async def add_to_shopping_list(db: AsyncSession, items) -> dict:
     """Put reorder lines on the shopping list.
 
     Each line knows its variant and supplier, so goods-in can tick it off. A
-    line that is on the list already and not bought yet grows instead of
-    being listed twice. The caller commits.
+    line that is on the list already, not bought yet and for the same
+    reference grows instead of being listed twice; a different reference (an
+    order for another job) gets a line of its own. The caller commits.
     """
     added = merged = 0
     for item in items:
         if not 1 <= item.quantity <= MAX_INTAKE_QUANTITY:
             raise ProductError(f"Quantity must be between 1 and {MAX_INTAKE_QUANTITY}")
+        reference = _clean_reference(getattr(item, "reference", None))
         variant = await find_variant(db, item.variant_id)
         if variant is None:
             raise ProductError(f"Unknown combination {item.variant_id}")
         product = await load_product(db, variant.product_id)
-        supplier_row = None
-        if item.supplier_id is not None:
-            supplier_row = next((row for row in product.suppliers if row.supplier_id == item.supplier_id), None)
-            if supplier_row is None:
-                raise ProductError("The supplier does not carry this product")
+        supplier_row = _product_supplier(product, item.supplier_id)
         existing = (
             (
                 await db.execute(
@@ -851,6 +877,9 @@ async def add_to_shopping_list(db: AsyncSession, items) -> dict:
                         ShoppingListItem.supplier_id.is_(None)
                         if item.supplier_id is None
                         else ShoppingListItem.supplier_id == item.supplier_id,
+                        ShoppingListItem.reference.is_(None)
+                        if reference is None
+                        else ShoppingListItem.reference == reference,
                         ShoppingListItem.status == "pending",
                     )
                 )
@@ -862,9 +891,6 @@ async def add_to_shopping_list(db: AsyncSession, items) -> dict:
             existing.quantity_spools = (existing.quantity_spools or 0) + item.quantity
             merged += 1
             continue
-        note_parts = [size_label(variant.size)]
-        if supplier_row is not None:
-            note_parts.append(supplier_row.supplier.name if supplier_row.supplier else None)
         db.add(
             ShoppingListItem(
                 material=product.material,
@@ -872,15 +898,198 @@ async def add_to_shopping_list(db: AsyncSession, items) -> dict:
                 brand=product.brand,
                 color_name=_color_text(variant.color),
                 quantity_spools=item.quantity,
-                note=" · ".join(part for part in note_parts if part),
+                note=_order_note(
+                    variant, supplier_row.supplier.name if supplier_row and supplier_row.supplier else None
+                ),
                 status="pending",
                 variant_id=variant.id,
                 supplier_id=item.supplier_id,
+                reference=reference,
             )
         )
         added += 1
     await db.flush()
     return {"added": added, "merged": merged}
+
+
+def _suppliers_out(product: FilamentProduct) -> list[dict]:
+    return [
+        {
+            "supplier_id": row.supplier_id,
+            "supplier_name": row.supplier.name if row.supplier else "",
+            "preferred": row.preferred,
+        }
+        for row in product.suppliers
+    ]
+
+
+async def reorder_line_for(db: AsyncSession, variant_id: int) -> dict | None:
+    """One combination as the reorder list offers it, whatever its target:
+    what it is, what it costs, its stock and where it has been bought."""
+    variant = await find_variant(db, variant_id)
+    if variant is None:
+        return None
+    product = await load_product(db, variant.product_id)
+    here = (await variant_stock(db, [variant.id])).get(variant.id, VariantStock())
+    on_order = (await variant_on_order(db, [variant.id])).get(variant.id, 0)
+    color, size = variant.color, variant.size
+    return {
+        "variant_id": variant.id,
+        "product_id": product.id,
+        "product_label": product_label(product),
+        "material_number": product.material_number,
+        "color_name": color.color_name,
+        "rgba": color.rgba,
+        "extra_colors": color.extra_colors,
+        "effect_type": color.effect_type,
+        "label_weight": size.label_weight,
+        "refill": size.refill,
+        "min_stock": variant.min_stock,
+        "spools": here.spools,
+        "in_stock": here.in_stock,
+        "on_order": on_order,
+        "shortfall": shortfall(variant.min_stock, here.in_stock, on_order),
+        "list_price": effective_price(variant, size),
+        "price_vat_included": size.price_vat_included,
+        "suppliers": _suppliers_out(product),
+    }
+
+
+def _iso(value) -> str | None:
+    """UTC without an offset, the way the database hands the column back —
+    so a line reads the same right after a change as on the next load."""
+    if not value:
+        return None
+    if value.tzinfo is not None:
+        from datetime import timezone
+
+        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value.isoformat()
+
+
+async def order_lines(db: AsyncSession) -> list[dict]:
+    """Every line of the shopping list for the reorder list, oldest first,
+    with its combination spelled out where it has one. Lines without one (the
+    forecast's, or whose combination was removed) keep their own text."""
+    rows = list((await db.execute(select(ShoppingListItem).order_by(ShoppingListItem.id))).scalars().all())
+    variant_ids = {row.variant_id for row in rows if row.variant_id}
+    combos: dict[int, tuple] = {}
+    if variant_ids:
+        for product in await load_products(db):
+            sizes = {size.id: size for size in product.sizes}
+            colors = {color.id: color for color in product.colors}
+            for variant in product.variants:
+                if variant.id in variant_ids and variant.size_id in sizes and variant.color_id in colors:
+                    combos[variant.id] = (product, variant, colors[variant.color_id], sizes[variant.size_id])
+    supplier_ids = {row.supplier_id for row in rows if row.supplier_id}
+    names = (
+        dict((await db.execute(select(Supplier.id, Supplier.name).where(Supplier.id.in_(supplier_ids)))).all())
+        if supplier_ids
+        else {}
+    )
+    lines = []
+    for row in rows:
+        line = {
+            "id": row.id,
+            "status": row.status if row.status in OPEN_ORDER_STATUSES else "pending",
+            "quantity": row.quantity_spools or 0,
+            "reference": row.reference,
+            "note": row.note,
+            "added_at": _iso(row.added_at),
+            "purchased_at": _iso(row.purchased_at),
+            "received_at": _iso(row.received_at),
+            "supplier_id": row.supplier_id,
+            "supplier_name": names.get(row.supplier_id) if row.supplier_id else None,
+            "material": row.material,
+            "subtype": row.subtype,
+            "brand": row.brand,
+            "color_name": row.color_name,
+            "variant_id": None,
+            "product_id": None,
+            "product_label": None,
+            "material_number": None,
+            "rgba": None,
+            "extra_colors": None,
+            "effect_type": None,
+            "label_weight": None,
+            "refill": False,
+            "list_price": None,
+            "price_vat_included": True,
+            "suppliers": [],
+        }
+        combo = combos.get(row.variant_id) if row.variant_id else None
+        if combo is not None:
+            product, variant, color, size = combo
+            line.update(
+                variant_id=variant.id,
+                product_id=product.id,
+                product_label=product_label(product),
+                material_number=product.material_number,
+                color_name=color.color_name or row.color_name,
+                rgba=color.rgba,
+                extra_colors=color.extra_colors,
+                effect_type=color.effect_type,
+                label_weight=size.label_weight,
+                refill=size.refill,
+                list_price=effective_price(variant, size),
+                price_vat_included=size.price_vat_included,
+                suppliers=_suppliers_out(product),
+            )
+        lines.append(line)
+    return lines
+
+
+_UNSET = object()
+
+
+async def update_order(
+    db: AsyncSession,
+    item: ShoppingListItem,
+    *,
+    status: str | None = None,
+    quantity: int | None = None,
+    supplier_id=_UNSET,
+    reference=_UNSET,
+    now=None,
+) -> ShoppingListItem:
+    """Change a reorder line: move it between the three columns (to order →
+    ordered → delivered, still to be booked in; and back), or correct its
+    quantity, supplier or reference. Moving it stamps when it was ordered and
+    when it arrived; moving it back clears what no longer holds. The caller
+    commits."""
+    from datetime import datetime, timezone
+
+    if quantity is not None:
+        if not 1 <= quantity <= MAX_INTAKE_QUANTITY:
+            raise ProductError(f"Quantity must be between 1 and {MAX_INTAKE_QUANTITY}")
+        item.quantity_spools = quantity
+    if reference is not _UNSET:
+        item.reference = _clean_reference(reference)
+    if supplier_id is not _UNSET:
+        variant = await find_variant(db, item.variant_id) if item.variant_id else None
+        if variant is not None:
+            product = await load_product(db, variant.product_id)
+            row = _product_supplier(product, supplier_id)
+            item.note = _order_note(variant, row.supplier.name if row and row.supplier else None)
+        elif supplier_id is not None and await db.get(Supplier, supplier_id) is None:
+            raise ProductError("Unknown supplier")
+        item.supplier_id = supplier_id
+    if status is not None and status != item.status:
+        if status not in OPEN_ORDER_STATUSES:
+            raise ProductError(f"Status must be one of {', '.join(OPEN_ORDER_STATUSES)}")
+        stamp = now or datetime.now(timezone.utc)
+        if status == "pending":
+            item.purchased_at = None
+            item.received_at = None
+        elif status == "purchased":
+            item.purchased_at = item.purchased_at or stamp
+            item.received_at = None
+        else:
+            item.purchased_at = item.purchased_at or stamp
+            item.received_at = stamp
+        item.status = status
+    await db.flush()
+    return item
 
 
 async def receive_order(db: AsyncSession, item: ShoppingListItem) -> IntakeResult:
