@@ -228,3 +228,7 @@ export function mergeColumnConfig(stored: ColumnConfig[] | null, defaults: Colum
   });
   return merged;
 }
+
+/** Invalidated whenever the reorder list changes: the list itself and what
+ *  shows how much is on order. */
+export const ORDER_QUERY_KEYS = [['product-orders'], ['filament-products'], ['shopping-list'], ['filament-products-reorder']];

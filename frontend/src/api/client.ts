@@ -4262,7 +4262,7 @@ export interface ProductReorderLine {
   effect_type: string | null;
   label_weight: number;
   refill: boolean;
-  min_stock: number;
+  min_stock: number | null;
   spools: number;
   in_stock: number;
   on_order: number;
@@ -4272,6 +4272,50 @@ export interface ProductReorderLine {
   price_vat_included: boolean;
   /** Where it has been bought, the usual supplier first. */
   suppliers: FilamentProductSupplier[];
+}
+
+/** A line's column on the reorder list: to order, ordered, delivered and
+ *  still to be booked in. */
+export type ProductOrderStatus = 'pending' | 'purchased' | 'received';
+
+/** A line of the reorder list (the shopping list's lines, each with its
+ *  combination spelled out where it has one). */
+export interface ProductOrderLine {
+  id: number;
+  status: ProductOrderStatus;
+  quantity: number;
+  /** What the order is for: a job, a customer. */
+  reference: string | null;
+  note: string | null;
+  added_at: string | null;
+  purchased_at: string | null;
+  received_at: string | null;
+  supplier_id: number | null;
+  supplier_name: string | null;
+  // The line's own text — all a line without a combination has.
+  material: string;
+  subtype: string | null;
+  brand: string | null;
+  color_name: string | null;
+  variant_id: number | null;
+  product_id: number | null;
+  product_label: string | null;
+  material_number: string | null;
+  rgba: string | null;
+  extra_colors: string | null;
+  effect_type: string | null;
+  label_weight: number | null;
+  refill: boolean;
+  list_price: number | null;
+  price_vat_included: boolean;
+  suppliers: FilamentProductSupplier[];
+}
+
+export interface ProductOrderUpdate {
+  status?: ProductOrderStatus;
+  quantity?: number;
+  supplier_id?: number | null;
+  reference?: string | null;
 }
 
 export interface ProductConversionPlan {
@@ -7775,7 +7819,9 @@ export const api = {
     ),
   getProductReorder: () =>
     request<ProductReorderLine[]>('/inventory/products/reorder'),
-  addProductReorder: (items: { variant_id: number; quantity: number; supplier_id: number | null }[]) =>
+  addProductReorder: (
+    items: { variant_id: number; quantity: number; supplier_id: number | null; reference?: string | null }[],
+  ) =>
     request<{ added: number; merged: number }>('/inventory/products/reorder', {
       method: 'POST',
       body: JSON.stringify({ items }),
@@ -7784,6 +7830,14 @@ export const api = {
     request<{ spool_ids: number[]; cost_per_kg: number | null }>(`/inventory/products/orders/${itemId}/receive`, {
       method: 'POST',
     }),
+  getProductOrders: () => request<ProductOrderLine[]>('/inventory/products/orders'),
+  updateProductOrder: (itemId: number, changes: ProductOrderUpdate) =>
+    request<ProductOrderLine>(`/inventory/products/orders/${itemId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(changes),
+    }),
+  getVariantReorderLine: (variantId: number) =>
+    request<ProductReorderLine>(`/inventory/products/variants/${variantId}/reorder-line`),
   setSpoolSuppliers: (spoolId: number, links: SpoolSupplierLinkInput[]) =>
     request<SpoolSupplierLink[]>(`/inventory/spools/${spoolId}/suppliers`, {
       method: 'PUT',

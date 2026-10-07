@@ -7,7 +7,7 @@ import type { ProductReorderLine } from '../../api/client';
 import { useToast } from '../../contexts/ToastContext';
 import { FilamentSwatch } from '../FilamentSwatch';
 import { getCurrencySymbol } from '../../utils/currency';
-import { formatMoney, formatSizeLabel } from './productUtils';
+import { formatMoney, formatSizeLabel, ORDER_QUERY_KEYS } from './productUtils';
 
 interface ReorderModalProps {
   onClose: () => void;
@@ -114,9 +114,7 @@ export function ReorderModal({ onClose, onDone }: ReorderModalProps) {
     try {
       const result = await api.addProductReorder(items);
       showToast(t('inventory.products.reorder.added', { count: result.added + result.merged }), 'success');
-      queryClient.invalidateQueries({ queryKey: ['shopping-list'] });
-      queryClient.invalidateQueries({ queryKey: ['filament-products'] });
-      queryClient.invalidateQueries({ queryKey: ['filament-products-reorder'] });
+      for (const queryKey of ORDER_QUERY_KEYS) queryClient.invalidateQueries({ queryKey });
       onDone();
     } catch (err) {
       console.error('ReorderModal.handleSubmit failed:', err);

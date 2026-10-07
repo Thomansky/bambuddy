@@ -90,6 +90,13 @@ describe('IntakeModal — the standard size', () => {
     expect(screen.getByRole('button', { name: /^1 kg$/ })).not.toHaveClass('border-bambu-green');
   });
 
+  it('opens a delivery from the reorder list on its combination and quantity', async () => {
+    render(<IntakeModal onClose={vi.fn()} initialOrder={{ productId: 1, variantId: 30, quantity: 3 }} />);
+
+    expect(await screen.findByText('Black · 1 kg')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('3')).toBeInTheDocument();
+  });
+
   it('leaves the choice open without a standard size', async () => {
     serve([product([size(10, {}), size(11, { price: 17, refill: true })])]);
     const user = userEvent.setup();

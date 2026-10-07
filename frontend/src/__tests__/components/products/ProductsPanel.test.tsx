@@ -220,6 +220,29 @@ describe('ProductsPanel', () => {
     expect(screen.getByText((content) => content.includes(asOf))).toBeInTheDocument();
   });
 
+  it('reorders a colour × size from its cell', async () => {
+    const onReorder = vi.fn();
+    const user = userEvent.setup();
+    render(<ProductsPanel onIntake={vi.fn()} onEdit={vi.fn()} onConvert={vi.fn()} onReorder={onReorder} />);
+    const table = await screen.findByRole('table');
+
+    await user.click(within(table).getByText('Bambu Lab'));
+    await user.click(await screen.findByRole('button', { name: 'Reorder White · 1 kg' }));
+
+    expect(onReorder).toHaveBeenCalledWith(12);
+  });
+
+  it('offers no reorder button to whoever may not reorder', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    const table = await screen.findByRole('table');
+
+    await user.click(within(table).getByText('Bambu Lab'));
+
+    await screen.findByText('White');
+    expect(screen.queryByRole('button', { name: /^Reorder White/ })).not.toBeInTheDocument();
+  });
+
   it('marks the standard size and names a refill', async () => {
     const base = { core_weight: 250, core_weight_catalog_id: null, price_vat_included: true, refill: false, standard: false };
     server.use(

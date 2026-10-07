@@ -15,6 +15,7 @@ import {
   Pencil,
   Plus,
   Search,
+  ShoppingCart,
   WandSparkles,
   X,
 } from 'lucide-react';
@@ -54,6 +55,8 @@ interface ProductsPanelProps {
   onConvert: () => void;
   /** Active spools that belong to no product yet. */
   unassignedCount?: number;
+  /** Put one combination on the reorder list. */
+  onReorder?: (variantId: number) => void;
 }
 
 type StockFilter = 'all' | 'in_stock' | 'empty' | 'below';
@@ -348,7 +351,7 @@ const segmentClass = (active: boolean, tone: 'green' | 'red' = 'green') =>
 // The "Products" section of the filament stock (#3165): every product in a
 // table built like the spool list — search, filter chips, configurable and
 // sortable columns — and, unfolded, the stock of each colour × size.
-export function ProductsPanel({ onIntake, onEdit, onConvert, unassignedCount = 0 }: ProductsPanelProps) {
+export function ProductsPanel({ onIntake, onEdit, onConvert, unassignedCount = 0, onReorder }: ProductsPanelProps) {
   const { t } = useTranslation();
   const { data: products = [], isLoading } = useQuery({
     queryKey: ['filament-products'],
@@ -811,7 +814,7 @@ export function ProductsPanel({ onIntake, onEdit, onConvert, unassignedCount = 0
                       {open && (
                         <tr className="bg-bambu-dark/40 border-b border-bambu-dark-tertiary/50">
                           <td colSpan={visibleColumns.length + 2} className="px-6 py-3">
-                            <StockMatrix product={product} currency={currency} />
+                            <StockMatrix product={product} currency={currency} onReorder={onReorder} />
                           </td>
                         </tr>
                       )}
@@ -847,7 +850,15 @@ export function ProductsPanel({ onIntake, onEdit, onConvert, unassignedCount = 0
 
 /** Colours × sizes with the stock of each variant. It says what its cells
  *  are: without that, a table of zeros and a stray price reads as noise. */
-function StockMatrix({ product, currency }: { product: FilamentProduct; currency: string }) {
+function StockMatrix({
+  product,
+  currency,
+  onReorder,
+}: {
+  product: FilamentProduct;
+  currency: string;
+  onReorder?: (variantId: number) => void;
+}) {
   const { t } = useTranslation();
   if (product.colors.length === 0 || product.sizes.length === 0) {
     return <p className="text-xs text-bambu-gray">{t('inventory.products.noVariants')}</p>;
@@ -920,6 +931,20 @@ function StockMatrix({ product, currency }: { product: FilamentProduct; currency
                     {variant.codes.length > 0 && (
                       <Barcode className="inline w-3 h-3 ml-1 text-bambu-gray" aria-label={t('inventory.products.codes')} />
                     )}
+                    {onReorder && (
+                      <button
+                        type="button"
+                        onClick={() => onReorder(variant.id)}
+                        className="ml-1 p-0.5 rounded text-bambu-gray hover:text-bambu-green align-middle"
+                        title={t('inventory.products.reorderOne.title')}
+                        aria-label={t('inventory.products.reorderOne.cellLabel', {
+                          color: colorLabel(color),
+                          size: formatSizeLabel(size.label_weight, size.refill, t('inventory.products.refill')),
+                        })}
+                      >
+                        <ShoppingCart className="w-3 h-3" />
+                      </button>
+                    )}
                     {variant.price_override !== null && (
                       <span
                         className="block text-[10px] text-amber-300"
@@ -928,12 +953,16 @@ function StockMatrix({ product, currency }: { product: FilamentProduct; currency
                         {formatMoney(variant.price_override, currency)}
                       </span>
                     )}
-                    {variant.min_stock !== null && (
+                    {/* What is on order shows with or without a target: an
+                        order put on the reorder list on purpose counts too. */}
+                    {(variant.min_stock !== null || variant.on_order > 0) && (
                       <span
                         className={`block text-[10px] ${variant.shortfall > 0 ? 'text-red-400' : 'text-bambu-gray'}`}
                       >
                         {[
-                          t('inventory.products.targetShort', { count: variant.min_stock }),
+                          variant.min_stock !== null
+                            ? t('inventory.products.targetShort', { count: variant.min_stock })
+                            : null,
                           variant.spool_count > variant.in_stock
                             ? t('inventory.products.lowShort', { count: variant.spool_count - variant.in_stock })
                             : null,

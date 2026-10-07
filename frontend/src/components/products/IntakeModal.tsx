@@ -23,6 +23,9 @@ interface IntakeModalProps {
   onClose: () => void;
   /** Open straight on the picker for this product (from the product list). */
   initialProductId?: number | null;
+  /** Open straight on the confirm step for a delivery on the reorder list:
+   *  its combination and quantity, the rest still to fill in. */
+  initialOrder?: { productId: number; variantId: number; quantity: number } | null;
 }
 
 type Step = 'scan' | 'pick' | 'confirm' | 'done';
@@ -33,7 +36,7 @@ const inputClass =
 // Goods in (#3165): scan → the variant is recognised → quantity → spools are
 // created, filled in from the master data. An unknown code is taught once by
 // picking its variant; the price is the variant's, overridable per delivery.
-export function IntakeModal({ onClose, initialProductId = null }: IntakeModalProps) {
+export function IntakeModal({ onClose, initialProductId = null, initialOrder = null }: IntakeModalProps) {
   const { t } = useTranslation();
   const { showToast } = useToast();
   const queryClient = useQueryClient();
@@ -42,11 +45,11 @@ export function IntakeModal({ onClose, initialProductId = null }: IntakeModalPro
   const { data: locations = [] } = useQuery({ queryKey: ['intake-locations'], queryFn: api.getLocations });
   const currency = getCurrencySymbol(settings?.currency || 'USD');
 
-  const [step, setStep] = useState<Step>(initialProductId ? 'pick' : 'scan');
+  const [step, setStep] = useState<Step>(initialProductId || initialOrder ? 'pick' : 'scan');
   const [code, setCode] = useState('');
   const [pendingCode, setPendingCode] = useState<string | null>(null);
   const [looking, setLooking] = useState(false);
-  const [productId, setProductId] = useState<number | null>(initialProductId);
+  const [productId, setProductId] = useState<number | null>(initialOrder?.productId ?? initialProductId);
   const [colorId, setColorId] = useState<number | null>(null);
   const [sizeId, setSizeId] = useState<number | null>(null);
   const [variantId, setVariantId] = useState<number | null>(null);
@@ -89,6 +92,19 @@ export function IntakeModal({ onClose, initialProductId = null }: IntakeModalPro
     setQuantity(1);
     setStep('confirm');
   };
+
+  // A delivery from the reorder list opens on its combination once the
+  // products have loaded, with the quantity that arrived.
+  const orderApplied = useRef(false);
+  useEffect(() => {
+    if (!initialOrder || orderApplied.current) return;
+    const target = products.find((p) => p.id === initialOrder.productId);
+    if (!target || !variantParts(target, initialOrder.variantId)) return;
+    orderApplied.current = true;
+    goConfirm(target, initialOrder.variantId);
+    setQuantity(Math.min(Math.max(1, initialOrder.quantity), 100));
+    // goConfirm only sets state; the order is applied exactly once.
+  }, [initialOrder, products]);
 
   const handleScan = async () => {
     const value = code.trim();
@@ -164,6 +180,7 @@ export function IntakeModal({ onClose, initialProductId = null }: IntakeModalPro
       if (result.orders_settled) {
         queryClient.invalidateQueries({ queryKey: ['shopping-list'] });
         queryClient.invalidateQueries({ queryKey: ['filament-products-reorder'] });
+        queryClient.invalidateQueries({ queryKey: ['product-orders'] });
       }
     } catch (err) {
       console.error('IntakeModal.handleCreate failed:', err);

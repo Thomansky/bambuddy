@@ -7,7 +7,7 @@ import {
   Search, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
   TrendingDown, Layers, Printer, AlertTriangle, X, Clock, LayoutGrid, TableProperties, Columns,
   ArrowUp, ArrowDown, ArrowUpDown, Group, ChevronDown, Check, RefreshCw, TrendingUp, Lock, Copy, Eraser, MapPin,
-  Upload, Download, Link2, Banknote, Store, Boxes, PackagePlus, ShoppingCart, WandSparkles,
+  Upload, Download, Link2, Banknote, Store, Boxes, PackagePlus, ShoppingCart, WandSparkles, ClipboardList,
 } from 'lucide-react';
 import { ForecastPanel } from '../components/ForecastPanel';
 import { api, spoolbuddyApi, ApiError } from '../api/client';
@@ -28,6 +28,8 @@ import { IntakeModal } from '../components/products/IntakeModal';
 import { ProductEditorModal } from '../components/products/ProductEditorModal';
 import { ConversionModal } from '../components/products/ConversionModal';
 import { ReorderModal } from '../components/products/ReorderModal';
+import { ReorderLineModal } from '../components/products/ReorderLineModal';
+import { OrderListPanel } from '../components/products/OrderListPanel';
 import { BulkEditSpoolsModal } from '../components/BulkEditSpoolsModal';
 import { SpoolGroupLinkModal } from '../components/SpoolGroupLinkModal';
 import { useToast } from '../contexts/ToastContext';
@@ -55,7 +57,7 @@ type UsageFilter = 'all' | 'used' | 'new' | 'lowstock';
 // The page's sections: the spools, the stock forecast and the product master
 // data (#3165). Table or cards is only how the spools are drawn, so that is a
 // view option inside the spool section rather than a section of its own.
-type Section = 'spools' | 'forecast' | 'products';
+type Section = 'spools' | 'forecast' | 'products' | 'orders';
 type DisplayMode = 'table' | 'cards';
 type SortDirection = 'asc' | 'desc';
 type SortState = { column: string; direction: SortDirection } | null;
@@ -683,8 +685,11 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
   const colorCatalogVersion = useColorCatalogVersion();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
-  const { hasPermission, loading: authLoading } = useAuth();
+  const { hasPermission, hasAnyPermission, loading: authLoading } = useAuth();
   const canViewForecast = !authLoading && hasPermission('inventory:forecast_read');
+  // Putting a combination on the reorder list takes the same rights as
+  // changing the shopping list.
+  const canReorder = !spoolmanMode && !authLoading && hasAnyPermission('inventory:update', 'inventory:forecast_write');
   const [searchParams, setSearchParams] = useSearchParams();
   const [formModal, setFormModal] = useState<{ spool?: InventorySpool | null; mode: SpoolFormMode } | null>(null);
   const deepLinkHandled = useRef(false);
@@ -708,6 +713,10 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
   const [productEditing, setProductEditing] = useState<FilamentProduct | null | undefined>(undefined);
   const [productConverting, setProductConverting] = useState(false);
   const [productReordering, setProductReordering] = useState(false);
+  // The reorder list: the combination being put on it, and the delivery
+  // being booked in from it.
+  const [reorderVariantId, setReorderVariantId] = useState<number | null>(null);
+  const [intakeOrder, setIntakeOrder] = useState<{ productId: number; variantId: number; quantity: number } | null>(null);
 
   // Filter state
   const [archiveFilter, setArchiveFilter] = useState<ArchiveFilter>('active');
@@ -722,11 +731,14 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
   const [spoolFilter, setSpoolFilter] = useState('');
   const [stockFilter, setStockFilter] = useState<'all' | 'stock' | 'configured'>('all');
   const [search, setSearch] = useState('');
-  // The section lives in the URL (?section=forecast|products) so a reload or
-  // a bookmark lands where the user was. Products need the built-in inventory.
+  // The section lives in the URL (?section=forecast|products|orders) so a
+  // reload or a bookmark lands where the user was. Products and the reorder
+  // list need the built-in inventory.
   const sectionParam = searchParams.get('section');
   const section: Section =
-    sectionParam === 'forecast' || (sectionParam === 'products' && !spoolmanMode) ? sectionParam : 'spools';
+    sectionParam === 'forecast' || ((sectionParam === 'products' || sectionParam === 'orders') && !spoolmanMode)
+      ? sectionParam
+      : 'spools';
   const setSection = (next: Section) => {
     setSearchParams((prev) => {
       if (next === 'spools') prev.delete('section');
@@ -846,6 +858,16 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
     () => (products ?? []).reduce((sum, p) => sum + p.variants.filter((v) => v.shortfall > 0).length, 0),
     [products],
   );
+  // The reorder list's lines, for the count on its tab.
+  const { data: orderLines } = useQuery({
+    queryKey: ['product-orders'],
+    queryFn: api.getProductOrders,
+    enabled: !spoolmanMode,
+  });
+  const openOrderLines = orderLines?.length ?? 0;
+  // A spool tied to a product reorders its combination.
+  const reorderSpool = (spool: InventorySpool) =>
+    canReorder && spool.variant_id != null ? () => setReorderVariantId(spool.variant_id ?? null) : undefined;
   const refreshProducts = () => {
     queryClient.invalidateQueries({ queryKey: ['filament-products'] });
     queryClient.invalidateQueries({ queryKey: ['inventory-spools'] });
@@ -1877,6 +1899,29 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
             )}
           </button>
         )}
+        {/* The reorder list: to order -> ordered -> to be booked in. */}
+        {!spoolmanMode && (
+          <button
+            onClick={() => setSection('orders')}
+            aria-current={section === 'orders' ? 'page' : undefined}
+            className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px flex items-center gap-2 whitespace-nowrap ${
+              section === 'orders'
+                ? 'text-bambu-green border-bambu-green'
+                : 'text-bambu-gray hover:text-gray-900 dark:hover:text-white border-transparent'
+            }`}
+          >
+            <ClipboardList className="w-4 h-4 shrink-0" />
+            {t('inventory.sections.orders')}
+            {openOrderLines > 0 && (
+              <span
+                className="text-xs bg-bambu-dark-tertiary text-bambu-gray px-1.5 py-0.5 rounded-full shrink-0"
+                title={t('inventory.products.orders.openLines', { count: openOrderLines })}
+              >
+                {openOrderLines}
+              </span>
+            )}
+          </button>
+        )}
       </div>
 
       {/* Stats Bar — about the spools, so only above them */}
@@ -2480,10 +2525,20 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
       ) : section === 'forecast' ? (
         /* Forecast view */
         <ForecastPanel spools={spools || []} />
+      ) : section === 'orders' ? (
+        /* The reorder list */
+        <OrderListPanel
+          onBookIn={(line) => {
+            if (line.product_id !== null && line.variant_id !== null) {
+              setIntakeOrder({ productId: line.product_id, variantId: line.variant_id, quantity: line.quantity });
+            }
+          }}
+        />
       ) : section === 'products' ? (
         /* Product master data (#3165) */
         <ProductsPanel
           onIntake={(productId) => setIntakeProductId(productId)}
+          onReorder={canReorder ? (variantId) => setReorderVariantId(variantId) : undefined}
           onEdit={(product) => setProductEditing(product)}
           onConvert={() => setProductConverting(true)}
           unassignedCount={(spools || []).filter((s) => !s.archived_at && s.variant_id == null).length}
@@ -2555,6 +2610,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
                                 onClick={() => setFormModal({ spool, mode: 'edit' })}
                                 onPrintLabel={() => setLabelPickerSpoolIds([spool.id])}
                                 onCopy={() => setFormModal({ spool: spool, mode: 'copy' })}
+                                onReorder={reorderSpool(spool)}
                                 t={t}
                                 colorizeLocationSensors={colorizeLocationSensors}
                                 locationSensorAboveColor={locationSensorAboveColor}
@@ -2580,6 +2636,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
                     onClick={() => setFormModal({ spool, mode: 'edit' })}
                     onPrintLabel={() => setLabelPickerSpoolIds([spool.id])}
                     onCopy={() => setFormModal({ spool: spool, mode: 'copy' })}
+                    onReorder={reorderSpool(spool)}
                     t={t}
                     colorizeLocationSensors={colorizeLocationSensors}
                     locationSensorAboveColor={locationSensorAboveColor}
@@ -2706,6 +2763,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
                           onArchive={(id) => setConfirmAction({ type: 'archive', spoolId: id })}
                           onDelete={(id) => setConfirmAction({ type: 'delete', spoolId: id })}
                           onPrintLabel={(id) => setLabelPickerSpoolIds([id])}
+                          onReorder={canReorder ? (s) => setReorderVariantId(s.variant_id ?? null) : undefined}
                           onResetConsumedCounter={(id) => setConfirmAction({ type: 'reset-consumed-counter', spoolId: id })}
                           visibleColumns={visibleColumns}
                           assignmentMap={assignmentMap}
@@ -2740,6 +2798,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
                         onArchive={() => setConfirmAction({ type: 'archive', spoolId: spool.id })}
                         onDelete={() => setConfirmAction({ type: 'delete', spoolId: spool.id })}
                         onPrintLabel={() => setLabelPickerSpoolIds([spool.id])}
+                        onReorder={reorderSpool(spool)}
                         onResetConsumedCounter={() => setConfirmAction({ type: 'reset-consumed-counter', spoolId: spool.id })}
                         visibleColumns={visibleColumns}
                         assignmentMap={assignmentMap}
@@ -3013,6 +3072,10 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
       {intakeProductId !== undefined && (
         <IntakeModal initialProductId={intakeProductId} onClose={() => setIntakeProductId(undefined)} />
       )}
+      {intakeOrder && <IntakeModal initialOrder={intakeOrder} onClose={() => setIntakeOrder(null)} />}
+      {reorderVariantId !== null && (
+        <ReorderLineModal variantId={reorderVariantId} onClose={() => setReorderVariantId(null)} />
+      )}
     </div>
   );
 }
@@ -3096,7 +3159,7 @@ function PaginationBar({
 
 /* Spool card for cards view */
 function SpoolCard({
-  spool, remaining, pct, onClick, onPrintLabel, onCopy, t,
+  spool, remaining, pct, onClick, onPrintLabel, onCopy, onReorder, t,
   colorizeLocationSensors, locationSensorAboveColor, locationSensorBelowColor, locationSensorOptimalColor,
 }: {
   spool: InventorySpool;
@@ -3105,6 +3168,8 @@ function SpoolCard({
   onClick: () => void;
   onPrintLabel?: () => void;
   onCopy?: () => void;
+  /** Put the spool's combination on the reorder list. */
+  onReorder?: () => void;
   t: (key: string, opts?: Record<string, unknown>) => string;
   colorizeLocationSensors: boolean;
   locationSensorAboveColor: LocationSensorAlertColor;
@@ -3155,6 +3220,16 @@ function SpoolCard({
                 aria-label={t('inventory.labels.printOne')}
               >
                 <Printer className="w-4 h-4" />
+              </button>
+            )}
+            {onReorder && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onReorder(); }}
+                className="p-1 text-bambu-gray hover:text-bambu-green rounded transition-colors"
+                title={t('inventory.products.reorderOne.title')}
+                aria-label={t('inventory.products.reorderOne.title')}
+              >
+                <ShoppingCart className="w-4 h-4" />
               </button>
             )}
             <span className="text-xs font-mono text-bambu-gray bg-bambu-dark-tertiary px-2 py-1 rounded">
@@ -3338,7 +3413,7 @@ function SpoolLocationFooter({
 /* Single spool row for table view */
 function SpoolTableRow({
   spool, remaining, pct, isSelected, onToggleSelected,
-  onEdit, onCopy, onRestore, onArchive, onDelete, onPrintLabel, onResetConsumedCounter,
+  onEdit, onCopy, onRestore, onArchive, onDelete, onPrintLabel, onReorder, onResetConsumedCounter,
   visibleColumns, assignmentMap, catalogMap, locationReadingsMap, currencySymbol, vatRatePercent, dateFormat, t, onSyncWeight,
   colorizeLocationSensors, locationSensorAboveColor, locationSensorBelowColor, locationSensorOptimalColor,
 }: {
@@ -3353,6 +3428,8 @@ function SpoolTableRow({
   onArchive: () => void;
   onDelete: () => void;
   onPrintLabel?: () => void;
+  /** Put the spool's combination on the reorder list. */
+  onReorder?: () => void;
   onResetConsumedCounter?: () => void;
   visibleColumns: string[];
   assignmentMap: Record<number, LocationDisplay>;
@@ -3406,6 +3483,16 @@ function SpoolTableRow({
               <Printer className="w-4 h-4" />
             </button>
           )}
+          {onReorder && (
+            <button
+              onClick={onReorder}
+              className="p-1.5 text-bambu-gray hover:text-bambu-green rounded transition-colors"
+              title={t('inventory.products.reorderOne.title')}
+              aria-label={t('inventory.products.reorderOne.title')}
+            >
+              <ShoppingCart className="w-4 h-4" />
+            </button>
+          )}
           {onResetConsumedCounter && spool.weight_used > 0 && (
             // Eraser also shows on archived spools (#1390 follow-up):
             // archived consumed weight now counts in "Total Consumed", so
@@ -3436,7 +3523,7 @@ function SpoolTableRow({
 /* Grouped spool rows for table view */
 function SpoolTableGroup({
   spools, headerSpool, remaining, pct, isExpanded, onToggle,
-  onEdit, onCopy, onArchive, onDelete, onPrintLabel, onResetConsumedCounter,
+  onEdit, onCopy, onArchive, onDelete, onPrintLabel, onReorder, onResetConsumedCounter,
   visibleColumns, assignmentMap, catalogMap, locationReadingsMap, currencySymbol, vatRatePercent, dateFormat, t, onSyncWeight,
   colorizeLocationSensors, locationSensorAboveColor, locationSensorBelowColor, locationSensorOptimalColor,
   selectedIds, onToggleSelected, onToggleGroupSelected,
@@ -3454,6 +3541,7 @@ function SpoolTableGroup({
   onArchive: (id: number) => void;
   onDelete: (id: number) => void;
   onPrintLabel?: (spoolId: number) => void;
+  onReorder?: (spool: InventorySpool) => void;
   onResetConsumedCounter?: (id: number) => void;
   visibleColumns: string[];
   assignmentMap: Record<number, LocationDisplay>;
@@ -3531,6 +3619,7 @@ function SpoolTableGroup({
             onArchive={() => onArchive(spool.id)}
             onDelete={() => onDelete(spool.id)}
             onPrintLabel={onPrintLabel ? () => onPrintLabel(spool.id) : undefined}
+            onReorder={onReorder && spool.variant_id != null ? () => onReorder(spool) : undefined}
             onResetConsumedCounter={onResetConsumedCounter ? () => onResetConsumedCounter(spool.id) : undefined}
             visibleColumns={visibleColumns}
             assignmentMap={assignmentMap}

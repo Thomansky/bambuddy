@@ -60,7 +60,7 @@ describe('InventoryPage — sections', () => {
     render(<InventoryPageRouter />);
 
     expect(await screen.findByRole('button', { name: /New product/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Reorder/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Below target/ })).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: /Take over spools/ }).length).toBeGreaterThan(0);
     expect(screen.queryByText('Total Inventory')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Add Spool/ })).not.toBeInTheDocument();

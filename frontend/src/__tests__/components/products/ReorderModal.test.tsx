@@ -1,6 +1,6 @@
 /**
  * Reorder (#3165): the combinations below their target stock, grouped by the
- * supplier they are bought from, go onto the shopping list as ticked.
+ * supplier they are bought from, go onto the reorder list as ticked.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -72,13 +72,13 @@ describe('ReorderModal', () => {
     expect(within(none).getByRole('textbox', { name: /Spools .*White/ })).toHaveValue('1');
   });
 
-  it('puts the ticked lines on the shopping list', async () => {
+  it('puts the ticked lines on the reorder list', async () => {
     const onDone = vi.fn();
     const user = userEvent.setup();
     render(<ReorderModal onClose={vi.fn()} onDone={onDone} />);
     await screen.findByRole('heading', { name: 'Filament Shop' });
 
-    await user.click(screen.getByRole('button', { name: 'Add 2 lines to the shopping list' }));
+    await user.click(screen.getByRole('button', { name: 'Put 2 lines on the reorder list' }));
 
     await waitFor(() => expect(onDone).toHaveBeenCalled());
     expect(posted).toEqual([
@@ -104,7 +104,7 @@ describe('ReorderModal', () => {
 
     expect(screen.getByRole('heading', { name: 'Other Shop' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Filament Shop' })).not.toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Add 1 line to the shopping list' }));
+    await user.click(screen.getByRole('button', { name: 'Put 1 line on the reorder list' }));
 
     await waitFor(() => expect(posted).toEqual([{ items: [{ variant_id: 11, quantity: 3, supplier_id: 8 }] }]));
   });
@@ -114,6 +114,6 @@ describe('ReorderModal', () => {
     render(<ReorderModal onClose={vi.fn()} onDone={vi.fn()} />);
 
     expect(await screen.findByText('Everything is at its target stock.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /shopping list/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /reorder list/ })).toBeDisabled();
   });
 });
