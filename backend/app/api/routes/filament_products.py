@@ -177,6 +177,8 @@ class ReorderItemIn(BaseModel):
     # What the order is for (a job, a customer); keeps it apart from other
     # orders of the same combination.
     reference: str | None = Field(default=None, max_length=200)
+    # How urgent it is; left out, normal.
+    priority: Literal["high", "normal", "low"] | None = None
 
 
 class ReorderIn(BaseModel):
@@ -190,6 +192,7 @@ class OrderUpdateIn(BaseModel):
     quantity: int | None = Field(default=None, ge=1, le=100)
     supplier_id: int | None = None
     reference: str | None = Field(default=None, max_length=200)
+    priority: Literal["high", "normal", "low"] | None = None
 
 
 def _product_out(
@@ -362,7 +365,7 @@ async def change_order(
     ),
 ):
     """Move a reorder line to another column, or change its quantity,
-    supplier or reference. Only the fields sent are changed; send
+    supplier, reference or priority. Only the fields sent are changed; send
     ``supplier_id`` or ``reference`` as null to clear them."""
     item = (await db.execute(select(ShoppingListItem).where(ShoppingListItem.id == item_id))).scalar_one_or_none()
     if item is None:
@@ -374,7 +377,7 @@ async def change_order(
     if "reference" in sent:
         changes["reference"] = data.reference
     try:
-        await update_order(db, item, status=data.status, quantity=data.quantity, **changes)
+        await update_order(db, item, status=data.status, quantity=data.quantity, priority=data.priority, **changes)
     except ProductError as exc:
         await db.rollback()
         raise HTTPException(400, str(exc)) from exc

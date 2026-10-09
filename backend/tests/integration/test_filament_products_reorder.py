@@ -601,3 +601,64 @@ class TestOrderList:
         assert (await _change(async_client, line["id"], quantity=0)).status_code == 422
         assert (await _change(async_client, line["id"], reference="x" * 201)).status_code == 422
         assert (await _change(async_client, 999999, status="purchased")).status_code == 404
+
+
+class TestOrderPriority:
+    """How urgent a reorder line is: high, normal or low."""
+
+    @pytest.mark.asyncio
+    async def test_a_line_is_normal_unless_said_otherwise(self, async_client: AsyncClient):
+        product = await _product(async_client)
+        await _order(async_client, _variant(product, "Black", 1000)["id"])
+        await _order(async_client, _variant(product, "White", 1000)["id"], priority="high")
+
+        lines = {line["color_name"]: line["priority"] for line in await _orders(async_client)}
+
+        assert lines == {"Black": "normal", "White": "high"}
+
+    @pytest.mark.asyncio
+    async def test_a_line_written_before_there_was_a_priority_reads_as_normal(
+        self, async_client: AsyncClient, db_session: AsyncSession
+    ):
+        db_session.add(ShoppingListItem(material="PETG", quantity_spools=1))
+        await db_session.commit()
+
+        [line] = await _orders(async_client)
+
+        assert line["priority"] == "normal"
+
+    @pytest.mark.asyncio
+    async def test_ordering_again_keeps_the_more_urgent_priority(self, async_client: AsyncClient):
+        product = await _product(async_client)
+        black = _variant(product, "Black", 1000)["id"]
+
+        await _order(async_client, black, 1, priority="low")
+        await _order(async_client, black, 2, priority="high")
+        await _order(async_client, black, 1)
+
+        [line] = await _orders(async_client)
+        assert (line["quantity"], line["priority"]) == (4, "high")
+
+    @pytest.mark.asyncio
+    async def test_the_priority_can_be_changed_and_only_it(self, async_client: AsyncClient):
+        product = await _product(async_client)
+        await _order(async_client, _variant(product, "Black", 1000)["id"], 3, reference="RAFI")
+        [line] = await _orders(async_client)
+
+        changed = await _change(async_client, line["id"], priority="low")
+
+        assert changed.status_code == 200, changed.text
+        body = changed.json()
+        assert (body["priority"], body["quantity"], body["reference"], body["status"]) == ("low", 3, "RAFI", "pending")
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_priority_is_refused(self, async_client: AsyncClient):
+        product = await _product(async_client)
+        black = _variant(product, "Black", 1000)["id"]
+        response = await async_client.post(
+            f"{API}/reorder", json={"items": [{"variant_id": black, "quantity": 1, "priority": "urgent"}]}
+        )
+        assert response.status_code == 422
+        await _order(async_client, black)
+        [line] = await _orders(async_client)
+        assert (await _change(async_client, line["id"], priority="urgent")).status_code == 422

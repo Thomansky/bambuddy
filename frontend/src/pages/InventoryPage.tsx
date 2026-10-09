@@ -871,6 +871,8 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
     enabled: !spoolmanMode,
   });
   const openOrderLines = orderLines?.length ?? 0;
+  // Urgent and not ordered yet: what turns the count red.
+  const urgentOrderLines = (orderLines ?? []).filter((line) => line.priority === 'high' && line.status === 'pending').length;
   // A spool tied to a product reorders its combination.
   const reorderSpool = (spool: InventorySpool) =>
     canReorder && spool.variant_id != null ? () => setReorderVariantId(spool.variant_id ?? null) : undefined;
@@ -1920,8 +1922,18 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
             {t('inventory.sections.orders')}
             {openOrderLines > 0 && (
               <span
-                className="text-xs bg-bambu-dark-tertiary text-bambu-gray px-1.5 py-0.5 rounded-full shrink-0"
-                title={t('inventory.products.orders.openLines', { count: openOrderLines })}
+                className={`text-xs px-1.5 py-0.5 rounded-full shrink-0 ${
+                  urgentOrderLines > 0 ? 'bg-red-500/20 text-red-400' : 'bg-bambu-dark-tertiary text-bambu-gray'
+                }`}
+                title={
+                  urgentOrderLines > 0
+                    ? `${t('inventory.products.orders.openLines', { count: openOrderLines })} · ${t(
+                        'inventory.products.orders.urgentLines',
+                        { count: urgentOrderLines },
+                      )}`
+                    : t('inventory.products.orders.openLines', { count: openOrderLines })
+                }
+                data-testid="orders-tab-count"
               >
                 {openOrderLines}
               </span>

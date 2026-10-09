@@ -83,6 +83,7 @@ function orderLine(id: number, status: string) {
     status,
     quantity: 1,
     reference: null,
+    priority: 'normal',
     note: null,
     added_at: '2026-10-01T08:00:00',
     purchased_at: null,
@@ -138,6 +139,20 @@ describe('InventoryPage — reorder list', () => {
     await waitFor(() => expect(within(tab).getByText('2')).toBeInTheDocument());
     expect(screen.queryByText('Total Inventory')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Add Spool/ })).not.toBeInTheDocument();
+  });
+
+  it('turns the count red while something urgent is still to be ordered', async () => {
+    server.use(
+      http.get('/api/v1/inventory/products/orders', () =>
+        HttpResponse.json([{ ...orderLine(1, 'pending'), priority: 'high' }, orderLine(2, 'received')]),
+      ),
+    );
+    openAt('/inventory?section=orders');
+    render(<InventoryPageRouter />);
+
+    const count = await screen.findByTestId('orders-tab-count');
+    await waitFor(() => expect(count).toHaveClass('text-red-400'));
+    expect(count).toHaveAttribute('title', '2 lines on the reorder list · 1 urgent, not ordered yet');
   });
 
   it('keeps the reorder list in the URL', async () => {

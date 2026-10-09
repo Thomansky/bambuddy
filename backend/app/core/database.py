@@ -5641,6 +5641,8 @@ async def run_migrations(conn):
     else:
         await _safe_execute(conn, "ALTER TABLE filament_shopping_list ADD COLUMN IF NOT EXISTS received_at TIMESTAMP")
     await _safe_execute(conn, "ALTER TABLE filament_shopping_list ADD COLUMN reference VARCHAR(200)")
+    # And how urgent it is: high, normal or low; NULL reads as normal.
+    await _safe_execute(conn, "ALTER TABLE filament_shopping_list ADD COLUMN priority VARCHAR(10)")
 
     # Migration: a code for why a scheduled drying failed, so the card can show
     # the reason in the user's language. Nullable: rows that failed before this

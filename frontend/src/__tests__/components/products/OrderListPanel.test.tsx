@@ -19,6 +19,7 @@ function orderLine(overrides: Partial<ProductOrderLine>): ProductOrderLine {
     status: 'pending',
     quantity: 1,
     reference: null,
+    priority: 'normal',
     note: '1 kg',
     added_at: '2026-10-01T08:00:00',
     purchased_at: null,
@@ -255,6 +256,49 @@ describe('OrderListPanel', () => {
     const line = await screen.findByTestId('order-line-5');
     expect(within(line).queryByRole('button', { name: 'Arrived' })).not.toBeInTheDocument();
     expect(within(line).getByText('Receive in the forecast')).toBeInTheDocument();
+  });
+
+  it('puts urgent lines first, with their supplier group, and marks them', async () => {
+    server.use(
+      http.get('/api/v1/inventory/products/orders', () =>
+        HttpResponse.json([
+          orderLine({ id: 1, supplier_id: 7, supplier_name: 'Alpha Shop', priority: 'low' }),
+          orderLine({ id: 2, supplier_id: 7, supplier_name: 'Alpha Shop' }),
+          orderLine({ id: 3, supplier_id: 8, supplier_name: 'Zeta Shop', color_name: 'Red', priority: 'high' }),
+          orderLine({ id: 4, status: 'purchased', color_name: 'Blue' }),
+          orderLine({ id: 5, status: 'purchased', color_name: 'Green', priority: 'high' }),
+        ]),
+      ),
+    );
+    render(<OrderListPanel onBookIn={vi.fn()} />);
+    await screen.findByRole('region', { name: 'To order' });
+
+    const ids = (scope: HTMLElement) =>
+      within(scope)
+        .getAllByTestId(/^order-line-/)
+        .map((el) => el.getAttribute('data-testid'));
+    // The shop with the urgent line comes first, though Alpha sorts before Zeta.
+    const groups = within(column('To order')).getAllByRole('heading', { level: 4 }).map((h) => h.textContent);
+    expect(groups).toEqual(['Zeta Shop', 'Alpha Shop']);
+    expect(ids(column('To order'))).toEqual(['order-line-3', 'order-line-2', 'order-line-1']);
+    expect(ids(column('Ordered'))).toEqual(['order-line-5', 'order-line-4']);
+
+    expect(within(screen.getByTestId('order-line-3')).getByTestId('priority-badge')).toHaveTextContent('High');
+    expect(within(screen.getByTestId('order-line-1')).getByTestId('priority-badge')).toHaveTextContent('Low');
+    expect(within(screen.getByTestId('order-line-2')).queryByTestId('priority-badge')).not.toBeInTheDocument();
+  });
+
+  it('changes a line\'s priority', async () => {
+    const user = userEvent.setup();
+    render(<OrderListPanel onBookIn={vi.fn()} />);
+    await screen.findByRole('region', { name: 'To order' });
+
+    await user.selectOptions(
+      within(screen.getByTestId('order-line-2')).getByRole('combobox', { name: 'Priority' }),
+      'high',
+    );
+
+    await waitFor(() => expect(patched).toEqual([{ id: '2', body: { priority: 'high' } }]));
   });
 
   it('removes a line', async () => {

@@ -61,6 +61,9 @@ MAX_SUPPORT_RATING = 4
 OPEN_ORDER_STATUSES = ("pending", "purchased", "received")
 # What a reorder line may say it is for (a job, a customer).
 MAX_ORDER_REFERENCE = 200
+# How urgent a reorder line is, most urgent first. A line without one (every
+# line written before there was a priority) is normal.
+ORDER_PRIORITIES = ("high", "normal", "low")
 DEFAULT_LOW_STOCK_THRESHOLD = 20.0
 
 
@@ -831,6 +834,19 @@ async def reorder_lines(db: AsyncSession) -> list[dict]:
     return lines
 
 
+def _clean_priority(value: str | None) -> str:
+    priority = (value or "normal").strip().lower()
+    if priority not in ORDER_PRIORITIES:
+        raise ProductError(f"The priority must be one of {', '.join(ORDER_PRIORITIES)}")
+    return priority
+
+
+def _more_urgent(a: str | None, b: str | None) -> str:
+    """The more urgent of two priorities."""
+    a, b = a or "normal", b or "normal"
+    return a if ORDER_PRIORITIES.index(a) <= ORDER_PRIORITIES.index(b) else b
+
+
 def _clean_reference(value: str | None) -> str | None:
     text = (value or "").strip()
     if len(text) > MAX_ORDER_REFERENCE:
@@ -860,14 +876,16 @@ async def add_to_shopping_list(db: AsyncSession, items) -> dict:
 
     Each line knows its variant and supplier, so goods-in can tick it off. A
     line that is on the list already, not bought yet and for the same
-    reference grows instead of being listed twice; a different reference (an
-    order for another job) gets a line of its own. The caller commits.
+    reference grows instead of being listed twice, and takes the more urgent
+    of the two priorities; a different reference (an order for another job)
+    gets a line of its own. The caller commits.
     """
     added = merged = 0
     for item in items:
         if not 1 <= item.quantity <= MAX_INTAKE_QUANTITY:
             raise ProductError(f"Quantity must be between 1 and {MAX_INTAKE_QUANTITY}")
         reference = _clean_reference(getattr(item, "reference", None))
+        priority = _clean_priority(getattr(item, "priority", None))
         variant = await find_variant(db, item.variant_id)
         if variant is None:
             raise ProductError(f"Unknown combination {item.variant_id}")
@@ -893,6 +911,7 @@ async def add_to_shopping_list(db: AsyncSession, items) -> dict:
         )
         if existing is not None:
             existing.quantity_spools = (existing.quantity_spools or 0) + item.quantity
+            existing.priority = _more_urgent(existing.priority, priority)
             merged += 1
             continue
         db.add(
@@ -909,6 +928,7 @@ async def add_to_shopping_list(db: AsyncSession, items) -> dict:
                 variant_id=variant.id,
                 supplier_id=item.supplier_id,
                 reference=reference,
+                priority=priority,
             )
         )
         added += 1
@@ -998,6 +1018,7 @@ async def order_lines(db: AsyncSession) -> list[dict]:
             "status": row.status if row.status in OPEN_ORDER_STATUSES else "pending",
             "quantity": row.quantity_spools or 0,
             "reference": row.reference,
+            "priority": row.priority if row.priority in ORDER_PRIORITIES else "normal",
             "note": row.note,
             "added_at": _iso(row.added_at),
             "purchased_at": _iso(row.purchased_at),
@@ -1054,11 +1075,12 @@ async def update_order(
     quantity: int | None = None,
     supplier_id=_UNSET,
     reference=_UNSET,
+    priority: str | None = None,
     now=None,
 ) -> ShoppingListItem:
     """Change a reorder line: move it between the three columns (to order →
     ordered → delivered, still to be booked in; and back), or correct its
-    quantity, supplier or reference. Moving it stamps when it was ordered and
+    quantity, supplier, reference or priority. Moving it stamps when it was ordered and
     when it arrived; moving it back clears what no longer holds. The caller
     commits."""
     from datetime import datetime, timezone
@@ -1069,6 +1091,8 @@ async def update_order(
         item.quantity_spools = quantity
     if reference is not _UNSET:
         item.reference = _clean_reference(reference)
+    if priority is not None:
+        item.priority = _clean_priority(priority)
     if supplier_id is not _UNSET:
         variant = await find_variant(db, item.variant_id) if item.variant_id else None
         if variant is not None:

@@ -30,4 +30,7 @@ class ShoppingListItem(Base):
     # a job or a customer — so two orders of one combination stay apart.
     received_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     reference: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # How urgent the line is on the reorder list: high, normal or low. NULL
+    # reads as normal, which is what every line written before had.
+    priority: Mapped[str | None] = mapped_column(String(10), nullable=True)
     added_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
