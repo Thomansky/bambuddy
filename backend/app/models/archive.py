@@ -29,6 +29,12 @@ class PrintArchive(Base):
     content_hash: Mapped[str | None] = mapped_column(String(64))  # SHA256 hash for duplicate detection
     thumbnail_path: Mapped[str | None] = mapped_column(String(500))
     timelapse_path: Mapped[str | None] = mapped_column(String(500))
+    # The plate whose run produced ``timelapse_path`` (#3275). Every plate of a
+    # Send All shares this archive, so a print start may delete the previous
+    # video only when it is the same plate printing again; another plate's
+    # video is the only copy of that plate's run. NULL when unknown -- a
+    # manually attached video, or one attached before this column existed.
+    timelapse_plate_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # True when Bambuddy forced timelapse recording on for this print so the
     # finish-photo extractor (#1397) could pull the post-park-pre-drop frame.
     # The cleanup path uses this to know the timelapse should be deleted
