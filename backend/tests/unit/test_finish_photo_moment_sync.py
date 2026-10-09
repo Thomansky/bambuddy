@@ -17,13 +17,18 @@ by the consumer. These tests pin the producer side of that contract.
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+import backend.app.models  # noqa: F401 - populate Base.metadata
 from backend.app import main as main_module
+from backend.app.core.database import Base
 from backend.app.main import on_finish_photo_moment
+from backend.app.models.archive import PrintArchive
 from backend.app.services import print_dispatch_context
 
 
@@ -86,7 +91,7 @@ def patched_env(fake_printer, monkeypatch):
     # #2547: default the plate restore to "print height unknown", so tests that
     # aren't about the restore never reach the G-code path. Tests that ARE about
     # it override these two.
-    async def _no_height(_printer_id, _data, _logger):
+    async def _no_height(_printer_id, _data, _logger, _archive_id, _plate_id=None):
         return None
 
     async def _not_blocked(_printer_id):
@@ -614,9 +619,10 @@ class TestPlateRestoreWiring:
 
     @pytest.fixture
     def restore_env(self, patched_env, monkeypatch):
-        calls = {"restore": [], "park": [], "blocked": False, "height": 16.0}
+        calls = {"restore": [], "park": [], "blocked": False, "height": 16.0, "bound": []}
 
-        async def _height(_printer_id, _data, _logger):
+        async def _height(_printer_id, _data, _logger, archive_id, plate_id=None):
+            calls["bound"].append((archive_id, plate_id))
             return calls["height"]
 
         async def _blocked(_printer_id):
@@ -645,6 +651,37 @@ class TestPlateRestoreWiring:
 
         assert restore_env["restore"] == [(patched_env.id, 16.0)]
         assert restore_env["park"] == [(patched_env.id, 16.0)]
+
+    async def test_reads_the_binding_before_on_print_complete_pops_it(self, patched_env, restore_env, monkeypatch):
+        """#3240: on the FINISH-state path on_print_complete is dispatched right
+        behind the producer and pops the print's archive binding and plate. The
+        producer must have read them first, or the restore has nothing bound to
+        move for and never runs."""
+
+        async def _yielding_get_setting(_db, key):
+            # A real settings read suspends; this is where on_print_complete
+            # gets to run.
+            await asyncio.sleep(0)
+            return "true" if key == "capture_finish_photo" else None
+
+        monkeypatch.setattr("backend.app.api.routes.settings.get_setting", _yielding_get_setting)
+        main_module._active_prints[(patched_env.id, "job.3mf")] = 5
+        main_module._print_plate_ids[5] = 3
+
+        async def _on_print_complete_pops():
+            main_module._active_prints.clear()
+            main_module._print_plate_ids.clear()
+
+        try:
+            data = {"trigger": "finish_state", "filename": "job.3mf", "subtask_name": "job"}
+            producer = asyncio.create_task(on_finish_photo_moment(patched_env.id, data))
+            completion = asyncio.create_task(_on_print_complete_pops())
+            await asyncio.gather(producer, completion)
+        finally:
+            main_module._active_prints.clear()
+            main_module._print_plate_ids.clear()
+
+        assert restore_env["bound"] == [(5, 3)]
 
     async def test_not_restored_on_the_stage_22_path(self, patched_env, restore_env):
         """Stage 22 fires before the end G-code drops the plate — it is already
@@ -758,152 +795,229 @@ class TestMaxZResolution:
     nozzle into the model — 20mm carried onto a 200mm print commands the plate
     up through the part. So the resolver refuses on every ambiguity rather than
     falling back to "whatever ran last on this printer".
+
+    Run against a real database (#3240): the earlier tests faked the session,
+    so neither the query nor the path the archive's file is read from was ever
+    exercised, and both were wrong.
     """
 
-    @staticmethod
-    def _archive(**overrides):
-        base = {
-            "id": 11,
-            "file_path": "/data/archive/1/job/job.3mf",
-            "filename": "job.gcode.3mf",
-            "print_name": "job",
-            "plate_id": 1,
-            "total_layers": 30,
-        }
-        base.update(overrides)
-        return SimpleNamespace(**base)
-
     @pytest.fixture
-    def resolver_env(self, monkeypatch):
-        env = {"archive": self._archive(), "reported_layers": 30, "height": 16.0, "where": None}
+    async def resolver_env(self, monkeypatch, tmp_path):
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        session_maker = async_sessionmaker(engine, expire_on_commit=False)
+        env = {"reported_layers": 30, "height": 16.0, "read": [], "session_maker": session_maker}
 
-        @asynccontextmanager
-        async def _session():
-            async def _execute(stmt):
-                env["where"] = str(stmt)
-                rows = [env["archive"]] if env["archive"] is not None else []
-                return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: rows))
-
-            yield SimpleNamespace(execute=_execute)
-
-        monkeypatch.setattr(main_module, "async_session", _session)
+        monkeypatch.setattr(main_module, "async_session", session_maker)
+        monkeypatch.setattr(main_module.app_settings, "base_dir", tmp_path)
         monkeypatch.setattr(
             main_module.printer_manager,
             "get_client",
             lambda _pid: SimpleNamespace(state=SimpleNamespace(total_layers=env["reported_layers"])),
         )
-        monkeypatch.setattr(
-            "backend.app.utils.threemf_tools.extract_max_z_height_from_3mf",
-            lambda _path, _plate: env["height"],
-        )
-        return env
 
-    async def test_returns_the_height_when_name_and_layers_agree(self, resolver_env):
-        height = await main_module._max_z_for_current_print(1, {"subtask_name": "job"}, logging.getLogger(__name__))
-        assert height == 16.0
+        def _extract(path, plate):
+            env["read"].append((path, plate))
+            return env["height"]
+
+        monkeypatch.setattr("backend.app.utils.threemf_tools.extract_max_z_height_from_3mf", _extract)
+        try:
+            yield env
+        finally:
+            await engine.dispose()
+
+    @staticmethod
+    async def _archive(env, **overrides) -> int:
+        values = {
+            "printer_id": 1,
+            "filename": "job.gcode.3mf",
+            "file_path": "archive/1/job/job.gcode.3mf",
+            "file_size": 1,
+            "print_name": "job",
+            "status": "completed",
+            "plate_id": 1,
+            "total_layers": 30,
+        }
+        values.update(overrides)
+        async with env["session_maker"]() as db:
+            archive = PrintArchive(**values)
+            db.add(archive)
+            await db.commit()
+            return archive.id
+
+    @staticmethod
+    async def _resolve(name, archive_id, plate_id=None):
+        data = {"subtask_name": name} if name is not None else {}
+        return await main_module._max_z_for_current_print(1, data, logging.getLogger(__name__), archive_id, plate_id)
+
+    async def test_returns_the_height_when_binding_name_and_layers_agree(self, resolver_env):
+        archive_id = await self._archive(resolver_env)
+        assert await self._resolve("job", archive_id) == 16.0
+
+    async def test_refuses_a_print_that_is_not_bound_to_an_archive(self, resolver_env):
+        """A name alone is never enough: with no binding there is no move, even
+        when an archive of exactly that name exists."""
+        await self._archive(resolver_env)
+        assert await self._resolve("job", None) is None
+        assert resolver_env["read"] == []
+
+    async def test_uses_the_bound_archive_not_a_newer_one_of_the_same_name(self, resolver_env):
+        """The support-bundle case: a reprint reuses archive 169, while a newer
+        archive of the same file (another plate) is 288. The name lookup took
+        288; only the layer check stopped it."""
+        bound = await self._archive(resolver_env, file_path="archive/reprinted.gcode.3mf", total_layers=125)
+        await self._archive(resolver_env, file_path="archive/other-plate.gcode.3mf", total_layers=313)
+        resolver_env["reported_layers"] = 125
+
+        assert await self._resolve("job", bound) == 16.0
+        assert resolver_env["read"][0][0].name == "reprinted.gcode.3mf"
+
+    async def test_reads_the_plate_the_job_was_dispatched_with(self, resolver_env):
+        """A reprint of one plate reuses the archive row without updating its
+        plate_id, so the dispatched plate wins."""
+        archive_id = await self._archive(resolver_env, plate_id=1)
+
+        await self._resolve("job", archive_id, plate_id=12)
+        assert resolver_env["read"][0][1] == 12
+
+        await self._resolve("job", archive_id)
+        assert resolver_env["read"][1][1] == 1
+
+    async def test_reads_a_relative_file_path_from_the_data_directory(self, resolver_env, tmp_path):
+        """#3240: archive paths are stored relative to the data directory. The
+        resolver joined them to a `data_dir` setting that does not exist, so the
+        lookup raised, was logged at debug level, and the plate never moved."""
+        archive_id = await self._archive(resolver_env, file_path="archive/1/job/job.gcode.3mf", plate_id=2)
+
+        assert await self._resolve("job", archive_id) == 16.0
+        assert resolver_env["read"] == [(tmp_path / "archive/1/job/job.gcode.3mf", 2)]
+
+    async def test_an_absolute_file_path_is_read_as_stored(self, resolver_env):
+        archive_id = await self._archive(resolver_env, file_path="/srv/bambuddy/archive/job.gcode.3mf")
+
+        assert await self._resolve("job", archive_id) == 16.0
+        assert str(resolver_env["read"][0][0]) == "/srv/bambuddy/archive/job.gcode.3mf"
+
+    async def test_matches_a_name_the_printer_echoed_with_underscores(self, resolver_env):
+        """#3240: the printer reports "Cube v2" as "Cube_v2"."""
+        archive_id = await self._archive(resolver_env, print_name="Cube v2", filename="Cube v2.gcode.3mf")
+        assert await self._resolve("Cube_v2", archive_id) == 16.0
+
+    async def test_matches_on_the_filename_with_or_without_its_extension(self, resolver_env):
+        archive_id = await self._archive(resolver_env, print_name=None, filename="Bracket Left.gcode.3mf")
+        assert await self._resolve("Bracket_Left", archive_id) == 16.0
+        assert await self._resolve("Bracket_Left.gcode", archive_id) == 16.0
+        assert await self._resolve("Bracket Left.gcode.3mf", archive_id) == 16.0
+
+    async def test_matches_a_file_name_that_ends_in_a_space(self, resolver_env):
+        """#3241: "Part .gcode.3mf" is echoed as "Part_"."""
+        archive_id = await self._archive(resolver_env, print_name="Part ", filename="Part .gcode.3mf")
+        assert await self._resolve("Part_", archive_id) == 16.0
+
+    async def test_refuses_a_bound_archive_with_another_name(self, resolver_env):
+        archive_id = await self._archive(resolver_env)
+        assert await self._resolve("other", archive_id) is None
+
+    async def test_matches_by_equality_not_substring(self, resolver_env):
+        """ "Cube" must never resolve to "Cube v2" — a different print, quite
+        possibly a much taller one."""
+        archive_id = await self._archive(resolver_env, print_name="Cube v2", filename="Cube v2.gcode.3mf")
+        assert await self._resolve("Cube", archive_id) is None
+
+    async def test_a_truncated_echo_does_not_match(self, resolver_env):
+        """The completion check accepts the printer's "..." truncation; a Z
+        move must not, since the cut-off name could belong to another print."""
+        archive_id = await self._archive(resolver_env, print_name="A very long print name indeed")
+        assert await self._resolve("A_very_long_print...", archive_id) is None
+
+    async def test_refuses_another_printers_or_a_failed_or_deleted_archive(self, resolver_env):
+        for overrides in ({"printer_id": 2}, {"status": "failed"}, {"deleted_at": datetime.now(timezone.utc)}):
+            archive_id = await self._archive(resolver_env, **overrides)
+            assert await self._resolve("job", archive_id) is None, overrides
 
     async def test_refuses_when_the_print_has_no_name_to_match_on(self, resolver_env):
-        """Without an identifier there is nothing to bind the archive to, and
-        the query would degrade to 'the newest row for this printer'."""
-        height = await main_module._max_z_for_current_print(1, {}, logging.getLogger(__name__))
-
-        assert height is None
-        assert resolver_env["where"] is None  # refused before touching the DB
-
-    async def test_refuses_when_no_archive_matches_the_name(self, resolver_env):
-        resolver_env["archive"] = None
-
-        height = await main_module._max_z_for_current_print(1, {"subtask_name": "job"}, logging.getLogger(__name__))
-        assert height is None
+        archive_id = await self._archive(resolver_env)
+        assert await self._resolve(None, archive_id) is None
+        assert resolver_env["read"] == []
 
     async def test_refuses_when_the_layer_counts_disagree(self, resolver_env):
         """The corroboration check. The archive's layer count comes from the
         3MF; the printer's comes from MQTT. If two independent sources disagree,
         the row is not this print whatever its name says."""
+        archive_id = await self._archive(resolver_env)
         resolver_env["reported_layers"] = 240
-
-        height = await main_module._max_z_for_current_print(1, {"subtask_name": "job"}, logging.getLogger(__name__))
-        assert height is None
+        assert await self._resolve("job", archive_id) is None
 
     async def test_proceeds_when_a_layer_count_is_simply_unknown(self, resolver_env):
         """Absent is not the same as contradictory — a print Bambuddy has no
-        layer count for still gets its height, because the name matched."""
+        layer count for still gets its height, because binding and name agree."""
+        archive_id = await self._archive(resolver_env)
         resolver_env["reported_layers"] = 0
-        assert (
-            await main_module._max_z_for_current_print(1, {"subtask_name": "job"}, logging.getLogger(__name__)) == 16.0
-        )
+        assert await self._resolve("job", archive_id) == 16.0
 
         resolver_env["reported_layers"] = 30
-        resolver_env["archive"] = self._archive(total_layers=None)
-        assert (
-            await main_module._max_z_for_current_print(1, {"subtask_name": "job"}, logging.getLogger(__name__)) == 16.0
-        )
-
-    async def test_matches_by_equality_not_substring(self, resolver_env):
-        """`LIKE %name%` would let "Cube" resolve to "Cube v2" — a different
-        print, quite possibly a much taller one."""
-        await main_module._max_z_for_current_print(1, {"subtask_name": "Cube"}, logging.getLogger(__name__))
-
-        assert "LIKE" not in resolver_env["where"].upper()
-
-    async def test_a_relative_file_path_resolves_against_the_data_directory(self, resolver_env):
-        """Archives store ``archive/<printer>/<run>/<file>`` relative to the
-        data directory. The resolver joined that onto a settings attribute that
-        does not exist, and the swallowed AttributeError cost every real print
-        its plate restore; only the absolute paths of the other tests got by."""
-        seen = {}
-
-        def _height(path, _plate):
-            seen["path"] = path
-            return 16.0
-
-        resolver_env["archive"] = self._archive(file_path="archive/1/20260926_1635_job/job.gcode.3mf")
-        import backend.app.utils.threemf_tools as threemf_tools
-
-        original = threemf_tools.extract_max_z_height_from_3mf
-        threemf_tools.extract_max_z_height_from_3mf = _height
-        try:
-            height = await main_module._max_z_for_current_print(1, {"subtask_name": "job"}, logging.getLogger(__name__))
-        finally:
-            threemf_tools.extract_max_z_height_from_3mf = original
-
-        assert height == 16.0
-        assert (
-            seen["path"]
-            == main_module.Path(main_module.app_settings.base_dir) / "archive/1/20260926_1635_job/job.gcode.3mf"
-        )
-
-    async def test_a_name_with_spaces_is_found_by_its_echo(self, resolver_env):
-        """The printer reports a file saved with spaces under underscores.
-        Matching the stored name by SQL equality never found those, so their
-        finish photo went without the plate brought back up."""
-        resolver_env["archive"] = self._archive(
-            filename="Unterteil H2S mit Logo V24 .gcode.3mf", print_name="Unterteil H2S mit Logo V24"
-        )
-
-        height = await main_module._max_z_for_current_print(
-            1, {"subtask_name": "Unterteil_H2S_mit_Logo_V24_"}, logging.getLogger(__name__)
-        )
-        assert height == 16.0
-
-    async def test_a_similar_name_is_still_not_this_print(self, resolver_env):
-        """Normalising the name must not turn the match into a prefix match."""
-        resolver_env["archive"] = self._archive(filename="Cube v2.gcode.3mf", print_name="Cube v2")
-
-        height = await main_module._max_z_for_current_print(1, {"subtask_name": "Cube"}, logging.getLogger(__name__))
-        assert height is None
+        unknown_layers = await self._archive(resolver_env, total_layers=None)
+        assert await self._resolve("job", unknown_layers) == 16.0
 
     async def test_refuses_when_the_archive_has_no_file(self, resolver_env):
-        resolver_env["archive"] = self._archive(file_path=None)
-
-        height = await main_module._max_z_for_current_print(1, {"subtask_name": "job"}, logging.getLogger(__name__))
-        assert height is None
+        archive_id = await self._archive(resolver_env, file_path="")
+        assert await self._resolve("job", archive_id) is None
 
     async def test_refuses_when_the_3mf_has_no_height(self, resolver_env):
+        archive_id = await self._archive(resolver_env)
         resolver_env["height"] = None
+        assert await self._resolve("job", archive_id) is None
 
-        height = await main_module._max_z_for_current_print(1, {"subtask_name": "job"}, logging.getLogger(__name__))
-        assert height is None
+
+class TestBoundPrint:
+    """The binding the plate restore reads (#3240)."""
+
+    @pytest.fixture(autouse=True)
+    def _clean(self):
+        main_module._active_prints.clear()
+        main_module._print_plate_ids.clear()
+        yield
+        main_module._active_prints.clear()
+        main_module._print_plate_ids.clear()
+
+    def test_finds_the_archive_under_the_keys_on_print_complete_tries(self):
+        main_module._active_prints[(7, "Cube v2.gcode.3mf")] = 169
+        main_module._active_prints[(7, "Cube_v2.3mf")] = 169
+        main_module._print_plate_ids[169] = 12
+
+        bound = main_module._bound_print(7, {"filename": "Cube_v2.3mf", "subtask_name": "Cube_v2"})
+
+        assert bound == (169, 12)
+
+    def test_reads_without_consuming(self):
+        """on_print_complete still has to find the binding after we looked."""
+        main_module._active_prints[(7, "job.3mf")] = 5
+        main_module._print_plate_ids[5] = 2
+
+        main_module._bound_print(7, {"filename": "job.3mf", "subtask_name": "job"})
+
+        assert main_module._active_prints == {(7, "job.3mf"): 5}
+        assert main_module._print_plate_ids == {5: 2}
+
+    def test_unbound_print_and_other_printers(self):
+        main_module._active_prints[(8, "job.3mf")] = 5
+
+        assert main_module._bound_print(7, {"filename": "job.3mf", "subtask_name": "job"}) == (None, None)
+        assert main_module._bound_print(7, {}) == (None, None)
+
+    def test_no_plate_recorded(self):
+        main_module._active_prints[(7, "job.3mf")] = 5
+        assert main_module._bound_print(7, {"filename": "job.3mf", "subtask_name": "job"}) == (5, None)
+
+    def test_same_archive_as_on_print_complete_takes(self):
+        """Keys tried in the same order, so the first one present wins in both."""
+        main_module._active_prints[(7, "job.gcode.3mf")] = 1
+        main_module._active_prints[(7, "job.3mf")] = 2
+        keys = main_module._completion_print_keys(7, "job.3mf", "job")
+        first = next(main_module._active_prints[k] for k in keys if k in main_module._active_prints)
+
+        assert main_module._bound_print(7, {"filename": "job.3mf", "subtask_name": "job"})[0] == first == 2
 
 
 class TestTimelapsePathPlateRestore:
@@ -935,7 +1049,7 @@ class TestTimelapsePathPlateRestore:
             moved.append((printer_id, max_z))
             return True
 
-        async def _height(_printer_id, _data, _logger):
+        async def _height(_printer_id, _data, _logger, _archive_id, _plate_id=None):
             return 16.0
 
         monkeypatch.setattr(main_module, "_restore_plate_for_finish_photo", _restore)

@@ -8,7 +8,7 @@ import time
 import uuid
 import zipfile
 from collections import deque
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -978,6 +978,11 @@ def _is_tray_id(value: object) -> bool:
 # a staged item (#3074); this one is the reason it was staged, so it stays.
 _UNMATCHED_HOLD_PREFIX = "Needs "
 
+# How often an "any model" job held for low filament looks for another printer
+# of its model that has enough (#3137). Each look matches its filament on every
+# idle printer again, which a 30 s queue pass would otherwise repeat each time.
+_SHORT_HOLD_RECHECK_SECONDS = 120
+
 
 def _is_unmatched_hold_reason(reason: str | None) -> bool:
     """True for the reason the unmatched-filament hold wrote when it staged the item."""
@@ -1712,6 +1717,9 @@ class PrintScheduler:
         # pass. Cleared at the top of each pass so a re-sliced file is never
         # served from a previous tick.
         self._filament_req_memo: dict[tuple, list[dict] | None] = {}
+        # When each "any model" job held for low filament last looked for
+        # another printer (#3137), by queue item id.
+        self._short_hold_checked_at: dict[int, float] = {}
 
     async def run(self):
         """Main loop - check queue every interval."""
@@ -2005,6 +2013,11 @@ class PrintScheduler:
                 len(items),
                 [(i.id, i.printer_id, i.archive_id, i.library_file_id) for i in items],
             )
+            # Forget jobs that left the queue since they were last checked.
+            pending_ids = {i.id for i in items}
+            self._short_hold_checked_at = {
+                item_id: at for item_id, at in self._short_hold_checked_at.items() if item_id in pending_ids
+            }
 
             # And the other way round (#3127): a printer with a run pending or
             # running takes no automatic dispatch until the run has closed,
@@ -2373,8 +2386,19 @@ class PrintScheduler:
                         skip_reasons["scheduled_future"] = skip_reasons.get("scheduled_future", 0) + 1
                         continue
 
-                # Skip items that require manual start
-                if item.manual_start:
+                # Skip items that require manual start, except an "any model"
+                # job held for low filament that another idle printer can now
+                # run: that one is moved there and carries on below (#3137).
+                if item.manual_start and not (
+                    item.filament_short
+                    and await self._release_short_model_hold(
+                        db,
+                        item,
+                        busy_printers | interlocked.keys(),
+                        require_plate_clear,
+                        await _creator_scope(item.created_by_id),
+                    )
+                ):
                     # Waiting on the user, not on a printer. Cleared here because
                     # this is the last pass that will look at the row: a staged
                     # item never reaches the branches below again, so a reason
@@ -2387,6 +2411,13 @@ class PrintScheduler:
                     await hold_item(item, keep)
                     skip_reasons["manual_start"] = skip_reasons.get("manual_start", 0) + 1
                     continue
+
+                if item.printer_id and item.printer_id not in pinned_printers:
+                    # Moved by the release above to a printer no row named when
+                    # the labels were read.
+                    moved_to = await self._get_printer(db, item.printer_id)
+                    if moved_to is not None:
+                        pinned_printers[item.printer_id] = (moved_to.name or "", moved_to.model or "")
 
                 if item.printer_id:
                     # Its creator may no longer use this printer (#1727): an
@@ -2750,6 +2781,17 @@ class PrintScheduler:
                             continue
 
                         wakeable_candidates.append(candidate)
+
+                        async def is_short(
+                            pid: int, item: PrintQueueItem = item, candidate: _ModelCandidate = candidate
+                        ) -> bool:
+                            # The check reads the file and plate off the item,
+                            # so it must hold this candidate's. Resolving is
+                            # safe to repeat, and the winner is resolved again
+                            # below.
+                            self._resolve_variant(item, candidate)
+                            return await self._filament_short_on(db, item, pid)
+
                         match_id, match_reason = await self._find_idle_printer_for_model(
                             db,
                             candidate.target_model,
@@ -2772,6 +2814,7 @@ class PrintScheduler:
                             maintenance_hold=lambda pid, _item=item: maintenance_hold(pid, _item),
                             wake_hold=lambda pid, _item=item: schedule_hold(pid, _item),
                             printer_scope=item_scope,
+                            is_short=is_short,
                         )
                         if match_id:
                             printer_id = match_id
@@ -2914,10 +2957,26 @@ class PrintScheduler:
                             db=db,
                         )
 
+                        # A mapping on this item was not made for the printer just
+                        # picked: it came with a job moved here from a fixed
+                        # printer, or from a variant. Its tray IDs can name a
+                        # tray of the right type in another colour here, which
+                        # the fit check lets through (#3239). Match afresh, by
+                        # type and colour.
+                        if item.ams_mapping:
+                            logger.info(
+                                "Queue item %s: dropping stored ams_mapping %s, not made for printer %s",
+                                item.id,
+                                item.ams_mapping,
+                                printer_id,
+                            )
+                            item.ams_mapping = None
+
                         # Same pre-dispatch RFID read as the fixed-printer branch.
                         # The item now carries its printer, so the next pass
                         # takes it through that branch, where the stamp set here
-                        # keeps it from asking twice.
+                        # keeps it from asking twice. The stale mapping is
+                        # dropped above first, so that branch matches afresh too.
                         if rfid_reread_enabled and await self._hold_for_rfid_reread(db, item, printer_id):
                             item.waiting_reason = RFID_REREAD_HOLD
                             await db.commit()
@@ -2925,9 +2984,8 @@ class PrintScheduler:
                             skip_reasons["rfid_reread"] = skip_reasons.get("rfid_reread", 0) + 1
                             continue
 
-                        # Resolve the AMS mapping for the assigned printer when it's
-                        # missing OR unresolved (all -1). Critical for model-based
-                        # jobs where mapping wasn't computed upfront, and it also
+                        # Resolve the AMS mapping for the assigned printer. It is
+                        # always missing here, so this computes it, and it also
                         # self-heals a bogus stored [-1] (#2589).
                         unmappable = await self._ensure_ams_mapping(db, printer_id, item)
                         if unmappable:
@@ -3641,6 +3699,7 @@ class PrintScheduler:
         maintenance_hold: Callable[[int], str | None] | None = None,
         wake_hold: Callable[[int], str | None] | None = None,
         printer_scope: PrinterScope = ALL_PRINTERS,
+        is_short: Callable[[int], Awaitable[bool]] | None = None,
     ) -> tuple[int | None, str | None]:
         """Find an idle, connected printer matching the model with compatible filaments.
 
@@ -3670,6 +3729,11 @@ class PrintScheduler:
                        about an offline printer a smart plug could switch on. The wake step
                        will decline that printer; naming the slot here, rather than "Offline",
                        says so and keeps the reason one that resolves itself.
+            is_short: Says whether a printer's spools are too light for the job (#3137).
+                      A printer it flags is passed over while another eligible one
+                      is not. When every eligible printer is short, the first is
+                      returned all the same, so the deficit gate holds the job there
+                      and "Print Anyway" still has a printer to print on.
 
         Returns:
             Tuple of (printer_id, waiting_reason):
@@ -3694,6 +3758,9 @@ class PrintScheduler:
         printers_offline_no_plug = []
         printers_missing_filament: list[tuple[str, list[str]]] = []
         candidates: list[tuple[int, int]] = []  # (printer_id, color_match_count)
+        # The first eligible printer that is short on filament, kept in case
+        # every eligible printer is (#3137).
+        short_fallback: int | None = None
 
         for printer in printers:
             if printer.id in exclude_ids:
@@ -3803,14 +3870,34 @@ class PrintScheduler:
             if pref_overrides:
                 candidates.append((printer.id, color_matches))
             else:
-                # No overrides, or every force check passed: the first
-                # available printer takes it (existing behaviour)
+                # No preference ordering needed: the first eligible printer
+                # wins, unless its spools are too light for the job (#3137).
+                if is_short is not None and await is_short(printer.id):
+                    if short_fallback is None:
+                        short_fallback = printer.id
+                    logger.info(
+                        "Model-based assignment: passing over printer %s (%s), not enough filament",
+                        printer.id,
+                        printer.name,
+                    )
+                    continue
                 return printer.id, None
 
         # If we have candidates from preference override matching, pick the one with most color matches
         if candidates:
             candidates.sort(key=lambda c: c[1], reverse=True)
+            if is_short is not None:
+                for candidate_id, _ in candidates:
+                    if not await is_short(candidate_id):
+                        return candidate_id, None
+                    logger.info(
+                        "Model-based assignment: passing over printer %s, not enough filament",
+                        candidate_id,
+                    )
             return candidates[0][0], None
+
+        if short_fallback is not None:
+            return short_fallback, None
 
         # Build waiting reason from what we found
         reasons = []
@@ -4213,6 +4300,19 @@ class PrintScheduler:
             await db.commit()
             return None
 
+        external_only = await self._external_spool_only_mapping(db, printer_id, item)
+        if external_only is not None:
+            item.ams_mapping = json.dumps(external_only)
+            logger.info(
+                "Queue item %s: printer %s has no AMS and its external spool has no filament set; "
+                "mapping every filament to it: %s",
+                item.id,
+                printer_id,
+                external_only,
+            )
+            await db.commit()
+            return None
+
         if _mapping_is_all_unresolved(stored_mapping):
             logger.warning(
                 "Queue item %s: stored ams_mapping %s is unresolved and could not be recomputed "
@@ -4225,6 +4325,62 @@ class PrintScheduler:
             await db.commit()
 
         return await self._unmappable_without_ams_message(db, printer_id, item, computed_mapping)
+
+    async def _external_spool_only_mapping(
+        self, db: AsyncSession, printer_id: int, item: PrintQueueItem
+    ) -> list[int] | None:
+        """Every filament on the external spool, for a printer that has nothing else (#3239).
+
+        A printer without an AMS prints from its external spool, and an external
+        spool whose filament was never set reports no type, so the matcher has
+        nothing to match. Sent without a mapping, the print goes out with the AMS
+        on and the firmware rejects it with 0700_8012. A stored ``[254]`` used
+        to carry such a job through; a job placed by model or location no longer
+        keeps one, and one queued that way never had one.
+
+        Only on a positive report: the printer has said it has no AMS, it has a
+        single external feed (a dual-nozzle printer's feeds steer nozzles, which
+        is not ours to pick), and no feed has a filament set — with one set, the
+        matcher has already given its answer. Not for a job that asked for its
+        colours to be matched strictly: a spool without a filament set has no
+        colour to check. Returns None otherwise.
+        """
+        if item.filament_overrides:
+            try:
+                overrides = json.loads(item.filament_overrides)
+            except (json.JSONDecodeError, TypeError):
+                return None
+            if not isinstance(overrides, list) or any(
+                isinstance(o, dict) and o.get("force_color_match") for o in overrides
+            ):
+                return None
+        status = printer_manager.get_status(printer_id)
+        if status is None or not isinstance(status.raw_data, dict):
+            return None
+        ams_units = status.raw_data.get("ams")
+        if not isinstance(ams_units, list) or ams_units:
+            return None
+        vt_trays = status.raw_data.get("vt_tray")
+        if not isinstance(vt_trays, list) or len(vt_trays) != 1 or not isinstance(vt_trays[0], dict):
+            return None
+        if self._build_loaded_filaments(status):
+            return None
+        printer = await self._get_printer(db, printer_id)
+        if _might_be_dual_nozzle(printer.model if printer else None, status):
+            return None
+        external = _int_or(vt_trays[0].get("id"), _EXTERNAL_TRAY_ID_MIN)
+        if external < _EXTERNAL_TRAY_ID_MIN:
+            return None
+
+        required = await self._get_filament_requirements(db, item)
+        slot_ids = [r.get("slot_id") for r in required or []]
+        slot_ids = [s for s in slot_ids if isinstance(s, int) and s > 0]
+        if not slot_ids:
+            return None
+        mapping = [-1] * max(slot_ids)
+        for slot_id in slot_ids:
+            mapping[slot_id - 1] = external
+        return mapping
 
     async def _fill_unresolved_slots(
         self,
@@ -4342,10 +4498,11 @@ class PrintScheduler:
         the firmware's own type check, so a PETG slot happily prints in ASA.
 
         Returns a short reason when the mapping names a tray this printer does
-        not have loaded, or points a slot at a tray holding a different filament
-        type. Returns None when the mapping fits, and — deliberately — whenever
-        we lack the evidence to judge, so a recompute only ever follows a
-        positive finding.
+        not have loaded, points a slot at a tray holding a different filament
+        type, or points it at an external spool this printer reports empty while
+        its AMS holds that slot's filament (#3239). Returns None when the
+        mapping fits, and — deliberately — whenever we lack the evidence to
+        judge, so a recompute only ever follows a positive finding.
 
         An unresolved (``-1``) required slot is NOT a conflict: it says the
         matcher had nothing, not that the mapping belongs to another printer,
@@ -4396,6 +4553,17 @@ class PrintScheduler:
             return None
         self._apply_filament_overrides(item, required)
 
+        # External feeds the printer reports and reports as empty. That is
+        # evidence, unlike an external feed it says nothing about (#3239).
+        empty_external: set[int] = set()
+        vt_trays = status.raw_data.get("vt_tray") if isinstance(status.raw_data, dict) else None
+        for vt in vt_trays if isinstance(vt_trays, list) else []:
+            if isinstance(vt, dict) and not vt.get("tray_type"):
+                try:
+                    empty_external.add(int(vt.get("id", 254)))
+                except (TypeError, ValueError):
+                    continue
+
         for req in required:
             slot_id = req.get("slot_id") or 0
             if slot_id <= 0:
@@ -4409,6 +4577,30 @@ class PrintScheduler:
 
             loaded_tray = by_tray.get(tray)
             if loaded_tray is None:
+                # A mapping made for a printer that feeds this slot from its
+                # external spool, sent to one whose external spool is empty and
+                # whose AMS holds the filament (#3239). Only then: an external
+                # spool can be loaded without its filament set, and on a printer
+                # with nothing else to offer that job printed before. The colour
+                # has to match too: with only another colour in the AMS, the
+                # printer asking for the spool beats printing in that colour.
+                want = canonical_filament_type(req.get("type"))
+                if tray >= 254 and tray in empty_external and want:
+                    ams_tray = next(
+                        (
+                            f
+                            for f in loaded
+                            if not f.get("is_external")
+                            and canonical_filament_type(f.get("type")) == want
+                            and self._colors_are_similar(f.get("color"), req.get("color"))
+                        ),
+                        None,
+                    )
+                    if ams_tray is not None:
+                        return (
+                            f"slot {slot_id} points at the external spool, which is empty, "
+                            f"while tray {ams_tray['global_tray_id']} holds {ams_tray.get('type')}"
+                        )
                 continue
 
             want = canonical_filament_type(req.get("type"))
@@ -4599,8 +4791,8 @@ class PrintScheduler:
         # Gate prefer_lowest on the printer's AMS Filament Backup state (#1766).
         # Without backup, the printer will not switch to a second spool when the
         # picked one runs out — so sorting toward the lowest leaves the print
-        # at risk of running dry mid-job. None (unknown / A1 family) preserves
-        # today's behaviour intentionally.
+        # at risk of running dry mid-job. None (unknown: no status report with
+        # cfg or home_flag yet) preserves today's behaviour intentionally.
         if prefer_lowest and status.ams_filament_backup is False:
             logger.info("[prefer-lowest] skipped (AMS Backup OFF on printer %s)", printer_id)
             prefer_lowest = False
@@ -9515,6 +9707,143 @@ class PrintScheduler:
             )
         except Exception:
             pass  # toast is best-effort
+
+    async def _filament_short_on(
+        self,
+        db: AsyncSession,
+        item: PrintQueueItem,
+        printer_id: int,
+        *,
+        require_known: bool = False,
+    ) -> bool:
+        """Would ``item`` be held for a filament deficit on ``printer_id`` (#3137)?
+
+        Asks what ``_block_on_filament_deficit`` would answer once the item is
+        assigned there, with the mapping the item would get there, but changes
+        nothing. The model-based matcher uses it to prefer a printer whose
+        spools can finish the job.
+
+        False whenever the gate would let the item through: "Print Anyway",
+        no mapping, or a check that fails. With ``require_known`` all three of
+        those, and any printed slot whose remaining amount is unknown, count
+        as short instead: releasing a held job starts it with nobody asked, so
+        it needs the amount on record, not merely nothing against it.
+        """
+        if item.skip_filament_check:
+            return False
+        try:
+            mapping = await self._compute_ams_mapping_for_printer(db, printer_id, item)
+            if not mapping:
+                return require_known
+            deficit = await compute_deficit_for_queue_item(
+                db, item, printer_id=printer_id, ams_mapping=mapping, require_known=require_known
+            )
+        except Exception as e:
+            logger.warning("Filament deficit check failed for item %s on printer %s: %s", item.id, printer_id, e)
+            return require_known
+        return bool(deficit)
+
+    async def _release_short_model_hold(
+        self,
+        db: AsyncSession,
+        item: PrintQueueItem,
+        unavailable: set[int],
+        require_plate_clear: bool,
+        printer_scope: PrinterScope,
+    ) -> bool:
+        """Free an "any model" job held for low filament once a printer can run it (#3137).
+
+        The deficit gate holds a model-based job on the printer the matcher
+        gave it, because "Print Anyway" needs a printer to print on. When
+        another idle printer of the job's model has the filament, the job is
+        moved to that printer and its hold lifted, and the fixed-printer
+        branch dispatches it in this same pass, through the same checks a
+        held job meets when the user presses Start. It is moved rather than
+        put back in the pool because the model-based branch would pick again
+        without requiring the amounts on record (below), and could pick a
+        different printer. Only the deficit gate sets ``filament_short``, so a
+        job held for any other reason stays held.
+
+        The printer it is held on is left out: a spool loaded there is started
+        with Start, as before, rather than while someone may still be loading
+        the next one. Each job is checked at most every
+        ``_SHORT_HOLD_RECHECK_SECONDS``, as every check matches its filament
+        on each idle printer again.
+
+        Cross-model jobs (#671) stay held: checking a variant writes its file
+        onto the item, which would leave a job that is not moved holding
+        another variant's file for the printer it waits on.
+
+        A printer qualifies only on a positive finding: every slot the plate
+        prints mapped to a spool whose remaining amount is on record and
+        enough. A printer whose spools Bambuddy does not track is not one.
+
+        Returns True when the job was moved. A check that fails keeps the hold
+        rather than stopping the queue pass.
+        """
+        if not item.filament_short or item.skip_filament_check or item.printer_id is None:
+            return False
+        if not item.target_model or item.variants:
+            return False
+        now = time.monotonic()
+        if now - self._short_hold_checked_at.get(item.id, float("-inf")) < _SHORT_HOLD_RECHECK_SECONDS:
+            return False
+        self._short_hold_checked_at[item.id] = now
+
+        try:
+            candidates = _candidates_for(item)
+            if not candidates:
+                return False
+            effective_types, filament_overrides = _filament_constraints(candidates[0])
+
+            async def is_short(pid: int) -> bool:
+                return await self._filament_short_on(db, item, pid, require_known=True)
+
+            match_id, _ = await self._find_idle_printer_for_model(
+                db,
+                item.target_model,
+                unavailable | {item.printer_id},
+                effective_types,
+                item.target_location,
+                filament_overrides=filament_overrides,
+                require_plate_clear=require_plate_clear,
+                printer_scope=printer_scope,
+                is_short=is_short,
+            )
+            # Every idle printer short comes back as the first of them.
+            if match_id is None or await is_short(match_id):
+                return False
+        except Exception as e:
+            logger.warning("Queue item %s: looking for another printer failed: %s", item.id, e)
+            return False
+
+        logger.info(
+            "Queue item %s: printer %s has the filament it was short of on printer %s — moving it there",
+            item.id,
+            match_id,
+            item.printer_id,
+        )
+        self._short_hold_checked_at.pop(item.id, None)
+        item.printer_id = match_id
+        # Resolved against the printer it leaves (#3239).
+        item.ams_mapping = None
+        item.manual_start = False
+        item.filament_short = False
+        item.waiting_reason = None
+        await db.commit()
+
+        try:
+            printer = await self._get_printer(db, match_id)
+            await notification_service.on_queue_job_assigned(
+                job_name=await self._get_job_name(db, item),
+                printer_id=match_id,
+                printer_name=printer.name if printer else "Unknown",
+                target_model=item.target_model,
+                db=db,
+            )
+        except Exception as e:
+            logger.debug("Assignment notification failed for item %s: %s", item.id, e)
+        return True
 
     async def _block_on_filament_deficit(
         self,

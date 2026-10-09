@@ -54,8 +54,8 @@ import {
   Play,
   ClipboardList,
   Zap,
+  Wrench,
   Cog,
-  Hourglass,
   Archive as ArchiveIcon,
   History,
   CheckCircle2,
@@ -73,6 +73,7 @@ import { formatDateTime, formatDateOnly, parseUTCDate, type TimeFormat, formatDu
 import { getCurrencySymbol } from '../utils/currency';
 import { VatBadge } from '../components/VatBadge';
 import { getBedTypeInfo } from '../utils/bedType';
+import { splitFilamentTypes } from '../utils/filamentTypes';
 import { invalidateArchiveAndProjectViews } from '../utils/projectQueries';
 import { assignableProjects, projectChoices, projectText } from '../utils/projectTree';
 import { verdictSourceKey } from '../utils/verdictSource';
@@ -108,22 +109,6 @@ import { formatFileSize } from '../utils/file';
 
 type TFunction = (key: string, options?: Record<string, unknown>) => string;
 
-// Card tooltip for the printer-wear figure (#694): "hours × rate/h", with the
-// rate recovered from the snapshot so it reflects what was charged, not what
-// the printer is configured with today. Falls back to the bare label when the
-// archive has no measured runtime to divide by.
-function printerWearTitle(
-  archive: { depreciation_cost: number | null; actual_time_seconds: number | null },
-  currency: string,
-  t: TFunction,
-): string {
-  const label = t('archives.card.printerWear');
-  const hours = (archive.actual_time_seconds ?? 0) / 3600;
-  if (archive.depreciation_cost == null || hours <= 0) return label;
-  const rate = archive.depreciation_cost / hours;
-  return `${label}: ${t('archives.card.printerWearDetail', { hours: hours.toFixed(1), rate: rate.toFixed(2), currency })}`;
-}
-
 // ---------------------------------------------------------------------------
 // Print Log column configuration (#2636, reporter @ajbastien)
 //
@@ -155,7 +140,7 @@ const LOG_COLUMN_LABEL_KEYS: Record<string, string> = {
   cost: 'archives.log.cost',
   energy: 'archives.log.energy',
   energy_cost: 'archives.log.energyCost',
-  depreciation_cost: 'archives.log.depreciationCost',
+  wear_cost: 'archives.log.wearCost',
 };
 
 // Defaults reproduce the previous seven columns in the same order, plus the
@@ -176,7 +161,7 @@ const DEFAULT_LOG_COLUMNS: Array<{ id: string; visible: boolean }> = [
   { id: 'cost', visible: false },
   { id: 'energy', visible: false },
   { id: 'energy_cost', visible: false },
-  { id: 'depreciation_cost', visible: false },
+  { id: 'wear_cost', visible: false },
 ];
 
 /** Stored config merged with the defaults: unknown ids (removed columns) are
@@ -212,7 +197,7 @@ type LogSortState = { column: string; direction: 'asc' | 'desc' };
  *  in both. */
 const SORTABLE_LOG_COLUMNS = new Set(Object.keys(LOG_COLUMN_LABEL_KEYS));
 // Columns holding an amount of money: their header carries the VAT basis.
-const LOG_MONEY_COLUMNS = new Set(['cost', 'energy_cost', 'depreciation_cost']);
+const LOG_MONEY_COLUMNS = new Set(['cost', 'energy_cost', 'wear_cost']);
 
 const DEFAULT_LOG_SORT: LogSortState = { column: 'date', direction: 'desc' };
 
@@ -945,6 +930,7 @@ function ArchiveCard({
                 ? api.getArchivePlateThumbnail(archive.id, plates[displayPlateIndex]?.index ?? 0)
                 : api.getArchiveThumbnail(archive.id)
             }
+            loading="lazy"
             alt={archive.print_name || archive.filename}
             className="w-full h-full object-cover"
           />
@@ -1317,11 +1303,17 @@ function ArchiveCard({
               {archive.filament_used_grams.toFixed(1)}g
             </div>
           )}
-          {(archive.cost != null || archive.energy_cost != null || archive.depreciation_cost != null) && (
+          {(archive.cost != null || archive.energy_cost != null || archive.wear_cost != null) && (
             <div className="flex items-center gap-3 text-bambu-gray">
               {archive.cost != null && (
-                <div className="flex items-center gap-1.5">
+                // A running print's cost is an estimate until completion re-prices it (#3261)
+                <div
+                  className="flex items-center gap-1.5"
+                  title={archive.status === 'printing' ? t('archives.card.costEstimate') : undefined}
+                  data-testid="archive-cost"
+                >
                   <Coins className="w-3 h-3" />
+                  {archive.status === 'printing' && '~'}
                   {currency}{archive.cost.toFixed(2)}<VatBadge />
                 </div>
               )}
@@ -1331,10 +1323,10 @@ function ArchiveCard({
                     {currency}{archive.energy_cost.toFixed(2)}<VatBadge />
                   </div>
                 )}
-                {archive.depreciation_cost != null && (
-                  <div className="flex items-center gap-1.5" title={printerWearTitle(archive, currency, t)}>
-                    <Hourglass className="w-3 h-3" />
-                    {currency}{archive.depreciation_cost.toFixed(2)}<VatBadge />
+                {archive.wear_cost != null && (
+                  <div className="flex items-center gap-1.5" title={t('archives.card.wearCost')}>
+                    <Wrench className="w-3 h-3" />
+                    {currency}{archive.wear_cost.toFixed(2)}<VatBadge />
                   </div>
                 )}
             </div>
@@ -2416,6 +2408,7 @@ function ArchiveListRow({
           {archive.thumbnail_path ? (
             <img
               src={api.getArchiveThumbnail(archive.id)}
+              loading="lazy"
               alt=""
               className="w-10 h-10 object-cover rounded"
             />
@@ -2994,9 +2987,12 @@ export function ArchivesPage() {
     const saved = localStorage.getItem('archiveFilterPrinter');
     return saved ? Number(saved) : null;
   });
-  const [filterMaterial, setFilterMaterial] = useState<string | null>(() =>
-    localStorage.getItem('archiveFilterMaterial')
-  );
+  const [filterMaterial, setFilterMaterial] = useState<string | null>(() => {
+    // A saved joined value ("PLA Basic,PLA") was once offered as a material of
+    // its own (#3262); it matches nothing now, and would hide every archive.
+    const saved = localStorage.getItem('archiveFilterMaterial');
+    return saved && !saved.includes(',') ? saved : null;
+  });
   const [filterColors, setFilterColors] = useState<Set<string>>(() => {
     const saved = localStorage.getItem('archiveFilterColors');
     return saved ? new Set(JSON.parse(saved)) : new Set();
@@ -3254,7 +3250,7 @@ export function ArchivesPage() {
   const handleLogSort = useCallback((colId: string) => {
     if (!SORTABLE_LOG_COLUMNS.has(colId)) return;
     setLogSort((prev) => {
-      const numericFirstDesc = ['date', 'completed_at', 'duration', 'filament_used', 'cost', 'energy', 'energy_cost', 'depreciation_cost'];
+      const numericFirstDesc = ['date', 'completed_at', 'duration', 'filament_used', 'cost', 'energy', 'energy_cost', 'wear_cost'];
       const next: LogSortState =
         prev.column === colId
           ? { column: colId, direction: prev.direction === 'asc' ? 'desc' : 'asc' }
@@ -3277,7 +3273,7 @@ export function ArchivesPage() {
   // Columns that hold a number and read better right-aligned. Kept as data so
   // the header and the body can't drift apart.
   const LOG_NUMERIC_COLUMNS = useMemo(
-    () => new Set(['duration', 'filament_used', 'cost', 'energy', 'energy_cost', 'depreciation_cost']),
+    () => new Set(['duration', 'filament_used', 'cost', 'energy', 'energy_cost', 'wear_cost']),
     [],
   );
 
@@ -3401,10 +3397,10 @@ export function ArchivesPage() {
               {entry.energy_cost != null ? `${currency}${entry.energy_cost.toFixed(2)}` : '—'}
             </span>
           );
-        case 'depreciation_cost':
+        case 'wear_cost':
           return (
             <span className="text-bambu-gray-light whitespace-nowrap tabular-nums">
-              {entry.depreciation_cost != null ? `${currency}${entry.depreciation_cost.toFixed(2)}` : '—'}
+              {entry.wear_cost != null ? `${currency}${entry.wear_cost.toFixed(2)}` : '—'}
             </span>
           );
         default:
@@ -3594,7 +3590,7 @@ export function ArchivesPage() {
 
   // Extract unique materials and colors from archives
   const uniqueMaterials = [...new Set(
-    archives?.flatMap(a => a.filament_type?.split(', ') || []).filter(Boolean) || []
+    archives?.flatMap(a => splitFilamentTypes(a.filament_type)) || []
   )].sort();
 
   const uniqueColors = [...new Set(
@@ -3648,7 +3644,7 @@ export function ArchivesPage() {
 
       // Material filter
       const matchesMaterial = !filterMaterial ||
-        (a.filament_type?.split(', ').includes(filterMaterial));
+        splitFilamentTypes(a.filament_type).includes(filterMaterial);
 
       // Color filter (AND: must have all selected colors, OR: must have any selected color)
       const archiveColors = a.filament_color?.split(',') || [];

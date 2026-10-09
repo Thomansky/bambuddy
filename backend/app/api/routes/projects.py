@@ -102,6 +102,7 @@ class _ProjectTotals:
     filament_cost: float = 0.0
     energy_kwh: float = 0.0
     energy_cost: float = 0.0
+    wear_cost: float = 0.0
     queued_prints: int = 0
     in_progress_prints: int = 0
     bom_total_items: int = 0
@@ -153,6 +154,7 @@ async def _load_totals(db: AsyncSession, project_ids: Sequence[int]) -> dict[int
             func.coalesce(func.sum(PrintLogEntry.cost), 0).label("total_filament_cost"),
             func.coalesce(func.sum(PrintLogEntry.energy_kwh), 0).label("total_energy"),
             func.coalesce(func.sum(PrintLogEntry.energy_cost), 0).label("total_energy_cost"),
+            func.coalesce(func.sum(PrintLogEntry.wear_cost), 0).label("total_wear_cost"),
             func.coalesce(func.sum(PrintArchive.quantity), 0).label("total_items"),
             # A completed run the user marked as reject (#1898) produced no
             # usable parts — keep it out of the good-parts count.
@@ -179,6 +181,7 @@ async def _load_totals(db: AsyncSession, project_ids: Sequence[int]) -> dict[int
         entry.filament_cost = float(row.total_filament_cost or 0)
         entry.energy_kwh = float(row.total_energy or 0)
         entry.energy_cost = float(row.total_energy_cost or 0)
+        entry.wear_cost = float(row.total_wear_cost or 0)
         entry.total_items = int(row.total_items or 0)
         entry.completed_items = int(row.completed_items or 0)
         entry.failed_runs = int(row.failed_runs or 0)
@@ -250,6 +253,7 @@ def _stats_from_totals(
         estimated_cost=round(totals.filament_cost, 2),
         total_energy_kwh=round(totals.energy_kwh, 3),
         total_energy_cost=round(totals.energy_cost, 3),
+        total_wear_cost=round(totals.wear_cost, 3),
         remaining_prints=remaining_prints,
         remaining_parts=remaining_parts,
         bom_total_items=totals.bom_total_items,
@@ -392,7 +396,13 @@ async def compute_subtree_stats(db: AsyncSession, root_id: int) -> _SubtreeRepor
                 completed_prints=child_stats.completed_prints,
                 total_print_time_hours=child_stats.total_print_time_hours,
                 total_filament_grams=child_stats.total_filament_grams,
-                total_cost=round(child_stats.estimated_cost + child_stats.total_energy_cost + child_stats.bom_cost, 2),
+                total_cost=round(
+                    child_stats.estimated_cost
+                    + child_stats.total_energy_cost
+                    + child_stats.total_wear_cost
+                    + child_stats.bom_cost,
+                    2,
+                ),
             )
         )
 
@@ -2216,7 +2226,7 @@ async def export_project(
 async def import_project(
     data: ProjectImport,
     db: AsyncSession = Depends(get_db),
-    _: User | None = RequirePermissionIfAuthEnabled(Permission.PROJECTS_CREATE),
+    current_user: User | None = RequirePermissionIfAuthEnabled(Permission.PROJECTS_CREATE),
 ):
     """Import a project with optional BOM items and linked folders."""
     # Create the project
@@ -2271,6 +2281,7 @@ async def import_project(
             await inherit_folder_number(db, project, existing_folder)
         else:
             # Create new folder linked to project
+            # A project's folder is shared, like every linked folder (#3201).
             new_folder = LibraryFolder(
                 name=folder_data.name,
                 number=await _importable_folder_number(db, folder_data.number, folder_data.name),
@@ -2278,6 +2289,8 @@ async def import_project(
                 is_external=False,
                 external_readonly=False,
                 external_show_hidden=False,
+                created_by_id=current_user.id if current_user else None,
+                shared=True,
             )
             db.add(new_folder)
             await db.flush()
@@ -2321,7 +2334,7 @@ async def import_project(
 async def import_project_file(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
-    _: User | None = RequirePermissionIfAuthEnabled(Permission.PROJECTS_CREATE),
+    current_user: User | None = RequirePermissionIfAuthEnabled(Permission.PROJECTS_CREATE),
 ):
     """Import a project from a ZIP or JSON file."""
     if not file.filename:
@@ -2412,6 +2425,7 @@ async def import_project_file(
             await inherit_folder_number(db, project, existing_folder)
         else:
             # Create new folder
+            # A project's folder is shared, like every linked folder (#3201).
             folder = LibraryFolder(
                 name=folder_name,
                 number=await _importable_folder_number(db, folder_number, folder_name),
@@ -2419,6 +2433,8 @@ async def import_project_file(
                 is_external=False,
                 external_readonly=False,
                 external_show_hidden=False,
+                created_by_id=current_user.id if current_user else None,
+                shared=True,
             )
             db.add(folder)
             await db.flush()

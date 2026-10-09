@@ -114,6 +114,7 @@ class ProjectStats(BaseModel):
     estimated_cost: float = 0.0  # Based on filament cost
     total_energy_kwh: float = 0.0
     total_energy_cost: float = 0.0
+    total_wear_cost: float = 0.0  # Printer wear (#694)
     remaining_prints: int | None = None  # target_count - total_archives
     remaining_parts: int | None = None  # target_parts_count - completed_prints
     # BOM stats (Phase 7)

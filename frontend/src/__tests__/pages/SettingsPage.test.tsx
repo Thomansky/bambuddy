@@ -225,6 +225,80 @@ describe('SettingsPage', () => {
     });
   });
 
+  describe('electricity price source (#1251)', () => {
+    const haSettings = {
+      ...mockSettings,
+      ha_enabled: true,
+      energy_cost_per_kwh: 0.42,
+      energy_price_source: 'homeassistant',
+      energy_price_ha_entity: 'sensor.amber_general_price',
+    };
+
+    beforeEach(() => {
+      server.use(
+        http.get('/api/v1/ha-sensors/entities', () =>
+          HttpResponse.json([
+            { entity_id: 'sensor.amber_general_price', friendly_name: 'Amber price', state: '0.42', domain: 'sensor', device_class: null, unit_of_measurement: 'AUD/kWh' },
+            { entity_id: 'sensor.room_temperature', friendly_name: 'Room', state: '21', domain: 'sensor', device_class: 'temperature', unit_of_measurement: '°C' },
+          ])
+        )
+      );
+    });
+
+    it('offers a fixed price by default, with no sensor field', async () => {
+      render(<SettingsPage />);
+
+      const input = (await screen.findByText('Electricity cost per kWh')).parentElement!.querySelector('input')!;
+      expect(input).not.toBeDisabled();
+      expect(screen.queryByPlaceholderText('sensor.electricity_price')).not.toBeInTheDocument();
+    });
+
+    it('shows the sensor and the last price read, read-only, with Home Assistant as the source', async () => {
+      server.use(http.get('/api/v1/settings/', () => HttpResponse.json(haSettings)));
+      render(<SettingsPage />);
+
+      expect(await screen.findByPlaceholderText('sensor.electricity_price')).toHaveValue('sensor.amber_general_price');
+      const input = screen.getByText('Last price read per kWh').parentElement!.querySelector('input')!;
+      expect(input).toBeDisabled();
+      expect(input).toHaveValue(0.42);
+      // Only price sensors are suggested, not every sensor in Home Assistant.
+      await waitFor(() => {
+        const options = document.querySelectorAll('#ha-price-entities option');
+        expect(Array.from(options).map((o) => o.getAttribute('value'))).toEqual(['sensor.amber_general_price']);
+      });
+    });
+
+    it('warns when Home Assistant is not connected', async () => {
+      server.use(http.get('/api/v1/settings/', () => HttpResponse.json({ ...haSettings, ha_enabled: false })));
+      render(<SettingsPage />);
+
+      expect(await screen.findByText(/Home Assistant is not set up/)).toBeInTheDocument();
+    });
+
+    it('does not send its stale copy of a price read from Home Assistant', async () => {
+      let saved: Record<string, unknown> | null = null;
+      server.use(
+        http.get('/api/v1/settings/', () => HttpResponse.json(haSettings)),
+        http.put('/api/v1/settings/', async ({ request }) => {
+          saved = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json({ ...haSettings, ...saved });
+        })
+      );
+      render(<SettingsPage />);
+
+      const label = await screen.findByText('Restore plate for finish photo');
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      await userEvent.click(within(label.closest('div')!.parentElement!).getByRole('checkbox'));
+
+      await waitFor(() => {
+        expect(saved).not.toBeNull();
+      }, { timeout: 3000 });
+      expect(saved!).not.toHaveProperty('energy_cost_per_kwh');
+      expect(saved!.energy_price_source).toBe('homeassistant');
+      expect(saved!.energy_price_ha_entity).toBe('sensor.amber_general_price');
+    });
+  });
+
   describe('general settings', () => {
     it('shows date format setting', async () => {
       render(<SettingsPage />);

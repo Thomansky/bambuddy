@@ -135,7 +135,6 @@ class SmartPlugManager:
         """Capture one energy snapshot row per plug with a usable lifetime counter."""
         from backend.app.core.database import async_session
         from backend.app.models.smart_plug import SmartPlug
-        from backend.app.models.smart_plug_energy_snapshot import SmartPlugEnergySnapshot
 
         async with async_session() as db:
             plugs_result = await db.execute(select(SmartPlug).where(SmartPlug.enabled.is_(True)))
@@ -147,6 +146,11 @@ class SmartPlugManager:
             # outright (SQLite quietly drops the offset, which is why this went
             # unnoticed — on Postgres the whole capture raised).
             now = utcnow_naive()
+            # One price for every row of this tick: read from Home Assistant
+            # when that's the source, so it is refreshed hourly (#1251).
+            from backend.app.services.energy_price import current_price, new_snapshot
+
+            price = await current_price(db, remember=True)
             captured = 0
             for plug in plugs:
                 # MQTT plugs only publish a "today" counter that resets at midnight —
@@ -169,16 +173,13 @@ class SmartPlugManager:
                     # comes straight from the device anyway.
                     continue
                 db.add(
-                    SmartPlugEnergySnapshot(
-                        plug_id=plug.id,
-                        recorded_at=now,
-                        lifetime_kwh=float(lifetime),
-                    )
+                    await new_snapshot(db, plug_id=plug.id, recorded_at=now, lifetime_kwh=float(lifetime), price=price)
                 )
                 captured += 1
 
+            # Commits the price read above too, even with nothing captured.
+            await db.commit()
             if captured:
-                await db.commit()
                 logger.info("Captured %d energy snapshot(s)", captured)
 
     async def _check_schedules(self):

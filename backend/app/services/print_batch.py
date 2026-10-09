@@ -269,7 +269,11 @@ async def load_progress(db: AsyncSession, batch: PrintBatch) -> BatchProgress:
         await db.execute(
             select(
                 PrintQueueItem.plate_id,
-                func.sum(func.coalesce(PrintLogEntry.cost, 0.0) + func.coalesce(PrintLogEntry.energy_cost, 0.0)),
+                func.sum(
+                    func.coalesce(PrintLogEntry.cost, 0.0)
+                    + func.coalesce(PrintLogEntry.energy_cost, 0.0)
+                    + func.coalesce(PrintLogEntry.wear_cost, 0.0)
+                ),
                 func.sum(PrintLogEntry.filament_used_grams),
             )
             .select_from(PrintLogEntry)

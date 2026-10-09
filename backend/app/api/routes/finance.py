@@ -7,7 +7,7 @@ from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from backend.app.core.auth import RequirePermissionIfAuthEnabled, require_auth_if_enabled
+from backend.app.core.auth import ApiKeyActor, RequestActor, RequirePermissionIfAuthEnabled, require_auth_if_enabled
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
 from backend.app.models.finance import (
@@ -638,8 +638,19 @@ async def create_manual_print(
 async def get_my_cost_centers(
     db: AsyncSession = Depends(get_db),
     current_user: User | None = Depends(require_auth_if_enabled),
+    actor: User | ApiKeyActor | None = RequestActor,
 ):
-    """Return private and assigned cost centers for the current user."""
+    """Return private and assigned cost centers for the current user.
+
+    An API key that may queue gets its owner's, the ones it can queue with
+    when billing is on (#3256). A key without an owner has none.
+    """
+    if isinstance(actor, ApiKeyActor):
+        if not actor.has_permission(Permission.QUEUE_CREATE.value):
+            raise HTTPException(status_code=403, detail="API key cannot queue prints")
+        if actor.owner is None:
+            return []
+        current_user = actor.owner
     user = await _require_authenticated_user(current_user)
 
     result = await db.execute(

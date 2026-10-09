@@ -1,25 +1,9 @@
 from datetime import datetime
-from decimal import Decimal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from backend.app.schemas.printer_location import normalize_location_name
 from backend.app.utils.printer_models import supports_nozzle_flow_type
-
-# Wear cost per printing hour (#694): a currency amount, so at most 4 decimals
-# (0.1234); finer input is rejected (422), not rounded. Checked on the
-# shortest repr so 0.1 does not fail as 0.1000...0055. Applied on the input
-# shapes only (PrinterCreate / PrinterUpdate, together with ge=0 and
-# allow_inf_nan=False — "inf" parses as a float by default and would snapshot
-# an infinite rate onto every run). PrinterResponse serialises whatever the
-# row holds, or one out-of-range value would take down GET /printers/ as a whole.
-_WEAR_COST_MAX_DECIMALS = 4
-
-
-def _validate_wear_cost_per_hour(v: float | None) -> float | None:
-    if v is not None and -Decimal(str(v)).as_tuple().exponent > _WEAR_COST_MAX_DECIMALS:
-        raise ValueError(f"at most {_WEAR_COST_MAX_DECIMALS} decimal places")
-    return v
 
 
 class PrinterBase(BaseModel):
@@ -56,10 +40,6 @@ class PrinterBase(BaseModel):
     external_camera_enabled: bool = False
     external_camera_snapshot_url: str | None = None  # Optional single-frame override; #1177
     camera_rotation: int = 0  # 0, 90, 180, 270 degrees
-    # Wear cost per printing hour (#694): optional, 0/None = off. Read at print
-    # completion — edits never recalculate past runs. Constrained on the input
-    # shapes (PrinterCreate / PrinterUpdate).
-    wear_cost_per_hour: float | None = None
     camera_light_auto: bool = False  # #1655, used when camera_light_mode is "selected"
 
 
@@ -68,12 +48,6 @@ class PrinterCreate(PrinterBase):
     # PrinterResponse. Direct exposure on PRINTERS_READ would let a Viewer
     # connect to the printer's MQTT and bypass Bambuddy's RBAC.
     access_code: str = Field(..., min_length=1, max_length=20)
-    wear_cost_per_hour: float | None = Field(default=None, ge=0, allow_inf_nan=False)  # #694
-
-    @field_validator("wear_cost_per_hour")
-    @classmethod
-    def _check_wear_cost_decimals(cls, v: float | None) -> float | None:
-        return _validate_wear_cost_per_hour(v)
 
     # Input only, not on PrinterBase: SQLite never enforced the column width,
     # so a stored location may be longer, and the response must still read it.
@@ -103,6 +77,8 @@ class PrinterUpdate(BaseModel):
     is_active: bool | None = None
     auto_archive: bool | None = None
     print_hours_offset: float | None = None
+    # Wear cost per printing hour (#694); null or 0 turns it off.
+    wear_cost_per_hour: float | None = Field(default=None, ge=0, le=100000)
     external_camera_url: str | None = None
     external_camera_type: str | None = None
     external_camera_enabled: bool | None = None
@@ -111,12 +87,6 @@ class PrinterUpdate(BaseModel):
     camera_light_auto: bool | None = None  # #1655
     plate_detection_enabled: bool | None = None
     plate_detection_roi: PlateDetectionROI | None = None
-    wear_cost_per_hour: float | None = Field(default=None, ge=0, allow_inf_nan=False)  # #694
-
-    @field_validator("wear_cost_per_hour")
-    @classmethod
-    def _check_wear_cost_decimals(cls, v: float | None) -> float | None:
-        return _validate_wear_cost_per_hour(v)
 
 
 class PrinterResponse(PrinterBase):
@@ -129,6 +99,7 @@ class PrinterResponse(PrinterBase):
     # printer_models.supports_nozzle_flow_type.
     supports_nozzle_flow_type: bool = True
     print_hours_offset: float = 0.0
+    wear_cost_per_hour: float | None = None  # #694
     external_camera_url: str | None = None
     external_camera_type: str | None = None
     external_camera_enabled: bool = False
@@ -446,6 +417,11 @@ class PrinterStatus(BaseModel):
     extruder_slots: dict[str, ExtruderSlotResponse] = {}
     # Currently loaded tray (global ID): 254 = external spool, 255 = no filament
     tray_now: int = 255
+    # The trays this print has drawn from, in order: [[global tray ID, layer the
+    # switch happened at], ...]. A tray outside the job's AMS mapping is a backup
+    # spool the printer switched to (AMS Filament Backup); the queue card shows it
+    # in place of the slot that ran out. Reset at the start of each print.
+    tray_change_log: list[list[int]] = []
     # Runout / filament-replacement guidance (#2587). Populated only while the
     # print is PAUSED. Both are globalised tray IDs (ams_id*4+slot, or 128-135 for
     # AMS-HT, or 254 for external) so the frontend can highlight them with the same

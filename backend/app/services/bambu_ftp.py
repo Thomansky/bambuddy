@@ -2281,14 +2281,19 @@ async def download_file_bytes_async(
         printer_model: Printer model for A1-specific workarounds
         timeout: overall async cap so a saturated ``_ftp_executor`` can't pin
             the caller (and any DB connection it holds) indefinitely (#2572).
-            Generous by default because this pulls whole files (timelapse
-            video, gcode) which can legitimately take minutes over slow Wi-Fi —
-            the cap only guards against a permanently-starved pool, not a
-            slow-but-progressing transfer.
+            Raised to fit ``expected_size`` at the pessimistic floor rate when
+            that is longer (#3272): a 75 MB timelapse took 358 s on a healthy
+            P1S link, and a flat cap cannot tell slow from stuck. A dead link
+            is still caught by ``socket_timeout``.
         expected_size: size from the directory listing; a mismatch fails the
             download instead of returning a truncated file. See
             :meth:`BambuFTPClient.download_file`.
     """
+    # Unlike ``_download_extension`` there is no 300 s ceiling here: that one
+    # exists because ``on_print_start`` holds a DB session across its 3MF hunt.
+    # Every caller that passes a size releases its session before the transfer.
+    if expected_size and expected_size > 0:
+        timeout = max(timeout, expected_size / _DOWNLOAD_FLOOR_BYTES_PER_SEC)
     loop = asyncio.get_event_loop()
 
     def _download():
@@ -2303,7 +2308,13 @@ async def download_file_bytes_async(
     try:
         return await asyncio.wait_for(loop.run_in_executor(_ftp_executor, _download), timeout=timeout)
     except TimeoutError:
-        logger.warning("FTP download_bytes exceeded its %ss cap for %s (#2572)", timeout, ip_address)
+        logger.warning(
+            "FTP download of %s (%s bytes) exceeded its %.0fs cap for %s",
+            remote_path,
+            expected_size if expected_size else "unknown",
+            timeout,
+            ip_address,
+        )
         return None
 
 

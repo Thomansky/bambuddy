@@ -1,6 +1,7 @@
 import json
 import re
 from typing import Annotated, Literal
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, BeforeValidator, Field, ValidationInfo, field_validator
 
@@ -149,6 +150,19 @@ class AppSettings(BaseModel):
     energy_tracking_mode: str = Field(
         default="total",
         description="Energy display mode on stats: 'print' shows sum of per-print energy, 'total' shows lifetime plug consumption",
+    )
+    # A plain string on the way out, like energy_tracking_mode: a stray value
+    # (a restored backup) reads as "fixed" everywhere instead of failing the
+    # whole settings response. Writes are checked in AppSettingsUpdate.
+    energy_price_source: str = Field(
+        default="fixed",
+        description=(
+            "Where the electricity price comes from: 'fixed' uses energy_cost_per_kwh, "
+            "'homeassistant' reads energy_price_ha_entity hourly and at print start and end (#1251)"
+        ),
+    )
+    energy_price_ha_entity: str = Field(
+        default="", description="Home Assistant sensor holding the electricity price per kWh"
     )
 
     # Spoolman integration
@@ -816,6 +830,9 @@ class AppSettings(BaseModel):
         default="",
         description="Self-hosted Obico ML API base URL (e.g., http://192.168.1.10:3333)",
     )
+    bambuddy_internal_url: str = Field(
+        default="", description="Bambuddy Internal URL for Obico; empty uses External URL"
+    )
     obico_ml_token: str = Field(
         default="",
         description=(
@@ -905,6 +922,8 @@ class AppSettingsUpdate(BaseModel):
     currency: str | None = None
     energy_cost_per_kwh: float | None = None
     energy_tracking_mode: str | None = None
+    energy_price_source: Literal["fixed", "homeassistant"] | None = None
+    energy_price_ha_entity: str | None = Field(default=None, max_length=255)
     spoolman_enabled: bool | None = None
     spoolman_url: str | None = None
     spoolman_sync_mode: str | None = None
@@ -1046,6 +1065,7 @@ class AppSettingsUpdate(BaseModel):
     ldap_default_group: str | None = None
     obico_enabled: bool | None = None
     obico_ml_url: str | None = None
+    bambuddy_internal_url: str | None = None
     obico_ml_token: str | None = None
     obico_sensitivity: str | None = None
     obico_action: str | None = None
@@ -1169,6 +1189,34 @@ class AppSettingsUpdate(BaseModel):
         if not isinstance(parsed, list) or not all(isinstance(item, int) for item in parsed):
             raise ValueError("obico_enabled_printers must be a JSON array of printer IDs (integers)")
         return v
+
+    @field_validator("bambuddy_internal_url")
+    @classmethod
+    def validate_bambuddy_internal_url(cls, v: str | None) -> str:
+        """Require an absolute http(s) URL, or empty to fall back to External URL.
+
+        Obico's ML server fetches snapshots from this address, so a value
+        without a scheme ("bambuddy:8000") would only fail later, mid-print,
+        as a snapshot error. Rejecting it here surfaces the mistake on save.
+
+        An explicit null clears the field. The settings updater stores None
+        as the literal "None", which would read back as an address.
+        """
+        candidate = (v or "").strip()
+        if not candidate:
+            return ""
+        error = "bambuddy_internal_url must be a full http:// or https:// address"
+        if any(ch.isspace() for ch in candidate):
+            raise ValueError(error)
+        try:
+            parsed = urlparse(candidate)
+            hostname = parsed.hostname
+            _ = parsed.port  # raises on a port outside 0-65535
+        except ValueError:
+            raise ValueError(error) from None
+        if parsed.scheme not in ("http", "https") or not hostname:
+            raise ValueError(error)
+        return candidate
 
     @staticmethod
     def _validate_preset_triple(v: str | None, field_name: str, lo: int, hi: int) -> str | None:

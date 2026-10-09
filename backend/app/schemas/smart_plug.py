@@ -27,12 +27,12 @@ class SmartPlugBase(BaseModel):
     # Power monitoring
     mqtt_power_topic: str | None = Field(default=None, max_length=200)  # Topic for power data
     mqtt_power_path: str | None = Field(default=None, max_length=100)  # e.g., "power_l1" or "data.power"
-    mqtt_power_multiplier: float = Field(default=1.0, ge=0.0001, le=10000)  # Unit conversion for power
+    mqtt_power_multiplier: float = Field(default=1.0, gt=0, le=10000)  # Unit conversion for power
 
     # Energy monitoring
     mqtt_energy_topic: str | None = Field(default=None, max_length=200)  # Topic for energy data
     mqtt_energy_path: str | None = Field(default=None, max_length=100)  # e.g., "energy_l1"
-    mqtt_energy_multiplier: float = Field(default=1.0, ge=0.0001, le=10000)  # Unit conversion for energy
+    mqtt_energy_multiplier: float = Field(default=1.0, gt=0, le=10000)  # Unit conversion for energy
 
     # State monitoring
     mqtt_state_topic: str | None = Field(default=None, max_length=200)  # Topic for state data
@@ -42,7 +42,7 @@ class SmartPlugBase(BaseModel):
     )  # What value means "ON" (e.g., "ON", "true", "1")
 
     # Legacy multiplier - kept for backward compatibility
-    mqtt_multiplier: float = Field(default=1.0, ge=0.0001, le=10000)  # Deprecated, use mqtt_power_multiplier
+    mqtt_multiplier: float = Field(default=1.0, gt=0, le=10000)  # Deprecated, use mqtt_power_multiplier
 
     # REST/Webhook fields (required when plug_type="rest")
     rest_on_url: str | None = Field(default=None, max_length=500)
@@ -56,14 +56,14 @@ class SmartPlugBase(BaseModel):
     rest_status_on_value: str | None = Field(default=None, max_length=50)
     rest_power_url: str | None = Field(default=None, max_length=500)
     rest_power_path: str | None = Field(default=None, max_length=200)
-    rest_power_multiplier: float = Field(default=1.0, ge=0.0001, le=10000)
+    rest_power_multiplier: float = Field(default=1.0, gt=0, le=10000)
     rest_energy_url: str | None = Field(default=None, max_length=500)
     # Today's usage, resetting at midnight.
     rest_energy_path: str | None = Field(default=None, max_length=200)
-    rest_energy_multiplier: float = Field(default=1.0, ge=0.0001, le=10000)
+    rest_energy_multiplier: float = Field(default=1.0, gt=0, le=10000)
     # Lifetime counter that never resets (#2539) — a Shelly's `aenergy.total`.
     rest_energy_total_path: str | None = Field(default=None, max_length=200)
-    rest_energy_total_multiplier: float = Field(default=1.0, ge=0.0001, le=10000)
+    rest_energy_total_multiplier: float = Field(default=1.0, gt=0, le=10000)
 
     printer_id: int | None = None
     # #2629: only a plug that really feeds the printer may mark it offline when
@@ -132,15 +132,15 @@ class SmartPlugUpdate(BaseModel):
     ha_energy_total_entity: str | None = None
     # MQTT fields (legacy)
     mqtt_topic: str | None = None
-    mqtt_multiplier: float | None = Field(default=None, ge=0.0001, le=10000)
+    mqtt_multiplier: float | None = Field(default=None, gt=0, le=10000)
     # MQTT power fields
     mqtt_power_topic: str | None = None
     mqtt_power_path: str | None = None
-    mqtt_power_multiplier: float | None = Field(default=None, ge=0.0001, le=10000)
+    mqtt_power_multiplier: float | None = Field(default=None, gt=0, le=10000)
     # MQTT energy fields
     mqtt_energy_topic: str | None = None
     mqtt_energy_path: str | None = None
-    mqtt_energy_multiplier: float | None = Field(default=None, ge=0.0001, le=10000)
+    mqtt_energy_multiplier: float | None = Field(default=None, gt=0, le=10000)
     # MQTT state fields
     mqtt_state_topic: str | None = None
     mqtt_state_path: str | None = None
@@ -157,12 +157,12 @@ class SmartPlugUpdate(BaseModel):
     rest_status_on_value: str | None = None
     rest_power_url: str | None = None
     rest_power_path: str | None = None
-    rest_power_multiplier: float | None = Field(default=None, ge=0.0001, le=10000)
+    rest_power_multiplier: float | None = Field(default=None, gt=0, le=10000)
     rest_energy_url: str | None = None
     rest_energy_path: str | None = None
-    rest_energy_multiplier: float | None = Field(default=None, ge=0.0001, le=10000)
+    rest_energy_multiplier: float | None = Field(default=None, gt=0, le=10000)
     rest_energy_total_path: str | None = None
-    rest_energy_total_multiplier: float | None = Field(default=None, ge=0.0001, le=10000)
+    rest_energy_total_multiplier: float | None = Field(default=None, gt=0, le=10000)
     printer_id: int | None = None
     # #2629: see SmartPlugBase.controls_printer_power.
     controls_printer_power: bool | None = None

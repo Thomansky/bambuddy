@@ -38,6 +38,7 @@ const LOG_ENTRIES = [
     cost: 0.42,
     energy_kwh: 0.31,
     energy_cost: 0.09,
+    wear_cost: 0.25,
     failure_reason: null,
     thumbnail_path: null,
     created_by_id: null,
@@ -200,6 +201,20 @@ describe('Print Log columns', () => {
     expect(within(table).getByText('Date')).toBeInTheDocument();
     // Appended from the defaults, with its default visibility.
     expect(within(table).getByText('Filament Used')).toBeInTheDocument();
+  });
+
+  it('shows the printer wear cost when that column is switched on (#694)', async () => {
+    stubStoredColumns(
+      JSON.stringify([
+        { id: 'date', visible: true },
+        { id: 'wear_cost', visible: true },
+      ]),
+    );
+    await openLogView();
+
+    const table = screen.getByRole('table');
+    expect(within(table).getByText('Wear Cost')).toBeInTheDocument();
+    expect(within(table).getByText('$0.25')).toBeInTheDocument();
   });
 
   it('shows a dash for energy that the background task has not written yet', async () => {

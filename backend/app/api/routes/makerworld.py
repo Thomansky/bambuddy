@@ -32,6 +32,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.api.routes.cloud import resolve_api_key_cloud_owner
 from backend.app.api.routes.library import save_3mf_bytes_to_library
 from backend.app.core.auth import (
+    ApiKeyActor,
+    RequestActor,
     RequirePermissionIfAuthEnabled,
     require_auth_if_enabled,
     require_permission_if_auth_enabled,
@@ -39,7 +41,7 @@ from backend.app.core.auth import (
 )
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
-from backend.app.models.library import LibraryFile, LibraryFolder
+from backend.app.models.library import LibraryFile
 from backend.app.models.user import User
 from backend.app.schemas.makerworld import (
     MakerWorldImportRequest,
@@ -49,6 +51,7 @@ from backend.app.schemas.makerworld import (
     MakerWorldResolveRequest,
     MakerWorldStatus,
 )
+from backend.app.services.library_folder_access import default_import_folder, get_writable_folder
 from backend.app.services.model_providers import makerworld_provider, registry
 from backend.app.services.model_providers.base import (
     ModelProvider,
@@ -318,6 +321,7 @@ async def import_instance(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
     api_key_cloud_owner: User | None = Depends(resolve_api_key_cloud_owner),
+    actor: User | ApiKeyActor | None = RequestActor,
 ):
     """Download a specific MakerWorld instance (plate configuration) and save
     the 3MF into the library.
@@ -336,10 +340,8 @@ async def import_instance(
     current_user = await _authorize_for_provider(provider, provider.import_permission, credentials, x_api_key)
 
     if body.folder_id is not None:
-        folder_q = await db.execute(select(LibraryFolder).where(LibraryFolder.id == body.folder_id))
-        target_folder = folder_q.scalar_one_or_none()
-        if target_folder is None:
-            raise HTTPException(status_code=404, detail="Folder not found")
+        # Only into a folder the user may write to (#3201).
+        target_folder = await get_writable_folder(db, body.folder_id, actor)
         if target_folder.is_external and target_folder.external_readonly:
             raise HTTPException(
                 status_code=403,
@@ -359,18 +361,7 @@ async def import_instance(
         if default_folder_name is None:
             effective_folder_id = None
         else:
-            default_folder_q = await db.execute(
-                select(LibraryFolder).where(
-                    LibraryFolder.name == default_folder_name,
-                    LibraryFolder.parent_id.is_(None),
-                    LibraryFolder.is_external.is_(False),
-                )
-            )
-            default_folder = default_folder_q.scalar_one_or_none()
-            if default_folder is None:
-                default_folder = LibraryFolder(name=default_folder_name, parent_id=None)
-                db.add(default_folder)
-                await db.flush()
+            default_folder = await default_import_folder(db, default_folder_name, actor)
             effective_folder_id = default_folder.id
 
     service = await _build_service(db, provider, current_user, api_key_cloud_owner)
@@ -435,11 +426,8 @@ async def import_instance(
     # there as on the manifest-supplied name.
     filename = suggested_name if suggested_name.endswith(".3mf") else unquote(download.filename)
 
-    # API-keyed callers carry identity on the key, not in current_user (#1777);
-    # this collapse stays route-side solely so the library row is attributed
-    # to the key's owner rather than NULL. Credential identity is resolved
-    # inside the provider.
-    cloud_token_user = current_user or api_key_cloud_owner
+    # Credited to the key's owner for an API key. Credential identity is
+    # resolved inside the provider.
     library_file, was_existing = await save_3mf_bytes_to_library(
         db,
         file_bytes=download.file_bytes,
@@ -447,7 +435,7 @@ async def import_instance(
         folder_id=effective_folder_id,
         source_type=provider.source_type,
         source_url=source_url,
-        owner_id=cloud_token_user.id if cloud_token_user else None,
+        owner_id=actor.id if actor else None,
     )
 
     return MakerWorldImportResponse(

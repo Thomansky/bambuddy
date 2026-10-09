@@ -6,23 +6,44 @@ import { api } from '../api/client';
 import type { NotificationProvider, NotificationProviderCreate, NotificationProviderUpdate, ProviderType, TelegramVerdictMode } from '../api/client';
 import { Button } from './Button';
 import { Toggle } from './Toggle';
+import { isNotifyPushOnlyTarget, isNotifyPhotoUnsupported } from '../utils/notify';
+
+interface ConfigField {
+  key: string;
+  label: string;
+  type: string;
+  required: boolean;
+  placeholder?: string;
+  help?: string;
+  options?: { value: string; label: string }[];
+  showIf?: (config: Record<string, string>) => boolean;
+  advanced?: boolean;
+  pattern?: string;
+}
+
+const NOTIFY_METRICS = ['progress', 'eta', 'layers', 'nozzle', 'bed', 'chamber'] as const;
+type NotifyMetric = (typeof NOTIFY_METRICS)[number];
 
 interface AddNotificationModalProps {
   provider?: NotificationProvider | null;
   onClose: () => void;
 }
 
-const PROVIDER_VALUES: ProviderType[] = ['email', 'telegram', 'discord', 'ntfy', 'pushover', 'bark', 'callmebot', 'webhook', 'homeassistant'];
+const PROVIDER_VALUES: ProviderType[] = ['email', 'telegram', 'discord', 'ntfy', 'pushover', 'bark', 'gotify', 'callmebot', 'webhook', 'homeassistant', 'notify'];
 
 export function AddNotificationModal({ provider, onClose }: AddNotificationModalProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const isEditing = !!provider;
 
   const [name, setName] = useState(provider?.name || '');
   const [providerType, setProviderType] = useState<ProviderType>(provider?.provider_type || 'email');
   const [printerId, setPrinterId] = useState<number | null>(provider?.printer_id || null);
-  const [attachPhoto, setAttachPhoto] = useState(provider?.attach_photo ?? true);
+  const [attachPhoto, setAttachPhoto] = useState(
+    provider?.provider_type === 'notify' && isNotifyPhotoUnsupported(String(provider.config.device_id || ''))
+      ? false
+      : provider?.attach_photo ?? true
+  );
   const [quietHoursEnabled, setQuietHoursEnabled] = useState(provider?.quiet_hours_enabled || false);
   const [quietHoursStart, setQuietHoursStart] = useState(provider?.quiet_hours_start || '22:00');
   const [quietHoursEnd, setQuietHoursEnd] = useState(provider?.quiet_hours_end || '07:00');
@@ -62,20 +83,33 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
   const [onFirstLayerComplete, setOnFirstLayerComplete] = useState(provider?.on_first_layer_complete ?? false);
   const [onAppMessage, setOnAppMessage] = useState(provider?.on_app_message ?? false);
 
+  const [notifyLiveActivities, setNotifyLiveActivities] = useState(
+    provider?.config?.live_activities === true && !isNotifyPushOnlyTarget(String(provider?.config?.device_id || ''))
+  );
+
+  const [notifyLockScreenWidgets, setNotifyLockScreenWidgets] = useState(
+    provider?.config?.lock_screen_widgets === true && !isNotifyPushOnlyTarget(String(provider?.config?.device_id || ''))
+  );
+
+  const [notifyMetrics, setNotifyMetrics] = useState<NotifyMetric[]>(() => {
+    const metrics = provider?.config?.live_activity_metrics;
+    return Array.isArray(metrics) ? NOTIFY_METRICS.filter((metric) => metrics.includes(metric)) : [];
+  });
+
   // Provider-specific config (scalar fields only — event_priorities is split out
   // into its own state because it's an object, not a string).
   const [config, setConfig] = useState<Record<string, string>>(
     provider?.config
       ? Object.fromEntries(
           Object.entries(provider.config)
-            .filter(([k]) => k !== 'event_priorities')
+            .filter(([k]) => k !== 'event_priorities' && k !== 'live_activities' && k !== 'live_activity_metrics' && k !== 'lock_screen_widgets')
             .map(([k, v]) => [k, String(v)]),
         )
       : {},
   );
 
-  // Per-event ntfy priority (#990). Map of event key → 1-5. Persisted into
-  // config.event_priorities on save; only sent when the provider is ntfy.
+  // Per-event priority for ntfy (#990) and Gotify (#2743). Map of event key →
+  // 1-5. Persisted into config.event_priorities on save for those two only.
   const initialEventPriorities = (() => {
     const raw = provider?.config?.event_priorities;
     if (!raw || typeof raw !== 'object') return {} as Record<string, number>;
@@ -106,9 +140,23 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onClose]);
 
+  const notifyPushOnlyTarget = providerType === 'notify' && isNotifyPushOnlyTarget(config.device_id || '');
+  const notifyPhotosUnsupported = providerType === 'notify' && isNotifyPhotoUnsupported(config.device_id || '');
+  const configForRequest = () => providerType === 'notify'
+    ? {
+        ...config,
+        live_activities: notifyLiveActivities && !notifyPushOnlyTarget,
+        lock_screen_widgets: notifyLockScreenWidgets && !notifyPushOnlyTarget,
+        live_activity_privacy: config.live_activity_privacy === 'true',
+        live_activity_stage: config.live_activity_stage === 'true',
+        live_activity_metrics: notifyMetrics,
+        time_sensitive: config.time_sensitive === 'true',
+      }
+    : config;
+
   // Test configuration mutation
   const testMutation = useMutation({
-    mutationFn: () => api.testNotificationConfig({ provider_type: providerType, config, attach_photo: attachPhoto }),
+    mutationFn: () => api.testNotificationConfig({ provider_type: providerType, config: configForRequest(), attach_photo: attachPhoto && !notifyPhotosUnsupported }),
     onSuccess: (result) => {
       setTestResult(result);
       setError(null);
@@ -185,16 +233,16 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
     }
 
     const finalConfig: Record<string, unknown> =
-      providerType === 'ntfy' && Object.keys(eventPriorities).length > 0
+      (providerType === 'ntfy' || providerType === 'gotify') && Object.keys(eventPriorities).length > 0
         ? { ...config, event_priorities: eventPriorities }
-        : config;
+        : configForRequest();
 
     const data = {
       name: name.trim(),
       provider_type: providerType,
       config: finalConfig,
       printer_id: printerId,
-      attach_photo: attachPhoto,
+      attach_photo: attachPhoto && !notifyPhotosUnsupported,
       quiet_hours_enabled: quietHoursEnabled,
       quiet_hours_start: quietHoursEnabled ? quietHoursStart : null,
       quiet_hours_end: quietHoursEnabled ? quietHoursEnd : null,
@@ -236,7 +284,7 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
   const isPending = createMutation.isPending || updateMutation.isPending;
 
   // Get config fields for each provider type
-  const getConfigFields = (type: ProviderType) => {
+  const getConfigFields = (type: ProviderType): ConfigField[] => {
     switch (type) {
       case 'callmebot':
         return [
@@ -272,6 +320,38 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
             required: false,
             showIf: (cfg: Record<string, string>) => cfg.priority === '2',
           },
+        ];
+      case 'notify':
+        return [
+          { key: 'device_id', label: t('notifications.notifyDeviceId'), type: 'text', required: true },
+          { key: 'token', label: t('notifications.notifyToken'), type: 'password', required: true },
+          { key: 'icon_url', label: t('notifications.notifyIconUrl'), placeholder: 'https://example.com/icon.png', type: 'url', pattern: 'https://.*', required: false },
+          { key: 'group_type', label: t('notifications.notifyGroupType'), type: 'text', required: false, help: t('notifications.notifyGroupTypeHelp') },
+          {
+            key: 'time_sensitive', label: t('notifications.notifyTimeSensitive'), type: 'select', required: false,
+            options: [{ value: 'false', label: t('common.no') }, { value: 'true', label: t('common.yes') }],
+            help: t('notifications.notifyTimeSensitiveHelp'),
+          },
+          {
+            key: 'live_activity_privacy', label: t('notifications.notifyPrivacy'), type: 'select', required: false, advanced: true,
+            options: [{ value: 'false', label: t('common.no') }, { value: 'true', label: t('common.yes') }],
+            help: t('notifications.notifyPrivacyHelp'),
+          },
+          {
+            key: 'live_activity_stage', label: t('notifications.notifyShowStage'), type: 'select', required: false, advanced: true,
+            options: [{ value: 'false', label: t('common.no') }, { value: 'true', label: t('common.yes') }],
+          },
+          {
+            key: 'live_activity_style', label: t('notifications.notifyStyle'), type: 'select', required: false, advanced: true,
+            options: [
+              { value: 'bar', label: t('notifications.notifyStyleBar') },
+              { value: 'segments', label: t('notifications.notifyStyleSegments') },
+              { value: 'none', label: t('notifications.notifyStyleNone') },
+            ],
+          },
+          { key: 'live_activity_button_url', label: t('notifications.notifyDashboardUrl'), type: 'url', pattern: 'https://.*', placeholder: 'https://bambuddy.example.com', required: false, advanced: true },
+          { key: 'live_activity_symbol', label: t('notifications.notifySymbol'), type: 'text', placeholder: 'printer.fill', required: false, advanced: true },
+          { key: 'live_activity_tint', label: t('notifications.notifyTint'), type: 'text', placeholder: '#00AE42', pattern: '#[0-9a-fA-F]{6}', required: false, advanced: true },
         ];
       case 'telegram':
         return [
@@ -347,6 +427,11 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
             { value: 'passive', label: 'Passive (no sound)' },
           ]},
         ];
+      case 'gotify':
+        return [
+          { key: 'server', label: 'Server URL', placeholder: 'https://gotify.example.com', type: 'text', required: true },
+          { key: 'app_token', label: 'App Token', placeholder: 'Token of a Gotify application', type: 'password', required: true },
+        ];
       default:
         return [];
     }
@@ -357,6 +442,69 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
   };
 
   const configFields = getConfigFields(providerType);
+
+  const renderConfigFields = (fields: ConfigField[]) =>
+    fields
+      .filter((field) => field.showIf?.(config) !== false)
+      .map((field) => (
+        <div key={field.key}>
+          <label htmlFor={`notification-config-${field.key}`} className="block text-sm text-bambu-gray mb-1">
+            {field.label} {field.required && '*'}
+          </label>
+          {field.type === 'select' && field.options ? (
+            <select
+              id={`notification-config-${field.key}`}
+              value={config[field.key] || field.options[0]?.value || ''}
+              onChange={(e) => {
+                setConfig({ ...config, [field.key]: e.target.value });
+                setTestResult(null);
+              }}
+              className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+            >
+              {field.options.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          ) : field.type === 'textarea' ? (
+            <textarea
+              id={`notification-config-${field.key}`}
+              value={config[field.key] || ''}
+              onChange={(e) => {
+                setConfig({ ...config, [field.key]: e.target.value });
+                setTestResult(null);
+              }}
+              placeholder={field.placeholder}
+              rows={3}
+              className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none font-mono text-sm"
+            />
+          ) : (
+            <input
+              id={`notification-config-${field.key}`}
+              type={field.type}
+              pattern={field.pattern}
+              value={config[field.key] || ''}
+              onChange={(e) => {
+                setConfig({ ...config, [field.key]: e.target.value });
+                if (providerType === 'notify' && field.key === 'device_id' && isNotifyPushOnlyTarget(e.target.value)) {
+                  setNotifyLiveActivities(false);
+                  setNotifyLockScreenWidgets(false);
+                }
+                if (providerType === 'notify' && field.key === 'device_id' && isNotifyPhotoUnsupported(e.target.value)) {
+                  setAttachPhoto(false);
+                }
+                setTestResult(null);
+              }}
+              placeholder={field.placeholder}
+              className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+            />
+          )}
+          {field.help && (
+            <p className="text-xs text-bambu-gray mt-1">{field.help}</p>
+          )}
+        </div>
+      ));
 
   return (
     <div
@@ -408,16 +556,22 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
               onChange={(e) => {
                 setProviderType(e.target.value as ProviderType);
                 setConfig({}); // Reset config when changing type
+                setNotifyLiveActivities(false);
+                setNotifyLockScreenWidgets(false);
+                setNotifyMetrics([]);
                 setTestResult(null);
               }}
               disabled={isEditing}
               className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none disabled:opacity-50"
             >
-              {PROVIDER_VALUES.map((value) => (
-                <option key={value} value={value}>
-                  {t(`notifications.providerTypes.${value}`, value)}
-                </option>
-              ))}
+              {/* Sorted by the label shown, so the order holds in every language */}
+              {PROVIDER_VALUES.map((value) => ({ value, label: t(`notifications.providerTypes.${value}`, value) }))
+                .sort((a, b) => a.label.localeCompare(b.label, i18n.language, { sensitivity: 'base' }))
+                .map(({ value, label }) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
             </select>
             <p className="text-xs text-bambu-gray mt-1">
               {t(`notifications.providerDescriptions.${providerType}`, '')}
@@ -427,56 +581,81 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
           {/* Provider-specific configuration */}
           <div className="space-y-3">
             <p className="text-sm text-bambu-gray">{t('notifications.configuration')}</p>
-            {configFields
-              .filter((field) => !('showIf' in field) || (field as { showIf?: (cfg: Record<string, string>) => boolean }).showIf?.(config) !== false)
-              .map((field) => (
-              <div key={field.key}>
-                <label className="block text-sm text-bambu-gray mb-1">
-                  {field.label} {field.required && '*'}
-                </label>
-                {field.type === 'select' && 'options' in field && field.options ? (
-                  <select
-                    value={config[field.key] || field.options[0]?.value || ''}
-                    onChange={(e) => {
-                      setConfig({ ...config, [field.key]: e.target.value });
+            {renderConfigFields(configFields.filter((field) => !field.advanced))}
+            {providerType === 'notify' && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3" role="group" aria-label={t('notifications.notifyLiveActivities')}>
+                  <div>
+                    <label className="text-sm text-white">{t('notifications.notifyLiveActivities')}</label>
+                    <p className="text-xs text-bambu-gray">{t('notifications.notifyLiveActivitiesHelp')}</p>
+                  </div>
+                  <Toggle
+                    checked={notifyLiveActivities && !notifyPushOnlyTarget}
+                    disabled={notifyPushOnlyTarget}
+                    onChange={(checked) => {
+                      setNotifyLiveActivities(checked);
                       setTestResult(null);
+                      setError(null);
                     }}
-                    className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
-                  >
-                    {field.options.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-                ) : field.type === 'textarea' ? (
-                  <textarea
-                    value={config[field.key] || ''}
-                    onChange={(e) => {
-                      setConfig({ ...config, [field.key]: e.target.value });
-                      setTestResult(null);
-                    }}
-                    placeholder={field.placeholder}
-                    rows={3}
-                    className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none font-mono text-sm"
                   />
-                ) : (
-                  <input
-                    type={field.type}
-                    value={config[field.key] || ''}
-                    onChange={(e) => {
-                      setConfig({ ...config, [field.key]: e.target.value });
+                </div>
+                {notifyLiveActivities && (
+                  <>
+                    <p className="text-xs text-bambu-gray">{t('notifications.notifyLifecycleHelp')}</p>
+                    <details className="rounded-lg border border-bambu-dark-tertiary p-3">
+                      <summary className="cursor-pointer text-sm text-white">{t('notifications.notifyAppearance')}</summary>
+                      <div className="mt-3 space-y-3">
+                        {renderConfigFields(configFields.filter((field) => field.advanced))}
+                        <fieldset>
+                          <legend className="text-sm text-bambu-gray mb-1">{t('notifications.notifyMetrics')}</legend>
+                          <p className="text-xs text-bambu-gray mb-2">{t('notifications.notifyMetricsHelp')}</p>
+                          <div className="flex flex-wrap gap-3">
+                            {NOTIFY_METRICS.map((metric) => (
+                              <label key={metric} className="flex items-center gap-1 text-sm text-white">
+                                <input
+                                  type="checkbox"
+                                  checked={notifyMetrics.includes(metric)}
+                                  onChange={(e) => {
+                                    setNotifyMetrics(e.target.checked
+                                      ? [...notifyMetrics, metric]
+                                      : notifyMetrics.filter((selected) => selected !== metric));
+                                    setTestResult(null);
+                                  }}
+                                  className="accent-bambu-green"
+                                />
+                                {t(metric === 'progress' ? 'notifications.progress'
+                                  : metric === 'eta' ? 'streamOverlay.eta'
+                                  : metric === 'layers' ? 'streamOverlay.layer'
+                                  : `printers.temperatures.${metric}`)}
+                              </label>
+                            ))}
+                          </div>
+                        </fieldset>
+                      </div>
+                    </details>
+                  </>
+                )}
+                <div className="flex items-center justify-between gap-3" role="group" aria-label={t('notifications.notifyLockScreenWidgets')}>
+                  <div>
+                    <label className="text-sm text-white">{t('notifications.notifyLockScreenWidgets')}</label>
+                    <p className="text-xs text-bambu-gray">{t('notifications.notifyLockScreenWidgetsHelp')}</p>
+                  </div>
+                  <Toggle
+                    checked={notifyLockScreenWidgets && !notifyPushOnlyTarget}
+                    disabled={notifyPushOnlyTarget}
+                    onChange={(checked) => {
+                      setNotifyLockScreenWidgets(checked);
                       setTestResult(null);
+                      setError(null);
                     }}
-                    placeholder={field.placeholder}
-                    className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                   />
+                </div>
+                {notifyPushOnlyTarget && (
+                  <p className="text-xs text-bambu-gray">{t('notifications.notifyIosFeaturesUnavailable')}</p>
                 )}
-                {'help' in field && (field as { help?: string }).help && (
-                  <p className="text-xs text-bambu-gray mt-1">{(field as { help?: string }).help}</p>
-                )}
+                <p className="text-xs text-bambu-gray">{t('notifications.notifyTestHelp')}</p>
               </div>
-            ))}
+            )}
             {providerType === 'telegram' && (
               <div>
                 <label htmlFor="telegram-verdict-mode" className="block text-sm text-bambu-gray mb-1">
@@ -506,7 +685,7 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
                 setTestResult(null);
                 testMutation.mutate();
               }}
-              disabled={testMutation.isPending || (getRequiredFields(providerType).length > 0 && !config[getRequiredFields(providerType)[0]?.key])}
+              disabled={testMutation.isPending || getRequiredFields(providerType).some((field) => !config[field.key]?.trim())}
               className="flex-1"
             >
               {testMutation.isPending ? (
@@ -563,10 +742,11 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
           <div className="flex items-center justify-between">
             <div>
               <label className="text-sm text-white">{t('notifications.attachPhotoLabel')}</label>
-              <p className="text-xs text-bambu-gray">{t('notifications.attachPhotoDescription')}</p>
+              <p className="text-xs text-bambu-gray">{t(notifyPhotosUnsupported ? 'notifications.notifyPhotoUnavailable' : 'notifications.attachPhotoDescription')}</p>
             </div>
             <Toggle
-              checked={attachPhoto}
+              checked={attachPhoto && !notifyPhotosUnsupported}
+              disabled={notifyPhotosUnsupported}
               onChange={setAttachPhoto}
             />
           </div>
@@ -782,8 +962,8 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
               </div>
             </div>
 
-            {/* Per-event ntfy priority (#990) */}
-            {providerType === 'ntfy' && (() => {
+            {/* Per-event priority: ntfy (#990), Gotify (#2743) */}
+            {(providerType === 'ntfy' || providerType === 'gotify') && (() => {
               const enabledEvents: Array<{ key: string; label: string }> = [];
               if (onPrintStart) enabledEvents.push({ key: 'on_print_start', label: t('notifications.start') });
               if (onPrintComplete) enabledEvents.push({ key: 'on_print_complete', label: t('notifications.complete') });
@@ -811,9 +991,15 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
               return (
                 <div className="space-y-2 p-3 bg-bambu-dark rounded-lg">
                   <p className="text-xs text-bambu-gray uppercase tracking-wide mb-1">
-                    {t('notifications.eventPriority.sectionTitle')}
+                    {providerType === 'gotify'
+                      ? t('notifications.eventPriority.sectionTitleGotify')
+                      : t('notifications.eventPriority.sectionTitle')}
                   </p>
-                  <p className="text-xs text-bambu-gray mb-2">{t('notifications.eventPriority.helpNtfy')}</p>
+                  <p className="text-xs text-bambu-gray mb-2">
+                    {providerType === 'gotify'
+                      ? t('notifications.eventPriority.helpGotify')
+                      : t('notifications.eventPriority.helpNtfy')}
+                  </p>
                   <div className="space-y-2">
                     {enabledEvents.map((ev) => (
                       <div key={ev.key} className="flex items-center justify-between gap-3">

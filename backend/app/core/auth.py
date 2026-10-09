@@ -116,12 +116,9 @@ _APIKEY_SCOPE_BY_PERMISSION: dict[Permission, str | tuple[str, ...]] = {
     Permission.PRINTER_SENSOR_HISTORY_READ: "can_read_status",
     Permission.STATS_READ: "can_read_status",
     Permission.STATS_FILTER_BY_USER: "can_read_status",
-    # USERS_READ_SLIM grants no data an API key could not already reach (#1894):
-    # for API-keyed requests the permission deps return None as ``current_user``,
-    # so ``_validate_user_filter_permission`` in routes/archives.py short-circuits
-    # and ``?created_by_id=N`` is already honoured for every N. Without a way to
-    # discover the ids, that filter is only addressable by brute force. The slim
-    # listing makes it usable; the full USERS_READ listing (emails, roles, group
+    # USERS_READ_SLIM is ids and usernames only (#1894). It lets a key whose
+    # owner holds stats:filter_by_user address ``?created_by_id=N`` without
+    # guessing ids. The full USERS_READ listing (emails, roles, group
     # membership, permission sets) stays unmapped = admin-only.
     Permission.USERS_READ_SLIM: "can_read_status",
     Permission.SYSTEM_READ: "can_read_status",
@@ -489,6 +486,38 @@ def _check_apikey_permissions(
 
     if require_any and last_failure is not None:
         raise last_failure
+
+
+class ApiKeyActor:
+    """An API key standing in for its owner in a route's own per-row checks.
+
+    Permission dependencies answer a key request with no user, and a route's
+    own checks read no user as "auth is off": they skip the archive, library
+    and cost-center ownership tests a signed-in session faces. Routes that
+    make those tests take this from ``RequestActor`` instead. It holds only
+    the permissions the key may exercise (``apikey_effective_permissions``),
+    so it never exceeds the owner nor the key's scope flags, and it is an
+    administrator, for checks such as printing with any cost center, only when
+    the owner is one. A legacy key without an owner has no ``id``, so it owns
+    nothing and is a member of no cost center.
+    """
+
+    def __init__(self, api_key: APIKey, owner: User | None):
+        self.api_key = api_key
+        self.owner = owner
+        self.is_admin: bool = owner is not None and owner.is_admin
+        self.id: int | None = owner.id if owner is not None else None
+        self.username: str | None = owner.username if owner is not None else None
+        self._permissions = frozenset(apikey_effective_permissions(api_key, owner))
+
+    def has_permission(self, permission: str) -> bool:
+        return permission in self._permissions
+
+    def has_all_permissions(self, *permissions: str) -> bool:
+        return all(p in self._permissions for p in permissions)
+
+    def has_any_permission(self, *permissions: str) -> bool:
+        return any(p in self._permissions for p in permissions)
 
 
 @dataclass(frozen=True)
@@ -2010,6 +2039,41 @@ async def get_queue_review_required(
 
 
 QueueReviewRequired = Depends(get_queue_review_required)
+
+
+async def get_request_actor(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)] = None,
+    x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
+) -> User | ApiKeyActor | None:
+    """FastAPI dependency: who a route's own ownership checks run against.
+
+    The signed-in user, or for an API key an ``ApiKeyActor`` for its owner.
+    None only when auth is off. Declare it after the permission dependency,
+    which has already turned away bad credentials.
+    """
+    async with async_session() as db:
+        if not await is_auth_enabled(db):
+            return None
+        api_key = await validated_api_key_from_request(credentials, x_api_key)
+        if api_key is not None:
+            return ApiKeyActor(api_key, await resolve_apikey_owner(db, api_key))
+    user = None
+    if credentials is not None:
+        cached = _authenticated_user.get()
+        if cached is not None and cached[0] == credentials.credentials:
+            user = cached[1]
+        else:
+            user = await get_current_user_optional(credentials)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return user
+
+
+RequestActor = Depends(get_request_actor)
 
 
 async def get_media_or_request_printer_scope(

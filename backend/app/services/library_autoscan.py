@@ -90,7 +90,7 @@ async def autoscan_once(db: AsyncSession) -> dict:
         try:
             # The route function, not a copy of it: two implementations of
             # "reconcile this folder" would drift, and this one is the tested one.
-            result = await scan_external_folder(folder_id=folder.id, db=db, _=None)
+            result = await scan_external_folder(folder_id=folder.id, db=db, current_user=None, actor=None)
         except Exception as exc:  # noqa: BLE001 - one bad folder must not stop the rest
             logger.warning("Library auto-scan failed for folder %s: %s", folder.id, exc)
             continue
@@ -162,7 +162,7 @@ async def refresh_folder_on_open(db: AsyncSession, folder_id: int) -> dict:
     from backend.app.api.routes.library import scan_external_folder
 
     try:
-        result = await scan_external_folder(folder_id=folder_id, db=db, _=None)
+        result = await scan_external_folder(folder_id=folder_id, db=db, current_user=None, actor=None)
     except Exception as exc:  # noqa: BLE001 - opening a folder must never fail on this
         logger.info("Refresh on open skipped for folder %s: %s", folder_id, exc)
         return {"added": 0, "removed": 0, "skipped": "folder unavailable"}

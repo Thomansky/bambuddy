@@ -24,6 +24,9 @@ MATERIAL_TEMPS: dict[str, tuple[int, int]] = {
     "PA-CF": (270, 300),
 }
 
+# Bambu's generic preset per material, for a slot whose spool has no preset of
+# its own. Every assignment path and the Configure dialog read this one table;
+# a material missing here goes to the printer with an empty tray_info_idx (#3273).
 GENERIC_FILAMENT_IDS: dict[str, str] = {
     "PLA": "GFL99",
     "PETG": "GFG99",
@@ -39,13 +42,42 @@ GENERIC_FILAMENT_IDS: dict[str, str] = {
     "PETG-CF": "GFG98",
     "PA-CF": "GFN98",
     "PETG HF": "GFG96",
+    "PLA SILK": "GFL96",
+    "PLA HIGH SPEED": "GFL95",
+    "PCTG": "GFG97",
+    "PE": "GFP99",
+    "PP": "GFP97",
 }
+
+# The generics the slot-reuse check replaces instead of carrying forward:
+# a slot holding one of these gets the generic for the new spool's own
+# material. Deliberately the set from before the table above grew (#3273), so
+# a slot set to Generic PLA Silk or PLA High Speed still keeps it for a
+# preset-less PLA spool, as it always has.
+GENERIC_IDS_REPLACED_ON_REUSE: frozenset[str] = frozenset(
+    {
+        "GFL99",
+        "GFL98",
+        "GFG99",
+        "GFG98",
+        "GFG96",
+        "GFB99",
+        "GFB98",
+        "GFC99",
+        "GFN99",
+        "GFN98",
+        "GFU99",
+        "GFS99",
+        "GFS98",
+    }
+)
 
 
 def filament_id_to_setting_id(filament_id: str) -> str:
     """Convert filament_id → setting_id (e.g. "GFL05" → "GFSL05").
 
-    - Already a setting_id ("GFS…") → returned unchanged.
+    - Already a setting_id ("GFSL05", "GFSS99") → returned unchanged; a
+      support filament_id ("GFS99") still converts.
     - User presets ("P…") → returned unchanged.
     - Empty / unknown → returned unchanged.
     """
@@ -58,8 +90,11 @@ def filament_id_to_setting_id(filament_id: str) -> str:
 
     # Official Bambu presets: GFx## -> GFSx##
     if filament_id.startswith("GF") and len(filament_id) >= 4:
-        # Already a setting_id (has S after GF)
-        if filament_id[2] == "S":
+        # Already a setting_id: "GFS" then the family letter ("GFSL05").
+        # Support filaments are family S, so their filament_id starts with
+        # "GFS" too -- but a digit follows it ("GFS99" is Generic PVA, whose
+        # setting_id is "GFSS99").
+        if filament_id[2] == "S" and filament_id[3].isalpha():
             return filament_id
         return f"GFS{filament_id[2:]}"
 
@@ -69,7 +104,8 @@ def filament_id_to_setting_id(filament_id: str) -> str:
 def setting_id_to_filament_id(setting_id: str) -> str:
     """Convert setting_id → filament_id (e.g. "GFSL05" → "GFL05").
 
-    - Already a filament_id ("GF" without "S") → returned unchanged.
+    - Already a filament_id ("GFL05", or a support one like "GFS99") →
+      returned unchanged.
     - User presets ("P…") → returned unchanged.
     - Empty / unknown → returned unchanged.
     """
@@ -80,8 +116,9 @@ def setting_id_to_filament_id(setting_id: str) -> str:
     if setting_id.startswith("P"):
         return setting_id
 
-    # Setting_id format: GFSx## -> GFx##  (remove the "S")
-    if setting_id.startswith("GFS") and len(setting_id) >= 5:
+    # Setting_id format: GFSx## -> GFx##  (remove the "S"). A digit after
+    # "GFS" means a support filament_id, not a setting_id (see above).
+    if setting_id.startswith("GFS") and len(setting_id) >= 5 and setting_id[3].isalpha():
         return f"GF{setting_id[3:]}"
 
     return setting_id

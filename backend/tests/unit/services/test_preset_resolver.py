@@ -435,3 +435,30 @@ async def test_resolve_preset_ref_dispatches_by_source():
         db, user, PresetRef(source="standard", id="Some Bundled Name"), slot="printer"
     )
     assert json.loads(out)["inherits"] == "Some Bundled Name"
+
+
+# --- no user while auth is on ----------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "resolve,source,loader",
+    [
+        (preset_resolver._resolve_cloud, "cloud", "get_stored_token"),
+        (preset_resolver._resolve_orca_cloud, "orca_cloud", "_build_orca_service"),
+    ],
+)
+async def test_no_user_with_auth_on_borrows_no_stored_sign_in(resolve, source, loader):
+    """The sign-in stored without a user is the auth-off install's, and may be
+    left over after auth was turned on. A caller with no user while auth is
+    on (an API key without Allow Cloud Access) must not slice with it."""
+    load = AsyncMock(return_value=("global-tok", "admin@x.com", "global"))
+    with (
+        patch.object(preset_resolver, "is_auth_enabled", AsyncMock(return_value=True)),
+        patch.object(preset_resolver, loader, load),
+        pytest.raises(HTTPException) as exc,
+    ):
+        await resolve(MagicMock(), None, PresetRef(source=source, id="X"), slot="printer")
+
+    assert exc.value.status_code == 403
+    load.assert_not_awaited()

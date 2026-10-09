@@ -1038,3 +1038,41 @@ class TestSlicerFilamentResolutionParity:
             "filament_id_to_setting_id-derived so the slot detail modal "
             "doesn't render with empty fields."
         )
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    @pytest.mark.parametrize(
+        "material,expected",
+        [("PP", "GFP97"), ("PE", "GFP99"), ("PCTG", "GFG97"), ("PLA Silk", "GFL96")],
+    )
+    async def test_generic_fallback_covers_every_material_with_a_bambu_generic(
+        self, async_client: AsyncClient, slot_settings, test_printer, mock_spoolman_client, material, expected
+    ):
+        """A PP spool without a preset went out with tray_info_idx="" (#3273):
+        the shared table lacked the generics the Configure dialog already had."""
+        spool = {**SAMPLE_SPOOL, "extra": {}, "filament": {**SAMPLE_SPOOL["filament"], "material": material}}
+        mock_spoolman_client.get_spool = AsyncMock(return_value=spool)
+
+        mqtt_mock = MagicMock()
+        mqtt_mock.ams_set_filament_setting = MagicMock()
+        mqtt_mock.extrusion_cali_sel = MagicMock()
+        mqtt_mock.printer_state = None
+
+        with patch("backend.app.api.routes.spoolman_inventory.printer_manager") as pm_mock:
+            pm_mock.get_client = MagicMock(return_value=mqtt_mock)
+            pm_mock.get_status = MagicMock(return_value=None)
+
+            response = await async_client.post(
+                "/api/v1/spoolman/inventory/slot-assignments",
+                json={
+                    "spoolman_spool_id": 10,
+                    "printer_id": test_printer.id,
+                    "ams_id": 0,
+                    "tray_id": 0,
+                },
+            )
+
+        assert response.status_code == 200
+        call_kwargs = mqtt_mock.ams_set_filament_setting.call_args[1]
+        assert call_kwargs["tray_info_idx"] == expected
+        assert call_kwargs["setting_id"] == "GFS" + expected[2:]

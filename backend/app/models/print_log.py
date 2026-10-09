@@ -49,8 +49,8 @@ class PrintLogEntry(Base):
     cost: Mapped[float | None] = mapped_column(Float)
     energy_kwh: Mapped[float | None] = mapped_column(Float)
     energy_cost: Mapped[float | None] = mapped_column(Float)
-    # duration × the printer's hourly depreciation rate at completion (#694).
-    depreciation_cost: Mapped[float | None] = mapped_column(Float)
+    # Printer wear for this run: duration at the printer's hourly wear cost (#694).
+    wear_cost: Mapped[float | None] = mapped_column(Float)
     failure_reason: Mapped[str | None] = mapped_column(String(100))
     # User quality verdict ('good' / 'reject'), mirrored from the archive on
     # PATCH exactly like status/failure_reason (#1444 mirror) so verdict-aware

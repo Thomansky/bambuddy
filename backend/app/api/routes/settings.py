@@ -241,6 +241,10 @@ _FLOAT_SETTING_KEYS = frozenset(
     }
 )
 
+# String settings limited to a fixed set of values, which a stored "None"
+# would break when the settings response is built.
+_ENUM_SETTING_KEYS = frozenset({"energy_price_source"})
+
 _INT_SETTING_KEYS = frozenset(
     {
         "ams_humidity_good",
@@ -394,7 +398,7 @@ async def update_settings(
     null_keys = sorted(
         key
         for key, value in update_data.items()
-        if value is None and key in (_BOOL_SETTING_KEYS | _FLOAT_SETTING_KEYS | _INT_SETTING_KEYS)
+        if value is None and key in (_BOOL_SETTING_KEYS | _FLOAT_SETTING_KEYS | _INT_SETTING_KEYS | _ENUM_SETTING_KEYS)
     )
     if null_keys:
         raise HTTPException(status_code=422, detail=f"These settings cannot be null: {', '.join(null_keys)}")
@@ -446,6 +450,13 @@ async def update_settings(
     }
     mqtt_updated = bool(mqtt_keys & set(update_data.keys()))
 
+    # The page saves every field it shows on each change, so compare against
+    # what is stored: only a real change of price source is worth a read.
+    price_source_changed = False
+    for key in ("energy_price_source", "energy_price_ha_entity"):
+        if key in update_data and str(update_data[key]) != (await get_setting(db, key) or ""):
+            price_source_changed = True
+
     for key, value in update_data.items():
         # Convert value to string for storage
         if isinstance(value, bool):
@@ -462,6 +473,17 @@ async def update_settings(
 
     if {"camera_light_mode", "camera_light_delay"} & set(update_data.keys()):
         camera_light.invalidate_settings()
+
+    if price_source_changed:
+        # Read a newly chosen price sensor now, so the saved settings show its
+        # price instead of the old one until the next hourly read (#1251).
+        from backend.app.services.energy_price import current_price
+
+        try:
+            await current_price(db, remember=True)
+            await db.commit()
+        except Exception as e:
+            logger.warning("Could not read the electricity price after saving its source: %s", e)
 
     # Reconfigure MQTT relay if any MQTT settings changed
     if mqtt_updated:

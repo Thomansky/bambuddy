@@ -29,7 +29,9 @@ from backend.app.api.routes.cloud import resolve_api_key_cloud_owner
 from backend.app.api.routes.library_variants import normalize_model_name, resolve_variant_model
 from backend.app.api.routes.print_queue import _extract_filament_types_from_3mf
 from backend.app.core.auth import (
+    ApiKeyActor,
     QueueReviewRequired,
+    RequestActor,
     RequestPrinterScope,
     require_media_token_ownership,
     require_ownership_permission,
@@ -88,6 +90,17 @@ from backend.app.services.design_settings import (
 )
 from backend.app.services.filament_requirements import annotate_rack_groups
 from backend.app.services.folder_numbers import folder_number_taken, inherit_folder_number
+from backend.app.services.library_folder_access import (
+    FolderIndex,
+    can_rename_folder,
+    can_write_folder,
+    folder_delete_blocker,
+    get_visible_folder,
+    get_writable_folder,
+    load_folder_index,
+    sees_all_folders,
+    visible_folder_ids,
+)
 from backend.app.services.number_series import (
     SERIES_LIBRARY_FOLDER,
     SERIES_QUEUE_JOB,
@@ -166,6 +179,41 @@ def _ensure_library_file_visible(
     if library_file.created_by_id is None or library_file.created_by_id != user.id:
         raise HTTPException(404, "File not found")
     return library_file
+
+
+def _own_files_filter(user: User | None) -> list:
+    """Extra WHERE terms that count only ``user``'s files, for a read_own user.
+
+    Folder file counts and activity times must not reveal files the user
+    can't open (#3201).
+    """
+    if sees_all_folders(user):
+        return []
+    return [LibraryFile.created_by_id == user.id]
+
+
+async def _load_index(db: AsyncSession, user: User | None) -> FolderIndex:
+    """The folder index a response for ``user`` needs (#3201).
+
+    Who owns which file is needed only to decide what a read_own user sees
+    and what a delete_own user may delete. Everyone else skips that scan of
+    the files table, which the folder tree would otherwise pay on every load.
+    """
+    needs_files = user is not None and not (
+        sees_all_folders(user) and user.has_permission(Permission.LIBRARY_DELETE_ALL.value)
+    )
+    return await load_folder_index(db, with_files=needs_files)
+
+
+def _folder_access_fields(index: FolderIndex, folder: LibraryFolder, user: User | None) -> dict:
+    """The ownership fields of a folder response, for the user asking (#3201)."""
+    return {
+        "created_by_id": folder.created_by_id,
+        "shared": bool(folder.shared),
+        "can_write": can_write_folder(folder, user),
+        "can_rename": can_rename_folder(folder, user),
+        "can_delete": folder_delete_blocker(index, folder, user) is None,
+    }
 
 
 def get_library_dir() -> Path:
@@ -1104,16 +1152,24 @@ async def _backfill_external_thumbnails(folder_ids: list[int]) -> None:
 async def list_folders(
     response: Response,
     db: AsyncSession = Depends(get_db),
-    _: tuple[User | None, bool] = Depends(
+    auth_result: tuple[User | None, bool] = Depends(
         require_ownership_permission(
             Permission.LIBRARY_READ_ALL,
             Permission.LIBRARY_READ_OWN,
         )
     ),
 ):
-    """Get all folders as a tree structure."""
+    """Get all folders as a tree structure.
+
+    A library:read_own user gets only the folders they may see (#3201), and
+    the file counts and activity times of their own files only.
+    """
+    user, _ = auth_result
     # Prevent browser caching of folder list
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+
+    index = await _load_index(db, user)
+    visible = visible_folder_ids(index, user)
 
     # Get all folders with project and archive joins
     result = await db.execute(
@@ -1122,12 +1178,13 @@ async def list_folders(
         .outerjoin(PrintArchive, LibraryFolder.archive_id == PrintArchive.id)
         .order_by(LibraryFolder.name)
     )
-    rows = result.all()
+    rows = [row for row in result.all() if visible is None or row[0].id in visible]
+    own_files = _own_files_filter(user)
 
     # Get file counts per folder
     file_counts_result = await db.execute(
         select(LibraryFile.folder_id, func.count(LibraryFile.id))
-        .where(LibraryFile.folder_id.isnot(None), LibraryFile.deleted_at.is_(None))
+        .where(LibraryFile.folder_id.isnot(None), LibraryFile.deleted_at.is_(None), *own_files)
         .group_by(LibraryFile.folder_id)
     )
     file_counts = dict(file_counts_result.all())
@@ -1142,7 +1199,7 @@ async def list_folders(
             LibraryFile.folder_id,
             func.max(func.coalesce(LibraryFile.fs_modified_at, LibraryFile.updated_at)),
         )
-        .where(LibraryFile.folder_id.isnot(None), LibraryFile.deleted_at.is_(None))
+        .where(LibraryFile.folder_id.isnot(None), LibraryFile.deleted_at.is_(None), *own_files)
         .group_by(LibraryFile.folder_id)
     )
     latest_file_activity = dict(latest_file_activity_result.all())
@@ -1174,6 +1231,7 @@ async def list_folders(
             external_readonly=folder.external_readonly,
             file_count=file_counts.get(folder.id, 0),
             latest_activity_at=own_activity,
+            **_folder_access_fields(index, folder, user),
             children=[],
         )
         folder_map[folder.id] = folder_item
@@ -1215,21 +1273,25 @@ async def list_folders(
 async def get_folders_by_project(
     project_id: int,
     db: AsyncSession = Depends(get_db),
-    _: tuple[User | None, bool] = Depends(
+    auth_result: tuple[User | None, bool] = Depends(
         require_ownership_permission(
             Permission.LIBRARY_READ_ALL,
             Permission.LIBRARY_READ_OWN,
         )
     ),
 ):
-    """Get all folders linked to a specific project."""
+    """Get all folders linked to a specific project, those the user may see (#3201)."""
+    user, _ = auth_result
+    index = await _load_index(db, user)
+    visible = visible_folder_ids(index, user)
+    own_files = _own_files_filter(user)
     result = await db.execute(
         select(LibraryFolder, Project.name)
         .outerjoin(Project, LibraryFolder.project_id == Project.id)
         .where(LibraryFolder.project_id == project_id)
         .order_by(LibraryFolder.name)
     )
-    rows = result.all()
+    rows = [row for row in result.all() if visible is None or row[0].id in visible]
 
     folders = []
     for folder, project_name in rows:
@@ -1242,6 +1304,7 @@ async def get_folders_by_project(
             ).where(
                 LibraryFile.folder_id == folder.id,
                 LibraryFile.deleted_at.is_(None),
+                *own_files,
             )
         )
         file_count, latest_file = agg_result.one()
@@ -1265,6 +1328,7 @@ async def get_folders_by_project(
                 external_show_hidden=folder.external_show_hidden,
                 file_count=file_count,
                 latest_activity_at=latest_activity_at,
+                **_folder_access_fields(index, folder, user),
                 created_at=folder.created_at,
                 updated_at=folder.updated_at,
             )
@@ -1277,21 +1341,25 @@ async def get_folders_by_project(
 async def get_folders_by_archive(
     archive_id: int,
     db: AsyncSession = Depends(get_db),
-    _: tuple[User | None, bool] = Depends(
+    auth_result: tuple[User | None, bool] = Depends(
         require_ownership_permission(
             Permission.LIBRARY_READ_ALL,
             Permission.LIBRARY_READ_OWN,
         )
     ),
 ):
-    """Get all folders linked to a specific archive."""
+    """Get all folders linked to a specific archive, those the user may see (#3201)."""
+    user, _ = auth_result
+    index = await _load_index(db, user)
+    visible = visible_folder_ids(index, user)
+    own_files = _own_files_filter(user)
     result = await db.execute(
         select(LibraryFolder, PrintArchive.print_name)
         .outerjoin(PrintArchive, LibraryFolder.archive_id == PrintArchive.id)
         .where(LibraryFolder.archive_id == archive_id)
         .order_by(LibraryFolder.name)
     )
-    rows = result.all()
+    rows = [row for row in result.all() if visible is None or row[0].id in visible]
 
     folders = []
     for folder, archive_name in rows:
@@ -1304,6 +1372,7 @@ async def get_folders_by_archive(
             ).where(
                 LibraryFile.folder_id == folder.id,
                 LibraryFile.deleted_at.is_(None),
+                *own_files,
             )
         )
         file_count, latest_file = agg_result.one()
@@ -1327,6 +1396,7 @@ async def get_folders_by_archive(
                 external_show_hidden=folder.external_show_hidden,
                 file_count=file_count,
                 latest_activity_at=latest_activity_at,
+                **_folder_access_fields(index, folder, user),
                 created_at=folder.created_at,
                 updated_at=folder.updated_at,
             )
@@ -1335,16 +1405,25 @@ async def get_folders_by_archive(
     return folders
 
 
-async def _sibling_folder(db: AsyncSession, parent_id: int | None, name: str) -> LibraryFolder | None:
+async def _sibling_folder(
+    db: AsyncSession, parent_id: int | None, name: str, actor: User | ApiKeyActor | None
+) -> LibraryFolder | None:
     """The folder *name* refers to under *parent_id*, or ``None``.
 
     By name first; then a numbered sibling whose directory is that name — a
     ZIP whose top directory is "001 EBZ" (the share's own folder, zipped in
     Explorer) belongs in EBZ filed under 001, not in a second folder that
     would claim the same directory.
+
+    Only folders *actor* may write to count (#3201): a same-named folder of
+    somebody else's is never extracted into.
     """
     parent_clause = LibraryFolder.parent_id == parent_id if parent_id else LibraryFolder.parent_id.is_(None)
-    siblings = (await db.execute(select(LibraryFolder).where(parent_clause))).scalars().all()
+    siblings = [
+        s
+        for s in (await db.execute(select(LibraryFolder).where(parent_clause))).scalars().all()
+        if can_write_folder(s, actor)
+    ]
     by_name = next((s for s in siblings if s.name == name), None)
     if by_name is not None:
         return by_name
@@ -1400,17 +1479,16 @@ async def _allocate_folder_number(db: AsyncSession) -> str | None:
 async def create_folder(
     data: FolderCreate,
     db: AsyncSession = Depends(get_db),
-    _: User | None = Depends(require_permission_if_auth_enabled(Permission.LIBRARY_UPLOAD)),
+    current_user: User | None = Depends(require_permission_if_auth_enabled(Permission.LIBRARY_UPLOAD)),
+    actor: User | ApiKeyActor | None = RequestActor,
 ):
-    """Create a new folder."""
-    # Verify parent exists if specified. Kept rather than discarded: in
-    # directory mode the parent's real directory is where this one is made.
+    """Create a new folder, owned by the user who makes it (#3201)."""
+    # A read_own user may only create inside their own or a shared folder.
+    # The parent is kept rather than discarded: in directory mode the
+    # parent's real directory is where this one is made.
     parent_folder: LibraryFolder | None = None
     if data.parent_id is not None:
-        parent_result = await db.execute(select(LibraryFolder).where(LibraryFolder.id == data.parent_id))
-        parent_folder = parent_result.scalar_one_or_none()
-        if not parent_folder:
-            raise HTTPException(status_code=404, detail="Parent folder not found")
+        parent_folder = await get_writable_folder(db, data.parent_id, actor)
 
     # Verify project exists if specified
     project_name = None
@@ -1461,6 +1539,9 @@ async def create_folder(
         archive_id=data.archive_id,
         is_external=tree_directory is not None,
         external_path=str(tree_directory) if tree_directory is not None else None,
+        created_by_id=actor.id if actor else None,
+        # Made without a user (auth off, a key without an owner): everyone's, as before #3201.
+        shared=actor is None or actor.id is None,
     )
     db.add(folder)
     await _flush_folder_number(db, number)
@@ -1470,6 +1551,7 @@ async def create_folder(
         await inherit_folder_number(db, project, folder)
     await db.commit()
     await db.refresh(folder)
+    index = await _load_index(db, actor)
 
     return FolderResponse(
         id=folder.id,
@@ -1488,6 +1570,7 @@ async def create_folder(
         # New folder has no files yet — fall back to the folder's own
         # updated_at so this matches the list-route semantics (#1770).
         latest_activity_at=folder.updated_at,
+        **_folder_access_fields(index, folder, actor),
         created_at=folder.created_at,
         updated_at=folder.updated_at,
     )
@@ -1497,14 +1580,19 @@ async def create_folder(
 async def get_folder(
     folder_id: int,
     db: AsyncSession = Depends(get_db),
-    _: tuple[User | None, bool] = Depends(
+    auth_result: tuple[User | None, bool] = Depends(
         require_ownership_permission(
             Permission.LIBRARY_READ_ALL,
             Permission.LIBRARY_READ_OWN,
         )
     ),
 ):
-    """Get a folder by ID."""
+    """Get a folder by ID; 404 for a folder the user may not see (#3201)."""
+    user, _ = auth_result
+    index = await _load_index(db, user)
+    visible = visible_folder_ids(index, user)
+    if visible is not None and folder_id not in visible:
+        raise HTTPException(status_code=404, detail="Folder not found")
     result = await db.execute(
         select(LibraryFolder, Project.name, PrintArchive.print_name)
         .outerjoin(Project, LibraryFolder.project_id == Project.id)
@@ -1526,6 +1614,7 @@ async def get_folder(
         ).where(
             LibraryFile.folder_id == folder_id,
             LibraryFile.deleted_at.is_(None),
+            *_own_files_filter(user),
         )
     )
     file_count, latest_file = agg_result.one()
@@ -1547,6 +1636,7 @@ async def get_folder(
         external_show_hidden=folder.external_show_hidden,
         file_count=file_count,
         latest_activity_at=latest_activity_at,
+        **_folder_access_fields(index, folder, user),
         created_at=folder.created_at,
         updated_at=folder.updated_at,
     )
@@ -1575,9 +1665,7 @@ async def get_folder_readme(
     """
     user, can_read_all = auth_result
 
-    folder_row = await db.execute(select(LibraryFolder.id).where(LibraryFolder.id == folder_id))
-    if folder_row.scalar_one_or_none() is None:
-        raise HTTPException(status_code=404, detail="Folder not found")
+    await get_visible_folder(db, folder_id, user)
 
     query = LibraryFile.active().where(
         LibraryFile.folder_id == folder_id,
@@ -1623,18 +1711,35 @@ async def update_folder(
     folder_id: int,
     data: FolderUpdate,
     db: AsyncSession = Depends(get_db),
-    _: User | None = Depends(require_permission_if_auth_enabled(Permission.LIBRARY_UPDATE_ALL)),
+    auth_result: tuple[User | None, bool] = Depends(
+        require_ownership_permission(
+            Permission.LIBRARY_UPDATE_ALL,
+            Permission.LIBRARY_UPDATE_OWN,
+        )
+    ),
 ):
     """Update a folder.
 
-    Note: Folders require library:update_all permission since they don't have
-    ownership tracking.
+    library:update_all changes any folder. With library:update_own a user may
+    rename their own folders and move them into another folder they can
+    write to (#3201); linking and sharing stay with library:update_all.
     """
-    result = await db.execute(select(LibraryFolder).where(LibraryFolder.id == folder_id))
-    folder = result.scalar_one_or_none()
+    user, can_modify_all = auth_result
+    # library:update_all reaches every folder, seen or not, as before #3201.
+    folder = await get_visible_folder(db, folder_id, None if can_modify_all else user)
 
-    if not folder:
-        raise HTTPException(status_code=404, detail="Folder not found")
+    if not can_modify_all:
+        if not can_rename_folder(folder, user):
+            raise HTTPException(status_code=403, detail="Only the folder's owner can change it")
+        if data.project_id is not None or data.archive_id is not None:
+            raise HTTPException(status_code=403, detail="Linking folders requires library:update_all")
+        if data.shared is not None:
+            raise HTTPException(status_code=403, detail="Sharing folders requires library:update_all")
+        if data.parent_id:
+            await get_writable_folder(db, data.parent_id, user)
+
+    if data.shared is not None:
+        folder.shared = data.shared
 
     # What decides where the folder lives on the share, as it was before.
     placement_before = (folder.name, folder.number, folder.parent_id)
@@ -1734,6 +1839,7 @@ async def update_folder(
         ).where(
             LibraryFile.folder_id == folder_id,
             LibraryFile.deleted_at.is_(None),
+            *_own_files_filter(user),
         )
     )
     file_count, latest_file = agg_result.one()
@@ -1765,35 +1871,10 @@ async def update_folder(
         external_show_hidden=folder.external_show_hidden,
         file_count=file_count,
         latest_activity_at=latest_activity_at,
+        **_folder_access_fields(await _load_index(db, user), folder, user),
         created_at=folder.created_at,
         updated_at=folder.updated_at,
     )
-
-
-async def _restricted_folder_delete_blocker(db: AsyncSession, folder: LibraryFolder) -> str | None:
-    """Why a library:delete_own user may NOT delete this folder, or None if they may.
-
-    Folders have no ownership tracking, so users without library:delete_all may
-    only delete folders that are truly empty — an empty folder contains nobody's
-    data (#1781). "Empty" must include trashed files: LibraryFile.folder_id
-    cascades on folder delete, so a folder holding another user's trashed file
-    would silently break trash restore.
-    """
-    if folder.is_external:
-        return "External folders can only be deleted by users with library:delete_all"
-    if folder.project_id is not None or folder.archive_id is not None:
-        return "Folders linked to a project or archive can only be deleted by users with library:delete_all"
-
-    child_result = await db.execute(select(func.count(LibraryFolder.id)).where(LibraryFolder.parent_id == folder.id))
-    if (child_result.scalar() or 0) > 0:
-        return "Only empty folders can be deleted without library:delete_all"
-
-    # Includes trashed files (no deleted_at filter) — see docstring.
-    file_result = await db.execute(select(func.count(LibraryFile.id)).where(LibraryFile.folder_id == folder.id))
-    if (file_result.scalar() or 0) > 0:
-        return "Only empty folders can be deleted without library:delete_all (the folder may contain trashed files)"
-
-    return None
 
 
 @router.delete("/folders/{folder_id}")
@@ -1809,24 +1890,22 @@ async def delete_folder(
 ):
     """Delete a folder and all its contents (cascade).
 
-    Folders have no ownership tracking, so cascade deletion requires
-    library:delete_all. Users with only library:delete_own may delete empty,
-    non-external, non-linked folders (#1781).
+    library:delete_all deletes any folder. With library:delete_own a user
+    deletes their own folder when everything in it is theirs too (#3201), or
+    an ownerless folder that is truly empty (#1781). See
+    ``library_folder_access.folder_delete_blocker``.
 
     A folder of the library's directory tree (#3160) goes to the trash on the
     share instead: its directory in one rename, its files' rows into the
     trash, from where they restore into the library's root. Deleting only the
     rows would hand the whole folder back on the next scan.
     """
-    _, can_modify_all = auth_result
-    result = await db.execute(select(LibraryFolder).where(LibraryFolder.id == folder_id))
-    folder = result.scalar_one_or_none()
-
-    if not folder:
-        raise HTTPException(status_code=404, detail="Folder not found")
+    user, can_modify_all = auth_result
+    # library:delete_all reaches every folder, seen or not, as before #3201.
+    folder = await get_visible_folder(db, folder_id, None if can_modify_all else user)
 
     if not can_modify_all:
-        blocker = await _restricted_folder_delete_blocker(db, folder)
+        blocker = folder_delete_blocker(await load_folder_index(db), folder, user)
         if blocker:
             raise HTTPException(status_code=403, detail=blocker)
 
@@ -2209,7 +2288,7 @@ async def create_external_folder(
     # /api/v1/library/folders). LIBRARY_UPLOAD was always the wrong scope —
     # SETTINGS_UPDATE is the admin-class gate that already protects every
     # other host-affecting setting (SMTP, LDAP, cloud, smart plugs).
-    _: User | None = Depends(require_permission_if_auth_enabled(Permission.SETTINGS_UPDATE)),
+    current_user: User | None = Depends(require_permission_if_auth_enabled(Permission.SETTINGS_UPDATE)),
 ):
     """Create an external folder that points to a host directory."""
     resolved = _validate_external_path(data.external_path)
@@ -2234,6 +2313,9 @@ async def create_external_folder(
         name=data.name,
         parent_id=data.parent_id,
         is_external=True,
+        created_by_id=current_user.id if current_user else None,
+        # A mount is everyone's, as before #3201; an admin can stop sharing it.
+        shared=True,
         external_path=str(resolved),
         external_readonly=data.readonly,
         external_show_hidden=data.show_hidden,
@@ -2257,6 +2339,7 @@ async def create_external_folder(
         # Newly-created external folder hasn't been scanned yet — fall back
         # to the folder's own updated_at (#1770).
         latest_activity_at=folder.updated_at,
+        **_folder_access_fields(await _load_index(db, current_user), folder, current_user),
         created_at=folder.created_at,
         updated_at=folder.updated_at,
     )
@@ -2276,7 +2359,8 @@ def _mtime_to_datetime(mtime: float) -> datetime:
 async def scan_external_folder(
     folder_id: int,
     db: AsyncSession = Depends(get_db),
-    _: User | None = Depends(require_permission_if_auth_enabled(Permission.LIBRARY_UPLOAD)),
+    current_user: User | None = Depends(require_permission_if_auth_enabled(Permission.LIBRARY_UPLOAD)),
+    actor: User | ApiKeyActor | None = RequestActor,
 ):
     """Scan an external folder and sync files to the database.
 
@@ -2288,15 +2372,12 @@ async def scan_external_folder(
     go with it.
     """
     async with library_storage.tree_lock():
-        return await _scan_external_folder(folder_id, db)
+        return await _scan_external_folder(folder_id, db, actor)
 
 
-async def _scan_external_folder(folder_id: int, db: AsyncSession) -> dict:
-    result = await db.execute(select(LibraryFolder).where(LibraryFolder.id == folder_id))
-    folder = result.scalar_one_or_none()
-
-    if not folder:
-        raise HTTPException(status_code=404, detail="Folder not found")
+async def _scan_external_folder(folder_id: int, db: AsyncSession, actor: User | ApiKeyActor | None) -> dict:
+    # A mount the user can't see is 404, like a missing one (#3201).
+    folder = await get_visible_folder(db, folder_id, actor)
     if not folder.is_external or not folder.external_path:
         raise HTTPException(status_code=400, detail="Not an external folder")
 
@@ -2452,6 +2533,9 @@ async def _scan_external_folder(folder_id: int, db: AsyncSession) -> dict:
                             ),  # SEC-PATH-OK: current_path built from Path(rel_dir).parts of an os.walk descent under ext_path
                             external_readonly=folder.external_readonly,
                             external_show_hidden=folder.external_show_hidden,
+                            # A scanned subfolder belongs with the mount (#3201).
+                            created_by_id=folder.created_by_id,
+                            shared=folder.shared,
                         )
                         db.add(new_folder)
                         await db.flush()
@@ -2888,6 +2972,7 @@ async def upload_file(
     generate_stl_thumbnails: bool = Query(default=True),
     db: AsyncSession = Depends(get_db),
     current_user: User | None = Depends(require_permission_if_auth_enabled(Permission.LIBRARY_UPLOAD)),
+    actor: User | ApiKeyActor | None = RequestActor,
 ):
     """Upload a file to the library."""
     try:
@@ -2901,13 +2986,10 @@ async def upload_file(
         except InvalidFilenameError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
 
-        # Verify folder exists if specified
+        # Verify folder exists if specified, and that the user may add to it (#3201)
         target_folder = None
         if folder_id is not None:
-            folder_result = await db.execute(select(LibraryFolder).where(LibraryFolder.id == folder_id))
-            target_folder = folder_result.scalar_one_or_none()
-            if not target_folder:
-                raise HTTPException(status_code=404, detail="Folder not found")
+            target_folder = await get_writable_folder(db, folder_id, actor)
 
         # Writable external folders write through to the mount so the file is
         # visible outside Bambuddy (#1112); everything else lands under the
@@ -2953,7 +3035,7 @@ async def upload_file(
             file_hash=derived.file_hash,
             thumbnail_path=derived.thumbnail_path,
             file_metadata=derived.metadata,
-            created_by_id=current_user.id if current_user else None,
+            created_by_id=actor.id if actor else None,
         )
         db.add(library_file)
         await db.commit()
@@ -2984,6 +3066,7 @@ async def extract_zip_file(
     generate_stl_thumbnails: bool = Query(default=True),
     db: AsyncSession = Depends(get_db),
     current_user: User | None = Depends(require_permission_if_auth_enabled(Permission.LIBRARY_UPLOAD)),
+    actor: User | ApiKeyActor | None = RequestActor,
 ):
     """Upload and extract a ZIP file to the library.
 
@@ -2999,12 +3082,9 @@ async def extract_zip_file(
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Only ZIP files are supported")
 
-    # Verify target folder exists if specified
+    # Verify target folder exists if specified, and that the user may add to it (#3201)
     if folder_id is not None:
-        folder_result = await db.execute(select(LibraryFolder).where(LibraryFolder.id == folder_id))
-        target_folder = folder_result.scalar_one_or_none()
-        if not target_folder:
-            raise HTTPException(status_code=404, detail="Target folder not found")
+        target_folder = await get_writable_folder(db, folder_id, actor)
         if target_folder.is_external and target_folder.external_readonly:
             raise HTTPException(status_code=403, detail="Cannot extract ZIP to a read-only external folder")
         if target_folder.is_external and not library_storage.is_inside_tree(
@@ -3062,6 +3142,9 @@ async def extract_zip_file(
             parent_id=parent_id,
             is_external=tree_dir is not None,
             external_path=str(tree_dir) if tree_dir is not None else None,
+            created_by_id=actor.id if actor else None,
+            # Made without a user (auth off, an API key): everyone's, as before #3201.
+            shared=actor is None or actor.id is None,
         )
         db.add(created)
         await db.flush()
@@ -3076,8 +3159,10 @@ async def extract_zip_file(
     if create_folder_from_zip and file.filename:
         # Remove .zip extension to get folder name
         zip_folder_name = file.filename[:-4] if file.filename.lower().endswith(".zip") else file.filename
-        # Check if folder already exists
-        existing_folder = await _sibling_folder(db, folder_id, zip_folder_name)
+        # Check if folder already exists. Reuse a same-named folder only when the
+        # user may write to it; never extract into someone else's folder that
+        # happens to share the name (#3201).
+        existing_folder = await _sibling_folder(db, folder_id, zip_folder_name, actor)
         if existing_folder:
             zip_folder_id = existing_folder.id
             logger.info("Reusing existing folder '%s' with id=%s", zip_folder_name, zip_folder_id)
@@ -3122,7 +3207,7 @@ async def extract_zip_file(
                                     current_parent = folder_cache[current_path]
                                 else:
                                     # Check if folder exists
-                                    existing_folder = await _sibling_folder(db, current_parent, part)
+                                    existing_folder = await _sibling_folder(db, current_parent, part, actor)
 
                                     if existing_folder:
                                         current_parent = existing_folder.id
@@ -3242,7 +3327,7 @@ async def extract_zip_file(
                         file_hash=file_hash,
                         thumbnail_path=to_relative_path(thumbnail_path) if thumbnail_path else None,
                         file_metadata=_without_print_name(metadata) if metadata else None,
-                        created_by_id=current_user.id if current_user else None,
+                        created_by_id=actor.id if actor else None,
                     )
                     db.add(library_file)
                     await db.flush()
@@ -3479,6 +3564,7 @@ async def combine_files(
     request: CombineFilesRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User | None = Depends(require_permission_if_auth_enabled(Permission.LIBRARY_UPLOAD)),
+    actor: User | ApiKeyActor | None = RequestActor,
 ):
     """Combine STL library files into one multi-object 3MF.
 
@@ -3499,15 +3585,11 @@ async def combine_files(
         raise HTTPException(status_code=400, detail=str(e)) from e
 
     if request.folder_id is not None:
-        folder = (
-            await db.execute(select(LibraryFolder).where(LibraryFolder.id == request.folder_id))
-        ).scalar_one_or_none()
-        if folder is None:
-            raise HTTPException(status_code=404, detail="Folder not found")
+        await get_writable_folder(db, request.folder_id, actor)
 
     # Same per-row visibility the slice route applies: a READ_OWN caller must
     # not be able to pull another user's model into their own file by raw id.
-    can_read_all = current_user is None or current_user.has_permission(Permission.LIBRARY_READ_ALL.value)
+    can_read_all = actor is None or actor.has_permission(Permission.LIBRARY_READ_ALL.value)
 
     # The same file listed twice is one object with the copies added up, so
     # its mesh is loaded and stored once. Order follows first appearance.
@@ -3520,7 +3602,7 @@ async def combine_files(
 
     # Gate every source before touching any of them on disk, so the answer for
     # a file the caller can't see is the same 404 whatever else is in the list.
-    sources = [_ensure_library_file_visible(by_id.get(file_id), current_user, can_read_all) for file_id in copies_by_id]
+    sources = [_ensure_library_file_visible(by_id.get(file_id), actor, can_read_all) for file_id in copies_by_id]
 
     parts: list[CombinePart] = []
     for lib_file in sources:
@@ -3545,7 +3627,7 @@ async def combine_files(
         filename=filename,
         folder_id=request.folder_id,
         source_type="combined",
-        owner_id=current_user.id if current_user else None,
+        owner_id=actor.id if actor else None,
     )
 
     return FileUploadResponse(
@@ -3565,6 +3647,7 @@ async def add_files_to_queue(
     current_user: User | None = Depends(require_permission_if_auth_enabled(Permission.QUEUE_CREATE)),
     printer_scope: PrinterScope = RequestPrinterScope,
     review_required: bool = QueueReviewRequired,
+    actor: User | ApiKeyActor | None = RequestActor,
 ):
     """Add library files to the print queue.
 
@@ -3626,8 +3709,8 @@ async def add_files_to_queue(
     # same "File not found" an unknown id gets and the response says nothing
     # about which ids exist. Ownerless rows need LIBRARY_READ_ALL, matching
     # _ensure_library_file_visible.
-    if current_user is not None and not current_user.has_permission(Permission.LIBRARY_READ_ALL.value):
-        files = {fid: f for fid, f in files.items() if f.created_by_id == current_user.id}
+    if actor is not None and not actor.has_permission(Permission.LIBRARY_READ_ALL.value):
+        files = {fid: f for fid, f in files.items() if f.created_by_id == actor.id}
 
     # Project attribution (#1897): a file queued from a project-linked folder
     # inherits that project, so the resulting archive counts toward the
@@ -3746,7 +3829,7 @@ async def add_files_to_queue(
                 # Without this the row is ownerless, and `queue:read_own` filters
                 # on `created_by_id` — so the user who queued the file could not
                 # see it in their own queue.
-                created_by_id=current_user.id if current_user else None,
+                created_by_id=actor.id if actor else None,
                 # Waits for someone to start it unless they may print without review (#1620)
                 manual_start=review_required,
             )
@@ -5585,6 +5668,7 @@ async def slice_library_file(
     db: AsyncSession = Depends(get_db),
     current_user: User | None = Depends(require_permission_if_auth_enabled(Permission.LIBRARY_UPLOAD)),
     api_key_cloud_owner: User | None = Depends(resolve_api_key_cloud_owner),
+    actor: User | ApiKeyActor | None = RequestActor,
 ):
     """Enqueue a slice job for a library file. Returns 202 + job_id; the
     slice runs in the background, the caller polls `GET /slice-jobs/{id}`.
@@ -5601,10 +5685,10 @@ async def slice_library_file(
     # built-in Operators group) slice another user's model by raw id even though
     # GET on that id returned 404 — the sliced output was then attributed to and
     # downloadable by the requester. Enforce the same visibility the read routes
-    # use before reading the source off disk. API-key / auth-disabled callers
-    # (current_user is None) keep can_read_all=True — no per-row identity.
-    can_read_all = current_user is None or current_user.has_permission(Permission.LIBRARY_READ_ALL.value)
-    lib_file = _ensure_library_file_visible(lib_file, current_user, can_read_all)
+    # use before reading the source off disk. An API key is checked as its
+    # owner (RequestActor); only auth off keeps can_read_all=True.
+    can_read_all = actor is None or actor.has_permission(Permission.LIBRARY_READ_ALL.value)
+    lib_file = _ensure_library_file_visible(lib_file, actor, can_read_all)
 
     src_lower = (lib_file.filename or "").lower()
     if src_lower.endswith(".step") or src_lower.endswith(".stp"):
@@ -5862,10 +5946,8 @@ async def update_file(
         if data.folder_id == 0:
             file.folder_id = None
         else:
-            # Verify folder exists
-            folder_result = await db.execute(select(LibraryFolder).where(LibraryFolder.id == data.folder_id))
-            if not folder_result.scalar_one_or_none():
-                raise HTTPException(status_code=404, detail="Folder not found")
+            # library:update_all moves into any folder, as before (#3201).
+            await get_writable_folder(db, data.folder_id, None if can_modify_all else user)
             file.folder_id = data.folder_id
 
     if data.project_id is not None:
@@ -6366,9 +6448,8 @@ async def download_folder_zip(
     """Stream a folder -- by default its whole subtree -- as one ZIP."""
     user, can_read_all = auth_result
 
-    folder = (await db.execute(select(LibraryFolder).where(LibraryFolder.id == folder_id))).scalar_one_or_none()
-    if folder is None:
-        raise HTTPException(status_code=404, detail="Folder not found")
+    # A folder the user may not see is 404, like a missing one (#3201).
+    folder = await get_visible_folder(db, folder_id, user)
 
     candidates = await _folder_zip_candidates(db, folder, recursive, ZIP_MAX_FILES)
     _enforce_zip_file_cap(len(candidates), exact=False)
@@ -6815,10 +6896,9 @@ async def move_files(
     # Verify folder exists if specified
     target_folder: LibraryFolder | None = None
     if data.folder_id is not None:
-        folder_result = await db.execute(select(LibraryFolder).where(LibraryFolder.id == data.folder_id))
-        target_folder = folder_result.scalar_one_or_none()
-        if not target_folder:
-            raise HTTPException(status_code=404, detail="Folder not found")
+        # Only into a folder the user may write to (#3201); library:update_all
+        # moves into any folder, as before.
+        target_folder = await get_writable_folder(db, data.folder_id, None if can_modify_all else user)
         if target_folder.is_external and target_folder.external_readonly:
             raise HTTPException(status_code=403, detail="Cannot move files to a read-only external folder")
 
@@ -6985,14 +7065,18 @@ async def _bulk_delete(
             remove_library_photos_dir(file.id)
             await db.delete(file)
 
-    # Delete folders (cascade will handle contents). Folders have no ownership
-    # tracking, so users without *_all permission may only delete empty,
-    # non-external, non-linked folders (#1781) — same rule as DELETE /folders/{id}.
+    # Delete folders (cascade will handle contents). Without *_all permission a
+    # user deletes only what DELETE /folders/{id} would let them (#1781, #3201);
+    # a folder they can't see is skipped like one that doesn't exist.
+    index = await load_folder_index(db) if data.folder_ids and not can_modify_all else None
+    visible = visible_folder_ids(index, user) if index is not None else None
     for folder_id in data.folder_ids:
         result = await db.execute(select(LibraryFolder).where(LibraryFolder.id == folder_id))
         folder = result.scalar_one_or_none()
         if folder:
-            if not can_modify_all and await _restricted_folder_delete_blocker(db, folder):
+            if visible is not None and folder.id not in visible:
+                continue
+            if not can_modify_all and folder_delete_blocker(index, folder, user):
                 continue
             # Count files that will be deleted
             file_count_result = await db.execute(
@@ -7049,9 +7133,13 @@ async def get_library_stats(
     total_files_result = await db.execute(select(func.count(LibraryFile.id)).where(*file_filters))
     total_files = total_files_result.scalar() or 0
 
-    # Total folders (folders are shared org structure, not per-user — count all)
-    total_folders_result = await db.execute(select(func.count(LibraryFolder.id)))
-    total_folders = total_folders_result.scalar() or 0
+    # Total folders: the ones the user can see (#3201)
+    visible = None if sees_all_folders(user) else visible_folder_ids(await load_folder_index(db), user)
+    if visible is None:
+        total_folders_result = await db.execute(select(func.count(LibraryFolder.id)))
+        total_folders = total_folders_result.scalar() or 0
+    else:
+        total_folders = len(visible)
 
     # Files that belong to no folder, split by bucket. The File Manager's root
     # offers a "No folder" entry only when such files exist, and asking the

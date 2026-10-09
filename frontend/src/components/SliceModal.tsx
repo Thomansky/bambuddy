@@ -42,7 +42,7 @@ import {
   isConnectedModelPreset,
   matchedFilamentRefs,
   pickConnectedPrinterPreset,
-  printerPresetModel,
+  printerProfileModel,
   printersOfModel,
 } from '../utils/sliceLoadedSpools';
 
@@ -486,9 +486,22 @@ export function SliceModal({ source, onClose, defaultAutoArrange = false }: Slic
   // Compatibility ground truth: the slicer's own `compatible_printers` list
   // on local-imported presets, plus the @BBL <code> name fallback for cloud
   // / standard presets via the backend Bambu printer-model registry.
+  // Plus, for printer presets saved under a name of their own, the preset
+  // each was saved from (#3250).
+  const printerParents = useMemo<Record<string, string>>(() => {
+    const out: Record<string, string> = {};
+    const data = presetsQuery.data;
+    if (!data) return out;
+    for (const tier of [data.local, data.orca_cloud, data.cloud, data.standard]) {
+      for (const p of tier.printer) {
+        if (p.inherits && !Object.hasOwn(out, p.name)) out[p.name] = p.inherits;
+      }
+    }
+    return out;
+  }, [presetsQuery.data]);
   const compatIndex = useMemo<PrinterCompatibilityIndex>(
-    () => buildCompatibilityIndex(printerModelsQuery.data ?? {}),
-    [printerModelsQuery.data],
+    () => buildCompatibilityIndex(printerModelsQuery.data ?? {}, printerParents),
+    [printerModelsQuery.data, printerParents],
   );
 
   // What the connected printers have loaded (#3172), for the two filters and
@@ -510,8 +523,8 @@ export function SliceModal({ source, onClose, defaultAutoArrange = false }: Slic
   // AMS says nothing about what an X1C job can start on. A profile whose
   // model can't be read keeps every connected printer.
   const spoolPrinters = useMemo(
-    () => printersOfModel(loadedPrinters, printerPresetModel(selectedPrinterName, printerModels)),
-    [loadedPrinters, selectedPrinterName, printerModels],
+    () => printersOfModel(loadedPrinters, printerProfileModel(selectedPrinterName, printerModels, printerParents)),
+    [loadedPrinters, selectedPrinterName, printerModels, printerParents],
   );
   const filamentNameIndex = useMemo(
     () => (presetsQuery.data ? buildFilamentNameIndex(presetsQuery.data) : new Map()),
@@ -529,8 +542,8 @@ export function SliceModal({ source, onClose, defaultAutoArrange = false }: Slic
   const printerFilter = useMemo(() => {
     if (!onlyConnectedModels || loadedPrinters.length === 0) return null;
     const models = loadedPrinters.map((p) => p.model);
-    return (p: UnifiedPreset) => isConnectedModelPreset(p, models, printerModels);
-  }, [onlyConnectedModels, loadedPrinters, printerModels]);
+    return (p: UnifiedPreset) => isConnectedModelPreset(p, models, printerModels, printerParents);
+  }, [onlyConnectedModels, loadedPrinters, printerModels, printerParents]);
   const filamentFilter = useMemo(() => {
     if (!onlyLoadedSpools || loadedFilamentRefs.size === 0) return null;
     return (p: UnifiedPreset) => loadedFilamentRefs.has(`${p.source}:${p.id}`);
@@ -670,9 +683,18 @@ export function SliceModal({ source, onClose, defaultAutoArrange = false }: Slic
     const embeddedPreset = findPreset(data, embedded, 'printer');
     const next = embeddedPreset && printerFilter(embeddedPreset)
       ? embedded
-      : pickConnectedPrinterPreset(data, loadedPrinters.map((p) => p.model), printerModels);
+      : pickConnectedPrinterPreset(data, loadedPrinters.map((p) => p.model), printerModels, printerParents);
     if (next) setPrinterPreset(next);
-  }, [presetsQuery.data, printerFilter, printerPreset, embeddedPrinter, loadedPrinters, printerModels, useEmbedded]);
+  }, [
+    presetsQuery.data,
+    printerFilter,
+    printerPreset,
+    embeddedPrinter,
+    loadedPrinters,
+    printerModels,
+    printerParents,
+    useEmbedded,
+  ]);
 
   // Process pre-pick / re-pick (#1325): defaults to a process compatible with
   // the selected printer, and re-defaults when a printer change leaves the

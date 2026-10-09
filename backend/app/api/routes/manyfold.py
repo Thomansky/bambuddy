@@ -16,15 +16,15 @@ import os
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.routes.library import save_3mf_bytes_to_library, validate_print_file_upload
 from backend.app.api.routes.settings import set_setting
-from backend.app.core.auth import RequirePermissionIfAuthEnabled
+from backend.app.core.auth import ApiKeyActor, RequestActor, RequirePermissionIfAuthEnabled
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
-from backend.app.models.library import LibraryFile, LibraryFolder
+from backend.app.models.library import LibraryFile
 from backend.app.models.settings import Settings
 from backend.app.models.user import User
 from backend.app.schemas.manyfold import (
@@ -40,6 +40,7 @@ from backend.app.schemas.manyfold import (
     ManyfoldTestRequest,
     ManyfoldTestResponse,
 )
+from backend.app.services.library_folder_access import default_import_folder, get_writable_folder
 from backend.app.services.model_providers import manyfold_provider
 from backend.app.services.model_providers.base import ProviderResourceRef
 from backend.app.services.model_providers.manyfold.config import (
@@ -290,29 +291,15 @@ async def get_preview(
 # ---- import -------------------------------------------------------------
 
 
-async def _import_folder_id(db: AsyncSession, folder_id: int | None) -> int | None:
+async def _import_folder_id(db: AsyncSession, folder_id: int | None, user: User | ApiKeyActor | None) -> int | None:
     """The chosen folder, or the top-level "Manyfold" folder (created on first use)."""
     if folder_id is not None:
-        folder = (await db.execute(select(LibraryFolder).where(LibraryFolder.id == folder_id))).scalar_one_or_none()
-        if folder is None:
-            raise HTTPException(status_code=404, detail="Folder not found")
+        # Only into a folder the user may write to (#3201).
+        folder = await get_writable_folder(db, folder_id, user)
         if folder.is_external and folder.external_readonly:
             raise HTTPException(status_code=403, detail="Cannot import into a read-only external folder")
         return folder_id
-    name = manyfold_provider.default_folder_name
-    folder = (
-        await db.execute(
-            select(LibraryFolder).where(
-                LibraryFolder.name == name,
-                LibraryFolder.parent_id.is_(None),
-                LibraryFolder.is_external.is_(False),
-            )
-        )
-    ).scalar_one_or_none()
-    if folder is None:
-        folder = LibraryFolder(name=name, parent_id=None)
-        db.add(folder)
-        await db.flush()
+    folder = await default_import_folder(db, manyfold_provider.default_folder_name, user)
     return folder.id
 
 
@@ -321,6 +308,7 @@ async def import_file(
     body: ManyfoldImportRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User | None = RequirePermissionIfAuthEnabled(Permission.MANYFOLD_IMPORT),
+    actor: User | ApiKeyActor | None = RequestActor,
 ):
     """Download one Manyfold file into the library.
 
@@ -356,7 +344,7 @@ async def import_file(
 
     filename = _library_filename(file["filename"], file_id)
     validate_print_file_upload(filename, data)
-    folder_id = await _import_folder_id(db, body.folder_id)
+    folder_id = await _import_folder_id(db, body.folder_id, actor)
     library_file, was_existing = await save_3mf_bytes_to_library(
         db,
         file_bytes=data,
@@ -364,7 +352,7 @@ async def import_file(
         folder_id=folder_id,
         source_type=manyfold_provider.source_type,
         source_url=source_url,
-        owner_id=current_user.id if current_user else None,
+        owner_id=actor.id if actor else None,
     )
     logger.info(
         "[MANYFOLD] Imported %s (model %s, file %s) as library file %s", filename, model_id, file_id, library_file.id

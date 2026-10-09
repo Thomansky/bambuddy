@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { Suspense, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useQueries } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -10,6 +10,7 @@ import { useSpoolBuddyState } from '../../hooks/useSpoolBuddyState';
 import { useColorCatalogVersion } from '../../hooks/useColorCatalogVersion';
 import { api, spoolbuddyApi, type Printer, type PrinterStatus } from '../../api/client';
 import { VirtualKeyboard } from '../VirtualKeyboard';
+import { PageLoading } from '../PageLoading';
 import { useToast } from '../../contexts/ToastContext';
 
 export function SpoolBuddyLayout() {
@@ -223,10 +224,12 @@ export function SpoolBuddyLayout() {
         />
 
         <main className="flex-1 overflow-y-auto">
-          <Outlet context={{
-            selectedPrinterId, setSelectedPrinterId, sbState: sbStateForUi, setAlert,
-            displayBrightness, setDisplayBrightness,
-          }} />
+          <Suspense fallback={<PageLoading />}>
+            <Outlet context={{
+              selectedPrinterId, setSelectedPrinterId, sbState: sbStateForUi, setAlert,
+              displayBrightness, setDisplayBrightness,
+            }} />
+          </Suspense>
         </main>
 
         {!keyboardVisible && <SpoolBuddyStatusBar alert={alert} />}

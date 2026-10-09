@@ -62,7 +62,6 @@ from backend.app.api.routes.library import (
     _mtime_to_datetime,
     _resolve_source_disk_path,
     _resolve_upload_destination,
-    _restricted_folder_delete_blocker,
     _stored_file_path,
     _unique_zip_name,
     _zip_entry_name,
@@ -87,6 +86,7 @@ from backend.app.models.library import LibraryFile, LibraryFolder
 from backend.app.models.user import User
 from backend.app.schemas.settings import WEBDAV_MODES
 from backend.app.services import library_storage
+from backend.app.services.library_folder_access import folder_delete_blocker, load_folder_index
 from backend.app.utils.filename import InvalidFilenameError, validate_print_filename
 from backend.app.utils.safe_path import safe_join_under
 
@@ -1439,7 +1439,9 @@ async def _delete_collection(db: AsyncSession, target: _Target, principal: _Prin
     can_delete_all = principal.user.has_permission(Permission.LIBRARY_DELETE_ALL.value)
     if not can_delete_all:
         _require_permission(principal.user, Permission.LIBRARY_DELETE_OWN)
-        blocker = await _restricted_folder_delete_blocker(db, folder)
+        # The same rule the File Manager applies (#3201): own folders with only
+        # own content, or an ownerless folder that is truly empty.
+        blocker = folder_delete_blocker(await load_folder_index(db), folder, principal.user)
         if blocker:
             raise _forbidden(blocker)
 
@@ -1484,7 +1486,14 @@ async def webdav_mkcol(
     parent = _write_folder(target.parent)
     _refuse_readonly(parent)
 
-    folder = LibraryFolder(name=target.name, parent_id=parent.id if parent is not None else None)
+    # Owned by whoever made it, private to them unless an admin shares it —
+    # the same as a folder made in the File Manager (#3201).
+    folder = LibraryFolder(
+        name=target.name,
+        parent_id=parent.id if parent is not None else None,
+        created_by_id=principal.user.id,
+        shared=principal.user.id is None,
+    )
     # With the library living in a directory tree the share IS the library, so a
     # MKCOL at its root makes a real directory too — and an existing directory
     # with no row is adopted, which is how a folder made in Explorer first gets

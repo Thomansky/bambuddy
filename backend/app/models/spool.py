@@ -91,6 +91,13 @@ class Spool(Base):
     variant_id: Mapped[int | None] = mapped_column(Integer, index=True)
 
     last_used: Mapped[datetime | None] = mapped_column(DateTime)  # Last time this spool was used in a print
+    # Last drying (#2863): stamped when an AMS drying cycle that held this spool
+    # ends having run at least half its length, or set by hand in the spool
+    # form for an external dryer. Temperature and hours are only known for
+    # cycles Bambuddy watched or started, and a hand-set date clears both.
+    last_dried_at: Mapped[datetime | None] = mapped_column(DateTime)
+    last_dried_temp: Mapped[int | None] = mapped_column(Integer)  # Target °C
+    last_dried_hours: Mapped[float | None] = mapped_column(Float)  # Time actually spent drying
     encode_time: Mapped[datetime | None] = mapped_column(DateTime)  # When spool was encoded/written to tag
     tag_uid: Mapped[str | None] = mapped_column(String(32))  # RFID tag UID (up to 32 hex chars)
     tray_uuid: Mapped[str | None] = mapped_column(String(32))  # Bambu Lab spool UUID (32 hex chars)

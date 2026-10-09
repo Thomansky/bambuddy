@@ -93,7 +93,11 @@ from backend.app.services.printer_media import (
 from backend.app.services.slicer_filament_resolver import _ORCA_PROFILE_ID, lookup_orca_filament_id
 from backend.app.services.slot_nozzle import resolve_slot_nozzle
 from backend.app.utils.ams_humidity import ams_humidity_percent
-from backend.app.utils.filament_ids import filament_id_to_setting_id
+from backend.app.utils.filament_ids import (
+    GENERIC_FILAMENT_IDS,
+    GENERIC_IDS_REPLACED_ON_REUSE,
+    filament_id_to_setting_id,
+)
 from backend.app.utils.filament_types import is_material_name, printer_filament_type
 from backend.app.utils.fts_routing import slot_extruder
 from backend.app.utils.http import build_content_disposition, download_error_response, safe_download_filename
@@ -837,6 +841,7 @@ async def get_printer_status(
             for ext_id, slot in state.extruder_slots.items()
         },
         tray_now=tray_now,
+        tray_change_log=[[tray, layer] for tray, layer in state.tray_change_log],
         # Runout guidance (#2587): resolve the firmware's target/previous slot to a
         # global tray ID, but only while PAUSED — the moment the operator needs it.
         expected_tray=(
@@ -2837,42 +2842,15 @@ async def get_slot_spool_defaults(
     }
 
 
-# Generic Bambu filament ids by material, as the Configure dialog has always
-# picked them for a preset without an id of its own (#3216 moved the Orca case
-# here). Wider than configure_ams_slot's own table: Silk, High Speed, PCTG, PE
-# and PP have generics of their own.
-_ORCA_GENERIC_IDS = {
-    "PLA": "GFL99",
-    "PLA-CF": "GFL98",
-    "PLA SILK": "GFL96",
-    "PLA HIGH SPEED": "GFL95",
-    "PETG": "GFG99",
-    "PETG HF": "GFG96",
-    "PETG-CF": "GFG98",
-    "PCTG": "GFG97",
-    "ABS": "GFB99",
-    "ASA": "GFB98",
-    "PC": "GFC99",
-    "PA": "GFN99",
-    "PA-CF": "GFN98",
-    "NYLON": "GFN99",
-    "TPU": "GFU99",
-    "PVA": "GFS99",
-    "HIPS": "GFS98",
-    "PE": "GFP99",
-    "PP": "GFP97",
-}
-
-
 def _orca_generic_filament_id(material: str) -> str:
     """The generic for a material, tried as given, without a CF suffix, without
     a trailing "+", then by its first word -- the dialog's order."""
     material = (material or "").upper().strip()
     return (
-        _ORCA_GENERIC_IDS.get(material)
-        or _ORCA_GENERIC_IDS.get(re.sub(r"[-\s]?CF$", "", material))
-        or _ORCA_GENERIC_IDS.get(re.sub(r"\+$", "", material))
-        or _ORCA_GENERIC_IDS.get(re.split(r"[-\s]", material)[0])
+        GENERIC_FILAMENT_IDS.get(material)
+        or GENERIC_FILAMENT_IDS.get(re.sub(r"[-\s]?CF$", "", material))
+        or GENERIC_FILAMENT_IDS.get(re.sub(r"\+$", "", material))
+        or GENERIC_FILAMENT_IDS.get(re.split(r"[-\s]", material)[0])
         or ""
     )
 
@@ -3011,8 +2989,7 @@ async def configure_ams_slot(
         else:
             orca_fallback_reason = reason or "no_filament_id"
             # The generic the Configure dialog picked for an Orca profile before
-            # the lookup moved here -- its table, not the shorter one below, so
-            # PLA Silk, PCTG, PP and PE keep their own generics.
+            # the lookup moved here, with the dialog's own lookup order.
             tray_info_idx = _orca_generic_filament_id(requested_tray_type)
         logger.info(
             "[configure_ams_slot] Orca profile %r → tray_info_idx=%r (%s)",
@@ -3028,23 +3005,6 @@ async def configure_ams_slot(
     #   2. Reuse the slot's existing tray_info_idx if it's a specific
     #      (non-generic) preset for the same material.
     #   3. Fall back to a generic Bambu filament ID.
-    _GENERIC_FILAMENT_IDS = {
-        "PLA": "GFL99",
-        "PETG": "GFG99",
-        "ABS": "GFB99",
-        "ASA": "GFB98",
-        "PC": "GFC99",
-        "PA": "GFN99",
-        "NYLON": "GFN99",
-        "TPU": "GFU99",
-        "PVA": "GFS99",
-        "HIPS": "GFS98",
-        "PLA-CF": "GFL98",
-        "PETG-CF": "GFG98",
-        "PA-CF": "GFN98",
-        "PETG HF": "GFG96",
-    }
-    _GENERIC_ID_VALUES = set(_GENERIC_FILAMENT_IDS.values())
     effective_tray_info_idx = tray_info_idx
 
     if not tray_info_idx:
@@ -3083,7 +3043,7 @@ async def configure_ams_slot(
             # preset in front of the slicer. It gets the generic for its material.
             not orca_profile_id
             and current_tray_info_idx
-            and current_tray_info_idx not in _GENERIC_ID_VALUES
+            and current_tray_info_idx not in GENERIC_IDS_REPLACED_ON_REUSE
             and current_tray_type
             and current_tray_type.upper() == tray_type.upper()
         ):
@@ -3100,9 +3060,9 @@ async def configure_ams_slot(
             # to "PETG" would trade away for GFG99.
             material = requested_tray_type.upper().strip()
             generic = (
-                _GENERIC_FILAMENT_IDS.get(material)
-                or _GENERIC_FILAMENT_IDS.get(material.split("-")[0].split(" ")[0])
-                or _GENERIC_FILAMENT_IDS.get(tray_type.upper())
+                GENERIC_FILAMENT_IDS.get(material)
+                or GENERIC_FILAMENT_IDS.get(material.split("-")[0].split(" ")[0])
+                or GENERIC_FILAMENT_IDS.get(tray_type.upper())
                 or ""
             )
             if generic:

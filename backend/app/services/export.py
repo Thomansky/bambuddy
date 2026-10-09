@@ -59,6 +59,8 @@ class ExportService:
         "nozzle_temperature": "Nozzle Temp (°C)",
         "total_layers": "Total Layers",
         "cost": "Cost",
+        "energy_cost": "Energy Cost",
+        "wear_cost": "Wear Cost",
         "designer": "Designer",
         "tags": "Tags",
         "notes": "Notes",

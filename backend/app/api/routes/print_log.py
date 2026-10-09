@@ -47,7 +47,7 @@ _SORTABLE_COLUMNS = {
     "cost": PrintLogEntry.cost,
     "energy": PrintLogEntry.energy_kwh,
     "energy_cost": PrintLogEntry.energy_cost,
-    "depreciation_cost": PrintLogEntry.depreciation_cost,
+    "wear_cost": PrintLogEntry.wear_cost,
     # The run's own number, not the archive's: several runs share one
     # archive, so sorting or searching through the archive would file every
     # copy of a quantity order under the first copy's number (#2603).

@@ -10,6 +10,7 @@ import {
   DollarSign,
   Target,
   Zap,
+  Wrench,
   AlertTriangle,
   TrendingDown,
   FileSpreadsheet,
@@ -22,7 +23,6 @@ import {
   ChevronDown,
   Users,
   BarChart3,
-  Hourglass,
 } from 'lucide-react';
 import {
   BarChart,
@@ -135,7 +135,7 @@ function QuickStatsWidget({
     total_cost: number;
     total_energy_kwh: number;
     total_energy_cost: number;
-    total_depreciation_cost?: number;
+    total_wear_cost?: number;
     energy_data_warming_up?: boolean;
   } | undefined;
   currency: string;
@@ -167,21 +167,20 @@ function QuickStatsWidget({
       warning: warmingUp,
       tooltip: warmingUpTooltip,
     },
+    // Only once a printer has a wear cost set (#694), so installs without one
+    // don't get a tile that always reads zero.
+    ...((stats?.total_wear_cost ?? 0) > 0
+      ? [{
+          icon: Wrench,
+          color: 'text-slate-500 dark:text-slate-300',
+          label: t('stats.wearCost'),
+          value: `${currency} ${stats?.total_wear_cost?.toFixed(2) ?? '0.00'}`,
+          money: true,
+          warning: false,
+          tooltip: undefined,
+        }]
+      : []),
   ];
-  // Printer wear (#694) is opt-in per printer; a farm with no prices set has
-  // nothing to show here, so the tile only appears once something accrued.
-  const wear = stats?.total_depreciation_cost ?? 0;
-  if (wear > 0) {
-    items.push({
-      icon: Hourglass,
-      color: 'text-purple-600 dark:text-purple-400',
-      label: t('stats.depreciationCost'),
-      value: `${currency} ${wear.toFixed(2)}`,
-      money: true,
-      warning: false,
-      tooltip: undefined,
-    });
-  }
 
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
@@ -916,9 +915,9 @@ function RecordsWidget({ archives, currency }: { archives: ArchiveSlim[]; curren
       });
     }
 
-    // Filament + measured energy (#1432) + printer wear (#694); prints without
-    // a smart plug or a priced printer have those null and compete on the rest.
-    const costliest = findMax(a => (a.cost ?? 0) + (a.energy_cost ?? 0) + (a.depreciation_cost ?? 0));
+    // Filament + measured energy (#1432) + printer wear (#694); a cost that
+    // wasn't recorded is null and simply doesn't add.
+    const costliest = findMax(a => (a.cost ?? 0) + (a.energy_cost ?? 0) + (a.wear_cost ?? 0));
     if (costliest.archive) {
       result.push({
         icon: DollarSign, iconColor: 'text-green-600 dark:text-green-400', label: t('stats.mostExpensivePrint'),

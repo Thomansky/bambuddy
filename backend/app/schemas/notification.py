@@ -20,6 +20,8 @@ class ProviderType(StrEnum):
     WEBHOOK = "webhook"
     HOMEASSISTANT = "homeassistant"
     BARK = "bark"
+    GOTIFY = "gotify"
+    NOTIFY = "notify"
 
 
 class NotificationProviderBase(BaseModel):
@@ -380,6 +382,21 @@ class NtfyConfig(BaseModel):
             "name ('print_failed'); both are accepted. Values are ntfy priorities 1-5 "
             "(1=min, 2=low, 3=default, 4=high, 5=urgent). Events without an entry use "
             "ntfy's server-side default."
+        ),
+    )
+
+
+class GotifyConfig(BaseModel):
+    """Gotify configuration (#2743)."""
+
+    server: str = Field(..., description="Gotify server URL")
+    app_token: str = Field(..., description="Token of the Gotify application to post as")
+    event_priorities: dict[str, int] | None = Field(
+        default=None,
+        description=(
+            "Per-event priority override, keyed like NtfyConfig.event_priorities. Values are "
+            "levels 1-5 (min, low, default, high, urgent), sent to Gotify as 0, 2, 5, 8 and 10. "
+            "Events without an entry are sent at 5."
         ),
     )
 

@@ -82,7 +82,9 @@ function spoolGroupKey(s: InventorySpool): string {
   // Include extra_colors + effect_type so the "Group similar" toggle does
   // not collapse two spools that share the base colour but differ on
   // gradient stops or visual effect (#1154).
-  return `${s.material}|${s.subtype || ''}|${s.brand || ''}|${s.color_name || ''}|${s.rgba || ''}|${s.extra_colors || ''}|${s.effect_type || ''}|${s.label_weight}`;
+  // last_dried_at too: a dried spool is not interchangeable with an undried
+  // one, and folding it into a group would hide the date (#2863).
+  return `${s.material}|${s.subtype || ''}|${s.brand || ''}|${s.color_name || ''}|${s.rgba || ''}|${s.extra_colors || ''}|${s.effect_type || ''}|${s.label_weight}|${s.last_dried_at || ''}`;
 }
 
 // Column definitions for the inventory table
@@ -117,6 +119,7 @@ const DEFAULT_COLUMNS: ColumnConfig[] = [
   { id: 'storage_location', label: 'Storage Location', visible: false },
   { id: 'temperature', label: 'Temperature', visible: false },
   { id: 'humidity', label: 'Humidity', visible: false },
+  { id: 'last_dried', label: 'Last Dried', visible: true },
   { id: 'battery', label: 'Battery', visible: false },
   { id: 'label_weight', label: 'Label', visible: true },
   { id: 'net', label: 'Net', visible: true },
@@ -198,6 +201,15 @@ const MATERIAL_COLORS: Record<string, string> = {
 
 type TFn = (key: string, opts?: Record<string, unknown>) => string;
 
+// "55°C · 8h" for the last drying (#2863); empty when neither is known, which
+// is the case for a date set by hand or a run Bambuddy did not start or watch.
+function formatLastDriedDetails(spool: InventorySpool): string {
+  const parts: string[] = [];
+  if (spool.last_dried_temp != null) parts.push(`${spool.last_dried_temp}°C`);
+  if (spool.last_dried_hours != null) parts.push(`${Number(spool.last_dried_hours.toFixed(1))}h`);
+  return parts.join(' · ');
+}
+
 function formatInventoryDate(dateStr: string | null, dateFormat: DateFormat = 'system'): string {
   if (!dateStr) return '-';
   const date = parseUTCDate(dateStr);
@@ -250,6 +262,7 @@ const columnHeaders: Record<string, (t: TFn) => string> = {
   storage_location: (t) => t('inventory.storageLocation'),
   temperature: (t) => t('inventory.temperature'),
   humidity: (t) => t('inventory.humidity'),
+  last_dried: (t) => t('inventory.lastDried'),
   battery: (t) => t('inventory.battery'),
   label_weight: (t) => t('inventory.labelWeight'),
   net: (t) => t('inventory.net'),
@@ -287,6 +300,16 @@ const columnCells: Record<string, (ctx: CellCtx) => ReactNode> = {
   last_used_time: ({ spool, dateFormat }) => (
     <span className="text-sm text-bambu-gray">{spool.last_used ? formatInventoryDate(spool.last_used, dateFormat) : 'Never'}</span>
   ),
+  last_dried: ({ spool, dateFormat }) => {
+    if (!spool.last_dried_at) return <span className="text-sm text-bambu-gray">-</span>;
+    const details = formatLastDriedDetails(spool);
+    return (
+      <div className="text-sm text-bambu-gray">
+        <div>{formatInventoryDate(spool.last_dried_at, dateFormat)}</div>
+        {details && <div className="text-xs text-bambu-gray/60">{details}</div>}
+      </div>
+    );
+  },
   rgba: ({ spool }) => (
     <div className="flex items-center justify-center">
       <FilamentSwatch
@@ -581,6 +604,7 @@ const columnSortValues: Record<
   added_time: (s) => s.created_at || '',
   encode_time: (s) => s.encode_time || '',
   last_used_time: (s) => s.last_used || '',
+  last_dried: (s) => s.last_dried_at || '',
   material: (s) => (s.material || '').toLowerCase(),
   subtype: (s) => (s.subtype || '').toLowerCase(),
   color_name: (s) => (s.color_name || '').toLowerCase(),
@@ -2639,6 +2663,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
                                 locationSensorAboveColor={locationSensorAboveColor}
                                 locationSensorBelowColor={locationSensorBelowColor}
                                 locationSensorOptimalColor={locationSensorOptimalColor}
+                                dateFormat={dateFormat}
                               />
                             );
                           })}
@@ -2665,6 +2690,7 @@ function InventoryPage({ spoolmanMode = false, spoolmanModeReady = true }: { spo
                     locationSensorAboveColor={locationSensorAboveColor}
                     locationSensorBelowColor={locationSensorBelowColor}
                     locationSensorOptimalColor={locationSensorOptimalColor}
+                    dateFormat={dateFormat}
                   />
                 );
               })}
@@ -3184,6 +3210,7 @@ function PaginationBar({
 function SpoolCard({
   spool, remaining, pct, onClick, onPrintLabel, onCopy, onReorder, t,
   colorizeLocationSensors, locationSensorAboveColor, locationSensorBelowColor, locationSensorOptimalColor,
+  dateFormat,
 }: {
   spool: InventorySpool;
   remaining: number;
@@ -3198,6 +3225,7 @@ function SpoolCard({
   locationSensorAboveColor: LocationSensorAlertColor;
   locationSensorBelowColor: LocationSensorAlertColor;
   locationSensorOptimalColor: LocationSensorAlertColor;
+  dateFormat: DateFormat;
 }) {
   const bannerStyle = buildFilamentBackground({
     rgba: spool.rgba,
@@ -3278,6 +3306,14 @@ function SpoolCard({
           </div>
         </div>
         <div className="grid grid-cols-2 gap-2 text-xs">
+          {spool.last_dried_at && (
+            <div className="col-span-2">
+              <span className="text-bambu-gray/60">{t('inventory.lastDried')}: </span>
+              <span className="text-bambu-gray">
+                {[formatInventoryDate(spool.last_dried_at, dateFormat), formatLastDriedDetails(spool)].filter(Boolean).join(' · ')}
+              </span>
+            </div>
+          )}
           <div>
             <span className="text-bambu-gray/60">{t('inventory.labelWeight')}: </span>
             <span className="text-bambu-gray">{formatWeight(spool.label_weight)}</span>

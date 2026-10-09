@@ -93,10 +93,14 @@ from backend.app.api.routes.maintenance import _get_printer_maintenance_internal
 from backend.app.api.routes.support import init_debug_logging
 from backend.app.core.config import APP_VERSION, settings as app_settings
 from backend.app.core.database import async_session, engine, init_db
+from backend.app.core.static_assets import AssetStaticFiles
 from backend.app.core.tasks import spawn_background_task
 from backend.app.core.websocket import ws_manager
 from backend.app.services import kprofile_drift, maintenance_actions, print_dispatch_context, slot_unlink_grace
 from backend.app.services.archive import ArchiveService, peek_plate_index_in_3mf, swap_plate_suffix
+from backend.app.services.archive_cost_estimate import (
+    schedule_archive_cost_estimate as _schedule_archive_cost_estimate,
+)
 from backend.app.services.archive_purge import archive_purge_service
 from backend.app.services.bambu_ftp import (
     FileNotOnPrinterError,
@@ -122,6 +126,8 @@ from backend.app.services.location_ha_sensor_manager import location_ha_sensor_m
 from backend.app.services.mqtt_relay import mqtt_relay
 from backend.app.services.mqtt_smart_plug import mqtt_smart_plug_service
 from backend.app.services.notification_service import notification_service
+from backend.app.services.notify_live_activities import notify_live_activities
+from backend.app.services.notify_widgets import notify_widgets
 from backend.app.services.obico_detection import obico_detection_service
 from backend.app.services.print_cost_estimate import plate_scoped_run_estimate as _plate_scoped_run_estimate
 from backend.app.services.print_scheduler import RFID_AFTER_PRINT_MAX_WAIT, scheduler as print_scheduler
@@ -369,6 +375,13 @@ if app_settings.log_to_file:
     # underlying transaction leak; this filter only suppresses the residual
     # log records that pre-existing pools still emit during their cleanup.
     logging.getLogger("sqlalchemy.pool").addFilter(CancelledPoolNoiseFilter())
+
+# Query-string tokens out of uvicorn's request and WebSocket lines, on every
+# handler (console included), whether or not file logging is on.
+from backend.app.core.logging_filters import QueryTokenRedactFilter  # noqa: E402
+
+for _uvicorn_logger in ("uvicorn.access", "uvicorn.error"):
+    logging.getLogger(_uvicorn_logger).addFilter(QueryTokenRedactFilter())
 
 # Reduce noise from third-party libraries in production
 if not app_settings.debug:
@@ -1018,6 +1031,18 @@ async def _record_energy_start(archive, printer_id: int, db, *, context: str = "
             return False
         plug, energy = selected
         archive.energy_start_kwh = float(energy["total"])
+        # With the plug's snapshots, what lets the cost follow the price over
+        # the print rather than take the price at its end (#1251). A price that
+        # can't be had must not cost the print its energy reading.
+        archive.energy_start_at = utcnow_naive()
+        archive.energy_start_plug_id = plug.id
+        try:
+            from backend.app.services.energy_price import current_price
+
+            archive.energy_start_price = await current_price(db)
+        except Exception as e:
+            _logger.warning("[ENERGY] Could not read the electricity price for archive %s: %s", archive.id, e)
+            archive.energy_start_price = None
         await db.commit()
         _logger.info(
             "[ENERGY] Recorded starting energy%s for archive %s from plug '%s': %s kWh",
@@ -1615,6 +1640,10 @@ def _progress_milestone_to_notify(printer_id: int, state: PrinterState) -> int |
 
 async def on_printer_status_change(printer_id: int, state: PrinterState):
     """Handle printer status changes - broadcast via WebSocket."""
+    try:
+        notify_live_activities.observe(printer_id, state)
+    except Exception:
+        logging.getLogger(__name__).exception("Notify Live Activity status hook failed for printer %s", printer_id)
     # Connected-edge reconciliation (#1542 follow-up). When the printer
     # transitions disconnected → connected — which covers both Bambuddy
     # startup (no prior connection) and a mid-session MQTT reconnect — fire
@@ -4070,6 +4099,11 @@ async def on_print_start(printer_id: int, data: dict):
 
     logger.info("[CALLBACK] on_print_start called for printer %s, data keys: %s", printer_id, list(data.keys()))
 
+    try:
+        notify_live_activities.print_started(printer_id, printer_manager.get_status(printer_id), data)
+    except Exception:
+        logger.exception("Notify Live Activity start hook failed for printer %s", printer_id)
+
     # Clear any stale user-stopped flag from previous print cycles
     _user_stopped_printers.discard(printer_id)
     # A new print starts its milestones from zero (#3211). The status path only
@@ -4441,10 +4475,32 @@ async def on_print_start(printer_id: int, data: dict):
                 # it describes the printer before the previous run. The capture
                 # below overwrites it, but clear it here too so an early failure
                 # can't leave the scan diffing against the wrong snapshot.
+                #
+                # Unlinked only when it is the same plate printing again. Every
+                # plate of a Send All shares this archive, and the video on it
+                # can be the only copy of another plate's run -- the printer's
+                # was deleted once it attached (#3275). That one is left in the
+                # archive directory, which goes with the archive. A video whose
+                # plate is not on record (attached by hand, or before the
+                # column existed) is kept too: nothing tells it apart from
+                # another plate's, and keeping costs one file where deleting
+                # can cost the only copy.
                 archive.timelapse_baseline = None
                 stale_timelapse_relpath = archive.timelapse_path
+                stale_timelapse_plate_id = archive.timelapse_plate_id
+                starting_plate_id = _print_plate_ids.get(expected_archive_id)
                 if stale_timelapse_relpath:
                     archive.timelapse_path = None
+                    archive.timelapse_plate_id = None
+                if stale_timelapse_relpath and stale_timelapse_plate_id != starting_plate_id:
+                    logger.info(
+                        "Kept timelapse %s of plate %s on archive %s: plate %s is starting",
+                        stale_timelapse_relpath,
+                        stale_timelapse_plate_id,
+                        expected_archive_id,
+                        starting_plate_id,
+                    )
+                elif stale_timelapse_relpath:
                     try:
                         stale_path = app_settings.base_dir / stale_timelapse_relpath
                         if stale_path.is_file():
@@ -4574,6 +4630,16 @@ async def on_print_start(printer_id: int, data: dict):
                 except Exception as e:
                     logger.warning("[SPOOLMAN] Failed to store tracking data: %s", e)
 
+                # Price the print from its spools now rather than only at completion (#3261)
+                _schedule_archive_cost_estimate(
+                    printer_id,
+                    archive.id,
+                    printer_manager,
+                    ams_mapping=_get_start_ams_mapping(data, archive.id),
+                    plate_id=_get_start_plate_id(archive.id),
+                    session_factory=async_session,
+                )
+
                 # Capture timelapse file baseline for snapshot-diff on completion
                 # (mirrors the new-archive branch). Queue / VP-dispatched prints
                 # hit this branch — without the baseline the completion-time scan
@@ -4612,6 +4678,12 @@ async def on_print_start(printer_id: int, data: dict):
         # subtask_id is missing ("0" / local / non-cloud prints).
         if existing_archive is None:
             check_name = subtask_name or filename.split("/")[-1].replace(".gcode", "").replace(".3mf", "")
+            archive_filenames = [f"{check_name}.3mf", f"{check_name}.gcode.3mf"]
+            # A print started from the printer's screen names its file in full,
+            # so the forms above double its extension. The file itself is the
+            # one exact match, and nothing looser is added (#3009).
+            if _subtask_is_the_file(subtask_name, filename):
+                archive_filenames.append(subtask_name)
             existing = await db.execute(
                 select(PrintArchive)
                 .where(PrintArchive.printer_id == printer_id)
@@ -4619,12 +4691,7 @@ async def on_print_start(printer_id: int, data: dict):
                 .where(
                     or_(
                         PrintArchive.print_name == check_name,
-                        PrintArchive.filename.in_(
-                            [
-                                f"{check_name}.3mf",
-                                f"{check_name}.gcode.3mf",
-                            ]
-                        ),
+                        PrintArchive.filename.in_(archive_filenames),
                     )
                 )
                 .order_by(PrintArchive.created_at.desc())
@@ -4725,9 +4792,15 @@ async def on_print_start(printer_id: int, data: dict):
         # Bambu printers typically store files as "Name.gcode.3mf"
         # The subtask_name is usually the best source for the filename
         if subtask_name:
-            # Try common Bambu naming patterns
-            possible_names.append(f"{subtask_name}.gcode.3mf")
-            possible_names.append(f"{subtask_name}.3mf")
+            if _subtask_is_the_file(subtask_name, filename):
+                # A print started from the printer's own screen reports the
+                # file's full name, extension included. That is the file, so
+                # no extension is appended to it (#3009).
+                possible_names.append(subtask_name)
+            else:
+                # Try common Bambu naming patterns
+                possible_names.append(f"{subtask_name}.gcode.3mf")
+                possible_names.append(f"{subtask_name}.3mf")
 
         # Try original filename with .3mf extension
         if filename:
@@ -5484,6 +5557,16 @@ async def on_print_start(printer_id: int, data: dict):
                 except Exception as e:
                     logger.warning("[SPOOLMAN] Failed to store tracking data: %s", e)
 
+                # Price the print from its spools now rather than only at completion (#3261)
+                _schedule_archive_cost_estimate(
+                    printer_id,
+                    archive.id,
+                    printer_manager,
+                    ams_mapping=_get_start_ams_mapping(data, archive.id),
+                    plate_id=_get_start_plate_id(archive.id),
+                    session_factory=async_session,
+                )
+
                 # Capture timelapse file baseline for snapshot-diff on completion
                 await _capture_timelapse_baseline_at_start(printer, printer_id, logger, archive_id=archive.id)
         finally:
@@ -5696,7 +5779,9 @@ async def _capture_timelapse_baseline_at_start(
         logger.warning("[TIMELAPSE] Failed to persist baseline for archive %s: %s", archive_id, e)
 
 
-async def _scan_for_timelapse_with_retries(archive_id: int, baseline_names: set[str] | None = None):
+async def _scan_for_timelapse_with_retries(
+    archive_id: int, baseline_names: set[str] | None = None, *, plate_id: int | None = None
+):
     """Poll the printer for this print's timelapse and attach it.
 
     Snapshot diff, not timestamp matching: a printer in LAN-only mode cannot
@@ -5854,6 +5939,7 @@ async def _scan_for_timelapse_with_retries(archive_id: int, baseline_names: set[
                     logger,
                     quiet=not changed,
                     require_unambiguous=not baseline_trusted,
+                    plate_id=plate_id,
                 )
                 if attached:
                     return
@@ -5888,6 +5974,7 @@ async def _attach_first_unclaimed_timelapse(
     *,
     quiet: bool = False,
     require_unambiguous: bool = False,
+    plate_id: int | None = None,
 ) -> bool:
     """Download and attach the one video that belongs to this print.
 
@@ -5992,7 +6079,7 @@ async def _attach_first_unclaimed_timelapse(
 
     # Write phase: attach in a fresh short-lived session.
     async with async_session() as db:
-        success = await ArchiveService(db).attach_timelapse(archive_id, timelapse_data, file_name)
+        success = await ArchiveService(db).attach_timelapse(archive_id, timelapse_data, file_name, plate_id=plate_id)
     if not success:
         logger.warning("[TIMELAPSE] Failed to attach timelapse to archive %s", archive_id)
         return False
@@ -6395,6 +6482,46 @@ async def prime_kprofile_table(printer_id: int) -> int:
     return primed
 
 
+def _sd_files_in_use(state) -> set[str]:
+    """Names of the SD-card files the printer may be printing right now (#3009).
+
+    The post-print cleanup works out what to delete from the finished archive,
+    not from the printer. When reconciliation closes an old archive because the
+    printer has moved on to a new job, and that job is the same file reprinted
+    from the printer's screen, the cleanup would delete the file mid-print.
+
+    Empty unless the printer is busy: on an ordinary completion the state is
+    FINISH or FAILED and nothing is held back. ``gcode_file`` arrives as a bare
+    name, a path or a URL depending on firmware, and some report only the
+    plate's G-code, so the job name is matched as well, in the same spellings
+    the cleanup tries. Names are lower-cased; the card's FAT filesystem
+    ignores case.
+    """
+
+    def _text(value) -> str:
+        return value.strip() if isinstance(value, str) else ""
+
+    if state is None:
+        return set()
+    current_state = _text(getattr(state, "state", None)).upper()
+    if current_state in ("", "UNKNOWN", "IDLE", "FINISH", "FAILED"):
+        return set()
+    in_use: set[str] = set()
+    gcode_file = _text(getattr(state, "gcode_file", None))
+    if gcode_file:
+        # Drop a scheme by hand: urlparse would cut a name at "#" or "?",
+        # both legal in a file name, and raises on some inputs.
+        name = PurePosixPath(gcode_file.split("://", 1)[-1]).name
+        if name:
+            in_use.add(name.lower())
+    subtask_name = _text(getattr(state, "subtask_name", None))
+    if subtask_name:
+        for name in (subtask_name, subtask_name.replace(" ", "_")):
+            for ext in (".3mf", ".gcode"):
+                in_use.add(f"{name}{ext}".lower())
+    return in_use
+
+
 async def reconcile_stale_active_prints(printer_id: int) -> int:
     """Synthesise ``on_print_complete`` for archives whose print can't be
     running on the printer anymore.
@@ -6510,30 +6637,99 @@ _PLATE_RESTORE_SETTLE_SECONDS = 12.0
 _FINISH_PHOTO_PRODUCER_WAIT_SECONDS = _PLATE_RESTORE_SETTLE_SECONDS + 23.0
 
 
-# How many of a printer's newest archives the plate restore looks through for
-# the one the finished print is named after. The finished print is normally
-# the newest; the margin covers rows written by prints on the same printer in
-# the meantime.
-_PLATE_RESTORE_NAME_CANDIDATES = 25
+def _completion_print_keys(printer_id: int, filename: str, subtask_name: str) -> list[tuple[int, str]]:
+    """The ``_active_prints`` keys a finished print may be registered under.
 
-
-def _archive_is_named(archive, subtask_name: str) -> bool:
-    """Whether *archive* is the print the printer reported as *subtask_name*.
-
-    Equality after the printer's own rewrite of the name (``_normalise_subtask_name``),
-    against either the archive's display name or the name its file was
-    dispatched under. Deliberately not the truncation-tolerant match the queue
-    uses: this answer becomes the target of a Z move, and a cut-short name is
-    ambiguity the restore refuses rather than resolves.
+    Matching how they were registered in on_print_start. Shared by
+    ``on_print_complete`` and the finish-photo plate restore (#3240), which has
+    to find the same binding.
     """
-    wanted = _normalise_subtask_name(subtask_name)
-    if not wanted:
-        return False
-    names = (archive.print_name or "", _subtask_name_from_filename(archive.filename or ""))
-    return any(name and _normalise_subtask_name(name) == wanted for name in names)
+    possible_keys = []
+
+    # Try subtask_name variations first (most reliable for matching)
+    if subtask_name:
+        possible_keys.append((printer_id, f"{subtask_name}.3mf"))
+        possible_keys.append((printer_id, f"{subtask_name}.gcode.3mf"))
+        possible_keys.append((printer_id, subtask_name))
+
+    # Try filename variations
+    if filename:
+        # Extract just the filename if it's a path
+        fname = filename.split("/")[-1] if "/" in filename else filename
+
+        if fname.endswith(".3mf"):
+            possible_keys.append((printer_id, fname))
+        elif fname.endswith(".gcode"):
+            base_name = fname.rsplit(".", 1)[0]
+            possible_keys.append((printer_id, f"{base_name}.gcode.3mf"))
+            possible_keys.append((printer_id, f"{base_name}.3mf"))
+            possible_keys.append((printer_id, fname))
+        else:
+            possible_keys.append((printer_id, f"{fname}.gcode.3mf"))
+            possible_keys.append((printer_id, f"{fname}.3mf"))
+            possible_keys.append((printer_id, fname))
+
+        # Also try full path versions
+        if filename.endswith(".3mf"):
+            possible_keys.append((printer_id, filename))
+        elif filename.endswith(".gcode"):
+            base_name = filename.rsplit(".", 1)[0]
+            possible_keys.append((printer_id, f"{base_name}.3mf"))
+            possible_keys.append((printer_id, filename))
+        else:
+            possible_keys.append((printer_id, f"{filename}.3mf"))
+            possible_keys.append((printer_id, filename))
+    return possible_keys
 
 
-async def _max_z_for_current_print(printer_id: int, data: dict, logger) -> float | None:
+def _archive_name_forms(archive) -> set[str]:
+    """The names an archive could be echoed back as, in normalised form (#3240).
+
+    Its print name, and its filename with and without the 3MF extension.
+    """
+    forms = set()
+    if archive.print_name:
+        forms.add(_normalise_subtask_name(archive.print_name))
+    if archive.filename:
+        forms.add(_normalise_subtask_name(archive.filename))
+        for suffix in (".gcode.3mf", ".3mf"):
+            if archive.filename.lower().endswith(suffix):
+                forms.add(_normalise_subtask_name(archive.filename[: -len(suffix)]))
+    forms.discard("")
+    return forms
+
+
+def _bound_print(printer_id: int, data: dict) -> tuple[int | None, int | None]:
+    """The archive and plate Bambuddy bound to the print ending on ``printer_id`` (#3240).
+
+    Read from ``_active_prints`` with the keys ``on_print_complete`` tries, and
+    from the plate recorded when the job was dispatched. Neither is touched:
+    ``on_print_complete`` pops both, which is why the finish-photo producer
+    calls this before its first await, while they are still there.
+
+    ``(None, None)`` for a print Bambuddy did not bind -- one it failed to
+    archive, or that it only knows by a name -- and on any error: the producer
+    calls this before the ``try`` that always releases the photo consumer, so
+    it must not raise.
+    """
+    try:
+        keys = _completion_print_keys(printer_id, str(data.get("filename") or ""), str(data.get("subtask_name") or ""))
+        archive_id = next((_active_prints[key] for key in keys if key in _active_prints), None)
+        if archive_id is None:
+            return None, None
+        return archive_id, _print_plate_ids.get(archive_id)
+    except Exception:
+        logging.getLogger(__name__).debug("Could not read the print binding for printer %s", printer_id, exc_info=True)
+        return None, None
+
+
+async def _max_z_for_current_print(
+    printer_id: int,
+    data: dict,
+    logger,
+    archive_id: int | None,
+    plate_id: int | None = None,
+) -> float | None:
     """Height of the print that just finished on ``printer_id``, or None (#2547).
 
     This number becomes the target of a real Z move, so every step here refuses
@@ -6541,22 +6737,32 @@ async def _max_z_for_current_print(printer_id: int, data: dict, logger) -> float
     failure that could drive the nozzle into the model: 20 mm carried onto a
     200 mm print would command the plate up through the part.
 
-    Two independent things therefore have to agree before a height is returned:
+    Three independent things therefore have to agree before a height is
+    returned:
 
-    1. **Identity.** The archive is matched by the finished print's own
-       ``subtask_name``, by equality rather than a ``LIKE``, so "Cube" can never
-       resolve to "Cube v2". Matching on "most recent archive for this printer"
-       is not good enough — ``on_print_complete`` pops the ``_active_prints``
-       binding concurrently with us, and a print Bambuddy failed to archive
-       would silently resolve to its predecessor.
-    2. **Corroboration.** The archive's layer count (parsed from the 3MF) has to
+    1. **Binding.** ``archive_id`` is the archive Bambuddy bound to this print
+       when it started (see ``_bound_print``), never one found by name. A name
+       is not an identity: every plate of a multi-plate file shares one, and a
+       reprint reuses its archive row, so the newest archive with the right
+       name can be another plate of the same file. Support bundles show the
+       old name lookup doing exactly that (archive 288 for a print bound to
+       169, 313 layers against 125), stopped only by the layer check below.
+       No binding, no move.
+    2. **Identity.** The bound archive's name still has to be the finished
+       print's ``subtask_name``, compared in ``_normalise_subtask_name`` form
+       because the printer echoes spaces as underscores (#3240). Exact: not a
+       substring, and not the completion check's tolerance for a truncated
+       echo.
+    3. **Corroboration.** The archive's layer count (parsed from the 3MF) has to
        match the layer count the printer itself reported over MQTT for the print
        that just ended. These come from genuinely different sources, so a
        mismatch means the row is not this print, whatever its name says.
 
-    ``completed`` is accepted alongside ``printing`` only because
+    ``plate_id`` is the plate the job was dispatched with; a reprint of one
+    plate of a multi-plate file reuses the archive row without updating its
+    ``plate_id``. ``completed`` is accepted alongside ``printing`` only because
     ``on_print_complete`` may already have flipped the status by the time we
-    run; the identity check above is what actually selects the row.
+    run.
     """
     subtask_name = (data.get("subtask_name") or "").strip()
     if not subtask_name:
@@ -6564,33 +6770,38 @@ async def _max_z_for_current_print(printer_id: int, data: dict, logger) -> float
         # "whatever ran last on this printer".
         logger.info("[PLATE-RESTORE] printer %s: print has no name to match on — skipping", printer_id)
         return None
+    if archive_id is None:
+        logger.info(
+            "[PLATE-RESTORE] printer %s: %r is not bound to an archive — skipping",
+            printer_id,
+            subtask_name,
+        )
+        return None
 
     try:
         from backend.app.models.archive import PrintArchive
         from backend.app.utils.threemf_tools import extract_max_z_height_from_3mf
 
         async with async_session() as db:
-            # The printer echoes the name with its spaces turned into
-            # underscores, so a SQL equality against the stored name never
-            # matched a file with a space in it. The recent rows for this
-            # printer are compared in Python by the rule the completion check
-            # uses -- still equality after that rewrite, never a substring.
             result = await db.execute(
-                select(PrintArchive)
-                .where(
+                select(PrintArchive).where(
+                    PrintArchive.id == archive_id,
                     PrintArchive.printer_id == printer_id,
                     PrintArchive.status.in_(("printing", "completed")),
                     PrintArchive.deleted_at.is_(None),
                 )
-                .order_by(PrintArchive.id.desc())
-                .limit(_PLATE_RESTORE_NAME_CANDIDATES)
             )
-            archive = next(
-                (row for row in result.scalars().all() if _archive_is_named(row, subtask_name)),
-                None,
-            )
+            archive = result.scalar_one_or_none()
         if archive is None or not archive.file_path:
-            logger.info("[PLATE-RESTORE] printer %s: no archive matches %r — skipping", printer_id, subtask_name)
+            logger.info("[PLATE-RESTORE] printer %s: archive %s has no usable file — skipping", printer_id, archive_id)
+            return None
+        if _normalise_subtask_name(subtask_name) not in _archive_name_forms(archive):
+            logger.warning(
+                "[PLATE-RESTORE] printer %s: archive %s is not named %r — refusing to move the plate",
+                printer_id,
+                archive_id,
+                subtask_name,
+            )
             return None
 
         client = printer_manager.get_client(printer_id)
@@ -6606,15 +6817,11 @@ async def _max_z_for_current_print(printer_id: int, data: dict, logger) -> float
             )
             return None
 
-        # Archives store their file relative to the data directory, which
-        # the settings call ``base_dir`` -- as every other reader of
-        # ``file_path`` resolves it. There is no ``data_dir`` attribute: the
-        # AttributeError was swallowed by the handler below, so every print
-        # with a relative path (all of them) lost its plate restore.
-        path = Path(archive.file_path)
-        if not path.is_absolute():
-            path = Path(app_settings.base_dir) / path
-        return await asyncio.to_thread(extract_max_z_height_from_3mf, path, archive.plate_id or 1)
+        # Stored relative to the data directory, like every other archive path
+        # (#3240: this read a `data_dir` setting that does not exist).
+        path = app_settings.base_dir / archive.file_path
+        plate = plate_id or archive.plate_id or 1
+        return await asyncio.to_thread(extract_max_z_height_from_3mf, path, plate)
     except Exception as e:
         logger.debug("[PLATE-RESTORE] printer %s: no usable print height: %s", printer_id, e)
         return None
@@ -6770,6 +6977,11 @@ async def on_finish_photo_moment(printer_id: int, data: dict):
     producer_done = asyncio.Event()
     _stage22_finish_in_flight[printer_id] = producer_done
 
+    # #3240: also before the first await. On the FINISH-state path
+    # `on_print_complete` is dispatched right behind us and pops both the
+    # print's archive binding and its plate; read here, they are still there.
+    bound_archive_id, bound_plate_id = _bound_print(printer_id, data)
+
     # #2547: set once the plate has actually been raised, and read by the
     # `finally` below. Declared out here so a failure anywhere after the move —
     # a camera timeout, a DB error — still lowers the plate again.
@@ -6849,7 +7061,7 @@ async def on_finish_photo_moment(printer_id: int, data: dict):
             and restore_plate_enabled
             and not print_dispatch_context.end_gcode_injected(printer_id)
         ):
-            wants_restore = await _max_z_for_current_print(printer_id, data, logger)
+            wants_restore = await _max_z_for_current_print(printer_id, data, logger, bound_archive_id, bound_plate_id)
             if wants_restore is None:
                 logger.info(
                     "[PLATE-RESTORE] printer %s: print height unknown — capturing without restore",
@@ -6958,6 +7170,19 @@ def _subtask_name_from_filename(filename: str) -> str:
     return name
 
 
+def _subtask_is_the_file(subtask_name: str, filename: str) -> bool:
+    """Whether the subtask name is the printed 3MF's own file name.
+
+    A print started from the printer's screen reports the same full name, with
+    its extension, as both subtask and file (#3009). A dispatched print reports
+    a bare subtask name; one that merely ends in ".3mf" can be a model named
+    that, whose file is ``Foo.3mf.gcode.3mf``, so it does not count.
+    """
+    if not subtask_name or not subtask_name.lower().endswith(".3mf"):
+        return False
+    return PurePosixPath((filename or "").split("://", 1)[-1]).name == subtask_name
+
+
 # How the printer marks a subtask name it had to cut short. Observed on real
 # hardware at ~100 characters, but the cut-off is not a fixed character count
 # (a name with multibyte characters came back at 98), so match the marker
@@ -6978,13 +7203,9 @@ def _normalise_subtask_name(name: str) -> str:
     the completion check reads the same rule from the same place instead of
     growing its own, which is exactly how it came to disagree (#2829).
 
-    The substitution covers a space at either end too: a file saved as
-    ``Unterteil H2S mit Logo V24 .gcode.3mf`` is dispatched as
-    ``Unterteil H2S mit Logo V24 `` and echoed as
-    ``Unterteil_H2S_mit_Logo_V24_``. Stripping only whitespace left that
-    trailing underscore on one side and nothing on the other, so every such
-    print stranded its queue row until the stale-row sweep closed it. Edge
-    underscores are therefore dropped from both sides, after the substitution.
+    A space at either end is substituted too: ``Part .gcode.3mf`` is
+    dispatched as ``Part `` and echoed as ``Part_``. Underscores at the ends
+    are dropped after the substitution so both sides agree (#3241).
     """
     return name.strip().replace(" ", "_").strip("_").casefold()
 
@@ -7005,7 +7226,13 @@ def _subtask_names_match(expected: str, observed: str) -> bool:
     # echoes, and an archive whose own filename was recorded from a previous
     # truncated echo carries the marker too.
     for full, cut in ((expected_n, observed_n), (observed_n, expected_n)):
-        if cut.endswith(_SUBTASK_TRUNCATION_MARKER) and full.startswith(cut[: -len(_SUBTASK_TRUNCATION_MARKER)]):
+        if not cut.endswith(_SUBTASK_TRUNCATION_MARKER):
+            continue
+        # The full side has lost its edge underscores; a cut that lands right
+        # after one keeps it, so drop it here too (#3241). Nothing left before
+        # the marker is no evidence of anything, and must not match every name.
+        kept = cut[: -len(_SUBTASK_TRUNCATION_MARKER)].rstrip("_")
+        if kept and full.startswith(kept):
             return True
     return False
 
@@ -7091,6 +7318,121 @@ async def _recover_fallback_from_cache_before_eviction(printer_id: int, data: di
                 return
         except Exception as e:
             logger.debug("[RECOVER] Pre-eviction recovery for %s failed: %s", name, e)
+
+
+async def _cleanup_sd_card_after_print(
+    printer_id: int, subtask_name: str | None, archive_id: int | None, logger
+) -> None:
+    """Delete a finished print's file from the printer's SD card."""
+    # Cleanup: delete uploaded file from printer SD card to prevent phantom prints (Issue #374, #1542)
+    # The print scheduler uploads files to the SD card root (/). Some printers (e.g. P1S, A1)
+    # auto-start files found in root on power cycle, causing ghost prints.
+    # Must run before the archive_id early-return so it executes even when archiving is disabled.
+    try:
+        if subtask_name:
+            archive_filename: str | None = None
+            async with async_session() as db:
+                from backend.app.models.archive import PrintArchive
+                from backend.app.models.printer import Printer
+
+                result = await db.execute(select(Printer).where(Printer.id == printer_id))
+                printer = result.scalar_one_or_none()
+                if archive_id:
+                    archive_row = await db.execute(select(PrintArchive.filename).where(PrintArchive.id == archive_id))
+                    archive_filename = archive_row.scalar_one_or_none()
+
+            if printer:
+                from backend.app.services.bambu_ftp import DeleteResult, delete_file_async
+                from backend.app.utils.filename import derive_remote_filename
+
+                # Primary candidate: the exact path the dispatcher uploaded to
+                # (derived from archive.filename via the same rule as upload).
+                # Without it, a library row that ended up with a doubled
+                # .gcode.3mf (#1542) leaves the real file behind because the
+                # subtask_name + ext fallbacks below don't match what's on the
+                # SD card. Fallbacks remain for archive-less prints (subtask
+                # never resolved to an archive) and for older naming variants.
+                candidate_paths: list[str] = []
+                if archive_filename:
+                    candidate_paths.append(f"/{derive_remote_filename(archive_filename)}")
+                for ext in (".3mf", ".gcode"):
+                    fallback = f"/{subtask_name}{ext}"
+                    if fallback not in candidate_paths:
+                        candidate_paths.append(fallback)
+
+                # Three outcomes track across all candidates so the final log
+                # line reflects what actually happened. The A1 in #1721 always
+                # ends here with ``any_not_found=True`` and the others False
+                # — its firmware auto-cleans the SD card before our cleanup
+                # runs, every candidate FTP-DELE returns 550, and the old
+                # code burned 3 retries × 2 s × 3 candidates per print
+                # logging a misleading "may linger" WARNING on a successful
+                # print.
+                any_deleted = False
+                any_real_failure = False
+                any_not_found = False
+
+                files_in_use = _sd_files_in_use(printer_manager.get_status(printer_id))
+
+                for remote_path in candidate_paths:
+                    if PurePosixPath(remote_path).name.lower() in files_in_use:
+                        logger.info(
+                            "SD card cleanup: keeping %s on printer %s, which is printing it now",
+                            remote_path,
+                            printer.name,
+                        )
+                        continue
+                    # Retry only the FAILED case — 550 NOT_FOUND will never
+                    # recover by waiting, so a "file isn't here" answer
+                    # advances immediately to the next candidate without
+                    # consuming the retry budget.
+                    for attempt in range(1, 4):
+                        try:
+                            delete_result = await delete_file_async(
+                                printer.ip_address,
+                                printer.access_code,
+                                remote_path,
+                                printer_model=printer.model,
+                            )
+                        except Exception as e:
+                            delete_result = DeleteResult.FAILED
+                            logger.warning(
+                                "SD card cleanup attempt %d/3 raised for %s: %s",
+                                attempt,
+                                remote_path,
+                                e,
+                            )
+
+                        if delete_result == DeleteResult.DELETED:
+                            any_deleted = True
+                            logger.info("Deleted %s from printer %s SD card", remote_path, printer.name)
+                            break
+                        if delete_result == DeleteResult.NOT_FOUND:
+                            any_not_found = True
+                            break  # 550 will not recover; try next candidate
+                        # FAILED: real error — retry with backoff, then give up
+                        if attempt < 3:
+                            await asyncio.sleep(2)
+                        else:
+                            any_real_failure = True
+                            logger.warning(
+                                "SD card cleanup failed after 3 attempts for %s "
+                                "(network/auth/transient error — file may linger on SD card)",
+                                remote_path,
+                            )
+
+                if not any_deleted and not any_real_failure and any_not_found:
+                    # Every candidate said "not here." Either the printer
+                    # firmware swept the SD card itself (common on A1) or the
+                    # dispatcher's upload path doesn't match our candidate
+                    # rule. Either way: nothing to clean up, no warning.
+                    logger.debug(
+                        "SD card cleanup: nothing to delete on %s — every candidate returned 550 "
+                        "(printer likely self-cleaned)",
+                        printer.name,
+                    )
+    except Exception as e:
+        logger.warning("SD card file cleanup failed for printer %s: %s", printer_id, e)
 
 
 async def on_print_complete(printer_id: int, data: dict):
@@ -7220,6 +7562,10 @@ async def on_print_complete(printer_id: int, data: dict):
     # which auto-dispatched the next queued print onto a fouled bed two seconds
     # after a touchscreen-abort (#1171). Persisted to DB so the gate survives
     # Auto Off power cycles and Bambuddy restarts.
+    try:
+        notify_live_activities.print_finished(printer_id, data)
+    except Exception:
+        logger.exception("Notify Live Activity completion hook failed for printer %s", printer_id)
     _final_status = data.get("status", "completed")
     if _final_status in ("completed", "failed", "aborted", "cancelled"):
         printer_manager.set_awaiting_plate_clear(printer_id, True)
@@ -7249,41 +7595,7 @@ async def on_print_complete(printer_id: int, data: dict):
     logger.info("Print complete - filename: %s, subtask: %s, status: %s", filename, subtask_name, data.get("status"))
 
     # Build list of possible keys to try (matching how they were registered in on_print_start)
-    possible_keys = []
-
-    # Try subtask_name variations first (most reliable for matching)
-    if subtask_name:
-        possible_keys.append((printer_id, f"{subtask_name}.3mf"))
-        possible_keys.append((printer_id, f"{subtask_name}.gcode.3mf"))
-        possible_keys.append((printer_id, subtask_name))
-
-    # Try filename variations
-    if filename:
-        # Extract just the filename if it's a path
-        fname = filename.split("/")[-1] if "/" in filename else filename
-
-        if fname.endswith(".3mf"):
-            possible_keys.append((printer_id, fname))
-        elif fname.endswith(".gcode"):
-            base_name = fname.rsplit(".", 1)[0]
-            possible_keys.append((printer_id, f"{base_name}.gcode.3mf"))
-            possible_keys.append((printer_id, f"{base_name}.3mf"))
-            possible_keys.append((printer_id, fname))
-        else:
-            possible_keys.append((printer_id, f"{fname}.gcode.3mf"))
-            possible_keys.append((printer_id, f"{fname}.3mf"))
-            possible_keys.append((printer_id, fname))
-
-        # Also try full path versions
-        if filename.endswith(".3mf"):
-            possible_keys.append((printer_id, filename))
-        elif filename.endswith(".gcode"):
-            base_name = filename.rsplit(".", 1)[0]
-            possible_keys.append((printer_id, f"{base_name}.3mf"))
-            possible_keys.append((printer_id, filename))
-        else:
-            possible_keys.append((printer_id, f"{filename}.3mf"))
-            possible_keys.append((printer_id, filename))
+    possible_keys = _completion_print_keys(printer_id, filename, subtask_name)
 
     # Find the archive for this print
     logger.info("Looking for archive in _active_prints, keys to try: %s...", possible_keys[:5])
@@ -7298,6 +7610,10 @@ async def on_print_complete(printer_id: int, data: dict):
             for k in keys_to_remove:
                 _active_prints.pop(k, None)
             break
+    # The archive bound when the print started, before the name search below.
+    # Only this one may give the finish-photo plate restore a height (#3240):
+    # the search matches names by substring.
+    bound_archive_id = archive_id
 
     if not archive_id:
         # Try to find by filename or subtask_name if not tracked (for prints started before app)
@@ -7338,106 +7654,7 @@ async def on_print_complete(printer_id: int, data: dict):
                 if archive:
                     archive_id = archive.id
 
-    # Cleanup: delete uploaded file from printer SD card to prevent phantom prints (Issue #374, #1542)
-    # The print scheduler uploads files to the SD card root (/). Some printers (e.g. P1S, A1)
-    # auto-start files found in root on power cycle, causing ghost prints.
-    # Must run before the archive_id early-return so it executes even when archiving is disabled.
-    try:
-        if subtask_name:
-            archive_filename: str | None = None
-            async with async_session() as db:
-                from backend.app.models.archive import PrintArchive
-                from backend.app.models.printer import Printer
-
-                result = await db.execute(select(Printer).where(Printer.id == printer_id))
-                printer = result.scalar_one_or_none()
-                if archive_id:
-                    archive_row = await db.execute(select(PrintArchive.filename).where(PrintArchive.id == archive_id))
-                    archive_filename = archive_row.scalar_one_or_none()
-
-            if printer:
-                from backend.app.services.bambu_ftp import DeleteResult, delete_file_async
-                from backend.app.utils.filename import derive_remote_filename
-
-                # Primary candidate: the exact path the dispatcher uploaded to
-                # (derived from archive.filename via the same rule as upload).
-                # Without it, a library row that ended up with a doubled
-                # .gcode.3mf (#1542) leaves the real file behind because the
-                # subtask_name + ext fallbacks below don't match what's on the
-                # SD card. Fallbacks remain for archive-less prints (subtask
-                # never resolved to an archive) and for older naming variants.
-                candidate_paths: list[str] = []
-                if archive_filename:
-                    candidate_paths.append(f"/{derive_remote_filename(archive_filename)}")
-                for ext in (".3mf", ".gcode"):
-                    fallback = f"/{subtask_name}{ext}"
-                    if fallback not in candidate_paths:
-                        candidate_paths.append(fallback)
-
-                # Three outcomes track across all candidates so the final log
-                # line reflects what actually happened. The A1 in #1721 always
-                # ends here with ``any_not_found=True`` and the others False
-                # — its firmware auto-cleans the SD card before our cleanup
-                # runs, every candidate FTP-DELE returns 550, and the old
-                # code burned 3 retries × 2 s × 3 candidates per print
-                # logging a misleading "may linger" WARNING on a successful
-                # print.
-                any_deleted = False
-                any_real_failure = False
-                any_not_found = False
-
-                for remote_path in candidate_paths:
-                    # Retry only the FAILED case — 550 NOT_FOUND will never
-                    # recover by waiting, so a "file isn't here" answer
-                    # advances immediately to the next candidate without
-                    # consuming the retry budget.
-                    for attempt in range(1, 4):
-                        try:
-                            delete_result = await delete_file_async(
-                                printer.ip_address,
-                                printer.access_code,
-                                remote_path,
-                                printer_model=printer.model,
-                            )
-                        except Exception as e:
-                            delete_result = DeleteResult.FAILED
-                            logger.warning(
-                                "SD card cleanup attempt %d/3 raised for %s: %s",
-                                attempt,
-                                remote_path,
-                                e,
-                            )
-
-                        if delete_result == DeleteResult.DELETED:
-                            any_deleted = True
-                            logger.info("Deleted %s from printer %s SD card", remote_path, printer.name)
-                            break
-                        if delete_result == DeleteResult.NOT_FOUND:
-                            any_not_found = True
-                            break  # 550 will not recover; try next candidate
-                        # FAILED: real error — retry with backoff, then give up
-                        if attempt < 3:
-                            await asyncio.sleep(2)
-                        else:
-                            any_real_failure = True
-                            logger.warning(
-                                "SD card cleanup failed after 3 attempts for %s "
-                                "(network/auth/transient error — file may linger on SD card)",
-                                remote_path,
-                            )
-
-                if not any_deleted and not any_real_failure and any_not_found:
-                    # Every candidate said "not here." Either the printer
-                    # firmware swept the SD card itself (common on A1) or the
-                    # dispatcher's upload path doesn't match our candidate
-                    # rule. Either way: nothing to clean up, no warning.
-                    logger.debug(
-                        "SD card cleanup: nothing to delete on %s — every candidate returned 550 "
-                        "(printer likely self-cleaned)",
-                        printer.name,
-                    )
-    except Exception as e:
-        logger.warning("SD card file cleanup failed for printer %s: %s", printer_id, e)
+    await _cleanup_sd_card_after_print(printer_id, subtask_name, archive_id, logger)
 
     log_timing("SD card cleanup")
 
@@ -7975,8 +8192,7 @@ async def on_print_complete(printer_id: int, data: dict):
     try:
         async with async_session() as db:
             from backend.app.models.archive import PrintArchive
-            from backend.app.services.depreciation import snapshot_run_depreciation
-            from backend.app.services.print_log import run_duration_seconds, write_log_entry
+            from backend.app.services.print_log import record_archive_wear, write_log_entry
 
             archive = await db.get(PrintArchive, archive_id)
             if archive:
@@ -8025,18 +8241,10 @@ async def on_print_complete(printer_id: int, data: dict):
                 if _run_cost is None and _run_status == "completed":
                     _run_cost = _est_cost
 
-                # Printer wear for THIS run (#694): measured duration × the
-                # printer's hourly rate as configured right now. Snapshot onto
-                # the archive on its first run only, like cost / energy (#1378).
-                _reconciled = bool(data.get("_reconciled"))
-                _depreciation_cost = await snapshot_run_depreciation(
-                    db,
-                    archive,
-                    printer_id,
-                    run_duration_seconds(archive.started_at, archive.completed_at, reconciled=_reconciled),
-                )
+                from backend.app.models.printer import Printer as _Printer
 
-                await write_log_entry(
+                _wear_rate = await db.scalar(select(_Printer.wear_cost_per_hour).where(_Printer.id == printer_id))
+                run_entry = await write_log_entry(
                     db,
                     archive_id=archive.id,
                     # Captured by _update_queue_status above; None for
@@ -8053,15 +8261,16 @@ async def on_print_complete(printer_id: int, data: dict):
                     filament_color=archive.filament_color,
                     filament_used_grams=_run_grams,
                     cost=_run_cost,
-                    depreciation_cost=_depreciation_cost,
+                    wear_cost_per_hour=_wear_rate,
                     failure_reason=archive.failure_reason,
                     thumbnail_path=archive.thumbnail_path,
                     created_by_id=archive.created_by_id,
                     created_by_username=_print_user_info.get("username") if _print_user_info else None,
                     # Reconciled completions have an unknown real end time —
                     # log 0 duration instead of the whole disconnect gap (#2592).
-                    reconciled=_reconciled,
+                    reconciled=bool(data.get("_reconciled")),
                 )
+                await record_archive_wear(db, archive, run_entry)
                 await db.commit()
                 logger.info("[PRINT_LOG] Log entry written for archive %s", archive_id)
     except Exception as e:
@@ -8121,11 +8330,29 @@ async def on_print_complete(printer_id: int, data: dict):
                     )
                     return
 
-                from backend.app.api.routes.settings import get_setting
+                from backend.app.services.energy_price import current_price, print_energy_cost, stored_price
 
-                energy_cost_per_kwh = await get_setting(db, "energy_cost_per_kwh")
-                cost_per_kwh = float(energy_cost_per_kwh) if energy_cost_per_kwh else 0.15
-                energy_cost_value = round(energy_used * cost_per_kwh, 3)
+                # Each hour of the print at the price of that hour (#1251). If
+                # that fails, the last price known, as before, rather than no
+                # energy at all. Read first: the session may be unusable after.
+                last_price = await stored_price(db)
+                try:
+                    energy_cost_value = round(
+                        await print_energy_cost(
+                            db,
+                            plug_id=archive.energy_start_plug_id,
+                            start_at=archive.energy_start_at,
+                            start_kwh=starting_kwh,
+                            start_price=archive.energy_start_price,
+                            end_kwh=energy["total"],
+                            end_plug_id=plug.id,
+                            price_now=await current_price(db),
+                        ),
+                        3,
+                    )
+                except Exception as e:
+                    logger.warning("[ENERGY-BG] Hour-by-hour cost failed for archive %s: %s", archive_id, e)
+                    energy_cost_value = round(energy_used * last_price, 3)
 
                 # First-run-only overwrite of archive.energy_kwh / energy_cost so a
                 # reprint doesn't visually clobber the source archive's energy data
@@ -8299,7 +8526,9 @@ async def on_print_complete(printer_id: int, data: dict):
 
                         restore_setting = await get_setting(db, "finish_photo_restore_plate")
                     if restore_setting is None or restore_setting.lower() == "true":
-                        max_z = await _max_z_for_current_print(printer_id, data, logger)
+                        max_z = await _max_z_for_current_print(
+                            printer_id, data, logger, bound_archive_id, notify_plate_id
+                        )
                         if max_z is not None and not await _plate_restore_is_blocked_by_queue(printer_id):
                             if await _restore_plate_for_finish_photo(printer_id, max_z, logger):
                                 plate_restored_z = max_z
@@ -8694,7 +8923,9 @@ async def on_print_complete(printer_id: int, data: dict):
                     async with async_session() as db:
                         service = ArchiveService(db)
                         timelapse_data = await asyncio.to_thread(timelapse_path.read_bytes)
-                        await service.attach_timelapse(archive_id, timelapse_data, "layer_timelapse.mp4")
+                        await service.attach_timelapse(
+                            archive_id, timelapse_data, "layer_timelapse.mp4", plate_id=notify_plate_id
+                        )
                         # Clean up the temp file
                         await asyncio.to_thread(timelapse_path.unlink, missing_ok=True)
                         logger.info("[LAYER-TL] Layer timelapse attached successfully")
@@ -8726,7 +8957,7 @@ async def on_print_complete(printer_id: int, data: dict):
         # The printer needs time to encode the video after print completion
         baseline = _timelapse_baselines.pop(printer_id, None)
         spawn_background_task(
-            _scan_for_timelapse_with_retries(archive_id, baseline),
+            _scan_for_timelapse_with_retries(archive_id, baseline, plate_id=notify_plate_id),
             name=f"scan-timelapse-{archive_id}",
         )
         log_timing("Timelapse scan scheduled")
@@ -9676,8 +9907,12 @@ def _evict_stale_expected_prints() -> None:
 
     # Also clean up _print_ams_mappings and _print_plate_ids for archive_ids
     # that have no remaining live keys in _expected_prints (all variants
-    # were just evicted).
-    live_archive_ids = set(_expected_prints.values())
+    # were just evicted) and are not printing right now. Print start pops
+    # only the names the printer reported, so the "<base>.gcode" variant
+    # outlives it; without the printing check its eviction two hours after
+    # dispatch threw away a running print's plate, AMS mapping and cost
+    # centre, which completion still reads (#3275).
+    live_archive_ids = set(_expected_prints.values()) | set(_active_prints.values())
     for archive_id in evicted_archive_ids:
         if archive_id not in live_archive_ids:
             _print_ams_mappings.pop(archive_id, None)
@@ -10049,6 +10284,23 @@ async def lifespan(app: FastAPI):
 
     printer_manager.set_drying_complete_callback(on_drying_complete)
 
+    async def on_drying_cycle_end(printer_id: int, cycle):
+        """Mark the spools in an AMS that just finished drying as dried (#2863)."""
+        from backend.app.services.spool_drying import record_drying_cycle
+
+        try:
+            async with async_session() as db:
+                await record_drying_cycle(db, printer_id, cycle)
+        except Exception as e:
+            logging.getLogger(__name__).warning(
+                "Failed to record drying for printer %d (AMS %d): %s",
+                printer_id,
+                cycle.ams_id,
+                e,
+            )
+
+    printer_manager.set_drying_cycle_end_callback(on_drying_cycle_end)
+
     async def on_assignment_verified(printer_id: int, ams_id: int, tray_id: int, verified: bool, detail: dict):
         """Surface the read-back result of a spool assignment to the UI (#2582).
 
@@ -10208,6 +10460,8 @@ async def lifespan(app: FastAPI):
 
     # Start the notification digest scheduler
     notification_service.start_digest_scheduler()
+    notify_live_activities.start()
+    notify_widgets.start()
 
     # Start the Telegram reaction pollers (#3046), one per bot token used by a
     # provider in reactions/both mode; the notification routes resync them.
@@ -10306,6 +10560,8 @@ async def lifespan(app: FastAPI):
     ha_sensor_manager.stop()
     location_ha_sensor_manager.stop()
     notification_service.stop_digest_scheduler()
+    await notify_live_activities.close()
+    await notify_widgets.close()
     await telegram_reaction_poller.aclose()
     github_backup_service.stop_scheduler()
     local_backup_service.stop_scheduler()
@@ -10948,9 +11204,10 @@ app.include_router(webdav.router)
 
 # Serve static files (React build)
 if app_settings.static_dir.exists() and any(app_settings.static_dir.iterdir()):
+    # Compressed, and cached for good where Vite hashed the name (#3175).
     app.mount(
         "/assets",
-        StaticFiles(directory=app_settings.static_dir / "assets"),
+        AssetStaticFiles(directory=app_settings.static_dir / "assets"),
         name="assets",
     )
     if (app_settings.static_dir / "img").exists():

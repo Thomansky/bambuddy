@@ -312,7 +312,8 @@ function ImportFolderSelect({
       >
         <option value="">{t('manyfold.folderAuto')}</option>
         {options.map(({ folder, depth }) => (
-          <option key={folder.id} value={folder.id}>
+          // Listed for the tree's shape; only own and shared folders take imports (#3201).
+          <option key={folder.id} value={folder.id} disabled={folder.can_write === false}>
             {`${'— '.repeat(depth)}${folder.name}`}
           </option>
         ))}

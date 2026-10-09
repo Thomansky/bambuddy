@@ -45,3 +45,22 @@ async def test_location_id_is_left_out(db_session):
     await GitHubBackupService()._collect_spools(db_session, files)
 
     assert "location_id" not in files["spools/inventory.json"]["spools"][0]
+
+
+@pytest.mark.asyncio
+async def test_collects_the_drying_record(db_session):
+    """#2863 — written with str(), the form _parse_dt reads back."""
+    from datetime import datetime
+
+    db_session.add(
+        Spool(material="PLA", last_dried_at=datetime(2026, 10, 6, 12, 30), last_dried_temp=55, last_dried_hours=7.5)
+    )
+    await db_session.commit()
+
+    files: dict = {}
+    await GitHubBackupService()._collect_spools(db_session, files)
+
+    entry = files["spools/inventory.json"]["spools"][0]
+    assert entry["last_dried_at"] == "2026-10-06 12:30:00"
+    assert entry["last_dried_temp"] == 55
+    assert entry["last_dried_hours"] == 7.5

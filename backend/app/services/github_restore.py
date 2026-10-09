@@ -1079,7 +1079,8 @@ class GitHubRestoreService:
                 "quantity": entry.get("quantity") or 1,
                 "energy_kwh": entry.get("energy_kwh"),
                 "energy_cost": entry.get("energy_cost"),
-                "depreciation_cost": entry.get("depreciation_cost"),
+                # A backup from the fork before upstream's #694 names it depreciation_cost.
+                "wear_cost": entry.get("wear_cost", entry.get("depreciation_cost")),
             }
 
             printer_id = entry.get("printer_id")
@@ -1328,6 +1329,11 @@ class GitHubRestoreService:
             for late_field in ("material_number", "category", "low_stock_threshold_pct", "storage_location"):
                 if late_field in entry:
                     fields[late_field] = entry[late_field]
+            # Last drying (#2863), same late-field rule.
+            if "last_dried_at" in entry:
+                fields["last_dried_at"] = _parse_dt(entry.get("last_dried_at"))
+                fields["last_dried_temp"] = entry.get("last_dried_temp")
+                fields["last_dried_hours"] = entry.get("last_dried_hours")
 
             if existing is not None:
                 if old_id is not None:

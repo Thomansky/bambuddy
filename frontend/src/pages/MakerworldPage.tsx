@@ -577,7 +577,8 @@ export function MakerworldPage({ embedded = false }: { embedded?: boolean } = {}
                     .filter((f) => !(f.is_external && f.external_readonly))
                     .flatMap((f) => flattenFolderTree(f))
                     .map(({ folder, depth }) => (
-                      <option key={folder.id} value={folder.id}>
+                      // Listed for the tree's shape; only own and shared folders take imports (#3201).
+                      <option key={folder.id} value={folder.id} disabled={folder.can_write === false}>
                         {`${'— '.repeat(depth)}${folderText(folder)}`}
                       </option>
                     ))}

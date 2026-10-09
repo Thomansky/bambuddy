@@ -2691,6 +2691,23 @@ class TestResolveLocalSlotFromMapping:
         # AMS-HT id=128: snow = 128*256 + 0 = 32768
         assert BambuMQTTClient._resolve_local_slot_from_mapping(0, [32768]) == 128
 
+    def test_units_narrow_ambiguous_match(self):
+        from backend.app.services.bambu_mqtt import BambuMQTTClient
+
+        # AMS0 slot1 and AMS2 slot1 both mapped; only AMS 2 is on this extruder
+        assert BambuMQTTClient._resolve_local_slot_from_mapping(1, [1, 513], [1, 2]) == 9
+
+    def test_units_do_not_drop_a_single_match(self):
+        from backend.app.services.bambu_mqtt import BambuMQTTClient
+
+        # One candidate stands even when the extruder map doesn't list its unit
+        assert BambuMQTTClient._resolve_local_slot_from_mapping(2, [514], [0]) == 10
+
+    def test_units_still_ambiguous_returns_none(self):
+        from backend.app.services.bambu_mqtt import BambuMQTTClient
+
+        assert BambuMQTTClient._resolve_local_slot_from_mapping(3, [3, 259], [0, 1]) is None
+
 
 # ---------------------------------------------------------------------------
 # 3. H2D Pro — initial state detection
@@ -2843,10 +2860,16 @@ class TestTrayNowDualNozzleH2DSetup:
         }
         mqtt_client._process_message(payload)
 
-        # Dual-nozzle was detected; AMS 0 on right extruder (active by default);
-        # snow is 0xFF00FF (unloaded), so falls through to ams_extruder_map fallback.
-        # Single AMS on extruder 0 → global_id = 0*4+2 = 2
+        # Dual-nozzle was detected; snow is 0xFF00FF (unloaded), so the
+        # ams_extruder_map fallback runs. The map is built from this same
+        # report only after tray_now, so the slot can't be placed yet and
+        # nothing is guessed (#3242).
         assert mqtt_client._is_dual_nozzle is True
+        assert mqtt_client.state.ams_extruder_map == {"0": 0}
+        assert mqtt_client.state.tray_now == 255
+
+        # The next report finds AMS 0 alone on the active extruder → 0*4+2 = 2
+        mqtt_client._process_message(_ams_payload(2))
         assert mqtt_client.state.tray_now == 2
 
 
@@ -3062,12 +3085,21 @@ class TestTrayNowDualNozzleH2DFallback(_H2DFixtureMixin):
         h2d_client._process_message(_ams_payload(1))
         assert h2d_client.state.tray_now == 5
 
-    def test_no_ams_on_extruder_uses_raw_slot(self, h2d_client):
-        """No AMS mapped to the active extruder → raw slot as global ID."""
+    def test_no_ams_on_extruder_keeps_current(self, h2d_client):
+        """No AMS mapped to the active extruder → the slot can't be placed, keep current (#3242)."""
         # All AMS on left extruder, but right is active
         h2d_client.state.ams_extruder_map = {"0": 1, "128": 1}
+        h2d_client.state.tray_now = 255
         h2d_client._process_message(_ams_payload(2))
-        assert h2d_client.state.tray_now == 2
+        assert h2d_client.state.tray_now == 255
+
+    def test_no_ams_on_extruder_resolved_from_mapping(self, h2d_client):
+        """No AMS the map knows of, but the print's mapping names one tray at the slot (#3242)."""
+        h2d_client.state.ams_extruder_map = {"0": 1, "128": 1}
+        h2d_client.state.raw_data["mapping"] = [514]  # AMS 2 slot 2
+        h2d_client._was_running = True
+        h2d_client._process_message(_ams_payload(2))
+        assert h2d_client.state.tray_now == 10
 
     def test_single_ams_ht_on_extruder_returns_unit_id(self, h2d_client):
         """AMS-HT 128 alone on left extruder, slot 0 → global ID 128 (not 512)."""
@@ -3100,50 +3132,80 @@ class TestTrayNowDualNozzleH2DFallback(_H2DFixtureMixin):
         h2d_client._process_message(_ams_payload(2))
         assert h2d_client.state.tray_now == 2
 
-    def test_multiple_ams_resolved_by_the_prints_mapping(self, h2d_client):
-        """Three AMS on the active extruder and no snow: the slot alone is
-        ambiguous, but the print command named AMS 2 slot 1 (global 9) and no
-        other mapped tray sits at slot 1. Taking the bare slot marked AMS 0
-        slot 1 as loaded instead."""
-        h2d_client.state.ams_extruder_map = {"0": 0, "1": 0, "2": 0}
-        h2d_client.state.tray_now = 255
-        h2d_client._captured_ams_mapping = [9]
-        h2d_client._process_message(_ams_payload(1))
-        assert h2d_client.state.tray_now == 9
-
-    def test_no_ams_on_extruder_resolved_by_the_prints_mapping(self, h2d_client):
-        """The extruder map places no AMS on the active extruder, yet the print
-        feeds from AMS 2 slot 2 (global 10) as its command said."""
-        h2d_client.state.ams_extruder_map = {"0": 1, "1": 1, "2": 1}
-        h2d_client._captured_ams_mapping = [10, -1]
-        h2d_client._process_message(_ams_payload(2))
-        assert h2d_client.state.tray_now == 10
-
-    def test_two_mapped_trays_on_one_slot_narrowed_to_this_extruder(self, h2d_client):
-        """AMS 0 slot 2 and AMS 1 slot 2 are both in the job; only AMS 1 is on
-        the active extruder, so the loaded tray is global 6."""
-        h2d_client.state.ams_extruder_map = {"0": 1, "1": 0, "2": 0}
-        h2d_client.state.tray_now = 255
-        h2d_client._captured_ams_mapping = [2, 6]
-        h2d_client._process_message(_ams_payload(2))
-        assert h2d_client.state.tray_now == 6
-
-    def test_a_mapping_without_a_tray_at_this_slot_decides_nothing(self, h2d_client):
-        """The mapping is evidence only when one of its trays sits at the slot
-        reported; otherwise the old fallback stands."""
-        h2d_client.state.ams_extruder_map = {"0": 0, "1": 0}
-        h2d_client.state.tray_now = 255
-        h2d_client._captured_ams_mapping = [0]
-        h2d_client._process_message(_ams_payload(3))
-        assert h2d_client.state.tray_now == 3
-
     def test_multiple_ams_slot_nonzero_narrows_to_single_ht_excluded(self, h2d_client):
         """Two regular AMS + one AMS-HT, slot > 0 → AMS-HT excluded but still ambiguous."""
         h2d_client.state.ams_extruder_map = {"0": 0, "1": 0, "128": 0}
         h2d_client.state.tray_now = 255
         # Slot 3 → excludes AMS-HT, but AMS 0 and AMS 1 both remain → ambiguous
         h2d_client._process_message(_ams_payload(3))
-        assert h2d_client.state.tray_now == 3  # raw slot fallback
+        assert h2d_client.state.tray_now == 255  # kept, never the bare slot (#3242)
+
+    def test_multiple_ams_resolved_from_mapping(self, h2d_client):
+        """#3242: three AMS on one extruder, the print feeds from AMS 2 slot 1.
+        The printer's mapping names that tray, so AMS 0 slot 1 is never marked."""
+        h2d_client.state.ams_extruder_map = {"0": 0, "1": 0, "2": 0}
+        h2d_client.state.raw_data["mapping"] = [65535, 513]  # AMS 2 slot 1
+        h2d_client._was_running = True
+        h2d_client._process_message(_ams_payload(1))
+        assert h2d_client.state.tray_now == 9
+
+    def test_mapping_ignored_while_idle(self, h2d_client):
+        """An idle H2 keeps reporting the previous print's mapping. A spool
+        swap at AMS 0 slot 1 must not be placed on that print's AMS 2 tray."""
+        h2d_client.state.ams_extruder_map = {"0": 0, "1": 0, "2": 0}
+        h2d_client.state.raw_data["mapping"] = [513]  # left over: AMS 2 slot 1
+        h2d_client.state.tray_now = 255
+        assert h2d_client._was_running is False
+        h2d_client._process_message(_ams_payload(1))
+        assert h2d_client.state.tray_now == 255
+
+    def test_mapping_ignored_after_print_completed(self, h2d_client):
+        h2d_client.state.ams_extruder_map = {"0": 0, "1": 0, "2": 0}
+        h2d_client.state.raw_data["mapping"] = [513]
+        h2d_client.state.tray_now = 255
+        h2d_client._was_running = True
+        h2d_client._completion_triggered = True
+        h2d_client._process_message(_ams_payload(1))
+        assert h2d_client.state.tray_now == 255
+
+    def test_mapping_narrowed_to_active_extruder(self, h2d_client):
+        """Two mapped trays share the slot; only one is on the active extruder."""
+        h2d_client.state.ams_extruder_map = {"0": 1, "1": 0, "2": 0}
+        h2d_client.state.raw_data["mapping"] = [1, 513]  # AMS 0 slot 1 (left), AMS 2 slot 1 (right)
+        h2d_client._was_running = True
+        h2d_client._process_message(_ams_payload(1))
+        assert h2d_client.state.tray_now == 9
+
+    def test_ambiguous_mapping_keeps_current(self, h2d_client):
+        """Multi-colour print: the mapping has the slot on two units of this extruder.
+        Keep the tray that was loaded until snow names the new one."""
+        h2d_client.state.ams_extruder_map = {"0": 0, "1": 0}
+        h2d_client.state.raw_data["mapping"] = [3, 259, 256]  # AMS 0 slot 3, AMS 1 slot 3, AMS 1 slot 0
+        h2d_client.state.tray_now = 4
+        h2d_client._was_running = True
+        h2d_client._process_message(_ams_payload(3))
+        assert h2d_client.state.tray_now == 4
+
+    def test_ambiguous_slot_stays_out_of_tray_change_log(self, h2d_client):
+        """#3242: a mid-print filament change reports the slot about a second
+        before snow. The guess must not land in the usage change log."""
+        h2d_client.state.ams_extruder_map = {"0": 0, "1": 0}
+        h2d_client.state.tray_now = 5
+        h2d_client.state.last_loaded_tray = 5
+        h2d_client.state.tray_change_log = [(5, 0)]
+        h2d_client._was_running = True
+        h2d_client._completion_triggered = False
+        h2d_client.state.layer_num = 120
+
+        h2d_client._process_message(_ams_payload(3))
+        assert h2d_client.state.tray_now == 5
+        assert h2d_client.state.tray_change_log == [(5, 0)]
+
+        # Snow arrives and names AMS 1 slot 3
+        h2d_client._process_message(_extruder_info_payload([{"id": 0, "snow": 0x0103}, {"id": 1, "snow": 0xFFFF}]))
+        h2d_client._process_message(_ams_payload(3))
+        assert h2d_client.state.tray_now == 7
+        assert h2d_client.state.tray_change_log == [(5, 0), (7, 120)]
 
 
 # ---------------------------------------------------------------------------
@@ -5582,6 +5644,22 @@ class TestHMSFullCode:
         assert mqtt_client.state.hms_errors[0].actions == ["CHECK_ASSISTANT"]
 
 
+def _wait_for_retirement(serial: str) -> None:
+    """Let the old client's teardown thread finish before asserting on it.
+
+    Since #3068 ``retire_paho_client`` runs ``disconnect()`` and ``loop_stop()``
+    on a thread of its own and returns at once, so a test that asserts on them
+    straight after the call can catch that thread between the two; under a
+    loaded parallel run it does.
+    """
+    import threading
+
+    for thread in threading.enumerate():
+        if thread.name == f"mqtt-retire-{serial}":
+            thread.join(timeout=5)
+            assert not thread.is_alive(), "the old client's teardown thread never finished"
+
+
 class TestForceReconnectRouting:
     """#1136 — force_reconnect_stale_session routes between hard-reset (full
     paho-client teardown, wipes the QoS 1 queue) and socket-close (the legacy
@@ -5626,6 +5704,7 @@ class TestForceReconnectRouting:
             mqtt_client.force_reconnect_stale_session("test")
 
         asyncio.run(_trigger())
+        _wait_for_retirement("TEST_HARD_RESET")
         original.disconnect.assert_called()
         original.loop_stop.assert_called()
         # connect() stub didn't repopulate _client, so it's None — the contract
@@ -5669,6 +5748,7 @@ class TestHardResetClientDirect:
         loop_stop (network thread exits, taking its QoS 1 queue with it)."""
         original = mqtt_client._client
         mqtt_client._hard_reset_client()
+        _wait_for_retirement("TEST_HARD_DIRECT")
         original.disconnect.assert_called()
         original.loop_stop.assert_called()
 
@@ -5686,6 +5766,7 @@ class TestHardResetClientDirect:
         original.disconnect.side_effect = RuntimeError("boom")
         # No exception escapes the call (test would fail if it did).
         mqtt_client._hard_reset_client()
+        _wait_for_retirement("TEST_HARD_DIRECT")
         # loop_stop is still attempted after the disconnect failure.
         original.loop_stop.assert_called()
         assert mqtt_client._client is None
@@ -7131,6 +7212,88 @@ class TestCommandAckIsNotTelemetry:
 
         assert mqtt_client.state.ams_filament_backup is True
 
+    @staticmethod
+    def _full_status(**fields):
+        """A full status report: home_flag is only read from one (>30 keys)."""
+        frame = {"command": "push_status", **{f"filler_{i}": 0 for i in range(30)}}
+        frame.update(fields)
+        return {"print": frame}
+
+    def test_full_status_home_flag_sets_backup_state_without_cfg(self, mqtt_client):
+        """P1S / P1P / A1 never send cfg; home_flag bit 10 carries the state (#3259)."""
+        assert mqtt_client.state.ams_filament_backup is None
+
+        mqtt_client._process_message(self._full_status(home_flag=7554719))  # bit10=1
+
+        assert mqtt_client.state.ams_filament_backup is True
+
+        mqtt_client._process_message(self._full_status(home_flag=7554719 & ~(1 << 10)))
+
+        assert mqtt_client.state.ams_filament_backup is False
+
+    def test_small_frame_home_flag_ignored_before_full_report(self, mqtt_client):
+        """Until a full report without cfg arrives, the printer may still be a cfg family."""
+        mqtt_client.state.ams_filament_backup = True
+
+        mqtt_client._process_message({"print": {"command": "push_status", "home_flag": 0}})
+
+        assert mqtt_client.state.ams_filament_backup is True
+
+    def test_small_frame_home_flag_read_after_full_report_without_cfg(self, mqtt_client):
+        """P1S sends a slicer toggle in a 4-6 key update frame, not a full report (#3259)."""
+        mqtt_client._process_message(self._full_status(home_flag=0x00634518))  # bit10=1
+        assert mqtt_client.state.ams_filament_backup is True
+
+        mqtt_client._process_message({"print": {"command": "push_status", "home_flag": 0x00634118}})
+        assert mqtt_client.state.ams_filament_backup is False
+
+        mqtt_client._process_message({"print": {"command": "push_status", "home_flag": 0x00634518}})
+        assert mqtt_client.state.ams_filament_backup is True
+
+    def test_small_frame_without_home_flag_keeps_backup_state(self, mqtt_client):
+        mqtt_client._process_message(self._full_status(home_flag=0x00634518))  # bit10=1
+
+        mqtt_client._process_message({"print": {"command": "push_status", "wifi_signal": "-38dBm"}})
+
+        assert mqtt_client.state.ams_filament_backup is True
+
+    def test_small_frame_home_flag_ignored_on_cfg_printer(self, mqtt_client):
+        mqtt_client._process_message(self._full_status(cfg="C0340FC219"))  # bit18=1
+
+        mqtt_client._process_message({"print": {"command": "push_status", "home_flag": 0}})
+
+        assert mqtt_client.state.ams_filament_backup is True
+
+    def test_home_flag_ignored_once_printer_sent_cfg(self, mqtt_client):
+        """Printers that send cfg keep reading it alone, even in full reports without it."""
+        mqtt_client._process_message(self._full_status(cfg="C0340FC219", home_flag=1 << 10))  # bit18=1
+        assert mqtt_client.state.ams_filament_backup is True
+
+        mqtt_client._process_message(self._full_status(home_flag=0))
+
+        assert mqtt_client.state.ams_filament_backup is True
+
+    def test_cfg_wins_over_home_flag_in_same_frame(self, mqtt_client):
+        mqtt_client._process_message(self._full_status(cfg="C0340BC219", home_flag=1 << 10))  # bit18=0
+
+        assert mqtt_client.state.ams_filament_backup is False
+
+    def test_ack_home_flag_is_not_read_as_backup_state(self, mqtt_client):
+        frame = self._full_status(home_flag=7554719)
+        frame["print"]["command"] = "project_file"
+
+        mqtt_client._process_message(frame)
+
+        assert mqtt_client.state.ams_filament_backup is None
+
+    def test_home_flag_respects_toggle_hold(self, mqtt_client):
+        """A stale home_flag right after a toggle must not flip the badge back."""
+        mqtt_client.set_ams_filament_backup(True)
+
+        mqtt_client._process_message(self._full_status(home_flag=7554719 & ~(1 << 10)))
+
+        assert mqtt_client.state.ams_filament_backup is True
+
     def test_project_file_ack_does_not_clear_timelapse_state(self, mqtt_client):
         """The ack echoes the per-job timelapse request, not the recorder."""
         mqtt_client.state.timelapse = True
@@ -8365,3 +8528,110 @@ class TestAmsFilamentSettingRefusalLogging:
 
         assert self._refusals(caplog) == []
         assert "extrusion_cali_sel" not in caplog.text
+
+
+class TestDryingCycleEndReport:
+    """#2863 — the cycle-end report carries what was seen of the cycle, so the
+    spools in that AMS can be stamped as dried."""
+
+    @pytest.fixture
+    def mqtt_client(self):
+        from backend.app.services.bambu_mqtt import BambuMQTTClient
+
+        reports: list = []
+        client = BambuMQTTClient(
+            ip_address="192.168.1.100",
+            serial_number="TEST-DRYING-END",
+            access_code="12345678",
+            on_drying_cycle_end=reports.append,
+        )
+        client._client = MagicMock()
+        client._cycle_reports = reports
+        return client
+
+    @staticmethod
+    def _push(client, dry_time, info=None):
+        unit = {"id": "0", "dry_time": dry_time, "tray": []}
+        if info is not None:
+            unit["info"] = info
+        client._handle_ams_data({"ams": [unit]})
+
+    def test_cycle_watched_from_its_start(self, mqtt_client):
+        self._push(mqtt_client, 0)
+        self._push(mqtt_client, 360)
+        self._push(mqtt_client, 200)
+        self._push(mqtt_client, 1)
+        self._push(mqtt_client, 0)
+
+        [report] = mqtt_client._cycle_reports
+        assert report.ams_id == 0
+        assert report.peak_minutes == 360
+        assert report.remaining_minutes == 1
+        assert report.start_seen is True
+        assert report.target_temp is None
+
+    def test_first_sighting_mid_cycle_is_not_the_start(self, mqtt_client):
+        """Bambuddy came up while the AMS was already drying."""
+        self._push(mqtt_client, 200)
+        self._push(mqtt_client, 0)
+
+        [report] = mqtt_client._cycle_reports
+        assert report.start_seen is False
+        assert report.peak_minutes == 200
+
+    def test_target_survives_a_stop_sent_by_bambuddy(self, mqtt_client):
+        """A stop drops _drying_targets before the countdown reaches 0; the
+        report must still carry the temperature the cycle ran at."""
+        self._push(mqtt_client, 0)
+        mqtt_client.send_drying_command(0, 55, 8, mode=1, filament="PLA")
+        self._push(mqtt_client, 480)
+        self._push(mqtt_client, 100)
+        mqtt_client.send_drying_command(0, 0, 0, mode=0)
+        self._push(mqtt_client, 0)
+
+        [report] = mqtt_client._cycle_reports
+        assert report.target_temp == 55
+        assert report.target_hours == 8
+        assert report.remaining_minutes == 100
+
+    def test_transient_zero_does_not_split_the_cycle(self, mqtt_client):
+        """#2759's 720 → 0 → 719 blip while Checking is one cycle, not two."""
+        self._push(mqtt_client, 0)
+        self._push(mqtt_client, 720, info="11402113")
+        self._push(mqtt_client, 0, info="11402113")
+        self._push(mqtt_client, 719, info="11402123")
+        self._push(mqtt_client, 0, info="11402103")
+
+        [report] = mqtt_client._cycle_reports
+        assert report.peak_minutes == 720
+        assert report.start_seen is True
+
+    def test_next_cycle_starts_fresh(self, mqtt_client):
+        self._push(mqtt_client, 0)
+        mqtt_client.send_drying_command(0, 55, 8, mode=1, filament="PLA")
+        self._push(mqtt_client, 480)
+        self._push(mqtt_client, 0)
+        # Started from the printer screen this time: no target of ours.
+        self._push(mqtt_client, 120)
+        self._push(mqtt_client, 0)
+
+        first, second = mqtt_client._cycle_reports
+        assert first.target_temp == 55
+        assert second.target_temp is None
+        assert second.peak_minutes == 120
+
+    def test_new_start_during_a_live_cycle_begins_a_fresh_record(self, mqtt_client):
+        """A start sent while a cycle still counts down replaces it without
+        dry_time passing through 0; the report is about the new run."""
+        self._push(mqtt_client, 0)
+        mqtt_client.send_drying_command(0, 55, 8, mode=1, filament="PLA")
+        self._push(mqtt_client, 480)
+        self._push(mqtt_client, 400)
+        mqtt_client.send_drying_command(0, 65, 2, mode=1, filament="PETG")
+        self._push(mqtt_client, 120)
+        self._push(mqtt_client, 0)
+
+        [report] = mqtt_client._cycle_reports
+        assert report.target_temp == 65
+        assert report.target_hours == 2
+        assert report.peak_minutes == 120

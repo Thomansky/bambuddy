@@ -72,6 +72,9 @@ class FolderUpdate(BaseModel):
     # Sent-but-null clears the number, omitted leaves it alone — the same rule
     # ProjectUpdate.number follows, so a rename can never drop a number.
     number: Annotated[str | None, Field(max_length=32)] = None
+    # Visible to (and writable by) every library:read_own user (#3201).
+    # Only library:update_all may change it.
+    shared: bool | None = None
 
     @field_validator("name")
     @classmethod
@@ -108,6 +111,13 @@ class FolderResponse(BaseModel):
     # tracks rename/move events. Recursion across subfolders is intentionally
     # left out to keep the route a single GROUP BY rather than a recursive CTE.
     latest_activity_at: datetime | None = None
+    # Ownership (#3201). ``can_*`` are for the user asking: what the File
+    # Manager may offer on this folder. The routes enforce the same rules.
+    created_by_id: int | None = None
+    shared: bool = False
+    can_write: bool = True
+    can_rename: bool = True
+    can_delete: bool = True
     created_at: datetime
     updated_at: datetime
 
@@ -147,6 +157,13 @@ class FolderTreeItem(BaseModel):
     file_count: int = 0
     # See FolderResponse.latest_activity_at — #1770 folder sort source.
     latest_activity_at: datetime | None = None
+    # Ownership (#3201). ``can_*`` are for the user asking: what the File
+    # Manager may offer on this folder. The routes enforce the same rules.
+    created_by_id: int | None = None
+    shared: bool = False
+    can_write: bool = True
+    can_rename: bool = True
+    can_delete: bool = True
     children: list["FolderTreeItem"] = []
 
     class Config:

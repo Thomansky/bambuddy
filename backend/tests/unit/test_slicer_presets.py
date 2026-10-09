@@ -396,6 +396,34 @@ class TestFetchOrcaCloudPresets:
         assert slots["printer"][0].compatible_printers is None
 
     @pytest.mark.asyncio
+    async def test_printer_preset_carries_the_preset_it_was_saved_from(self):
+        """#3250: a printer preset saved under a name of its own is in no
+        process's compatible_printers; the SliceModal needs its parent."""
+        sp._orca_cloud_cache.clear()
+        svc_mock = MagicMock()
+        svc_mock.list_profiles = AsyncMock(
+            return_value=[
+                {
+                    "id": "m1",
+                    "name": "Bambu Lab H2D 0.4 nozzle - Skew",
+                    "content": {"type": "printer", "inherits": " Bambu Lab H2D 0.4 nozzle "},
+                },
+                {"id": "m2", "name": "Orca X1C", "content": {"type": "printer", "inherits": ""}},
+                {"id": "m3", "name": "Odd", "content": {"type": "printer", "inherits": ["x"]}},
+            ]
+        )
+        svc_mock.close = AsyncMock()
+        user = MagicMock(id=1)
+        user.has_permission = MagicMock(return_value=True)
+        with (
+            patch.object(sp, "_load_orca_credentials", AsyncMock(return_value=self._orca_creds("tok"))),
+            patch.object(sp, "_build_orca_service", AsyncMock(return_value=svc_mock)),
+        ):
+            slots, _ = await sp._fetch_orca_cloud_presets(MagicMock(), user)
+
+        assert [p.inherits for p in slots["printer"]] == ["Bambu Lab H2D 0.4 nozzle", None, None]
+
+    @pytest.mark.asyncio
     async def test_missing_or_malformed_compatible_printers_stays_none(self):
         """No data must read as "unknown", never as "compatible with nothing" —
         the SliceModal falls back to the name matcher for those."""
@@ -904,3 +932,70 @@ class TestListPrinterModels:
 
         result = sp.list_printer_models()
         assert result is not PRINTER_MODEL_MAP
+
+
+class TestNoUserWithAuthOn:
+    """The sign-in stored without a user is the auth-off install's, and may be
+    left over after auth was turned on. A caller with no user while auth is
+    on (an API key without Allow Cloud Access) must not list its presets."""
+
+    @pytest.mark.asyncio
+    async def test_bambu_cloud(self):
+        sp._cloud_cache.clear()
+        with (
+            patch.object(sp, "is_auth_enabled", AsyncMock(return_value=True)),
+            patch.object(sp, "get_stored_token", AsyncMock(return_value=("global-tok", None, None))) as get_tok,
+        ):
+            slots, status = await sp._fetch_cloud_presets(MagicMock(), None)
+        assert status == "not_authenticated"
+        assert slots == {"printer": [], "process": [], "filament": []}
+        get_tok.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_orca_cloud(self):
+        sp._orca_cloud_cache.clear()
+        with (
+            patch.object(sp, "is_auth_enabled", AsyncMock(return_value=True)),
+            patch.object(sp, "_load_orca_credentials", AsyncMock()) as load,
+        ):
+            slots, status = await sp._fetch_orca_cloud_presets(MagicMock(), None)
+        assert status == "not_authenticated"
+        assert slots == {"printer": [], "process": [], "filament": []}
+        load.assert_not_called()
+
+
+class TestLocalPrinterInherits:
+    """#3250: local printer presets report the preset they were saved from."""
+
+    @pytest.mark.asyncio
+    async def test_local_printer_preset_carries_inherits(self, db_session):
+        from backend.app.models.local_preset import LocalPreset
+
+        db_session.add_all(
+            [
+                LocalPreset(
+                    name="Bambu Lab H2D 0.4 nozzle - Skew",
+                    preset_type="printer",
+                    source="orcaslicer",
+                    setting="{}",
+                    inherits="Bambu Lab H2D 0.4 nozzle",
+                ),
+                LocalPreset(name="Plain", preset_type="printer", source="orcaslicer", setting="{}", inherits="  "),
+                LocalPreset(
+                    name="0.20mm Mine",
+                    preset_type="process",
+                    source="orcaslicer",
+                    setting="{}",
+                    inherits="0.20mm Standard @BBL H2D",
+                ),
+            ]
+        )
+        await db_session.commit()
+
+        slots = await sp._fetch_local_presets(db_session)
+
+        by_name = {p.name: p for p in slots["printer"]}
+        assert by_name["Bambu Lab H2D 0.4 nozzle - Skew"].inherits == "Bambu Lab H2D 0.4 nozzle"
+        assert by_name["Plain"].inherits is None
+        # Only printer presets need it; a process is matched by its own list.
+        assert slots["process"][0].inherits is None

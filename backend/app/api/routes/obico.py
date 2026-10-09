@@ -5,7 +5,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
-from backend.app.core.auth import RequestPrinterScope, RequirePermissionIfAuthEnabled
+from backend.app.core.auth import ApiKeyActor, RequestActor, RequestPrinterScope, RequirePermissionIfAuthEnabled
 from backend.app.core.permissions import Permission
 from backend.app.core.printer_scope import PrinterScope
 from backend.app.models.user import User
@@ -36,7 +36,7 @@ async def get_status(
         "sensitivity": settings["sensitivity"],
         "action": settings["action"],
         "poll_interval": settings["poll_interval"],
-        "external_url_configured": bool(settings["external_url"]),
+        "external_url_configured": bool(settings["snapshot_base_url"]),
     }
 
 
@@ -44,6 +44,7 @@ async def get_status(
 async def get_printer_status(
     user: User | None = RequirePermissionIfAuthEnabled(Permission.PRINTERS_READ),
     printer_scope: PrinterScope = RequestPrinterScope,
+    actor: User | ApiKeyActor | None = RequestActor,
 ):
     """Per-printer live classification for the printer cards (#1546).
 
@@ -54,7 +55,7 @@ async def get_printer_status(
     enabled_printers = settings["enabled_printers"]
     # Error strings can embed configured URLs (ML API base, external URL), so
     # they stay behind settings:read like the rest of the configuration.
-    can_see_error = user is None or user.has_permission(Permission.SETTINGS_READ.value)
+    can_see_error = actor is None or actor.has_permission(Permission.SETTINGS_READ.value)
     per_printer = obico_detection_service.get_per_printer()
     if not can_see_error:
         # The "error" *class* is not configuration — a printers:read user still

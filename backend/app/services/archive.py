@@ -1835,11 +1835,17 @@ class ArchiveService:
         archive_id: int,
         timelapse_data: bytes,
         filename: str = "timelapse.mp4",
+        *,
+        plate_id: int | None = None,
     ) -> bool:
         """Attach a timelapse video to an archive.
 
         Non-MP4 videos (e.g. AVI from P1S) are saved as-is and a background
         task converts them to MP4 for browser compatibility.
+
+        ``plate_id`` is the plate whose run produced the video, when the caller
+        knows it; print start uses it to tell a reprint from the next plate of
+        a shared archive (#3275).
         """
         import asyncio
 
@@ -1881,10 +1887,20 @@ class ArchiveService:
         # leaves nothing behind. A no-3MF archive has never had a directory of
         # its own, and the timelapse can be the first thing to want one.
         await asyncio.to_thread(lambda: timelapse_file.parent.mkdir(parents=True, exist_ok=True))
+
+        # A file of this name that the archive no longer points at is an earlier
+        # run's video, kept because another plate of a shared archive started
+        # (#3275). Writing over it would destroy the copy that was kept: the
+        # external-camera stitch always names its output layer_timelapse.mp4.
+        # Re-attaching the file the archive does point at still replaces it.
+        timelapse_file = await asyncio.to_thread(
+            _free_timelapse_name, timelapse_file, archive.timelapse_path, settings.base_dir
+        )
         await asyncio.to_thread(timelapse_file.write_bytes, timelapse_data)
 
         # Update archive record
         archive.timelapse_path = str(timelapse_file.relative_to(settings.base_dir))
+        archive.timelapse_plate_id = plate_id
         await self.db.commit()
 
         # For non-MP4 videos (e.g. AVI from P1S), kick off background conversion
@@ -1895,6 +1911,31 @@ class ArchiveService:
             )
 
         return True
+
+
+def _free_timelapse_name(target: Path, current_relpath: str | None, base_dir: Path) -> Path:
+    """``target``, or ``<stem>_<n><suffix>`` beside it when ``target`` would
+    replace a video the archive does not point at (see ``attach_timelapse``).
+
+    A non-MP4 is converted to ``<stem>.mp4`` afterwards, so that name counts as
+    taken too.
+    """
+
+    def outputs(path: Path) -> set[Path]:
+        return {path.resolve(), path.with_suffix(".mp4").resolve()}
+
+    # Only compared against ``target``, which attach_timelapse has already
+    # safe-joined; nothing is read or written through this path.
+    current = (base_dir / current_relpath).resolve() if current_relpath else None  # SEC-PATH-OK: comparison only
+    taken = {p for p in outputs(target) if p.exists()}
+    if not taken or current in taken:
+        return target
+    n = 2
+    while True:
+        candidate = target.with_name(f"{target.stem}_{n}{target.suffix}")
+        if not any(p.exists() for p in outputs(candidate)):
+            return candidate
+        n += 1
 
 
 async def _convert_timelapse_to_mp4(archive_id: int, source_path: Path) -> None:

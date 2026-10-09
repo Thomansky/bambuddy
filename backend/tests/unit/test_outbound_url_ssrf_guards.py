@@ -253,13 +253,14 @@ def test_every_url_setting_is_either_guarded_or_explicitly_exempt():
     added per-incident rather than to the whole class of fields.
     """
     exempt = {
-        # Bambuddy's own public address, not a destination it requests. It is
+        # Bambuddy's own address, not a destination it requests. It is
         # rendered into notification bodies and OIDC redirect URIs, and handed
         # to Obico's ML server as the `img` parameter for that server to fetch
         # (obico_detection.py builds `{external_url}/api/v1/obico/cached-frame/
         # {nonce}`). Pointing it at a private address only breaks Bambuddy's own
         # links; it cannot make Bambuddy request anything it otherwise wouldn't.
         "external_url",
+        "bambuddy_internal_url",
         # Guarded by assert_safe_spoolman_url at each consumer (spoolman.py,
         # location_service.py, inventory.py, spoolbuddy.py,
         # spoolman_inventory.py) rather than in the schema, keeping its
@@ -311,7 +312,7 @@ def test_opaque_failure_logs_the_body_for_the_operator(caplog):
 
 @pytest.mark.parametrize(
     "provider_label",
-    ["ntfy server", "Bark server", "webhook endpoint", "Home Assistant endpoint"],
+    ["ntfy server", "Bark server", "Gotify server", "webhook endpoint", "Home Assistant endpoint"],
 )
 def test_user_supplied_host_providers_use_the_opaque_path(provider_label: str):
     """Guards the mapping itself: each user-supplied-host provider must route
@@ -369,6 +370,7 @@ def test_provider_url_guard_permits_self_hosted_servers(url: str):
     [
         ("ntfy", {"server": "http://169.254.169.254", "topic": "t"}),
         ("bark", {"server": "http://169.254.169.254", "device_key": "k"}),
+        ("gotify", {"server": "http://169.254.169.254", "app_token": "t"}),
         ("webhook", {"webhook_url": "http://169.254.169.254/latest/meta-data/"}),
     ],
 )
@@ -608,6 +610,7 @@ GUARDED_BODY_URLS = {
 # Not a destination Bambuddy requests — no guard applies.
 NOT_A_FETCH_TARGET = {
     ("AppSettingsUpdate", "external_url"),  # Bambuddy's own address (see exempt list above)
+    ("AppSettingsUpdate", "bambuddy_internal_url"),
     ("AppSettingsUpdate", "ldap_server_url"),  # ldap://, handed to an LDAP client
     ("ProjectCreate", "url"),  # stored link, rendered in the UI, never fetched
     ("ProjectUpdate", "url"),

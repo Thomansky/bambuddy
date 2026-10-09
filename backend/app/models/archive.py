@@ -29,6 +29,12 @@ class PrintArchive(Base):
     content_hash: Mapped[str | None] = mapped_column(String(64))  # SHA256 hash for duplicate detection
     thumbnail_path: Mapped[str | None] = mapped_column(String(500))
     timelapse_path: Mapped[str | None] = mapped_column(String(500))
+    # The plate whose run produced ``timelapse_path`` (#3275). Every plate of a
+    # Send All shares this archive, so a print start may delete the previous
+    # video only when it is the same plate printing again; another plate's
+    # video is the only copy of that plate's run. NULL when unknown -- a
+    # manually attached video, or one attached before this column existed.
+    timelapse_plate_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # True when Bambuddy forced timelapse recording on for this print so the
     # finish-photo extractor (#1397) could pull the post-park-pre-drop frame.
     # The cleanup path uses this to know the timelapse should be deleted
@@ -149,13 +155,17 @@ class PrintArchive(Base):
     # Energy tracking
     energy_kwh: Mapped[float | None] = mapped_column(Float)  # Energy consumed in kWh
     energy_cost: Mapped[float | None] = mapped_column(Float)  # Cost of energy consumed
+    # Printer wear for the first run, at the printer's hourly wear cost (#694).
+    wear_cost: Mapped[float | None] = mapped_column(Float)
     # Plug lifetime counter captured at print start; delta at print end becomes energy_kwh.
     # Persisted so per-print tracking survives backend restarts mid-print (#941).
     energy_start_kwh: Mapped[float | None] = mapped_column(Float)
-    # Printer wear for the first run, snapshot at completion from the printer's
-    # hourly wear rate (#694). Reprints keep theirs on their PrintLogEntry,
-    # never here (#1378).
-    depreciation_cost: Mapped[float | None] = mapped_column(Float)
+    # When and from which plug that counter was read, and the electricity price
+    # then. With the plug's hourly snapshots in between, these let the print's
+    # cost follow a price that changes while it runs (#1251).
+    energy_start_at: Mapped[datetime | None] = mapped_column(DateTime)
+    energy_start_plug_id: Mapped[int | None] = mapped_column(Integer)
+    energy_start_price: Mapped[float | None] = mapped_column(Float)
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

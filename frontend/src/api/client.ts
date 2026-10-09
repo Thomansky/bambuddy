@@ -489,8 +489,7 @@ export interface Printer {
   camera_light_auto: boolean;  // picked for the chamber light when camera_light_mode is 'selected' (#1655)
   plate_detection_enabled: boolean;  // Check plate before print
   plate_detection_roi?: PlateDetectionROI;  // ROI for plate detection
-  // Wear cost per printing hour (#694); null or 0 = feature off for this printer.
-  wear_cost_per_hour: number | null;
+  wear_cost_per_hour: number | null;  // Wear cost per printing hour (#694)
   created_at: string;
   updated_at: string;
 }
@@ -733,6 +732,10 @@ export interface PrinterStatus {
   extruder_slots: Record<string, ExtruderSlot>;
   // Currently loaded tray (global tray ID, 255 = no filament loaded, 254 = external spool)
   tray_now: number;
+  // The trays this print has drawn from, in order: [global tray ID, layer of the
+  // switch]. A tray outside the job's AMS mapping is a backup spool the printer
+  // switched to (AMS Filament Backup). Reset at the start of each print.
+  tray_change_log?: [number, number][];
   // Runout / filament-replacement guidance (#2587). Populated only while PAUSED.
   // Global tray IDs (ams_id*4+slot, 128-135 = AMS-HT, 254 = external), matching
   // the same numbering as tray_now so the AMS graphic can highlight them.
@@ -892,7 +895,7 @@ export interface PrinterCreate {
   camera_light_auto?: boolean;
   plate_detection_enabled?: boolean;
   plate_detection_roi?: PlateDetectionROI;
-  wear_cost_per_hour?: number | null;  // #694
+  wear_cost_per_hour?: number | null;
 }
 
 // Plate Detection
@@ -1022,8 +1025,7 @@ export interface Archive {
   quantity: number;
   energy_kwh: number | null;
   energy_cost: number | null;
-  // First-run printer wear (#694); null when the printer has no price set.
-  depreciation_cost: number | null;
+  wear_cost: number | null;  // Printer wear (#694)
   created_at: string;
   // User tracking (Issue #206)
   created_by_id: number | null;
@@ -1050,7 +1052,7 @@ export interface ArchiveSlim {
   cost: number | null;
   energy_kwh: number | null;
   energy_cost: number | null;
-  depreciation_cost: number | null;
+  wear_cost: number | null;  // Printer wear (#694)
   quantity: number;
   created_at: string;
 }
@@ -1073,7 +1075,7 @@ export interface PrintLogEntry {
   cost: number | null;
   energy_kwh: number | null;
   energy_cost: number | null;
-  depreciation_cost: number | null;
+  wear_cost: number | null;  // Printer wear (#694)
   failure_reason: string | null;
   thumbnail_path: string | null;
   created_by_id: number | null;
@@ -1103,8 +1105,7 @@ export interface ArchiveStats {
   time_accuracy_by_printer: Record<string, number> | null;
   total_energy_kwh: number;
   total_energy_cost: number;
-  // Printer wear summed over every run's depreciation_cost (#694).
-  total_depreciation_cost: number;
+  total_wear_cost: number;  // Printer wear (#694)
   // True when a date-filtered total-consumption query is running on incomplete
   // snapshot history (e.g. right after upgrade, before hourly snapshots have
   // a baseline). UI should explain why the number may undercount.
@@ -1223,6 +1224,7 @@ export interface ProjectStats {
   estimated_cost: number;
   total_energy_kwh: number;
   total_energy_cost: number;
+  total_wear_cost: number;  // Printer wear (#694)
   remaining_prints: number | null;  // Remaining plates
   remaining_parts: number | null;  // Remaining parts
   bom_total_items: number;
@@ -1603,6 +1605,10 @@ export interface AppSettings {
   price_vat_basis: 'gross' | 'net';
   energy_cost_per_kwh: number;
   energy_tracking_mode: 'print' | 'total';
+  // Where the electricity price comes from (#1251). With 'homeassistant',
+  // energy_cost_per_kwh holds the sensor's last reading and is read-only.
+  energy_price_source: 'fixed' | 'homeassistant';
+  energy_price_ha_entity: string;
   check_updates: boolean;
   check_printer_firmware: boolean;
   include_beta_updates: boolean;
@@ -1821,6 +1827,7 @@ export interface AppSettings {
   ldap_default_group: string;
   obico_enabled: boolean;
   obico_ml_url: string;
+  bambuddy_internal_url: string;
   obico_ml_token: string;
   obico_sensitivity: 'low' | 'medium' | 'high';
   obico_action: 'notify' | 'pause' | 'pause_and_off';
@@ -2223,6 +2230,9 @@ export interface UnifiedPreset {
   // the process / filament dropdowns by the selected printer using this when
   // present (#1325).
   compatible_printers?: string[] | null;
+  // Printer presets only: the preset it was saved from, for the local and
+  // OrcaSlicer Cloud tiers (#3250).
+  inherits?: string | null;
 }
 export interface UnifiedPresetsBySlot {
   printer: UnifiedPreset[];
@@ -3381,7 +3391,7 @@ export interface Filament {
 }
 
 // Notification Provider types
-export type ProviderType = 'callmebot' | 'ntfy' | 'pushover' | 'telegram' | 'email' | 'discord' | 'webhook' | 'homeassistant' | 'bark';
+export type ProviderType = 'callmebot' | 'ntfy' | 'pushover' | 'telegram' | 'email' | 'discord' | 'webhook' | 'homeassistant' | 'bark' | 'gotify' | 'notify';
 // How a Telegram provider collects the outcome verdict (#3046)
 export type TelegramVerdictMode = 'buttons' | 'reactions' | 'both';
 
@@ -3868,6 +3878,23 @@ export interface PushoverConfig {
   priority?: number;
 }
 
+export interface NotifyConfig {
+  device_id: string;
+  token: string;
+  icon_url?: string;
+  group_type?: string;
+  live_activities?: boolean;
+  lock_screen_widgets?: boolean;
+  live_activity_privacy?: boolean;
+  live_activity_stage?: boolean;
+  live_activity_style?: 'bar' | 'segments' | 'none';
+  live_activity_metrics?: ('progress' | 'eta' | 'layers' | 'nozzle' | 'bed' | 'chamber')[];
+  live_activity_button_url?: string;
+  live_activity_symbol?: string;
+  live_activity_tint?: string;
+  time_sensitive?: boolean;
+}
+
 export interface TelegramConfig {
   bot_token: string;
   chat_id: string;
@@ -3947,6 +3974,15 @@ export interface SpoolmanStatus {
   enabled: boolean;
   connected: boolean;
   url: string | null;
+  native_tags?: boolean;  // Spoolman 0.27+ links tags natively
+}
+
+export interface SpoolmanTagMigrationReport {
+  dry_run: boolean;
+  moved: number[];
+  already: number;
+  slot_ids: number;
+  conflicts: Array<{ spool_id: number; tag: string; holder: number }>;  // holder -1: a filament holds the tag
 }
 
 export interface SkippedSpool {
@@ -4090,6 +4126,11 @@ export interface InventorySpool {
   note: string | null;
   added_full: boolean | null;
   last_used: string | null;
+  // Last drying (#2863): stamped when an AMS drying run of at least half its
+  // length ends, or set by hand. Temperature and hours are null when unknown.
+  last_dried_at?: string | null;
+  last_dried_temp?: number | null;
+  last_dried_hours?: number | null;
   encode_time: string | null;
   tag_uid: string | null;
   tray_uuid: string | null;
@@ -6146,6 +6187,8 @@ export const api = {
     if (dateTo) params.set('date_to', dateTo);
     return request<Archive[]>(`/archives/?${params}`);
   },
+  // Latest archive of every printer in one request, for the printer cards.
+  getLastArchivePerPrinter: () => request<Archive[]>('/archives/last-per-printer'),
   getArchivesSlim: (dateFrom?: string, dateTo?: string, createdById?: number) => {
     const params = new URLSearchParams();
     if (dateFrom) params.set('date_from', dateFrom);
@@ -7564,6 +7607,10 @@ export const api = {
 
   // Spoolman Integration
   getSpoolmanStatus: () => request<SpoolmanStatus>('/spoolman/status'),
+  migrateSpoolmanTags: (dryRun: boolean) =>
+    request<SpoolmanTagMigrationReport>(`/spoolman/inventory/tags/migrate?dry_run=${dryRun}`, {
+      method: 'POST',
+    }),
   connectSpoolman: () =>
     request<{ success: boolean; message: string }>('/spoolman/connect', {
       method: 'POST',
@@ -9444,6 +9491,13 @@ export interface LibraryFolderTree {
   // max(folder.updated_at, max(immediate-child file.updated_at)). Used by
   // the File Manager folder tree's "sort by recent activity" mode (#1770).
   latest_activity_at: string | null;
+  // Ownership (#3201). can_* are for the current user: what the File
+  // Manager may offer on this folder. The backend enforces the same rules.
+  created_by_id: number | null;
+  shared: boolean;
+  can_write: boolean;
+  can_rename: boolean;
+  can_delete: boolean;
   children: LibraryFolderTree[];
 }
 
@@ -9462,6 +9516,13 @@ export interface LibraryFolder {
   external_show_hidden: boolean;
   file_count: number;
   latest_activity_at: string | null;
+  // Ownership (#3201). can_* are for the current user: what the File
+  // Manager may offer on this folder. The backend enforces the same rules.
+  created_by_id: number | null;
+  shared: boolean;
+  can_write: boolean;
+  can_rename: boolean;
+  can_delete: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -9493,6 +9554,7 @@ export interface LibraryFolderUpdate {
   parent_id?: number | null;
   project_id?: number | null;  // 0 to unlink
   archive_id?: number | null;  // 0 to unlink
+  shared?: boolean;  // library:update_all only (#3201)
 }
 
 export interface LibraryFileDuplicate {

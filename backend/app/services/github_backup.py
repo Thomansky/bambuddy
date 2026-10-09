@@ -789,6 +789,10 @@ class GitHubBackupService:
                 "category": s.category,
                 "low_stock_threshold_pct": s.low_stock_threshold_pct,
                 "storage_location": s.storage_location,
+                # Last drying (#2863).
+                "last_dried_at": str(s.last_dried_at) if s.last_dried_at else None,
+                "last_dried_temp": s.last_dried_temp,
+                "last_dried_hours": s.last_dried_hours,
                 "tag_uid": s.tag_uid,
                 "tray_uuid": s.tray_uuid,
                 "data_origin": s.data_origin,
@@ -881,7 +885,7 @@ class GitHubBackupService:
                 "quantity": a.quantity,
                 "energy_kwh": a.energy_kwh,
                 "energy_cost": a.energy_cost,
-                "depreciation_cost": a.depreciation_cost,
+                "wear_cost": a.wear_cost,
                 "created_at": str(a.created_at) if a.created_at else None,
                 # Soft-deleted archives are collected too — their row is kept on
                 # purpose so the stats endpoint keeps counting their filament and

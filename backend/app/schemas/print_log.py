@@ -31,7 +31,7 @@ class PrintLogEntrySchema(BaseModel):
     cost: float | None = None
     energy_kwh: float | None = None
     energy_cost: float | None = None
-    depreciation_cost: float | None = None
+    wear_cost: float | None = None  # #694
     failure_reason: str | None = None
     user_verdict: str | None = None  # Post-print quality verdict (#1898)
     thumbnail_path: str | None = None

@@ -34,7 +34,13 @@ from sqlalchemy import delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.routes.cloud import resolve_api_key_cloud_owner
-from backend.app.core.auth import QueueReviewRequired, RequestPrinterScope, RequirePermissionIfAuthEnabled
+from backend.app.core.auth import (
+    ApiKeyActor,
+    QueueReviewRequired,
+    RequestActor,
+    RequestPrinterScope,
+    RequirePermissionIfAuthEnabled,
+)
 from backend.app.core.config import settings as app_settings
 from backend.app.core.database import async_session, get_db
 from backend.app.core.permissions import Permission
@@ -378,15 +384,15 @@ async def _resolve_source(
     *,
     library_file_id: int | None,
     archive_id: int | None,
-    user: User | None,
+    user: User | ApiKeyActor | None,
     printer_scope: PrinterScope,
 ) -> tuple[SourceKind, int, str, Path]:
     # Per-row ownership gate (IDOR fix): a caller may only run a pipeline on a
     # source they can see. Without this a READ_OWN caller could reference
     # another user's library file / archive by raw id and have it sliced (and,
     # via /run, printed) even though a direct GET on that id returned 404.
-    # Auth-disabled and API-key callers (user is None) keep can_read_all=True —
-    # no per-row identity, matching the library/archive read helpers.
+    # Only auth off (user is None) keeps can_read_all=True. An API key arrives
+    # as its owner's RequestActor, matching the library/archive read helpers.
     from backend.app.api.routes.archives import _ensure_archive_visible
     from backend.app.api.routes.library import _ensure_library_file_visible
 
@@ -655,6 +661,7 @@ async def check_eligibility(
     current_user: User | None = RequirePermissionIfAuthEnabled(Permission.PIPELINES_READ),
     printer_scope: PrinterScope = RequestPrinterScope,
     db: AsyncSession = Depends(get_db),
+    actor: User | ApiKeyActor | None = RequestActor,
 ):
     pipeline = await _load_pipeline(db, pipeline_id)
     printer_scope.ensure(pipeline.target_printer_id)
@@ -662,7 +669,7 @@ async def check_eligibility(
         db,
         library_file_id=body.source_library_file_id,
         archive_id=body.source_archive_id,
-        user=current_user,
+        user=actor,
         printer_scope=printer_scope,
     )
     if pipeline.target_kind == "printer_class" and pipeline.target_printer_id is None:
@@ -687,6 +694,7 @@ async def run_pipeline(
     printer_scope: PrinterScope = RequestPrinterScope,
     review_required: bool = QueueReviewRequired,
     db: AsyncSession = Depends(get_db),
+    actor: User | ApiKeyActor | None = RequestActor,
 ):
     from backend.app.api.routes.settings import get_setting
     from backend.app.services.slice_dispatch import slice_dispatch
@@ -695,14 +703,13 @@ async def run_pipeline(
     # The pipeline is shared config; running it is limited to what the caller
     # may print on (#1727)
     printer_scope.ensure(pipeline.target_printer_id)
-    # ``user=current_user`` deliberately, not the cloud owner below: an API-key
-    # caller has no per-row identity and must keep can_read_all, the same as
-    # every other read helper.
+    # An API key is checked as its owner (RequestActor), like its owner's own
+    # session; ``creator`` below is a separate question.
     src_kind, src_id, src_filename, src_path = await _resolve_source(
         db,
         library_file_id=body.source_library_file_id,
         archive_id=body.source_archive_id,
-        user=current_user,
+        user=actor,
         printer_scope=printer_scope,
     )
 
@@ -995,6 +1002,7 @@ async def retry_failed(
     printer_scope: PrinterScope = RequestPrinterScope,
     review_required: bool = QueueReviewRequired,
     db: AsyncSession = Depends(get_db),
+    actor: User | ApiKeyActor | None = RequestActor,
 ):
     """Create a new run with copies = (failed + cancelled count) from the
     parent. Same pipeline, same source. Eligibility re-checked at run time
@@ -1041,6 +1049,7 @@ async def retry_failed(
         body,
         current_user=current_user,
         api_key_cloud_owner=api_key_cloud_owner,
+        actor=actor,
         printer_scope=printer_scope,
         review_required=review_required,
         db=db,

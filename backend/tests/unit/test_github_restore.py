@@ -856,6 +856,36 @@ class TestRestoreSpools:
         assert restored.material == "PLA"
 
     @pytest.mark.asyncio
+    async def test_restores_the_drying_record(self, db_session):
+        """#2863 — the date the backup writes with str() parses back."""
+        tally = _CategoryTally()
+        entry = self._spool_entry(last_dried_at="2026-10-06 12:30:00", last_dried_temp=55, last_dried_hours=7.5)
+
+        await _service()._restore_spools(db_session, {"spools": [entry]}, None, False, tally, {})
+        await db_session.commit()
+
+        restored = (await db_session.execute(select(Spool))).scalars().one()
+        assert restored.last_dried_at == datetime(2026, 10, 6, 12, 30)
+        assert restored.last_dried_temp == 55
+        assert restored.last_dried_hours == 7.5
+
+    @pytest.mark.asyncio
+    async def test_older_backup_keeps_the_live_drying_record(self, db_session):
+        """A backup written before #2863 has no drying keys and must not wipe them."""
+        db_session.add(
+            Spool(material="PLA", tag_uid="AABBCCDD", last_dried_at=datetime(2026, 9, 1, 8, 0), last_dried_temp=55)
+        )
+        await db_session.commit()
+        tally = _CategoryTally()
+
+        await _service()._restore_spools(db_session, {"spools": [self._spool_entry()]}, None, True, tally, {})
+        await db_session.commit()
+
+        spool = (await db_session.execute(select(Spool))).scalars().one()
+        assert spool.last_dried_at == datetime(2026, 9, 1, 8, 0)
+        assert spool.last_dried_temp == 55
+
+    @pytest.mark.asyncio
     async def test_matches_existing_spool_by_tag_uid(self, db_session):
         db_session.add(Spool(material="PLA", tag_uid="AABBCCDD", color_name="Old"))
         await db_session.commit()

@@ -333,6 +333,7 @@ Optional but recommended — drop the [`slicer-api/` Compose stack](slicer-api/R
 ### 🔔 Notifications
 - WhatsApp, Telegram (including forum topics), Discord
 - Email, Pushover, Bark, ntfy (with per-event priority — Min / Low / Default / High / Urgent)
+- **Notify!** — push alerts plus iOS Live Activities (live print countdown on the Lock Screen) and Lock Screen status widgets per printer
 - Home Assistant persistent notifications, with custom data fields
 - Custom webhooks
 - Quiet hours & daily digest
@@ -830,7 +831,7 @@ Full documentation available at **[wiki.bambuddy.cool](http://wiki.bambuddy.cool
 |-----------|------------|
 | Backend | Python, FastAPI, SQLAlchemy |
 | Frontend | React, TypeScript, Tailwind CSS |
-| Database | SQLite (default) or PostgreSQL |
+| Database | SQLite (default) or PostgreSQL 13+ |
 | 3D Viewer | Three.js (models), libvgcode (G-code preview) |
 | Communication | MQTT (TLS), FTPS |
 

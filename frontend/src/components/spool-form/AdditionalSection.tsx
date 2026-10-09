@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { useToast } from '../../contexts/ToastContext';
 import { api } from '../../api/client';
+import { toDateTimeLocalValue } from '../../utils/date';
 import type { AdditionalSectionProps } from './types';
 
 function SpoolWeightPicker({
@@ -182,6 +183,7 @@ export function AdditionalSection({
   globalLowStockThreshold,
   spoolmanMode = false,
   vatEnabled = false,
+  showLastDried = false,
 }: AdditionalSectionProps) {
   const { t } = useTranslation();
   const { showToast } = useToast();
@@ -519,6 +521,33 @@ export function AdditionalSection({
           </div>
         )}
       </div>
+
+      {/* Last dried (#2863). Stamped by AMS drying runs; set here for a
+          spool dried in an external dryer. */}
+      {showLastDried && (
+        <div>
+          <label className="block text-sm font-medium text-bambu-gray mb-1" htmlFor="spool-last-dried">
+            {t('inventory.lastDried')}
+          </label>
+          <div className="flex gap-2">
+            <input
+              id="spool-last-dried"
+              type="datetime-local"
+              className="flex-1 min-w-0 px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white text-sm focus:outline-none focus:border-bambu-green"
+              value={formData.last_dried_at}
+              onChange={(e) => updateField('last_dried_at', e.target.value)}
+            />
+            <button
+              type="button"
+              className="px-3 py-2 text-sm rounded-lg bg-bambu-dark-tertiary text-white hover:bg-bambu-gray-dark"
+              onClick={() => updateField('last_dried_at', toDateTimeLocalValue(new Date()))}
+            >
+              {t('inventory.lastDriedNow')}
+            </button>
+          </div>
+          <p className="text-xs text-bambu-gray mt-1">{t('inventory.lastDriedHelp')}</p>
+        </div>
+      )}
 
       {/* Note */}
       <div className="sm:col-span-2">

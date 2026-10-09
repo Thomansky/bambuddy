@@ -1,33 +1,7 @@
-import { Component, type ReactNode, type ErrorInfo } from 'react';
+import { Component, Suspense, type ReactNode, type ErrorInfo } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Layout } from './components/Layout';
-import { PrintersPage } from './pages/PrintersPage';
-import { ArchivesPage } from './pages/ArchivesPage';
-import { QueuePage } from './pages/QueuePage';
-import { StatsPage } from './pages/StatsPage';
-import { SettingsPage } from './pages/SettingsPage';
-import { FinancePage } from './pages/FinancePage';
-import { ProfilesPage } from './pages/ProfilesPage';
-import { MaintenancePage } from './pages/MaintenancePage';
-import { ProjectsPage } from './pages/ProjectsPage';
-import { ProjectDetailPage } from './pages/ProjectDetailPage';
-import { FileManagerPage } from './pages/FileManagerPage';
-import { LibraryTrashPage } from './pages/LibraryTrashPage';
-import { CameraPage } from './pages/CameraPage';
-import { CamWallPage } from './pages/CamWallPage';
-import { StreamOverlayPage } from './pages/StreamOverlayPage';
-import { ExternalLinkPage } from './pages/ExternalLinkPage';
-import { GroupEditPage } from './pages/GroupEditPage';
-import { PrinterLocationsPage } from './pages/PrinterLocationsPage';
-import InventoryPage from './pages/InventoryPage';
-import { ModelSourcesPage } from './pages/ModelSourcesPage';
-import { SystemInfoPage } from './pages/SystemInfoPage';
-import { LoginPage } from './pages/LoginPage';
-import { ConnectAuthorizePage } from './pages/ConnectAuthorizePage';
-import { SetupPage } from './pages/SetupPage';
-import { NotificationsPage } from './pages/NotificationsPage';
-import { GCodeViewerPage } from './pages/GCodeViewerPage';
 import { useWebSocket } from './hooks/useWebSocket';
 import { usePrintProgressTitle } from './hooks/usePrintProgressTitle';
 import { useStreamTokenSync } from './hooks/useCameraStreamToken';
@@ -37,12 +11,43 @@ import { SliceJobTrackerProvider } from './contexts/SliceJobTrackerContext';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { ColorCatalogProvider } from './contexts/ColorCatalogContext';
 import { SpoolBuddyLayout } from './components/spoolbuddy/SpoolBuddyLayout';
-import { SpoolBuddyDashboard } from './pages/spoolbuddy/SpoolBuddyDashboard';
-import { SpoolBuddyAmsPage } from './pages/spoolbuddy/SpoolBuddyAmsPage';
-import { SpoolBuddySettingsPage } from './pages/spoolbuddy/SpoolBuddySettingsPage';
-import { SpoolBuddyCalibrationPage } from './pages/spoolbuddy/SpoolBuddyCalibrationPage';
-import { SpoolBuddyWriteTagPage } from './pages/spoolbuddy/SpoolBuddyWriteTagPage';
-import { SpoolBuddyInventoryPage } from './pages/spoolbuddy/SpoolBuddyInventoryPage';
+import { PageLoading } from './components/PageLoading';
+import { lazyPage } from './utils/lazyPage';
+
+// Every page loads as its own file when first opened (#3175).
+const PrintersPage = lazyPage(() => import('./pages/PrintersPage'), 'PrintersPage');
+const ArchivesPage = lazyPage(() => import('./pages/ArchivesPage'), 'ArchivesPage');
+const QueuePage = lazyPage(() => import('./pages/QueuePage'), 'QueuePage');
+const StatsPage = lazyPage(() => import('./pages/StatsPage'), 'StatsPage');
+const SettingsPage = lazyPage(() => import('./pages/SettingsPage'), 'SettingsPage');
+const FinancePage = lazyPage(() => import('./pages/FinancePage'), 'FinancePage');
+const ProfilesPage = lazyPage(() => import('./pages/ProfilesPage'), 'ProfilesPage');
+const MaintenancePage = lazyPage(() => import('./pages/MaintenancePage'), 'MaintenancePage');
+const ProjectsPage = lazyPage(() => import('./pages/ProjectsPage'), 'ProjectsPage');
+const ProjectDetailPage = lazyPage(() => import('./pages/ProjectDetailPage'), 'ProjectDetailPage');
+const FileManagerPage = lazyPage(() => import('./pages/FileManagerPage'), 'FileManagerPage');
+const LibraryTrashPage = lazyPage(() => import('./pages/LibraryTrashPage'), 'LibraryTrashPage');
+const CameraPage = lazyPage(() => import('./pages/CameraPage'), 'CameraPage');
+const CamWallPage = lazyPage(() => import('./pages/CamWallPage'), 'CamWallPage');
+const StreamOverlayPage = lazyPage(() => import('./pages/StreamOverlayPage'), 'StreamOverlayPage');
+const ExternalLinkPage = lazyPage(() => import('./pages/ExternalLinkPage'), 'ExternalLinkPage');
+const GroupEditPage = lazyPage(() => import('./pages/GroupEditPage'), 'GroupEditPage');
+const PrinterLocationsPage = lazyPage(() => import('./pages/PrinterLocationsPage'), 'PrinterLocationsPage');
+const InventoryPage = lazyPage(() => import('./pages/InventoryPage'), 'default');
+const ModelSourcesPage = lazyPage(() => import('./pages/ModelSourcesPage'), 'ModelSourcesPage');
+const SystemInfoPage = lazyPage(() => import('./pages/SystemInfoPage'), 'SystemInfoPage');
+const LoginPage = lazyPage(() => import('./pages/LoginPage'), 'LoginPage');
+const ConnectAuthorizePage = lazyPage(() => import('./pages/ConnectAuthorizePage'), 'ConnectAuthorizePage');
+const SetupPage = lazyPage(() => import('./pages/SetupPage'), 'SetupPage');
+const NotificationsPage = lazyPage(() => import('./pages/NotificationsPage'), 'NotificationsPage');
+const GCodeViewerPage = lazyPage(() => import('./pages/GCodeViewerPage'), 'GCodeViewerPage');
+const SpoolBuddyDashboard = lazyPage(() => import('./pages/spoolbuddy/SpoolBuddyDashboard'), 'SpoolBuddyDashboard');
+const SpoolBuddyAmsPage = lazyPage(() => import('./pages/spoolbuddy/SpoolBuddyAmsPage'), 'SpoolBuddyAmsPage');
+const SpoolBuddySettingsPage = lazyPage(() => import('./pages/spoolbuddy/SpoolBuddySettingsPage'), 'SpoolBuddySettingsPage');
+const SpoolBuddyCalibrationPage = lazyPage(() => import('./pages/spoolbuddy/SpoolBuddyCalibrationPage'), 'SpoolBuddyCalibrationPage');
+const SpoolBuddyWriteTagPage = lazyPage(() => import('./pages/spoolbuddy/SpoolBuddyWriteTagPage'), 'SpoolBuddyWriteTagPage');
+const SpoolBuddyInventoryPage = lazyPage(() => import('./pages/spoolbuddy/SpoolBuddyInventoryPage'), 'SpoolBuddyInventoryPage');
+
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null; errorInfo: ErrorInfo | null }> {
   state = { error: null as Error | null, errorInfo: null as ErrorInfo | null };
 
@@ -177,6 +182,9 @@ function App() {
             <SliceJobTrackerProvider>
             <StreamTokenSync />
             <BrowserRouter>
+              {/* Standalone pages (login, camera, overlay, ...) wait here; pages
+                  inside a layout wait in that layout, so its frame stays up. */}
+              <Suspense fallback={<PageLoading fullScreen />}>
               <Routes>
                 {/* Setup page - only accessible if auth not enabled */}
                 <Route path="/setup" element={<SetupRoute><SetupPage /></SetupRoute>} />
@@ -243,6 +251,7 @@ function App() {
                   <Route path="camera-tokens" element={<Navigate to="/settings?tab=camera#card-camera-tokens" replace />} />
                 </Route>
               </Routes>
+              </Suspense>
             </BrowserRouter>
             </SliceJobTrackerProvider>
             </ColorCatalogProvider>

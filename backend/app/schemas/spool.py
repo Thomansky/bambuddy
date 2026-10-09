@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -90,6 +90,17 @@ def normalize_effect_type(value: str | None) -> str | None:
     if canonical not in ALLOWED_EFFECT_TYPES:
         raise ValueError(f"effect_type must be one of: {sorted(ALLOWED_EFFECT_TYPES)}")
     return canonical
+
+
+def naive_utc(value: datetime | None) -> datetime | None:
+    """Store a datetime the way Bambuddy's naive ``DateTime`` columns hold it: UTC.
+
+    A browser sends local time with an offset. Dropping the offset without
+    converting would shift the stored moment by that offset (#2863).
+    """
+    if value is not None and value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
 
 
 class SpoolBase(BaseModel):
@@ -206,6 +217,14 @@ class SpoolUpdate(BaseModel):
     cost_per_kg: float | None = Field(default=None, ge=0)
     cost_vat_included: bool | None = None
     weight_locked: bool | None = None
+    # Set by hand for a drying done outside an AMS; null clears it (#2863).
+    last_dried_at: datetime | None = None
+
+    @field_validator("last_dried_at")
+    @classmethod
+    def _validate_last_dried_at(cls, v: datetime | None) -> datetime | None:
+        return naive_utc(v)
+
     # User-defined category + per-spool low-stock threshold override (#729).
     category: str | None = Field(default=None, max_length=50)
     low_stock_threshold_pct: int | None = Field(default=None, ge=1, le=99)
@@ -296,6 +315,10 @@ class SpoolResponse(SpoolBase):
     rgba: str | None = None
     added_full: bool | None = None
     last_used: datetime | None = None
+    # Last drying (#2863). Only the date is writable, through SpoolUpdate.
+    last_dried_at: datetime | None = None
+    last_dried_temp: int | None = None
+    last_dried_hours: float | None = None
     encode_time: datetime | None = None
     tag_uid: str | None = None
     tray_uuid: str | None = None

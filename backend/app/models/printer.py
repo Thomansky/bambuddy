@@ -20,7 +20,8 @@ class Printer(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     auto_archive: Mapped[bool] = mapped_column(Boolean, default=True)
     print_hours_offset: Mapped[float] = mapped_column(Float, default=0.0)  # Baseline hours to add
-    # Optional wear cost charged per printing hour (#694). Unset or 0 = off.
+    # What an hour of printing costs in wear on this machine (#694). Empty or 0
+    # leaves wear cost off for the printer.
     wear_cost_per_hour: Mapped[float | None] = mapped_column(Float, nullable=True)
     runtime_seconds: Mapped[int] = mapped_column(
         default=0

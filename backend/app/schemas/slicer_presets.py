@@ -40,6 +40,12 @@ class UnifiedPreset(BaseModel):
     process / filament dropdowns by the selected printer (#1325); when it is
     ``None`` the modal falls back to matching the preset name against the
     ``@BBL <code>`` printer-model registry.
+
+    ``inherits`` is the preset a printer preset was saved from, for the local
+    and OrcaSlicer Cloud tiers. A printer preset saved under a name of its own
+    ("Bambu Lab H2D 0.4 nozzle - Skew") is listed in no process's
+    ``compatible_printers`` and its name says nothing reliable about the
+    model, so the SliceModal matches against this parent as well (#3250).
     """
 
     id: str
@@ -48,6 +54,7 @@ class UnifiedPreset(BaseModel):
     filament_type: str | None = None
     filament_colour: str | None = None
     compatible_printers: list[str] | None = None
+    inherits: str | None = None
 
 
 class UnifiedPresetsBySlot(BaseModel):

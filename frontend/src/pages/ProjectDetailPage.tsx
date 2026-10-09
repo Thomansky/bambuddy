@@ -730,6 +730,7 @@ export function ProjectDetailPage() {
                 const rollupCost =
                   project.rollup_stats.estimated_cost +
                   project.rollup_stats.total_energy_cost +
+                  (project.rollup_stats.total_wear_cost ?? 0) +
                   project.rollup_stats.bom_cost;
                 if (rollupCost <= 0) return null;
                 return (
@@ -770,7 +771,7 @@ export function ProjectDetailPage() {
 
       {/* Cost tracking */}
       {stats && (() => {
-        const totalCost = stats.estimated_cost + stats.total_energy_cost + stats.bom_cost;
+        const totalCost = stats.estimated_cost + stats.total_energy_cost + (stats.total_wear_cost ?? 0) + stats.bom_cost;
         return (stats.estimated_cost > 0 || totalCost > 0 || project.budget !== null);
       })() && (
         <Card>
@@ -798,8 +799,16 @@ export function ProjectDetailPage() {
                   </p>
                 </div>
               )}
+              {(stats.total_wear_cost ?? 0) > 0 && (
+                <div>
+                  <p className="text-xs text-bambu-gray uppercase">{t('projectDetail.cost.wear')}</p>
+                  <p className="text-lg font-semibold text-white">
+                    {currency}{stats.total_wear_cost.toFixed(2)}
+                  </p>
+                </div>
+              )}
               {(() => {
-                const totalCost = stats.estimated_cost + stats.total_energy_cost + stats.bom_cost;
+                const totalCost = stats.estimated_cost + stats.total_energy_cost + (stats.total_wear_cost ?? 0) + stats.bom_cost;
                 if (totalCost <= 0) return null;
                 return (
                   <div>
@@ -814,7 +823,7 @@ export function ProjectDetailPage() {
                 );
               })()}
               {project.budget !== null && (() => {
-                const totalCost = stats.estimated_cost + stats.total_energy_cost + stats.bom_cost;
+                const totalCost = stats.estimated_cost + stats.total_energy_cost + (stats.total_wear_cost ?? 0) + stats.bom_cost;
                 const remaining = project.budget - totalCost;
                 return (
                   <div>
