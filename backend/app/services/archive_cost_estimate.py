@@ -78,12 +78,15 @@ async def _internal_rates(
     """Price per gram of the built-in inventory spool in each tray.
 
     Same rule as ``usage_tracker``'s completion writer: the spool's own
-    ``cost_per_kg``, or the default rate when the spool has none.
+    ``cost_per_kg`` in the VAT working basis, or the default rate when the
+    spool has none.
     """
     from backend.app.models.spool import Spool
     from backend.app.models.spool_assignment import SpoolAssignment
     from backend.app.services.spoolman_tracking import _global_tray_id_to_ams_slot
+    from backend.app.services.vat import VatContext, spool_cost_per_kg
 
+    vat_ctx = await VatContext.load(db)
     rates: dict[int, float] = {}
     for tray in trays:
         ams_id, tray_id = _global_tray_id_to_ams_slot(tray)
@@ -100,8 +103,7 @@ async def _internal_rates(
         ).scalar_one_or_none()  # one assignment per tray (UniqueConstraint)
         if spool is None:
             continue
-        cost_per_kg = spool.cost_per_kg if spool.cost_per_kg is not None else default_cost_per_kg
-        rates[tray] = cost_per_kg / 1000.0
+        rates[tray] = spool_cost_per_kg(spool, vat_ctx, default_cost_per_kg) / 1000.0
     return rates
 
 

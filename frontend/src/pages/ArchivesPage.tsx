@@ -164,6 +164,12 @@ const DEFAULT_LOG_COLUMNS: Array<{ id: string; visible: boolean }> = [
   { id: 'wear_cost', visible: false },
 ];
 
+/** Column ids that were renamed, old -> new. The printer wear column was stored
+ *  as `depreciation_cost` before it became upstream's `wear_cost`; mapping it
+ *  on load keeps a user's visible column and sort across the rename instead of
+ *  dropping them as unknown ids. */
+const LEGACY_LOG_COLUMN_IDS = new Map<string, string>([['depreciation_cost', 'wear_cost']]);
+
 /** Stored config merged with the defaults: unknown ids (removed columns) are
  *  dropped and ids added by a later Bambuddy version are appended with their
  *  default visibility, so an upgrade never silently hides a new column or
@@ -172,7 +178,11 @@ function loadLogColumnConfig(): Array<{ id: string; visible: boolean }> {
   try {
     const stored = localStorage.getItem(LOG_COLUMN_CONFIG_KEY);
     if (stored) {
-      const parsed = JSON.parse(stored) as Array<{ id: string; visible: boolean }>;
+      // Renamed ids first, then dedupe: a config holding both the old and the
+      // new id keeps the first entry so the column isn't rendered twice.
+      const parsed = (JSON.parse(stored) as Array<{ id: string; visible: boolean }>)
+        .map((c) => ({ ...c, id: LEGACY_LOG_COLUMN_IDS.get(c.id) ?? c.id }))
+        .filter((c, i, all) => all.findIndex((x) => x.id === c.id) === i);
       const known = new Set(Object.keys(LOG_COLUMN_LABEL_KEYS));
       const storedIds = new Set(parsed.map((c) => c.id));
       const valid = parsed
@@ -206,6 +216,8 @@ function loadLogSort(): LogSortState {
     const stored = localStorage.getItem(LOG_SORT_KEY);
     if (stored) {
       const parsed = JSON.parse(stored) as LogSortState;
+      const renamed = LEGACY_LOG_COLUMN_IDS.get(parsed?.column);
+      if (renamed) parsed.column = renamed;
       if (SORTABLE_LOG_COLUMNS.has(parsed?.column) && (parsed.direction === 'asc' || parsed.direction === 'desc')) {
         return parsed;
       }

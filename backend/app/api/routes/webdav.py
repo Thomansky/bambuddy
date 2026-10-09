@@ -13,10 +13,11 @@ and refuses the rest with 405, and ``readwrite`` adds ``PUT``, ``DELETE``,
 
 The projection is virtual: nothing here invents a layout on disk. A path is
 resolved by walking the tree one level at a time from the root, which is also
-what makes the permission gate work — a file the caller may not read is not in
-the listing its parent produces, so no path leads to it. A write resolves its
-*parent* the same way and then validates the one remaining segment, so the same
-walk is the only way in and there is no second resolver to keep honest.
+what makes the permission gate work — a file the caller may not read, or a
+folder they may not see (#3201), is not in the listing its parent produces, so
+no path leads to it. A write resolves its *parent* the same way and then
+validates the one remaining segment, so the same walk is the only way in and
+there is no second resolver to keep honest.
 
 The write half is mostly about how clients actually write, which is nothing
 like a single clean PUT: they create the file empty and fill it afterwards,
@@ -86,7 +87,12 @@ from backend.app.models.library import LibraryFile, LibraryFolder
 from backend.app.models.user import User
 from backend.app.schemas.settings import WEBDAV_MODES
 from backend.app.services import library_storage
-from backend.app.services.library_folder_access import folder_delete_blocker, load_folder_index
+from backend.app.services.library_folder_access import (
+    can_write_folder,
+    folder_delete_blocker,
+    load_folder_index,
+    visible_folder_ids,
+)
 from backend.app.utils.filename import InvalidFilenameError, validate_print_filename
 from backend.app.utils.safe_path import safe_join_under
 
@@ -470,24 +476,41 @@ async def _has_external_content(db: AsyncSession, principal: _Principal) -> bool
     (``unfoldered_external_files``) and so must this, or an install whose only
     external content is loose files would have no path to it.
 
-    The loose-file test runs the same visibility gate the bucket's listing
-    runs. Asking a looser question here than the listing answers would put an
-    empty ``External/`` in front of a ``read_own`` caller, and its mere
-    presence is the fact the per-file gate exists to withhold.
+    Both tests run the same visibility gates the bucket's listing runs, the
+    folder one included (#3201). Asking a looser question here than the
+    listing answers would put an empty ``External/`` in front of a
+    ``read_own`` caller, and its mere presence is the fact the gates exist to
+    withhold.
     """
-    folder = await db.execute(
-        select(LibraryFolder.id).where(LibraryFolder.parent_id.is_(None), LibraryFolder.is_external.is_(True)).limit(1)
-    )
-    if folder.scalar_one_or_none() is not None:
+    if await _subfolders(db, None, principal, external=True):
         return True
     return bool(await _visible_files(db, None, principal, external=True))
 
 
-async def _subfolders(db: AsyncSession, parent_id: int | None, *, external: bool | None = None):
+async def _subfolders(
+    db: AsyncSession,
+    parent_id: int | None,
+    principal: _Principal,
+    *,
+    external: bool | None = None,
+) -> list[LibraryFolder]:
+    """The folders directly under *parent_id* that the caller may see.
+
+    The File Manager's tree rule (#3201): a ``read_own`` caller sees their own
+    folders, shared ones, folders holding one of their files and the parents
+    leading there. Applied in the listing, like the per-file gate, so a hidden
+    folder has no path to it and every method answers as if it were not there.
+    """
     query = select(LibraryFolder).where(LibraryFolder.parent_id == parent_id).order_by(LibraryFolder.id)
     if external is not None:
         query = query.where(LibraryFolder.is_external.is_(external))
-    return (await db.execute(query)).scalars().all()
+    folders = list((await db.execute(query)).scalars().all())
+    if principal.can_read_all or not folders:
+        return folders
+    visible = visible_folder_ids(await load_folder_index(db), principal.user)
+    if visible is None:
+        return folders
+    return [folder for folder in folders if folder.id in visible]
 
 
 async def _children(db: AsyncSession, entry: _Entry, principal: _Principal) -> list[_Entry]:
@@ -513,14 +536,14 @@ async def _children(db: AsyncSession, entry: _Entry, principal: _Principal) -> l
 
     if entry.bucket in (BUCKET_MANAGED, BUCKET_EXTERNAL):
         is_external = entry.bucket == BUCKET_EXTERNAL
-        folders = await _subfolders(db, None, external=is_external)
+        folders = await _subfolders(db, None, principal, external=is_external)
         # Files belonging to no folder would otherwise have no path at all.
         # They sit directly in the bucket rather than behind the File Manager's
         # synthetic "No folder" entry, which is a UI affordance and not a
         # directory anyone would want to type.
         files = await _visible_files(db, None, principal, external=is_external)
     elif entry.folder is not None:
-        folders = await _subfolders(db, entry.folder.id)
+        folders = await _subfolders(db, entry.folder.id, principal)
         files = await _visible_files(db, entry.folder.id, principal)
     else:  # pragma: no cover - every collection is a bucket or a folder
         return []
@@ -930,14 +953,34 @@ async def _resolve_target(
     return _Target(parent=parent, name=name, entry=entry)
 
 
-def _write_folder(parent: _Entry) -> LibraryFolder | None:
-    """The folder a write into *parent* belongs to, or None for the managed bucket.
+def _write_folder(
+    destination: _Target,
+    principal: _Principal,
+    *,
+    source: _Target | None = None,
+) -> LibraryFolder | None:
+    """The folder a write to *destination* lands in, or None for the managed bucket.
 
     The root and ``External`` are not directories: the first holds exactly the
     two buckets, and a loose file under the second would have no directory on
     any share to live in. Both refuse rather than inventing a home.
+
+    A write that adds an entry to a folder also needs a folder the caller may
+    add to (#3201): their own, a shared one, or any for ``library:read_all`` —
+    the 403 ``get_writable_folder`` gives the File Manager's uploads and moves.
+    A ``read_own`` caller can see a folder they may not write to, one holding
+    their file or one on the way to a shared folder, so being able to resolve
+    it is not enough. Two writes add nothing and are not asked: one onto a file
+    that is already there only changes that row, as a PUT onto it does, and a
+    MOVE from *source* that stays in its folder is a rename, which the File
+    Manager does not ask for either.
     """
+    parent = destination.parent
     if parent.folder is not None:
+        stays = source is not None and source.parent.folder is not None and source.parent.folder.id == parent.folder.id
+        adds = destination.entry is None and not stays
+        if adds and not can_write_folder(parent.folder, principal.user):
+            raise _forbidden("You can only add to your own folders and folders shared with everyone")
         return parent.folder
     if parent.bucket == BUCKET_MANAGED:
         return None
@@ -1323,7 +1366,7 @@ async def webdav_put(
 
     existing = target.entry.file if target.entry is not None else None
     if existing is None:
-        folder = _write_folder(target.parent)
+        folder = _write_folder(target, principal)
         _require_permission(principal.user, Permission.LIBRARY_UPLOAD)
         _refuse_readonly(folder)
         # The upload route's own resolver: it picks the managed blob or the
@@ -1483,7 +1526,7 @@ async def webdav_mkcol(
     if target.entry is not None:
         raise _method_not_allowed(principal.mode, "That name already exists")
 
-    parent = _write_folder(target.parent)
+    parent = _write_folder(target, principal)
     _refuse_readonly(parent)
 
     # Owned by whoever made it, private to them unless an admin shares it —
@@ -1629,7 +1672,7 @@ async def webdav_move(
     _require_ownership(principal.user, file, Permission.LIBRARY_UPDATE_ALL, Permission.LIBRARY_UPDATE_OWN)
     _refuse_readonly_row(file, source.parent.folder)
 
-    target_folder = _write_folder(destination.parent)
+    target_folder = _write_folder(destination, principal, source=source)
     _refuse_readonly(target_folder)
     replaced = destination.entry.file if destination.entry is not None else None
     if replaced is not None:
@@ -1723,11 +1766,11 @@ async def _move_collection(
         raise _forbidden("'Files' and 'External' are part of the share and cannot be moved")
     if folder.is_external:
         raise _forbidden("An external folder mirrors a real directory — rename it on the share instead")
-    # Folders carry no ownership, so the File Manager asks for update_all here
-    # and so does this.
+    # Still update_all only. Since #3201 the File Manager also lets update_own
+    # move a user's own folders; the share keeps the stricter rule it had.
     _require_permission(principal.user, Permission.LIBRARY_UPDATE_ALL)
 
-    parent = _write_folder(destination.parent)
+    parent = _write_folder(destination, principal, source=source)
     if parent is not None and parent.is_external:
         raise _forbidden("A managed folder cannot be moved into an external one")
 
@@ -1768,7 +1811,7 @@ async def webdav_copy(
         raise _forbidden("Copy the files; a folder is copied by creating it and copying into it")
 
     file = source.entry.file
-    target_folder = _write_folder(destination.parent)
+    target_folder = _write_folder(destination, principal)
     _refuse_readonly(target_folder)
     replaced = destination.entry.file if destination.entry is not None else None
     if replaced is not None:

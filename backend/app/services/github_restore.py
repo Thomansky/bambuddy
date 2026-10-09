@@ -1082,6 +1082,12 @@ class GitHubRestoreService:
                 # A backup from the fork before upstream's #694 names it depreciation_cost.
                 "wear_cost": entry.get("wear_cost", entry.get("depreciation_cost")),
             }
+            # Late arrival like deleted_at below: a backup taken before the
+            # collector wrote it has no key, and the overwrite branch is a
+            # blanket setattr, so only carry it when present or an old backup
+            # writes NULL over a live job number.
+            if "job_number" in entry:
+                fields["job_number"] = entry.get("job_number")
 
             printer_id = entry.get("printer_id")
             if printer_id is not None and printer_id not in valid_printers:

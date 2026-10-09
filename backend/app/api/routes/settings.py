@@ -242,8 +242,20 @@ _FLOAT_SETTING_KEYS = frozenset(
 )
 
 # String settings limited to a fixed set of values, which a stored "None"
-# would break when the settings response is built.
-_ENUM_SETTING_KEYS = frozenset({"energy_price_source"})
+# would break when the settings response is built. price_vat_basis has no
+# read-side fallback, so a stored "None" 500s every settings read. The two
+# mode settings do fall back, but silently: a null would take the library out
+# of directory mode or switch the WebDAV share off without anyone asking.
+# library_root_view is left out on purpose: a null there resets it to "all",
+# a contract test_library_root_view_setting.py pins.
+_ENUM_SETTING_KEYS = frozenset(
+    {
+        "energy_price_source",
+        "price_vat_basis",
+        "library_storage_mode",
+        "webdav_mode",
+    }
+)
 
 _INT_SETTING_KEYS = frozenset(
     {

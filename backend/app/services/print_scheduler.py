@@ -2397,6 +2397,8 @@ class PrintScheduler:
                         busy_printers | interlocked.keys(),
                         require_plate_clear,
                         await _creator_scope(item.created_by_id),
+                        # Passed over like the model-based branch does (#3127).
+                        maintenance_hold=lambda pid, _item=item: maintenance_hold(pid, _item),
                     )
                 ):
                     # Waiting on the user, not on a printer. Cleared here because
@@ -9750,6 +9752,7 @@ class PrintScheduler:
         unavailable: set[int],
         require_plate_clear: bool,
         printer_scope: PrinterScope,
+        maintenance_hold: Callable[[int], str | None] | None = None,
     ) -> bool:
         """Free an "any model" job held for low filament once a printer can run it (#3137).
 
@@ -9777,6 +9780,12 @@ class PrintScheduler:
         A printer qualifies only on a positive finding: every slot the plate
         prints mapped to a spool whose remaining amount is on record and
         enough. A printer whose spools Bambuddy does not track is not one.
+
+        *maintenance_hold* is the main pass's maintenance reservation (#3127),
+        handed to the matcher as the model-based branch hands it: a printer
+        with a run pending, or a scheduled run the job would run into, is
+        passed over for a free one. Moved onto it, the job would only be held
+        again by the fixed-printer branch while a free printer sat idle.
 
         Returns True when the job was moved. A check that fails keeps the hold
         rather than stopping the queue pass.
@@ -9807,6 +9816,7 @@ class PrintScheduler:
                 item.target_location,
                 filament_overrides=filament_overrides,
                 require_plate_clear=require_plate_clear,
+                maintenance_hold=maintenance_hold,
                 printer_scope=printer_scope,
                 is_short=is_short,
             )
@@ -9827,6 +9837,8 @@ class PrintScheduler:
         item.printer_id = match_id
         # Resolved against the printer it leaves (#3239).
         item.ams_mapping = None
+        # A pre-dispatch RFID read is per printer: the new one gets its own.
+        item.rfid_precheck_at = None
         item.manual_start = False
         item.filament_short = False
         item.waiting_reason = None

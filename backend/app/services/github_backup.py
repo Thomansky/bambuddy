@@ -886,6 +886,10 @@ class GitHubBackupService:
                 "energy_kwh": a.energy_kwh,
                 "energy_cost": a.energy_cost,
                 "wear_cost": a.wear_cost,
+                # The queue item's running number, which quotes and invoices are
+                # filed under. The queue row is gone once the order is done, so
+                # the archive holds the only copy.
+                "job_number": a.job_number,
                 "created_at": str(a.created_at) if a.created_at else None,
                 # Soft-deleted archives are collected too — their row is kept on
                 # purpose so the stats endpoint keeps counting their filament and

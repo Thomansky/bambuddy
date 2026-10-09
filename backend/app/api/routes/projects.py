@@ -17,7 +17,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from backend.app.api.routes.library import get_library_dir
-from backend.app.core.auth import RequestPrinterScope, RequirePermissionIfAuthEnabled, require_media_token_permission
+from backend.app.core.auth import (
+    RequestPrinterScope,
+    RequirePermissionIfAuthEnabled,
+    probe_permissions_if_auth_enabled,
+    require_media_token_permission,
+)
 from backend.app.core.config import settings
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
@@ -47,6 +52,7 @@ from backend.app.schemas.project import (
     TimelineEvent,
 )
 from backend.app.services.folder_numbers import folder_number_taken, inherit_folder_number, project_number_taken
+from backend.app.services.library_folder_access import get_visible_folder
 from backend.app.services.number_series import (
     SERIES_PROJECT,
     NumbersAlreadyInUse,
@@ -588,7 +594,10 @@ async def list_projects(
 async def create_project(
     data: ProjectCreate,
     db: AsyncSession = Depends(get_db),
-    _: User | None = RequirePermissionIfAuthEnabled(Permission.PROJECTS_CREATE),
+    current_user: User | None = RequirePermissionIfAuthEnabled(Permission.PROJECTS_CREATE),
+    # The right PUT /library/folders/{id} asks for to link a folder: true with
+    # auth off, for library:update_all and for an API key with the library scope.
+    can_link_folders: bool = Depends(probe_permissions_if_auth_enabled(Permission.LIBRARY_UPDATE_ALL)),
 ):
     """Create a new project."""
     # Verify parent exists if specified
@@ -604,10 +613,16 @@ async def create_project(
     # allocator runs so a bad id costs no number.
     folder = None
     if data.library_folder_id is not None:
-        folder_result = await db.execute(select(LibraryFolder).where(LibraryFolder.id == data.library_folder_id))
-        folder = folder_result.scalar_one_or_none()
-        if not folder:
-            raise HTTPException(status_code=400, detail="Library folder not found")
+        # Same rules as linking through update_folder (#3201): a folder the
+        # caller cannot see reads as missing, and linking one at all takes
+        # library:update_all. Both are checked before the 409 below, so its
+        # message tells no one without that right which folders are linked.
+        try:
+            folder = await get_visible_folder(db, data.library_folder_id, None if can_link_folders else current_user)
+        except HTTPException:
+            raise HTTPException(status_code=400, detail="Library folder not found") from None
+        if not can_link_folders:
+            raise HTTPException(status_code=403, detail="Linking folders requires library:update_all")
         if folder.project_id is not None:
             # The folder is another project's already, and the create below
             # would silently re-point it: that project keeps the number it took

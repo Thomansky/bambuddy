@@ -2041,7 +2041,7 @@ async def get_library_storage_migration_plan(
 async def refresh_library_folder(
     folder_id: int,
     db: AsyncSession = Depends(get_db),
-    _: tuple[User | None, bool] = Depends(
+    auth_result: tuple[User | None, bool] = Depends(
         require_ownership_permission(
             Permission.LIBRARY_READ_ALL,
             Permission.LIBRARY_READ_OWN,
@@ -2057,6 +2057,11 @@ async def refresh_library_folder(
     """
     from backend.app.services.library_autoscan import refresh_folder_on_open
 
+    user, _ = auth_result
+    # A folder the user can't see is 404 like on every other folder route
+    # (#3201): the scan and its answer would otherwise tell which hidden
+    # folders exist and when their files change.
+    await get_visible_folder(db, folder_id, user)
     return await refresh_folder_on_open(db, folder_id)
 
 
@@ -2426,7 +2431,7 @@ async def _scan_external_folder(folder_id: int, db: AsyncSession, actor: User | 
         for cf in all_child_folders:
             if cf.id == fid and cf.external_path:
                 try:
-                    rel = str(Path(cf.external_path).relative_to(ext_path))
+                    rel = Path(cf.external_path).relative_to(ext_path).as_posix()
                     if rel != ".":
                         folder_cache[rel] = cf.id
                 except ValueError:
@@ -2461,7 +2466,7 @@ async def _scan_external_folder(folder_id: int, db: AsyncSession, actor: User | 
         # back into the library as a folder called @Recycle (#3160).
         dirnames[:] = [d for d in dirnames if d not in SHARE_SYSTEM_DIRS]
 
-        rel_dir = str(Path(dirpath).relative_to(ext_path))
+        rel_dir = Path(dirpath).relative_to(ext_path).as_posix()
         if rel_dir == ".":
             rel_dir = ""
         seen_rel_dirs.add(rel_dir)
@@ -2524,6 +2529,14 @@ async def _scan_external_folder(folder_id: int, db: AsyncSession, actor: User | 
                                 existing_folder.external_path = found_path
                         current_parent = existing_folder.id
                     else:
+                        # Owner and sharing come from the folder it is made in,
+                        # not from the scan root: in directory mode the walk of
+                        # a shared top-level folder reaches users' private
+                        # subfolders, and a directory made in one of those must
+                        # stay as private as its parent (#3201).
+                        parent_row = (
+                            folder if current_parent == folder_id else await db.get(LibraryFolder, current_parent)
+                        )
                         new_folder = LibraryFolder(
                             name=part,
                             parent_id=current_parent,
@@ -2533,9 +2546,8 @@ async def _scan_external_folder(folder_id: int, db: AsyncSession, actor: User | 
                             ),  # SEC-PATH-OK: current_path built from Path(rel_dir).parts of an os.walk descent under ext_path
                             external_readonly=folder.external_readonly,
                             external_show_hidden=folder.external_show_hidden,
-                            # A scanned subfolder belongs with the mount (#3201).
-                            created_by_id=folder.created_by_id,
-                            shared=folder.shared,
+                            created_by_id=parent_row.created_by_id,
+                            shared=parent_row.shared,
                         )
                         db.add(new_folder)
                         await db.flush()
@@ -3378,7 +3390,7 @@ async def extract_zip_file(
 async def list_pending_preview_thumbnails(
     limit: int = 200,
     db: AsyncSession = Depends(get_db),
-    _: tuple[User | None, bool] = Depends(
+    auth_result: tuple[User | None, bool] = Depends(
         require_ownership_permission(
             Permission.LIBRARY_READ_ALL,
             Permission.LIBRARY_READ_OWN,
@@ -3394,16 +3406,18 @@ async def list_pending_preview_thumbnails(
     ``CLIENT_THUMBNAIL_TYPES`` rather than a second list, so a type added there
     is picked up here without a second edit.
     """
+    user, can_read_all = auth_result
     limit = max(1, min(limit, 500))
-    result = await db.execute(
-        LibraryFile.active()
-        .where(
-            LibraryFile.file_type.in_(CLIENT_THUMBNAIL_TYPES),
-            LibraryFile.thumbnail_path.is_(None),
-        )
-        .order_by(LibraryFile.id)
-        .limit(limit)
+    query = LibraryFile.active().where(
+        LibraryFile.file_type.in_(CLIENT_THUMBNAIL_TYPES),
+        LibraryFile.thumbnail_path.is_(None),
     )
+    # A read_own user gets only their own files, like list_files: the names
+    # of other users' files stay hidden, and their rows can't crowd the
+    # user's own out of the batch.
+    if user is not None and not can_read_all:
+        query = query.where(LibraryFile.created_by_id == user.id)
+    result = await db.execute(query.order_by(LibraryFile.id).limit(limit))
     return [
         PendingPreviewThumbnail(
             id=f.id,
