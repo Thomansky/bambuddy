@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowDown, Flag } from 'lucide-react';
 import type { ProductOrderPriority } from '../../api/client';
@@ -21,6 +22,11 @@ export function PriorityChoice({
   disabled?: boolean;
 }) {
   const { t } = useTranslation();
+  // Native radios behind the labels, as in the settings' segmented choices:
+  // one tab stop for the group, the arrow keys move the choice, and the
+  // focus ring is drawn inside each segment where the rounded group cannot
+  // clip it.
+  const name = useId();
   return (
     <div
       role="radiogroup"
@@ -30,21 +36,26 @@ export function PriorityChoice({
       {ORDER_PRIORITIES.map((priority) => {
         const checked = value === priority;
         return (
-          <button
-            key={priority}
-            type="button"
-            role="radio"
-            aria-checked={checked}
-            disabled={disabled}
-            onClick={() => onChange(priority)}
-            className={`px-3 py-1.5 text-sm flex items-center gap-1 transition-colors disabled:opacity-50 ${
-              checked ? `${CHOICE_STYLE[priority]} font-medium` : 'text-bambu-gray hover:text-white hover:bg-bambu-dark'
-            }`}
-          >
-            {priority === 'high' && <Flag className="w-3.5 h-3.5" />}
-            {priority === 'low' && <ArrowDown className="w-3.5 h-3.5" />}
-            {t(`inventory.products.orders.priority.${priority}`)}
-          </button>
+          <label key={priority} className={disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}>
+            <input
+              type="radio"
+              name={name}
+              value={priority}
+              checked={checked}
+              disabled={disabled}
+              onChange={() => onChange(priority)}
+              className="sr-only peer"
+            />
+            <span
+              className={`flex items-center gap-1 px-3 py-1.5 text-sm transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-inset peer-focus-visible:ring-bambu-green ${
+                checked ? `${CHOICE_STYLE[priority]} font-medium` : 'text-bambu-gray hover:text-white hover:bg-bambu-dark'
+              }`}
+            >
+              {priority === 'high' && <Flag className="w-3.5 h-3.5" />}
+              {priority === 'low' && <ArrowDown className="w-3.5 h-3.5" />}
+              {t(`inventory.products.orders.priority.${priority}`)}
+            </span>
+          </label>
         );
       })}
     </div>

@@ -301,6 +301,25 @@ describe('OrderListPanel', () => {
     await waitFor(() => expect(patched).toEqual([{ id: '2', body: { priority: 'high' } }]));
   });
 
+  it('shows the chosen priority at once and steps on from it', async () => {
+    const user = userEvent.setup();
+    render(<OrderListPanel onBookIn={vi.fn()} />);
+    await screen.findByRole('region', { name: 'To order' });
+    const select = within(screen.getByTestId('order-line-2')).getByRole('combobox', { name: 'Priority' });
+
+    await user.selectOptions(select, 'high');
+    expect(select).toHaveValue('high');
+    await user.selectOptions(select, 'low');
+
+    expect(select).toHaveValue('low');
+    await waitFor(() =>
+      expect(patched).toEqual([
+        { id: '2', body: { priority: 'high' } },
+        { id: '2', body: { priority: 'low' } },
+      ]),
+    );
+  });
+
   it('removes a line', async () => {
     const user = userEvent.setup();
     render(<OrderListPanel onBookIn={vi.fn()} />);

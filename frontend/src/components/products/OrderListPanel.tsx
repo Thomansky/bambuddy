@@ -85,6 +85,40 @@ function QuantityField({ value, disabled, onCommit, label }: {
   );
 }
 
+/** The line's priority. Shows the choice at once and keeps it while the save
+ *  runs, so stepping through with the arrow keys moves on from what is shown
+ *  rather than from the value still on the server. */
+function PriorityField({ value, disabled, onCommit, label }: {
+  value: ProductOrderPriority;
+  disabled: boolean;
+  onCommit: (priority: ProductOrderPriority) => void;
+  label: string;
+}) {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  return (
+    <select
+      className="px-1 py-0.5 bg-bambu-dark border border-bambu-dark-tertiary rounded text-xs text-bambu-gray focus:border-bambu-green focus:outline-none"
+      aria-label={label}
+      title={label}
+      value={draft}
+      disabled={disabled}
+      onChange={(e) => {
+        const priority = e.target.value as ProductOrderPriority;
+        setDraft(priority);
+        if (priority !== value) onCommit(priority);
+      }}
+    >
+      {ORDER_PRIORITIES.map((priority) => (
+        <option key={priority} value={priority}>
+          {t(`inventory.products.orders.priority.${priority}`)}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 /** What the line is for — a job, a customer; saved on blur like the quantity. */
 function ReferenceField({ value, disabled, onCommit, placeholder }: {
   value: string | null;
@@ -340,20 +374,13 @@ export function OrderListPanel({ onBookIn }: OrderListPanelProps) {
             >
               <Trash2 className="w-3.5 h-3.5" />
             </button>
-            <select
-              className="px-1 py-0.5 bg-bambu-dark border border-bambu-dark-tertiary rounded text-xs text-bambu-gray focus:border-bambu-green focus:outline-none"
-              aria-label={t('inventory.products.orders.priority.label')}
-              title={t('inventory.products.orders.priority.label')}
+            <PriorityField
+              key={`priority-${failures}`}
               value={line.priority}
               disabled={busy}
-              onChange={(e) => change(line, { priority: e.target.value as ProductOrderPriority })}
-            >
-              {ORDER_PRIORITIES.map((priority) => (
-                <option key={priority} value={priority}>
-                  {t(`inventory.products.orders.priority.${priority}`)}
-                </option>
-              ))}
-            </select>
+              label={t('inventory.products.orders.priority.label')}
+              onCommit={(priority) => change(line, { priority })}
+            />
             <div className="ml-auto">
               {line.status === 'pending' && (
                 <button

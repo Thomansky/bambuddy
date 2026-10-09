@@ -74,7 +74,7 @@ describe('ReorderLineModal', () => {
     await user.selectOptions(screen.getByRole('combobox', { name: /^Supplier/ }), '8');
     await user.type(screen.getByRole('textbox', { name: /For/ }), '  Job 4019 ');
     // Urgent: a series job waiting on it.
-    expect(screen.getByRole('radio', { name: 'Normal' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: 'Normal' })).toBeChecked();
     await user.click(screen.getByRole('radio', { name: 'High' }));
     expect(screen.getByText('Total: €60.00')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Put on the reorder list' }));
