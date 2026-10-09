@@ -3,13 +3,21 @@ import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Check, ClipboardList, Loader2, PackageCheck, PackagePlus, Trash2, Truck } from 'lucide-react';
 import { api } from '../../api/client';
-import type { ProductOrderLine, ProductOrderStatus, ProductOrderUpdate } from '../../api/client';
+import type { ProductOrderLine, ProductOrderPriority, ProductOrderStatus, ProductOrderUpdate } from '../../api/client';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
 import { FilamentSwatch } from '../FilamentSwatch';
 import { getCurrencySymbol } from '../../utils/currency';
 import { formatDateOnly } from '../../utils/date';
-import { formatMoney, formatSizeLabel, ORDER_LINES_KEY, ORDER_QUERY_KEYS } from './productUtils';
+import {
+  formatMoney,
+  formatSizeLabel,
+  ORDER_LINES_KEY,
+  ORDER_PRIORITIES,
+  ORDER_QUERY_KEYS,
+  priorityRank,
+} from './productUtils';
+import { PriorityBadge } from './OrderPriority';
 
 interface OrderListPanelProps {
   /** Book a delivered line in through goods-in. */
@@ -74,6 +82,40 @@ function QuantityField({ value, disabled, onCommit, label }: {
         if (e.key === 'Escape') setDraft(String(value));
       }}
     />
+  );
+}
+
+/** The line's priority. Shows the choice at once and keeps it while the save
+ *  runs, so stepping through with the arrow keys moves on from what is shown
+ *  rather than from the value still on the server. */
+function PriorityField({ value, disabled, onCommit, label }: {
+  value: ProductOrderPriority;
+  disabled: boolean;
+  onCommit: (priority: ProductOrderPriority) => void;
+  label: string;
+}) {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  return (
+    <select
+      className="px-1 py-0.5 bg-bambu-dark border border-bambu-dark-tertiary rounded text-xs text-bambu-gray focus:border-bambu-green focus:outline-none"
+      aria-label={label}
+      title={label}
+      value={draft}
+      disabled={disabled}
+      onChange={(e) => {
+        const priority = e.target.value as ProductOrderPriority;
+        setDraft(priority);
+        if (priority !== value) onCommit(priority);
+      }}
+    >
+      {ORDER_PRIORITIES.map((priority) => (
+        <option key={priority} value={priority}>
+          {t(`inventory.products.orders.priority.${priority}`)}
+        </option>
+      ))}
+    </select>
   );
 }
 
@@ -167,14 +209,17 @@ export function OrderListPanel({ onBookIn }: OrderListPanelProps) {
 
   const change = (line: ProductOrderLine, changes: ProductOrderUpdate) => updateMutation.mutate({ id: line.id, changes });
 
+  // Every column most urgent first, then oldest first.
   const byStatus = useMemo(() => {
     const columns: Record<ProductOrderStatus, ProductOrderLine[]> = { pending: [], purchased: [], received: [] };
-    for (const line of lines) columns[line.status]?.push(line);
+    const sorted = [...lines].sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority) || a.id - b.id);
+    for (const line of sorted) columns[line.status]?.push(line);
     return columns;
   }, [lines]);
 
-  // "To order" grouped by supplier, so one shop's lines go into one order;
-  // lines without a supplier last.
+  // "To order" grouped by supplier, so one shop's lines go into one order.
+  // A shop with something urgent comes first; lines without a supplier last
+  // among equally urgent ones.
   const pendingGroups = useMemo(() => {
     const groups = new Map<string, { name: string; noSupplier: boolean; lines: ProductOrderLine[] }>();
     for (const line of byStatus.pending) {
@@ -188,8 +233,12 @@ export function OrderListPanel({ onBookIn }: OrderListPanelProps) {
       }
       groups.get(key)?.lines.push(line);
     }
-    return [...groups.values()].sort((a, b) =>
-      a.noSupplier ? 1 : b.noSupplier ? -1 : a.name.localeCompare(b.name),
+    const urgency = (group: { lines: ProductOrderLine[] }) =>
+      Math.min(...group.lines.map((line) => priorityRank(line.priority)));
+    return [...groups.values()].sort(
+      (a, b) =>
+        urgency(a) - urgency(b) ||
+        (a.noSupplier === b.noSupplier ? a.name.localeCompare(b.name) : a.noSupplier ? 1 : -1),
     );
   }, [byStatus.pending, t]);
 
@@ -214,7 +263,9 @@ export function OrderListPanel({ onBookIn }: OrderListPanelProps) {
     return (
       <li
         key={line.id}
-        className="rounded-lg border border-bambu-dark-tertiary bg-bambu-dark p-3 space-y-2"
+        className={`rounded-lg border border-bambu-dark-tertiary bg-bambu-dark p-3 space-y-2 ${
+          line.priority === 'high' ? 'border-l-4 border-l-red-500' : ''
+        }`}
         data-testid={`order-line-${line.id}`}
       >
         <div className="flex items-start gap-2.5">
@@ -234,7 +285,12 @@ export function OrderListPanel({ onBookIn }: OrderListPanelProps) {
               {line.material_number && <span className="font-mono text-bambu-gray mr-1.5">{line.material_number}</span>}
               {lineTitle(line)}
             </div>
-            {detail && <div className="text-xs text-bambu-gray truncate">{detail}</div>}
+            {(detail || line.priority !== 'normal') && (
+              <div className="flex items-center gap-1.5 min-w-0">
+                <PriorityBadge priority={line.priority} />
+                {detail && <span className="text-xs text-bambu-gray truncate">{detail}</span>}
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-1 shrink-0">
             {canWrite ? (
@@ -318,6 +374,13 @@ export function OrderListPanel({ onBookIn }: OrderListPanelProps) {
             >
               <Trash2 className="w-3.5 h-3.5" />
             </button>
+            <PriorityField
+              key={`priority-${failures}`}
+              value={line.priority}
+              disabled={busy}
+              label={t('inventory.products.orders.priority.label')}
+              onCommit={(priority) => change(line, { priority })}
+            />
             <div className="ml-auto">
               {line.status === 'pending' && (
                 <button

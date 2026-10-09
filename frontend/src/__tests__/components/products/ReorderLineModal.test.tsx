@@ -73,11 +73,16 @@ describe('ReorderLineModal', () => {
     await user.type(quantity, '3');
     await user.selectOptions(screen.getByRole('combobox', { name: /^Supplier/ }), '8');
     await user.type(screen.getByRole('textbox', { name: /For/ }), '  Job 4019 ');
+    // Urgent: a series job waiting on it.
+    expect(screen.getByRole('radio', { name: 'Normal' })).toBeChecked();
+    await user.click(screen.getByRole('radio', { name: 'High' }));
     expect(screen.getByText('Total: €60.00')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Put on the reorder list' }));
 
     await waitFor(() => expect(onClose).toHaveBeenCalled());
-    expect(posted).toEqual([{ items: [{ variant_id: 12, quantity: 3, supplier_id: 8, reference: 'Job 4019' }] }]);
+    expect(posted).toEqual([
+      { items: [{ variant_id: 12, quantity: 3, supplier_id: 8, reference: 'Job 4019', priority: 'high' }] },
+    ]);
   });
 
   it('sends no supplier and no purpose when none is given', async () => {
@@ -89,7 +94,9 @@ describe('ReorderLineModal', () => {
     await user.click(screen.getByRole('button', { name: 'Put on the reorder list' }));
 
     await waitFor(() =>
-      expect(posted).toEqual([{ items: [{ variant_id: 12, quantity: 1, supplier_id: null, reference: null }] }]),
+      expect(posted).toEqual([
+        { items: [{ variant_id: 12, quantity: 1, supplier_id: null, reference: null, priority: 'normal' }] },
+      ]),
     );
   });
 

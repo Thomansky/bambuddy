@@ -4278,6 +4278,9 @@ export interface ProductReorderLine {
  *  still to be booked in. */
 export type ProductOrderStatus = 'pending' | 'purchased' | 'received';
 
+/** How urgent a reorder line is. */
+export type ProductOrderPriority = 'high' | 'normal' | 'low';
+
 /** A line of the reorder list (the shopping list's lines, each with its
  *  combination spelled out where it has one). */
 export interface ProductOrderLine {
@@ -4286,6 +4289,7 @@ export interface ProductOrderLine {
   quantity: number;
   /** What the order is for: a job, a customer. */
   reference: string | null;
+  priority: ProductOrderPriority;
   note: string | null;
   added_at: string | null;
   purchased_at: string | null;
@@ -4316,6 +4320,7 @@ export interface ProductOrderUpdate {
   quantity?: number;
   supplier_id?: number | null;
   reference?: string | null;
+  priority?: ProductOrderPriority;
 }
 
 export interface ProductConversionPlan {
@@ -7822,7 +7827,13 @@ export const api = {
   getProductReorder: () =>
     request<ProductReorderLine[]>('/inventory/products/reorder'),
   addProductReorder: (
-    items: { variant_id: number; quantity: number; supplier_id: number | null; reference?: string | null }[],
+    items: {
+      variant_id: number;
+      quantity: number;
+      supplier_id: number | null;
+      reference?: string | null;
+      priority?: ProductOrderPriority;
+    }[],
   ) =>
     request<{ added: number; merged: number }>('/inventory/products/reorder', {
       method: 'POST',

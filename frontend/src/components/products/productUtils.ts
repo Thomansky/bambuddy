@@ -4,6 +4,7 @@ import type {
   FilamentProductSize,
   FilamentProductSupplier,
   FilamentVariant,
+  ProductOrderPriority,
 } from '../../api/client';
 import type { ColumnConfig } from '../ColumnConfigModal';
 import { extractPresetModel, matchesPrinterModelSuffix } from '../../utils/slicerPrinterMatch';
@@ -236,3 +237,12 @@ export const ORDER_LINES_KEY = ['shopping-list', 'orders'];
 /** Invalidated whenever the reorder list changes: the list itself (and the
  *  forecast's shopping list) and what shows how much is on order. */
 export const ORDER_QUERY_KEYS = [['shopping-list'], ['filament-products'], ['filament-products-reorder'], ['reorder-line']];
+
+/** How urgent a reorder line can be, most urgent first. */
+export const ORDER_PRIORITIES: ProductOrderPriority[] = ['high', 'normal', 'low'];
+
+/** Most urgent first: high before normal before low. */
+export function priorityRank(priority: ProductOrderPriority | null | undefined): number {
+  const rank = ORDER_PRIORITIES.indexOf(priority ?? 'normal');
+  return rank < 0 ? 1 : rank;
+}

@@ -3,10 +3,12 @@ import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2, ShoppingCart, X } from 'lucide-react';
 import { api } from '../../api/client';
+import type { ProductOrderPriority } from '../../api/client';
 import { useToast } from '../../contexts/ToastContext';
 import { FilamentSwatch } from '../FilamentSwatch';
 import { getCurrencySymbol } from '../../utils/currency';
 import { formatMoney, formatSizeLabel, ORDER_QUERY_KEYS } from './productUtils';
+import { PriorityChoice } from './OrderPriority';
 
 interface ReorderLineModalProps {
   /** The colour × size to reorder. */
@@ -37,6 +39,7 @@ export function ReorderLineModal({ variantId, onClose }: ReorderLineModalProps) 
   // undefined = not touched yet: the usual supplier once the line has loaded.
   const [supplierId, setSupplierId] = useState<number | null | undefined>(undefined);
   const [reference, setReference] = useState('');
+  const [priority, setPriority] = useState<ProductOrderPriority>('normal');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -56,7 +59,13 @@ export function ReorderLineModal({ variantId, onClose }: ReorderLineModalProps) 
     setBusy(true);
     try {
       const result = await api.addProductReorder([
-        { variant_id: line.variant_id, quantity: amount, supplier_id: chosenSupplier, reference: reference.trim() || null },
+        {
+          variant_id: line.variant_id,
+          quantity: amount,
+          supplier_id: chosenSupplier,
+          reference: reference.trim() || null,
+          priority,
+        },
       ]);
       showToast(
         t(result.merged > 0 ? 'inventory.products.reorderOne.merged' : 'inventory.products.reorderOne.added'),
@@ -176,6 +185,11 @@ export function ReorderLineModal({ variantId, onClose }: ReorderLineModalProps) 
                   {t('inventory.products.reorderOne.referenceHint')}
                 </span>
               </label>
+
+              <div>
+                <span className="block text-xs text-bambu-gray mb-1">{t('inventory.products.orders.priority.label')}</span>
+                <PriorityChoice value={priority} onChange={setPriority} />
+              </div>
 
               {line.list_price !== null && amount > 0 && (
                 <p className="text-sm text-bambu-gray">
