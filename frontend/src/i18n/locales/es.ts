@@ -4406,6 +4406,7 @@ export default {
     collapseFoldersByDefault: 'Contraer las carpetas de forma predeterminada',
     folderSort: 'Ordenar carpetas',
     folderSortByName: 'Por nombre',
+    folderSortByNumber: 'Por número',
     folderSortByActivity: 'Por actividad reciente',
     folderSortDirection: 'Dirección de ordenación',
     folderDisplayMenu: 'Ordenar y mostrar carpetas',

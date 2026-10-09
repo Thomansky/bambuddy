@@ -4390,6 +4390,7 @@ export default {
     collapseFoldersByDefault: 'Recolher pastas por padrão',
     folderSort: 'Ordenar pastas',
     folderSortByName: 'Por nome',
+    folderSortByNumber: 'Por número',
     folderSortByActivity: 'Por atividade recente',
     folderSortDirection: 'Direção da ordenação',
     folderDisplayMenu: 'Ordenar e exibir pastas',

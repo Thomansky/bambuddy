@@ -4434,6 +4434,7 @@ export default {
     collapseFoldersByDefault: 'Mappen standaard inklappen',
     folderSort: 'Mappen sorteren',
     folderSortByName: 'Op naam',
+    folderSortByNumber: 'Op nummer',
     folderSortByActivity: 'Op recente activiteit',
     folderSortDirection: 'Sorteerrichting',
     folderDisplayMenu: 'Mappen sorteren en weergeven',

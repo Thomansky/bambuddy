@@ -90,6 +90,7 @@ import { RunWithPipelineModal } from '../components/RunWithPipelineModal';
 import { BulkTagsPickerModal } from '../components/BulkTagsPickerModal';
 import { FileUploadModal } from '../components/FileUploadModal';
 import { FolderNumber } from '../components/FolderNumber';
+import { compareFolderNumbers, folderSortNumber, type FolderSortField } from '../utils/folderSort';
 import { FolderReadmePanel } from '../components/FolderReadmePanel';
 import { LibraryTagsModal } from '../components/LibraryTagsModal';
 import { LibraryFileDetailsModal } from '../components/LibraryFileDetailsModal';
@@ -1795,8 +1796,8 @@ function ColumnFileRow({ file, isSelected, isFocused, showModified, thumbnailVer
 // one home beats two, which is why this renders whether the tree is on screen
 // or not.
 interface FolderDisplayMenuProps {
-  sortField: 'name' | 'activity';
-  onSortFieldChange: (value: 'name' | 'activity') => void;
+  sortField: FolderSortField;
+  onSortFieldChange: (value: FolderSortField) => void;
   sortDirection: 'asc' | 'desc';
   onSortDirectionChange: (value: 'asc' | 'desc') => void;
   collapseByDefault: boolean;
@@ -1807,11 +1808,11 @@ interface FolderDisplayMenuProps {
 }
 
 /** The sort field, then the sort direction, then the display toggles. Field
- *  and direction are two two-way choices, so they are two radio sets and not
+ *  and direction are two separate choices, so they are two radio sets and not
  *  one: a `menuitemradio` is checked against the others in its group, and a
- *  group with two of four checked describes neither choice. */
-const SORT_FIELD_ENTRY_COUNT = 2;
-const SORT_ENTRY_COUNT = 4;
+ *  group with two of five checked describes neither choice. */
+const SORT_FIELD_ENTRY_COUNT = 3;
+const SORT_ENTRY_COUNT = 5;
 
 function FolderDisplayMenu({
   sortField,
@@ -1859,6 +1860,13 @@ function FolderDisplayMenu({
       checked: sortField === 'name',
       role: 'menuitemradio',
       onSelect: () => onSortFieldChange('name'),
+    },
+    {
+      key: 'number',
+      label: t('fileManager.folderSortByNumber'),
+      checked: sortField === 'number',
+      role: 'menuitemradio',
+      onSelect: () => onSortFieldChange('number'),
     },
     {
       key: 'activity',
@@ -2842,9 +2850,9 @@ export function FileManagerPage() {
   // Folder tree sort (#1770). 'name' = alphabetical (the prior behaviour);
   // 'activity' = most recent file activity inside the folder first. Persisted
   // independently from the file-side sort so each can be tuned to taste.
-  const [folderSortField, setFolderSortField] = useState<'name' | 'activity'>(() => {
+  const [folderSortField, setFolderSortField] = useState<FolderSortField>(() => {
     const saved = localStorage.getItem('library-folder-sort-field');
-    return saved === 'activity' ? 'activity' : 'name';
+    return saved === 'activity' || saved === 'number' ? saved : 'name';
   });
   const [folderSortDirection, setFolderSortDirection] = useState<'asc' | 'desc'>(() => {
     const saved = localStorage.getItem('library-folder-sort-direction');
@@ -3017,6 +3025,20 @@ export function FileManagerPage() {
         let comparison = 0;
         if (folderSortField === 'name') {
           comparison = a.name.localeCompare(b.name);
+        } else if (folderSortField === 'number') {
+          // By the number the folder is filed under. Folders with none sort
+          // to the end whichever the direction, like folders without activity.
+          const aNo = folderSortNumber(a);
+          const bNo = folderSortNumber(b);
+          if (aNo === null && bNo === null) {
+            comparison = a.name.localeCompare(b.name);
+          } else if (aNo === null) {
+            return 1;
+          } else if (bNo === null) {
+            return -1;
+          } else {
+            comparison = compareFolderNumbers(aNo, bNo) || a.name.localeCompare(b.name);
+          }
         } else {
           // activity: newest first on 'desc', oldest first on 'asc'.
           // Folders with no activity timestamp sort to the end regardless

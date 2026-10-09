@@ -4403,6 +4403,7 @@ export default {
     collapseFoldersByDefault: 'フォルダをデフォルトで折りたたむ',
     folderSort: 'フォルダの並べ替え',
     folderSortByName: '名前順',
+    folderSortByNumber: '番号順',
     folderSortByActivity: '最終更新順',
     folderSortDirection: '並べ替えの方向',
     folderDisplayMenu: 'フォルダの並べ替えと表示',

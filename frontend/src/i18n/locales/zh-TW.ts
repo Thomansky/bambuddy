@@ -4390,6 +4390,7 @@ export default {
     collapseFoldersByDefault: '預設折疊資料夾',
     folderSort: '資料夾排序',
     folderSortByName: '依名稱',
+    folderSortByNumber: '依編號',
     folderSortByActivity: '依最近活動',
     folderSortDirection: '排序方向',
     folderDisplayMenu: '資料夾排序與顯示',

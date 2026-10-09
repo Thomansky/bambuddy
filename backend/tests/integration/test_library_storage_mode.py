@@ -216,6 +216,68 @@ class TestFolders:
         assert (tree / "Kunden").is_dir()
 
     @pytest.mark.asyncio
+    async def test_a_numbered_folder_carries_its_number_in_front_on_the_share(
+        self, async_client: AsyncClient, db_session, tree
+    ):
+        """Explorer shows the folder the way Bambuddy does: "001 EBZ"."""
+        await _directory_mode(db_session, tree)
+        response = await async_client.post("/api/v1/library/folders", json={"name": "EBZ", "number": "001"})
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert (body["name"], body["number"]) == ("EBZ", "001")
+        assert body["external_path"] == str(tree / "001 EBZ")
+        assert (tree / "001 EBZ").is_dir()
+
+    @pytest.mark.asyncio
+    async def test_numbering_a_folder_renames_its_directory_and_everything_below(
+        self, async_client: AsyncClient, db_session, tree
+    ):
+        await _directory_mode(db_session, tree)
+        parent = (await async_client.post("/api/v1/library/folders", json={"name": "EBZ"})).json()
+        child = (
+            await async_client.post("/api/v1/library/folders", json={"name": "7200090094", "parent_id": parent["id"]})
+        ).json()
+
+        numbered = await async_client.put(f"/api/v1/library/folders/{parent['id']}", json={"number": "001"})
+        assert numbered.status_code == 200, numbered.text
+        child_numbered = await async_client.put(f"/api/v1/library/folders/{child['id']}", json={"number": "4024"})
+        assert child_numbered.status_code == 200, child_numbered.text
+
+        assert (tree / "001 EBZ" / "4024 7200090094").is_dir()
+        assert not (tree / "EBZ").exists()
+        db_session.expire_all()
+        child_row = (
+            await db_session.execute(select(LibraryFolder).where(LibraryFolder.id == child["id"]))
+        ).scalar_one()
+        assert child_row.external_path == str(tree / "001 EBZ" / "4024 7200090094")
+        assert (child_row.name, child_row.number) == ("7200090094", "4024")
+
+    @pytest.mark.asyncio
+    async def test_taking_the_number_away_takes_it_off_the_directory(self, async_client: AsyncClient, db_session, tree):
+        await _directory_mode(db_session, tree)
+        folder = (await async_client.post("/api/v1/library/folders", json={"name": "RAFI", "number": "002"})).json()
+
+        response = await async_client.put(f"/api/v1/library/folders/{folder['id']}", json={"number": None})
+
+        assert response.status_code == 200, response.text
+        assert (tree / "RAFI").is_dir()
+        assert not (tree / "002 RAFI").exists()
+
+    @pytest.mark.asyncio
+    async def test_a_name_that_already_starts_with_its_number_keeps_it_once(
+        self, async_client: AsyncClient, db_session, tree
+    ):
+        """Made in Explorer as "4026 Gehäuse", numbered in Bambuddy afterwards."""
+        await _directory_mode(db_session, tree)
+        folder = (await async_client.post("/api/v1/library/folders", json={"name": "4026 Gehäuse"})).json()
+
+        response = await async_client.put(f"/api/v1/library/folders/{folder['id']}", json={"number": "4026"})
+
+        assert response.status_code == 200, response.text
+        assert (tree / "4026 Gehäuse").is_dir()
+        assert response.json()["external_path"] == str(tree / "4026 Gehäuse")
+
+    @pytest.mark.asyncio
     async def test_delete_removes_an_empty_directory(self, async_client: AsyncClient, db_session, tree):
         await _directory_mode(db_session, tree)
         folder = (await async_client.post("/api/v1/library/folders", json={"name": "Leer"})).json()
@@ -545,6 +607,51 @@ class TestKeepingUpWithTheShare:
         response = await async_client.post("/api/v1/library/storage/scan")
         assert response.status_code == 200, response.text
         assert response.json()["added"] == 2
+
+    @pytest.mark.asyncio
+    async def test_a_numbered_folder_renamed_in_explorer_to_its_number_and_name_is_found_again(
+        self, async_client: AsyncClient, db_session, tree
+    ):
+        """Renamed by hand from "7200090094" to "4024 7200090094": the same folder.
+
+        Not a second folder beside it, and not deleted as gone because its old
+        directory no longer exists — even while it is still empty — and the
+        row now names the directory where it is, so the next subfolder made
+        in it lands there instead of recreating the old one.
+        """
+        from backend.app.services.library_autoscan import autoscan_once
+
+        await _directory_mode(db_session, tree)
+        parent = (await async_client.post("/api/v1/library/folders", json={"name": "EBZ"})).json()
+        child = (
+            await async_client.post("/api/v1/library/folders", json={"name": "7200090094", "parent_id": parent["id"]})
+        ).json()
+        # Numbered while the directory was left alone — as the rows look on a
+        # library numbered before the number went onto the share.
+        db_session.expire_all()
+        row = (await db_session.execute(select(LibraryFolder).where(LibraryFolder.id == child["id"]))).scalar_one()
+        row.number = "4024"
+        await db_session.commit()
+        os.rename(tree / "EBZ" / "7200090094", tree / "EBZ" / "4024 7200090094")
+
+        result = await autoscan_once(db_session)
+        assert result["skipped"] is None
+
+        db_session.expire_all()
+        children = (
+            (await db_session.execute(select(LibraryFolder).where(LibraryFolder.parent_id == parent["id"])))
+            .scalars()
+            .all()
+        )
+        assert [(c.id, c.name, c.number) for c in children] == [(child["id"], "7200090094", "4024")]
+        assert children[0].external_path == str(tree / "EBZ" / "4024 7200090094")
+
+        sub = await async_client.post(
+            "/api/v1/library/folders", json={"name": "B.70925843 - 10", "parent_id": child["id"]}
+        )
+        assert sub.status_code == 200, sub.text
+        assert (tree / "EBZ" / "4024 7200090094" / "B.70925843 - 10").is_dir()
+        assert not (tree / "EBZ" / "7200090094").exists()
 
     @pytest.mark.asyncio
     async def test_the_interval_is_off_by_default(self, async_client: AsyncClient):
@@ -1201,3 +1308,16 @@ class TestThePathGuard:
         assert library_storage.directory_component("a/b", None) == "a-b"
         assert library_storage.directory_component("..", None, fallback_id=7) == "folder-7"
         assert library_storage.directory_component("", "4021") == "4021"
+
+    def test_a_numbered_folder_is_named_number_first(self):
+        assert library_storage.directory_component("EBZ", "001") == "001 EBZ"
+        assert library_storage.directory_component("7200090094", "4024") == "4024 7200090094"
+        assert library_storage.directory_component("EBZ", None) == "EBZ"
+        # Already in front, with any separator: kept once.
+        assert library_storage.directory_component("4026 Gehäuse", "4026") == "4026 Gehäuse"
+        assert library_storage.directory_component("4026-Gehäuse", "4026") == "4026-Gehäuse"
+        assert library_storage.directory_component("4026", "4026") == "4026"
+        # A longer number that merely begins with the same digits is another number.
+        assert library_storage.directory_component("40261 Teil", "4026") == "4026 40261 Teil"
+        # The number is a path component too.
+        assert library_storage.directory_component("Teil", "A/7") == "A-7 Teil"

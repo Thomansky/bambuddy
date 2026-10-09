@@ -4430,6 +4430,7 @@ export default {
     collapseFoldersByDefault: "За замовчуванням згорнути папки",
     folderSort: "Сортування папок",
     folderSortByName: "За назвою",
+    folderSortByNumber: 'За номером',
     folderSortByActivity: "За останніми діями",
     folderSortDirection: "Напрямок сортування",
     folderDisplayMenu: "Сортування та відображення папок",

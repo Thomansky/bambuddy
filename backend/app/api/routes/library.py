@@ -2349,15 +2349,34 @@ async def scan_external_folder(
                 if current_path in folder_cache:
                     current_parent = folder_cache[current_path]
                 else:
-                    existing_sub = await db.execute(
-                        select(LibraryFolder).where(
-                            LibraryFolder.name == part,
-                            LibraryFolder.parent_id == current_parent,
-                            LibraryFolder.is_external.is_(True),
+                    siblings = (
+                        (
+                            await db.execute(
+                                select(LibraryFolder).where(
+                                    LibraryFolder.parent_id == current_parent,
+                                    LibraryFolder.is_external.is_(True),
+                                )
+                            )
                         )
+                        .scalars()
+                        .all()
                     )
-                    existing_folder = existing_sub.scalar_one_or_none()
+                    # By name first; then by the directory name the folder maps
+                    # to, which for a numbered folder is "<number> <name>" — a
+                    # directory renamed in Explorer to that form is still the
+                    # folder, not a new one beside it.
+                    existing_folder = next((s for s in siblings if s.name == part), None) or next(
+                        (s for s in siblings if library_storage.folder_component(s) == part), None
+                    )
                     if existing_folder:
+                        found_path = str(ext_path / current_path)  # SEC-PATH-OK: as below, from os.walk under ext_path
+                        if existing_folder.external_path != found_path and not (
+                            existing_folder.external_path and Path(existing_folder.external_path).is_dir()
+                        ):
+                            # Its directory was renamed outside Bambuddy: point
+                            # the row at where it is now, or the next subfolder
+                            # made here would recreate the old directory.
+                            existing_folder.external_path = found_path
                         current_parent = existing_folder.id
                     else:
                         new_folder = LibraryFolder(
@@ -2546,8 +2565,12 @@ async def scan_external_folder(
     # Process deepest-first by sorting on path depth (descending)
     subfolder_entries = [(rel, fid) for rel, fid in folder_cache.items() if rel and fid != folder_id]
     subfolder_entries.sort(key=lambda x: x[0].count("/"), reverse=True)
+    # A folder found again under another directory name (renamed in Explorer)
+    # sits in the cache under its old path too; that path is gone, the folder
+    # is not.
+    seen_folder_ids = {folder_cache[rel] for rel in seen_rel_dirs if rel in folder_cache}
     for rel_path, sub_fid in subfolder_entries:
-        if rel_path in seen_rel_dirs:
+        if rel_path in seen_rel_dirs or sub_fid in seen_folder_ids:
             continue  # Directory still exists on disk
         # Check if subfolder has any remaining files
         file_count_result = await db.execute(

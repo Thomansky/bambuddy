@@ -4213,6 +4213,7 @@ export default {
     collapseFoldersByDefault: '기본적으로 폴더 접기',
     folderSort: '폴더 정렬',
     folderSortByName: '이름순',
+    folderSortByNumber: '번호순',
     folderSortByActivity: '최근 활동순',
     folderSortDirection: '정렬 방향',
     folderDisplayMenu: '폴더 정렬 및 표시',

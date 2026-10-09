@@ -122,6 +122,7 @@ describe('FileManagerPage — folder display menu', () => {
 
     const menu = await openMenu(user);
     expect(within(menu).getByRole('menuitemradio', { name: 'By name' })).toBeInTheDocument();
+    expect(within(menu).getByRole('menuitemradio', { name: 'By number' })).toBeInTheDocument();
     expect(within(menu).getByRole('menuitemradio', { name: 'By recent activity' })).toBeInTheDocument();
     expect(within(menu).getByRole('menuitemradio', { name: 'Ascending' })).toBeInTheDocument();
     expect(within(menu).getByRole('menuitemradio', { name: 'Descending' })).toBeInTheDocument();
@@ -146,9 +147,10 @@ describe('FileManagerPage — folder display menu', () => {
       .getAllByRole('group')
       .filter((group) => within(group).queryAllByRole('menuitemradio').length > 0);
     expect(groups).toHaveLength(2);
+    // Three fields (name, number, activity), two directions.
+    expect(groups.map((group) => within(group).getAllByRole('menuitemradio').length)).toEqual([3, 2]);
     for (const group of groups) {
       const radios = within(group).getAllByRole('menuitemradio');
-      expect(radios).toHaveLength(2);
       expect(radios.filter((radio) => radio.getAttribute('aria-checked') === 'true')).toHaveLength(1);
     }
     expect(groups[0]).toHaveAttribute('aria-label', 'Sort folders');
@@ -215,6 +217,43 @@ describe('FileManagerPage — folder display menu', () => {
       expect(orderIn(screen.getByTestId('folder-sidebar'))).toEqual(['Zulu', 'Alpha']),
     );
     expect(setItemMock).toHaveBeenCalledWith('library-folder-sort-field', 'activity');
+  });
+
+  it('orders by folder number either way, with names that start with one in the same run', async () => {
+    // As on the farm's share: numbered folders, order folders named by their
+    // number from before numbers had a field, and one with no number at all.
+    server.use(
+      http.get('/api/v1/library/folders', () =>
+        HttpResponse.json([
+          folder({ id: 11, name: 'Kein' }),
+          folder({ id: 12, name: '7200090094', number: '4024' }),
+          folder({ id: 13, name: '4016' }),
+          folder({ id: 14, name: 'EBZ', number: '001' }),
+          folder({ id: 15, name: '099 Privat' }),
+        ]),
+      ),
+    );
+    const names = ['Kein', '7200090094', '4016', 'EBZ', '099 Privat'];
+    const order = () => {
+      const sidebar = screen.getByTestId('folder-sidebar');
+      return names
+        .map((name) => ({ name, el: within(sidebar).getAllByText(name)[0] }))
+        .sort((a, b) => (a.el.compareDocumentPosition(b.el) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1))
+        .map((entry) => entry.name);
+    };
+    render(<FileManagerPage />);
+    await waitFor(() => expect(within(screen.getByTestId('folder-sidebar')).getByText('Kein')).toBeInTheDocument());
+
+    await openMenu(user);
+    await user.click(screen.getByRole('menuitemradio', { name: 'By number' }));
+
+    await waitFor(() => expect(order()).toEqual(['EBZ', '099 Privat', '4016', '7200090094', 'Kein']));
+    expect(setItemMock).toHaveBeenCalledWith('library-folder-sort-field', 'number');
+
+    await user.click(screen.getByRole('menuitemradio', { name: 'Descending' }));
+
+    // Without a number it stays last, whichever the direction.
+    await waitFor(() => expect(order()).toEqual(['7200090094', '4016', '099 Privat', 'EBZ', 'Kein']));
   });
 
   it('round-trips the collapse and wrap preferences through localStorage', async () => {

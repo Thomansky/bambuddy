@@ -4222,6 +4222,7 @@ errors: {
     expandFoldersByDefault: 'Fäll ut mappar som standard',
     folderSort: 'Sortera mappar',
     folderSortByName: 'Efter namn',
+    folderSortByNumber: 'Efter nummer',
     folderSortByActivity: 'Efter senaste aktivitet',
     dragToResizeTooltip: 'Dra för att ändra storlek, dubbelklicka för att återställa',
     searchFiles: 'Sök filer...',

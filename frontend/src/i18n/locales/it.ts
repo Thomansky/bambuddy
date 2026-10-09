@@ -4391,6 +4391,7 @@ export default {
     collapseFoldersByDefault: 'Comprimi le cartelle per impostazione predefinita',
     folderSort: 'Ordina cartelle',
     folderSortByName: 'Per nome',
+    folderSortByNumber: 'Per numero',
     folderSortByActivity: 'Per attività recente',
     folderSortDirection: 'Direzione di ordinamento',
     folderDisplayMenu: 'Ordina e visualizza le cartelle',

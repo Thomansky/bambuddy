@@ -4397,6 +4397,7 @@ export default {
     collapseFoldersByDefault: 'Klasörleri varsayılan olarak daralt',
     folderSort: 'Klasörleri sırala',
     folderSortByName: 'Ada göre',
+    folderSortByNumber: 'Numaraya göre',
     folderSortByActivity: 'Son etkinliğe göre',
     folderSortDirection: 'Sıralama yönü',
     folderDisplayMenu: 'Klasörleri sırala ve görüntüle',

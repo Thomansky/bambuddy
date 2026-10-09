@@ -4464,6 +4464,7 @@ export default {
     collapseFoldersByDefault: 'Ordner standardmäßig einklappen',
     folderSort: 'Ordner sortieren',
     folderSortByName: 'Nach Name',
+    folderSortByNumber: 'Nach Nummer',
     folderSortByActivity: 'Nach letzter Aktivität',
     folderSortDirection: 'Sortierrichtung',
     folderDisplayMenu: 'Ordner sortieren und anzeigen',

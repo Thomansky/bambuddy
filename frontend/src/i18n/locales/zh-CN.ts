@@ -4390,6 +4390,7 @@ export default {
     collapseFoldersByDefault: '默认折叠文件夹',
     folderSort: '文件夹排序',
     folderSortByName: '按名称',
+    folderSortByNumber: '按编号',
     folderSortByActivity: '按最近活动',
     folderSortDirection: '排序方向',
     folderDisplayMenu: '文件夹排序与显示',

@@ -4497,6 +4497,7 @@ export default {
     collapseFoldersByDefault: 'Collapse folders by default',
     folderSort: 'Sort folders',
     folderSortByName: 'By name',
+    folderSortByNumber: 'By number',
     folderSortByActivity: 'By recent activity',
     folderSortDirection: 'Sort direction',
     folderDisplayMenu: 'Sort and display folders',

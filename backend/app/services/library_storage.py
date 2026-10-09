@@ -197,6 +197,27 @@ def is_inside_tree(root: Path | None, path: Path | str | None) -> bool:
         return False
 
 
+def numbered_name(name: str | None, number: str | None) -> str:
+    """The name a numbered folder goes by on the share: ``"001 EBZ"``.
+
+    The number comes first, the way the folder reads in Bambuddy and the way
+    order folders are named by hand, so Explorer lists the share in the same
+    order and under the same label. A folder that is only a number is just
+    the number, and a name that already starts with its number — a folder
+    made in Explorer as ``"4026 Gehäuse"`` and numbered afterwards — keeps it
+    once instead of becoming ``"4026 4026 Gehäuse"``.
+    """
+    name = (name or "").strip()
+    number = (number or "").strip()
+    if not number:
+        return name
+    if not name:
+        return number
+    if re.match(rf"{re.escape(number)}(?![0-9A-Za-z])", name):
+        return name
+    return f"{number} {name}"
+
+
 def directory_component(name: str | None, number: str | None, *, fallback_id: int | None = None) -> str:
     """The one directory-name component a folder with this name maps to.
 
@@ -204,14 +225,15 @@ def directory_component(name: str | None, number: str | None, *, fallback_id: in
     separator, it can be ``..``, and an order folder filed under a number alone
     can be empty. ``safe_path_component`` reduces all three to something a
     single ``mkdir`` accepts, and the number — then the id — is the fallback so
-    the result is never empty.
+    the result is never empty. A numbered folder's directory carries the
+    number in front of the name (:func:`numbered_name`).
 
     Takes the two fields rather than the row because a folder about to be
     created has no row yet, and the directory has to exist before the row is
     worth writing.
     """
     fallback = f"folder-{number or fallback_id or 'unnamed'}"
-    return safe_path_component(name or number or "", fallback=fallback)
+    return safe_path_component(numbered_name(name, number), fallback=fallback)
 
 
 def folder_component(folder: LibraryFolder) -> str:

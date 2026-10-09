@@ -4391,6 +4391,7 @@ export default {
     collapseFoldersByDefault: 'Réduire les dossiers par défaut',
     folderSort: 'Trier les dossiers',
     folderSortByName: 'Par nom',
+    folderSortByNumber: 'Par numéro',
     folderSortByActivity: 'Par activité récente',
     folderSortDirection: 'Sens du tri',
     folderDisplayMenu: 'Trier et afficher les dossiers',

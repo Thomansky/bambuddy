@@ -4205,6 +4205,7 @@ export default {
     collapseFoldersByDefault: "Сворачивать папки по умолчанию",
     folderSort: "Сортировка папок",
     folderSortByName: "По имени",
+    folderSortByNumber: 'По номеру',
     folderSortByActivity: "По последней активности",
     folderSortDirection: "Направление сортировки",
     folderDisplayMenu: "Сортировка и отображение папок",
