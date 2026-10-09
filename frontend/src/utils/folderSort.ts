@@ -8,8 +8,11 @@ export type FolderSortField = 'name' | 'activity' | 'number';
 export function folderSortNumber(folder: { number?: string | null; name: string }): string | null {
   const own = folder.number?.trim();
   if (own) return own;
-  const leading = /^\d+/.exec(folder.name.trim());
-  return leading ? leading[0] : null;
+  // The digits count only as a whole word, the rule the backend uses for a
+  // name that already starts with its number: "4016" and "003 Stübbe" do,
+  // "3D-Teile" does not.
+  const leading = /^(\d+)(?![0-9A-Za-z])/.exec(folder.name.trim());
+  return leading ? leading[1] : null;
 }
 
 /** Numbers compared as numbers where they are digits ("05" before "099",

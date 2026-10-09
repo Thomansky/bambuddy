@@ -1335,6 +1335,23 @@ async def get_folders_by_archive(
     return folders
 
 
+async def _sibling_folder(db: AsyncSession, parent_id: int | None, name: str) -> LibraryFolder | None:
+    """The folder *name* refers to under *parent_id*, or ``None``.
+
+    By name first; then a numbered sibling whose directory is that name — a
+    ZIP whose top directory is "001 EBZ" (the share's own folder, zipped in
+    Explorer) belongs in EBZ filed under 001, not in a second folder that
+    would claim the same directory.
+    """
+    parent_clause = LibraryFolder.parent_id == parent_id if parent_id else LibraryFolder.parent_id.is_(None)
+    siblings = (await db.execute(select(LibraryFolder).where(parent_clause))).scalars().all()
+    by_name = next((s for s in siblings if s.name == name), None)
+    if by_name is not None:
+        return by_name
+    component = library_storage.directory_component(name, None)
+    return next((s for s in siblings if s.number and library_storage.folder_component(s) == component), None)
+
+
 async def _assert_folder_number_free(db: AsyncSession, number: str, exclude_id: int | None = None) -> None:
     """Answer 409 before writing, so the common case keeps its transaction.
 
@@ -1619,6 +1636,9 @@ async def update_folder(
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
 
+    # What decides where the folder lives on the share, as it was before.
+    placement_before = (folder.name, folder.number, folder.parent_id)
+
     if data.name is not None:
         folder.name = data.name
 
@@ -1686,7 +1706,12 @@ async def update_folder(
     # The rename on the share happens before the commit and after every
     # validation above, so a refused move never touches the share and a refused
     # save never leaves the tree renamed (#3160).
-    moved_to = await library_storage.relocate_folder_directory(db, folder)
+    # Only a change of name, number or parent moves the directory: linking a
+    # project must not fail because a folder numbered long ago cannot be
+    # renamed on the share right now.
+    moved_to = None
+    if (folder.name, folder.number, folder.parent_id) != placement_before:
+        moved_to = await library_storage.relocate_folder_directory(db, folder)
     try:
         await db.commit()
     except Exception:
@@ -2361,22 +2386,40 @@ async def scan_external_folder(
                         .scalars()
                         .all()
                     )
+                    found_path = str(
+                        ext_path / current_path
+                    )  # SEC-PATH-OK: current_path built from Path(rel_dir).parts of an os.walk descent under ext_path
+
+                    def _claimable(sibling: LibraryFolder, found: str = found_path) -> bool:
+                        # A sibling whose own directory is still there is that
+                        # directory's folder; this one is somebody else's.
+                        stored = sibling.external_path
+                        return not (stored and stored != found and Path(stored).is_dir())
+
+                    candidates = [s for s in siblings if _claimable(s)]
                     # By name first; then by the directory name the folder maps
                     # to, which for a numbered folder is "<number> <name>" — a
                     # directory renamed in Explorer to that form is still the
                     # folder, not a new one beside it.
-                    existing_folder = next((s for s in siblings if s.name == part), None) or next(
-                        (s for s in siblings if library_storage.folder_component(s) == part), None
+                    existing_folder = next((s for s in candidates if s.name == part), None) or next(
+                        (s for s in candidates if library_storage.folder_component(s) == part), None
                     )
                     if existing_folder:
-                        found_path = str(ext_path / current_path)  # SEC-PATH-OK: as below, from os.walk under ext_path
-                        if existing_folder.external_path != found_path and not (
-                            existing_folder.external_path and Path(existing_folder.external_path).is_dir()
-                        ):
-                            # Its directory was renamed outside Bambuddy: point
-                            # the row at where it is now, or the next subfolder
-                            # made here would recreate the old directory.
-                            existing_folder.external_path = found_path
+                        if existing_folder.external_path != found_path:
+                            # Its directory was renamed outside Bambuddy: the
+                            # row, every folder and file below it follow, so the
+                            # files keep their tags, photos and history instead
+                            # of being dropped and found again as new ones, and
+                            # the next subfolder made here does not recreate
+                            # the old directory.
+                            old_dir = existing_folder.external_path
+                            if old_dir:
+                                await library_storage.rewrite_subtree_paths(
+                                    db, existing_folder, Path(old_dir), Path(found_path)
+                                )
+                                existing_files = {f.file_path: f for f in existing_files.values()}
+                            else:
+                                existing_folder.external_path = found_path
                         current_parent = existing_folder.id
                     else:
                         new_folder = LibraryFolder(
@@ -3009,13 +3052,7 @@ async def extract_zip_file(
         # Remove .zip extension to get folder name
         zip_folder_name = file.filename[:-4] if file.filename.lower().endswith(".zip") else file.filename
         # Check if folder already exists
-        existing = await db.execute(
-            select(LibraryFolder).where(
-                LibraryFolder.name == zip_folder_name,
-                LibraryFolder.parent_id == folder_id if folder_id else LibraryFolder.parent_id.is_(None),
-            )
-        )
-        existing_folder = existing.scalar_one_or_none()
+        existing_folder = await _sibling_folder(db, folder_id, zip_folder_name)
         if existing_folder:
             zip_folder_id = existing_folder.id
             logger.info("Reusing existing folder '%s' with id=%s", zip_folder_name, zip_folder_id)
@@ -3060,15 +3097,7 @@ async def extract_zip_file(
                                     current_parent = folder_cache[current_path]
                                 else:
                                     # Check if folder exists
-                                    existing = await db.execute(
-                                        select(LibraryFolder).where(
-                                            LibraryFolder.name == part,
-                                            LibraryFolder.parent_id == current_parent
-                                            if current_parent
-                                            else LibraryFolder.parent_id.is_(None),
-                                        )
-                                    )
-                                    existing_folder = existing.scalar_one_or_none()
+                                    existing_folder = await _sibling_folder(db, current_parent, part)
 
                                     if existing_folder:
                                         current_parent = existing_folder.id

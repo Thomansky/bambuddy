@@ -17,6 +17,9 @@ describe('folderSortNumber', () => {
     expect(folderSortNumber({ number: '', name: '003 Stübbe' })).toBe('003');
     expect(folderSortNumber({ name: 'B.70925843 - 10' })).toBeNull();
     expect(folderSortNumber({ number: null, name: 'EBZ' })).toBeNull();
+    expect(folderSortNumber({ name: '3D-Teile' })).toBeNull();
+    expect(folderSortNumber({ name: '3MF Vorlagen' })).toBeNull();
+    expect(folderSortNumber({ name: '4016-Halter' })).toBe('4016');
   });
 });
 

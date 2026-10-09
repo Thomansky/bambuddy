@@ -430,6 +430,22 @@ async def prepare_folder_directory(
         return None
     root = await storage_root_for_write(db)
     directory = safe_join_under(parent_dir, directory_component(name, number), http=False)
+    # Adopting a directory made in Explorer is the normal case; adopting one a
+    # folder already lives in is not. A new "001 EBZ" next to EBZ filed under
+    # 001 would share its directory, and deleting the newcomer would take the
+    # other folder's files to the trash with it.
+    claimed = (
+        await db.execute(
+            select(LibraryFolder.id).where(
+                LibraryFolder.is_external.is_(True),
+                LibraryFolder.external_path.in_({str(directory), str(directory.resolve())}),
+            )
+        )
+    ).first()
+    if claimed is not None:
+        raise HTTPException(
+            status_code=409, detail=f"{directory.name!r} on the share already belongs to another folder"
+        )
     adopt_or_create_directory(directory, root)
     return directory
 
@@ -497,6 +513,101 @@ async def relocate_folder_directory(db: AsyncSession, folder: LibraryFolder) -> 
         folder.id,
     )
     return new_dir
+
+
+# Set once the directories of folders numbered before the number went onto
+# the share have been renamed to "<number> <name>". Internal: not a field of
+# the settings response, which skips keys it does not know.
+SETTING_NUMBERED_DIRS_ALIGNED = "library_numbered_dirs_aligned"
+
+
+async def align_numbered_directories(db: AsyncSession) -> dict:
+    """Once: rename the directories of numbered folders to "<number> <name>".
+
+    Folders numbered before the number was part of the directory name still
+    sit on the share under the name alone ("EBZ" filed under 001). The edit
+    dialog only saves a change, so nothing would ever bring them in line; this
+    does it on the first start, parents before children, through the same
+    rename a save does. Afterwards the share is the user's again — a folder
+    renamed back by hand in Explorer is not fought over on every restart.
+
+    Not marked done while the library is not in a directory or the share is
+    unreachable, so a NAS that is down at startup is caught up on the next one.
+    A folder that cannot be renamed is logged and skipped. Its name already
+    taken on the share is final (saving the folder later renames it); any
+    other failure — the directory open in Explorer — leaves the pass unmarked,
+    so the next start tries again.
+    """
+    from backend.app.api.routes.settings import get_setting, set_setting
+
+    if (await get_setting(db, SETTING_NUMBERED_DIRS_ALIGNED) or "").lower() == "true":
+        return {"renamed": 0, "failed": 0, "skipped": "already done"}
+    root = await configured_storage_root(db)
+    if root is None:
+        return {"renamed": 0, "failed": 0, "skipped": "not a directory library"}
+    problem = storage_path_problem(str(root))
+    if problem:
+        return {"renamed": 0, "failed": 0, "skipped": f"the storage path {problem}"}
+    try:
+        if not any(root.iterdir()):
+            return {"renamed": 0, "failed": 0, "skipped": "the library directory is empty"}
+    except OSError as exc:
+        return {"renamed": 0, "failed": 0, "skipped": f"the library directory could not be read: {exc}"}
+
+    numbered = (
+        (
+            await db.execute(
+                select(LibraryFolder).where(
+                    LibraryFolder.number.is_not(None),
+                    LibraryFolder.number != "",
+                    LibraryFolder.is_external.is_(True),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    targets = [f for f in numbered if is_inside_tree(root, f.external_path)]
+    # Parents first: a parent's rename re-points its children's rows, so each
+    # child is moved from where it is by then.
+    targets.sort(key=lambda f: len(Path(f.external_path).parts))
+    ids = [f.id for f in targets]
+
+    renamed = failed = 0
+    retry_later = False
+    for folder_id in ids:
+        folder = (await db.execute(select(LibraryFolder).where(LibraryFolder.id == folder_id))).scalar_one_or_none()
+        if folder is None or not folder.external_path:
+            continue
+        current = folder.external_path
+        if Path(current).name == folder_component(folder):
+            continue
+        try:
+            moved = await relocate_folder_directory(db, folder)
+            await db.commit()
+        except Exception as exc:  # noqa: BLE001 - one folder must not stop the rest
+            # The rollback expires every row; only plain values from here on.
+            await db.rollback()
+            failed += 1
+            detail = exc.detail if isinstance(exc, HTTPException) else exc
+            # A name already taken (409) stays taken; anything else — the
+            # directory open in Explorer, the share hiccuping — may pass, so
+            # the next start tries again.
+            if not (isinstance(exc, HTTPException) and exc.status_code == 409):
+                retry_later = True
+            logger.warning("Library tree: could not put the number on folder %s (%s): %s", folder_id, current, detail)
+            continue
+        if moved is not None:
+            renamed += 1
+
+    if not retry_later:
+        await set_setting(db, SETTING_NUMBERED_DIRS_ALIGNED, "true")
+        await db.commit()
+    if renamed or failed:
+        logger.info(
+            "Library tree: number put in front of %d folder directory name(s), %d could not be renamed", renamed, failed
+        )
+    return {"renamed": renamed, "failed": failed, "skipped": None}
 
 
 async def folder_directory_for_delete(db: AsyncSession, folder: LibraryFolder) -> Path | None:
@@ -1042,10 +1153,23 @@ async def plan_migration(db: AsyncSession, root: Path) -> MigrationPlan:
         current = folder
         depth = 0
         while current is not None and depth < _MAX_CHAIN_DEPTH:
-            if current.is_external and not is_inside_tree(root, current.external_path):
-                # One of the external folders from #124: it already has a home
-                # of its own, and its files were never in the managed store.
-                return None
+            if current.is_external:
+                if not is_inside_tree(root, current.external_path):
+                    # One of the external folders from #124: it already has a
+                    # home of its own, and its files were never in the managed
+                    # store.
+                    return None
+                # Already in the tree: its directory is where its row says, not
+                # where its name would put it today. A folder numbered before
+                # the number went into directory names is still "EBZ" on the
+                # share until it is renamed, and a second run must not invent
+                # an empty "001 EBZ" beside it.
+                try:
+                    anchor = Path(current.external_path).resolve().relative_to(root.resolve()).parts
+                except (OSError, ValueError):
+                    return None
+                parts.reverse()
+                return [*anchor, *parts]
             parts.append(folder_component(current))
             current = by_id.get(current.parent_id) if current.parent_id is not None else None
             depth += 1
@@ -1173,7 +1297,10 @@ async def run_migration(db: AsyncSession, root: Path) -> dict:
         if await asyncio.to_thread(adopt_or_create_directory, directory, root):
             created += 1
         folder = folders.get(folder_id)
-        if folder is not None:
+        # A folder already in the tree keeps its row exactly as it is: the plan
+        # put it where that row says, and rewriting the string could only
+        # change its spelling.
+        if folder is not None and not (folder.is_external and is_inside_tree(root, folder.external_path)):
             folder.is_external = True
             folder.external_path = str(directory)
             folder.external_readonly = False

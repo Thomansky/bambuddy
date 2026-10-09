@@ -174,6 +174,18 @@ async def _interval_minutes(db: AsyncSession) -> int:
 
 async def _loop() -> None:
     from backend.app.core.database import async_session
+    from backend.app.services.library_storage import align_numbered_directories
+
+    # Once, before the first interval: folders numbered before the number went
+    # into the directory name get it there. In the loop's own task so a slow
+    # share never holds up the start.
+    try:
+        async with async_session() as db:
+            await align_numbered_directories(db)
+    except asyncio.CancelledError:
+        return
+    except Exception as exc:  # noqa: BLE001 - the loop outlives its failures
+        logger.warning("Library tree: aligning numbered folder directories failed: %s", exc)
 
     last_run = 0.0
     while True:
