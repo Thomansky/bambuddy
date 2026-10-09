@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 
 from sqlalchemy import event
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
@@ -680,6 +681,58 @@ def _is_already_applied(exc, sql: str) -> bool:
     return is_rename and "column" in msg and "does not exist" in msg
 
 
+# On PostgreSQL every statement that fails is written to the SERVER's log as an
+# ERROR, with its text, before _safe_execute gets to swallow it. Since nearly every
+# ADD COLUMN below is a re-run on every start, that was ~320 ERROR + STATEMENT
+# pairs per start on every PostgreSQL install -- harmless, but it buried real
+# errors and alarmed anyone who read the log. These rewrites let the server skip
+# what is already there with a NOTICE (not logged by default) instead.
+_PG_ADD_COLUMN = re.compile(r"^(\s*ALTER\s+TABLE\s+\S+\s+ADD\s+COLUMN\s+)(?!IF\s+NOT\s+EXISTS\b)", re.I)
+_PG_CREATE = re.compile(
+    r"^(\s*CREATE\s+(?:UNIQUE\s+)?(?:INDEX|TABLE)\s+)(?!IF\s+NOT\s+EXISTS\b)(?!CONCURRENTLY\b)", re.I
+)
+# No IF NOT EXISTS exists for these two, so the catalog is asked first.
+_PG_ADD_CONSTRAINT = re.compile(r"^\s*ALTER\s+TABLE\s+(\S+)\s+ADD\s+CONSTRAINT\s+(\S+)", re.I)
+_PG_RENAME_COLUMN = re.compile(r"^\s*ALTER\s+TABLE\s+(\S+)\s+RENAME\s+COLUMN\s+(\S+)\s+TO\s+", re.I)
+
+
+def _is_pg_conn(conn) -> bool:
+    """The connection's own dialect, so the rewrites never touch anything else."""
+    return getattr(getattr(conn, "dialect", None), "name", None) == "postgresql"
+
+
+def _pg_if_not_exists(sql: str) -> str:
+    """ADD COLUMN / CREATE INDEX / CREATE TABLE made a no-op when already applied."""
+    sql = _PG_ADD_COLUMN.sub(r"\1IF NOT EXISTS ", sql, count=1)
+    return _PG_CREATE.sub(r"\1IF NOT EXISTS ", sql, count=1)
+
+
+async def _pg_already_applied(conn, sql: str) -> bool:
+    """Whether a constraint or a rename has already run, asked of the catalog."""
+    from sqlalchemy import text
+
+    m = _PG_ADD_CONSTRAINT.match(sql)
+    if m:
+        found = await conn.scalar(
+            text("SELECT 1 FROM pg_constraint WHERE conname = :name AND conrelid = to_regclass(:table)"),
+            {"name": m.group(2).strip('"'), "table": m.group(1)},
+        )
+        return found is not None
+    m = _PG_RENAME_COLUMN.match(sql)
+    if m:
+        # The old column gone means the rename already ran -- the same reading
+        # _is_already_applied gives an undefined_column on a RENAME.
+        found = await conn.scalar(
+            text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_schema = current_schema() AND table_name = :table AND column_name = :column"
+            ),
+            {"table": m.group(1).strip('"'), "column": m.group(2).strip('"')},
+        )
+        return found is None
+    return False
+
+
 async def _safe_execute(conn, sql):
     """Execute a DDL migration statement, silently ignoring idempotency errors.
 
@@ -701,6 +754,11 @@ async def _safe_execute(conn, sql):
     transaction (required for PostgreSQL).
     """
     from sqlalchemy import text
+
+    if _is_pg_conn(conn):
+        if await _pg_already_applied(conn, sql):
+            return
+        sql = _pg_if_not_exists(sql)
 
     try:
         async with conn.begin_nested():
@@ -1841,7 +1899,34 @@ async def _migrate_failure_reason_vocabulary(conn):
         logger.info("[#2974] converted %d failure_reason value(s) to the canonical vocabulary", total)
 
 
+def _pg_ddl_if_not_exists(conn, cursor, statement, parameters, context, executemany):
+    """before_cursor_execute hook: the _pg_if_not_exists rewrite for every statement.
+
+    About 40 older migrations run their DDL through conn.execute() in a
+    try/except of their own rather than through _safe_execute, so rewriting there
+    alone would leave their server-side errors in the log.
+    """
+    return _pg_if_not_exists(statement), parameters
+
+
 async def run_migrations(conn):
+    """Run _run_migrations; on PostgreSQL, with the IF NOT EXISTS rewrite in place.
+
+    The hook lives only on this connection and only for the migration run, so no
+    statement issued at runtime is ever rewritten.
+    """
+    if not _is_pg_conn(conn):
+        await _run_migrations(conn)
+        return
+    sync_conn = conn.sync_connection
+    event.listen(sync_conn, "before_cursor_execute", _pg_ddl_if_not_exists, retval=True)
+    try:
+        await _run_migrations(conn)
+    finally:
+        event.remove(sync_conn, "before_cursor_execute", _pg_ddl_if_not_exists)
+
+
+async def _run_migrations(conn):
     """Run all schema migrations and data backfills on startup.
 
     Includes ALTER TABLE (add columns, rename columns, add constraints),
@@ -3851,8 +3936,10 @@ async def run_migrations(conn):
             "CHECK (auto_link_existing_accounts = FALSE OR email_claim != 'email' OR require_email_verified = TRUE)"
         )
         try:
-            async with conn.begin_nested():
-                await conn.execute(text(add_constraint))
+            # Asked first so an existing constraint costs no ERROR in the server log.
+            if not (_is_pg_conn(conn) and await _pg_already_applied(conn, add_constraint)):
+                async with conn.begin_nested():
+                    await conn.execute(text(add_constraint))
         except (OperationalError, ProgrammingError) as exc:
             # Classified by SQLSTATE, not by message text: a non-English server
             # reports the constraint as already present in its own language (#2949).

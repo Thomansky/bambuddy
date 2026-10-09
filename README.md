@@ -831,7 +831,7 @@ Full documentation available at **[wiki.bambuddy.cool](http://wiki.bambuddy.cool
 |-----------|------------|
 | Backend | Python, FastAPI, SQLAlchemy |
 | Frontend | React, TypeScript, Tailwind CSS |
-| Database | SQLite (default) or PostgreSQL |
+| Database | SQLite (default) or PostgreSQL 13+ |
 | 3D Viewer | Three.js (models), libvgcode (G-code preview) |
 | Communication | MQTT (TLS), FTPS |
 
