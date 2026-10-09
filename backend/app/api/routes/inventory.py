@@ -87,6 +87,7 @@ from backend.app.services.supplier_links import apply_supplier_inheritance, appl
 from backend.app.services.tag_conflict import tag_already_linked
 from backend.app.utils.filament_ids import (
     GENERIC_FILAMENT_IDS,
+    GENERIC_IDS_REPLACED_ON_REUSE,
     filament_id_to_setting_id,
     normalize_slicer_filament,
 )
@@ -96,7 +97,6 @@ from backend.app.utils.tag_normalization import normalize_tag_uid, normalize_tra
 
 logger = logging.getLogger(__name__)
 
-_GENERIC_ID_VALUES = set(GENERIC_FILAMENT_IDS.values())
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
 
@@ -165,7 +165,7 @@ async def apply_spool_to_slot_via_mqtt(
     tray_sub_brands = " ".join(p for p in (spool.brand, spool.material, spool.subtype) if p) or spool.material
     tray_color = spool.rgba or "FFFFFFFF"
 
-    _generic_id_values = _GENERIC_ID_VALUES
+    _generic_id_values = GENERIC_IDS_REPLACED_ON_REUSE
 
     # Which nozzle this slot feeds, and how wide it is. One resolution shared
     # with every other path that configures a slot (see services.slot_nozzle),

@@ -334,6 +334,39 @@ class TestAssignSpoolTrayInfoIdx:
             # Slot's specific preset is reused when spool has no own preset
             assert call_kwargs.kwargs["tray_info_idx"] == "GFA05"
 
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    @pytest.mark.parametrize("slot_generic", ["GFL96", "GFL95"])
+    async def test_no_preset_keeps_a_silk_or_high_speed_generic_on_the_slot(
+        self, async_client: AsyncClient, printer_factory, spool_factory, slot_generic
+    ):
+        """PLA Silk and PLA High Speed joined the generic table (#3273), but the
+        reuse check kept its old set: a slot set to one of them still keeps it
+        for a preset-less PLA spool rather than dropping to Generic PLA."""
+        printer = await printer_factory(name="X1C")
+        spool = await spool_factory(slicer_filament=None, material="PLA")
+
+        mock_client = MagicMock()
+        mock_client.ams_set_filament_setting.return_value = True
+        mock_client.extrusion_cali_sel.return_value = True
+
+        status = _make_mock_status(
+            ams_data=[{"id": 0, "tray": [{"id": 0, "tray_info_idx": slot_generic, "tray_type": "PLA"}]}]
+        )
+
+        with patch("backend.app.services.printer_manager.printer_manager") as mock_pm:
+            mock_pm.get_client.return_value = mock_client
+            mock_pm.get_status.return_value = status
+
+            response = await async_client.post(
+                "/api/v1/inventory/assignments",
+                json={"spool_id": spool.id, "printer_id": printer.id, "ams_id": 0, "tray_id": 0},
+            )
+
+            assert response.status_code == 200
+            call_kwargs = mock_client.ams_set_filament_setting.call_args
+            assert call_kwargs.kwargs["tray_info_idx"] == slot_generic
+
 
 class TestAssignSpoolPresetMapping:
     """Tests that assign_spool saves the slot preset mapping for correct UI display."""
