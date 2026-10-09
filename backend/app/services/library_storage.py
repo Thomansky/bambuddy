@@ -44,6 +44,8 @@ import logging
 import os
 import re
 import shutil
+import unicodedata
+import weakref
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -195,6 +197,45 @@ def is_inside_tree(root: Path | None, path: Path | str | None) -> bool:
         return Path(path).resolve().is_relative_to(root.resolve())
     except OSError:  # pragma: no cover - resolve() on a broken mount
         return False
+
+
+_tree_locks: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = weakref.WeakKeyDictionary()
+
+
+def tree_lock() -> asyncio.Lock:
+    """Held while the tree's directories are renamed or walked.
+
+    A scan that walks a directory the moment it is renamed sees it vanish,
+    takes every file below it for deleted and drops their rows — tags, photos,
+    history. Renames (a save in Bambuddy, the one-time numbering pass) and
+    scans therefore take turns. One lock per event loop, so tests that each
+    run their own loop never share one.
+    """
+    loop = asyncio.get_running_loop()
+    lock = _tree_locks.get(loop)
+    if lock is None:
+        lock = _tree_locks[loop] = asyncio.Lock()
+    return lock
+
+
+def _path_key(path: str) -> str:
+    """How the share compares names: a QNAP over SMB ignores case."""
+    return unicodedata.normalize("NFC", path).casefold()
+
+
+async def directory_claimed(db: AsyncSession, directory: Path, *, exclude_id: int | None = None) -> bool:
+    """Whether a folder other than *exclude_id* already lives in *directory*."""
+    wanted = {_path_key(str(directory))}
+    with contextlib.suppress(OSError):
+        wanted.add(_path_key(str(directory.resolve())))
+    rows = (
+        await db.execute(
+            select(LibraryFolder.id, LibraryFolder.external_path).where(
+                LibraryFolder.is_external.is_(True), LibraryFolder.external_path.is_not(None)
+            )
+        )
+    ).all()
+    return any(row_id != exclude_id and _path_key(path) in wanted for row_id, path in rows)
 
 
 def numbered_name(name: str | None, number: str | None) -> str:
@@ -434,15 +475,7 @@ async def prepare_folder_directory(
     # folder already lives in is not. A new "001 EBZ" next to EBZ filed under
     # 001 would share its directory, and deleting the newcomer would take the
     # other folder's files to the trash with it.
-    claimed = (
-        await db.execute(
-            select(LibraryFolder.id).where(
-                LibraryFolder.is_external.is_(True),
-                LibraryFolder.external_path.in_({str(directory), str(directory.resolve())}),
-            )
-        )
-    ).first()
-    if claimed is not None:
+    if await directory_claimed(db, directory):
         raise HTTPException(
             status_code=409, detail=f"{directory.name!r} on the share already belongs to another folder"
         )
@@ -534,9 +567,16 @@ async def align_numbered_directories(db: AsyncSession) -> dict:
     Not marked done while the library is not in a directory or the share is
     unreachable, so a NAS that is down at startup is caught up on the next one.
     A folder that cannot be renamed is logged and skipped. Its name already
-    taken on the share is final (saving the folder later renames it); any
-    other failure — the directory open in Explorer — leaves the pass unmarked,
-    so the next start tries again.
+    taken on the share is final: the folder keeps its directory until it is
+    renamed or renumbered in Bambuddy, or its directory is renamed to
+    "<number> <name>" in Explorer. Any other failure — the directory open in
+    Explorer, a database write failing after the rename (the directory is put
+    back) — leaves the pass unmarked, so the next start tries again; a rename
+    that reached the share while its rows did not is found then and the rows
+    follow it.
+
+    Runs under :func:`tree_lock`, so no scan walks a directory while it is
+    being renamed.
     """
     from backend.app.api.routes.settings import get_setting, set_setting
 
@@ -575,30 +615,69 @@ async def align_numbered_directories(db: AsyncSession) -> dict:
 
     renamed = failed = 0
     retry_later = False
-    for folder_id in ids:
-        folder = (await db.execute(select(LibraryFolder).where(LibraryFolder.id == folder_id))).scalar_one_or_none()
-        if folder is None or not folder.external_path:
-            continue
-        current = folder.external_path
-        if Path(current).name == folder_component(folder):
-            continue
-        try:
-            moved = await relocate_folder_directory(db, folder)
-            await db.commit()
-        except Exception as exc:  # noqa: BLE001 - one folder must not stop the rest
-            # The rollback expires every row; only plain values from here on.
-            await db.rollback()
-            failed += 1
-            detail = exc.detail if isinstance(exc, HTTPException) else exc
-            # A name already taken (409) stays taken; anything else — the
-            # directory open in Explorer, the share hiccuping — may pass, so
-            # the next start tries again.
-            if not (isinstance(exc, HTTPException) and exc.status_code == 409):
-                retry_later = True
-            logger.warning("Library tree: could not put the number on folder %s (%s): %s", folder_id, current, detail)
-            continue
-        if moved is not None:
-            renamed += 1
+    async with tree_lock():
+        for folder_id in ids:
+            folder = (await db.execute(select(LibraryFolder).where(LibraryFolder.id == folder_id))).scalar_one_or_none()
+            if folder is None or not folder.external_path:
+                continue
+            current = Path(folder.external_path)
+            target = current.parent / folder_component(folder)
+            if current.name == target.name:
+                continue
+            if (
+                not current.is_dir()
+                and target.is_dir()
+                and not await directory_claimed(db, target, exclude_id=folder_id)
+            ):
+                # Renamed on the share by an earlier pass whose row write was
+                # lost (a crash, a database lock): bring the rows along.
+                try:
+                    await rewrite_subtree_paths(db, folder, current, target)
+                    await db.commit()
+                except Exception as exc:  # noqa: BLE001 - one folder must not stop the rest
+                    await db.rollback()
+                    failed += 1
+                    retry_later = True
+                    logger.warning("Library tree: could not re-point folder %s at %s: %s", folder_id, target, exc)
+                    continue
+                logger.info("Library tree: folder %s found already renamed to %s; rows re-pointed", folder_id, target)
+                renamed += 1
+                continue
+            try:
+                moved = await relocate_folder_directory(db, folder)
+                await db.commit()
+            except Exception as exc:  # noqa: BLE001 - one folder must not stop the rest
+                # The rollback expires every row; only plain values from here on.
+                await db.rollback()
+                failed += 1
+                detail = exc.detail if isinstance(exc, HTTPException) else exc
+                # A name already taken (409) stays taken; anything else — the
+                # directory open in Explorer, the share hiccuping, a database
+                # write failing after the rename — may pass, so the next start
+                # tries again.
+                if not (isinstance(exc, HTTPException) and exc.status_code == 409):
+                    retry_later = True
+                if target.is_dir() and not current.is_dir():
+                    # The rename reached the share and the rows did not: put the
+                    # directory back so both say the same again.
+                    try:
+                        await asyncio.to_thread(os.rename, target, current)
+                    except OSError as undo:
+                        logger.error(
+                            "Library tree: folder %s was renamed to %s but its rows could not be updated (%s), "
+                            "and moving it back failed (%s); the next start re-points the rows",
+                            folder_id,
+                            target,
+                            detail,
+                            undo,
+                        )
+                        continue
+                logger.warning(
+                    "Library tree: could not put the number on folder %s (%s): %s", folder_id, current, detail
+                )
+                continue
+            if moved is not None:
+                renamed += 1
 
     if not retry_later:
         await set_setting(db, SETTING_NUMBERED_DIRS_ALIGNED, "true")

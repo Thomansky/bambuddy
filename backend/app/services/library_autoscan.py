@@ -151,6 +151,13 @@ async def refresh_folder_on_open(db: AsyncSession, folder_id: int) -> dict:
     if storage_path_problem(str(root)) or not any(root.iterdir()):
         return {"added": 0, "removed": 0, "skipped": "library directory unavailable"}
 
+    # The tree is being renamed (the numbering pass after an update): opening a
+    # folder must not wait on that, and the next visit catches up.
+    from backend.app.services.library_storage import tree_lock
+
+    if tree_lock().locked():
+        return {"added": 0, "removed": 0, "skipped": "library being renamed"}
+
     _last_refresh[folder_id] = now
     from backend.app.api.routes.library import scan_external_folder
 

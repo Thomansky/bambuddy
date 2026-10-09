@@ -1711,7 +1711,8 @@ async def update_folder(
     # renamed on the share right now.
     moved_to = None
     if (folder.name, folder.number, folder.parent_id) != placement_before:
-        moved_to = await library_storage.relocate_folder_directory(db, folder)
+        async with library_storage.tree_lock():
+            moved_to = await library_storage.relocate_folder_directory(db, folder)
     try:
         await db.commit()
     except Exception:
@@ -2281,7 +2282,16 @@ async def scan_external_folder(
 
     Discovers new files, removes DB entries for deleted files.
     Does not copy files — stores the external path directly.
+
+    Takes turns with renames of the library tree (``tree_lock``): a directory
+    renamed while the walk passes it looks deleted, and its files' rows would
+    go with it.
     """
+    async with library_storage.tree_lock():
+        return await _scan_external_folder(folder_id, db)
+
+
+async def _scan_external_folder(folder_id: int, db: AsyncSession) -> dict:
     result = await db.execute(select(LibraryFolder).where(LibraryFolder.id == folder_id))
     folder = result.scalar_one_or_none()
 
@@ -2349,7 +2359,18 @@ async def scan_external_folder(
     # Real on-disk mtime per visited folder id (#2680), applied after the walk.
     folder_mtimes: dict[int, datetime] = {}
 
-    for dirpath, dirnames, filenames in os.walk(ext_path):
+    # Directories the walk could not read. What is below one of them was not
+    # seen, which is not the same as gone: nothing under them is removed.
+    unreadable: list[Path] = []
+
+    def _note_unreadable(error: OSError) -> None:
+        if error.filename:
+            unreadable.append(Path(error.filename))
+
+    def _under_unreadable(path: str | Path) -> bool:
+        return any(Path(path).is_relative_to(directory) for directory in unreadable)
+
+    for dirpath, dirnames, filenames in os.walk(ext_path, onerror=_note_unreadable):
         # Filter hidden directories unless configured
         if not folder.external_show_hidden:
             dirnames[:] = [d for d in dirnames if not d.startswith(".")]
@@ -2587,6 +2608,8 @@ async def scan_external_folder(
     # such records; genuinely-deleted files (absent from disk) are still
     # cleaned up. External file_path is the absolute on-disk path.
     for path_str, db_file in existing_files.items():
+        if _under_unreadable(path_str):
+            continue
         if path_str not in found_paths and not os.path.exists(path_str):
             # Clean up thumbnail if we generated one
             if db_file.thumbnail_path:
@@ -2615,6 +2638,8 @@ async def scan_external_folder(
     for rel_path, sub_fid in subfolder_entries:
         if rel_path in seen_rel_dirs or sub_fid in seen_folder_ids:
             continue  # Directory still exists on disk
+        if _under_unreadable(ext_path / rel_path):  # SEC-PATH-OK: rel_path from folder_cache, under ext_path
+            continue
         # Check if subfolder has any remaining files
         file_count_result = await db.execute(
             select(func.count(LibraryFile.id)).where(

@@ -267,6 +267,18 @@ class TestFolders:
         assert [(r.name, r.number) for r in rows] == [("EBZ", "001")]
 
     @pytest.mark.asyncio
+    async def test_the_claim_on_a_directory_ignores_case_like_the_share(
+        self, async_client: AsyncClient, db_session, tree
+    ):
+        """On the SMB share "001 ebz" is the same directory as "001 EBZ"."""
+        await _directory_mode(db_session, tree)
+        await async_client.post("/api/v1/library/folders", json={"name": "EBZ", "number": "001"})
+
+        response = await async_client.post("/api/v1/library/folders", json={"name": "001 ebz"})
+
+        assert response.status_code == 409, response.text
+
+    @pytest.mark.asyncio
     async def test_a_zip_of_a_numbered_folder_unpacks_into_that_folder(
         self, async_client: AsyncClient, db_session, tree
     ):
@@ -846,6 +858,39 @@ class TestKeepingUpWithTheShare:
         }
 
     @pytest.mark.asyncio
+    async def test_nothing_is_removed_below_a_directory_the_walk_could_not_read(
+        self, async_client: AsyncClient, db_session, tree, monkeypatch
+    ):
+        """Not seen is not gone: a directory renamed or locked while the walk
+        passed it keeps its files' rows until a walk can read it again."""
+        import backend.app.api.routes.library as library_routes
+        from backend.app.services.library_autoscan import autoscan_once
+
+        await _directory_mode(db_session, tree)
+        parent = (await async_client.post("/api/v1/library/folders", json={"name": "EBZ"})).json()
+        order = (
+            await async_client.post("/api/v1/library/folders", json={"name": "4016", "parent_id": parent["id"]})
+        ).json()
+        (tree / "EBZ" / "4016" / "teil.3mf").write_bytes(b"x")
+        assert (await autoscan_once(db_session))["added"] == 1
+
+        real_walk = os.walk
+
+        def walk_losing_4016(top, onerror=None, **kwargs):
+            for dirpath, dirnames, filenames in real_walk(top, onerror=onerror, **kwargs):
+                if "4016" in dirnames:
+                    dirnames.remove("4016")
+                    onerror(PermissionError(13, "Access is denied", str(Path(dirpath) / "4016")))
+                yield dirpath, dirnames, filenames
+
+        monkeypatch.setattr(library_routes.os, "walk", walk_losing_4016)
+        result = await autoscan_once(db_session)
+
+        assert result["removed"] == 0
+        listed = (await async_client.get(f"/api/v1/library/files?folder_id={order['id']}")).json()
+        assert [f["filename"] for f in listed] == ["teil.3mf"]
+
+    @pytest.mark.asyncio
     async def test_the_interval_is_off_by_default(self, async_client: AsyncClient):
         """A walk of a mounted share is real network IO; nobody pays for it unasked."""
         settings = (await async_client.get("/api/v1/settings/")).json()
@@ -939,6 +984,48 @@ class TestNumbersOntoTheShare:
         assert (tree / "001 EBZ").is_dir()
 
     @pytest.mark.asyncio
+    async def test_a_rename_whose_rows_were_not_written_is_put_back(
+        self, async_client: AsyncClient, db_session, tree, monkeypatch
+    ):
+        """The share and the rows must say the same, or every file is unopenable."""
+        await _directory_mode(db_session, tree)
+        await self._numbered_without_the_number_on_disk(async_client, db_session, "EBZ", "001")
+        real_rewrite = library_storage.rewrite_subtree_paths
+
+        async def database_locked(*args, **kwargs):
+            raise RuntimeError("database is locked")
+
+        monkeypatch.setattr(library_storage, "rewrite_subtree_paths", database_locked)
+        first = await library_storage.align_numbered_directories(db_session)
+        assert first == {"renamed": 0, "failed": 1, "skipped": None}
+        assert (tree / "EBZ").is_dir()
+        assert not (tree / "001 EBZ").exists()
+
+        monkeypatch.setattr(library_storage, "rewrite_subtree_paths", real_rewrite)
+        second = await library_storage.align_numbered_directories(db_session)
+        assert second == {"renamed": 1, "failed": 0, "skipped": None}
+        assert (tree / "001 EBZ").is_dir()
+
+    @pytest.mark.asyncio
+    async def test_a_rename_that_reached_the_share_alone_is_caught_up(
+        self, async_client: AsyncClient, db_session, tree
+    ):
+        """Renamed by a pass that crashed before its rows were written."""
+        await _directory_mode(db_session, tree)
+        ebz = await self._numbered_without_the_number_on_disk(async_client, db_session, "EBZ", "001")
+        inner = (
+            await async_client.post("/api/v1/library/folders", json={"name": "4016", "parent_id": ebz["id"]})
+        ).json()
+        os.rename(tree / "EBZ", tree / "001 EBZ")
+
+        result = await library_storage.align_numbered_directories(db_session)
+
+        assert result == {"renamed": 1, "failed": 0, "skipped": None}
+        db_session.expire_all()
+        paths = {r.id: r.external_path for r in (await db_session.execute(select(LibraryFolder))).scalars().all()}
+        assert paths == {ebz["id"]: str(tree / "001 EBZ"), inner["id"]: str(tree / "001 EBZ" / "4016")}
+
+    @pytest.mark.asyncio
     async def test_nothing_is_marked_done_while_the_share_is_away(
         self, async_client: AsyncClient, db_session, tmp_path
     ):
@@ -998,6 +1085,22 @@ class TestRefreshOnOpen:
 
         response = await async_client.post(f"/api/v1/library/folders/{folder['id']}/refresh")
         assert response.json()["skipped"] == "not a directory library"
+
+    @pytest.mark.asyncio
+    async def test_opening_a_folder_while_the_tree_is_being_renamed_waits_for_nothing(
+        self, async_client: AsyncClient, db_session, tree
+    ):
+        """A walk during a rename would take the renamed folder's files for gone."""
+        await _directory_mode(db_session, tree)
+        folder = (await async_client.post("/api/v1/library/folders", json={"name": "Kunden"})).json()
+        (tree / "Kunden" / "neu.3mf").write_bytes(b"x")
+
+        async with library_storage.tree_lock():
+            busy = (await async_client.post(f"/api/v1/library/folders/{folder['id']}/refresh")).json()
+        assert busy == {"added": 0, "removed": 0, "skipped": "library being renamed"}
+
+        later = (await async_client.post(f"/api/v1/library/folders/{folder['id']}/refresh")).json()
+        assert later == {"added": 1, "removed": 0, "skipped": None}
 
     @pytest.mark.asyncio
     async def test_it_can_be_switched_off(self, async_client: AsyncClient, db_session, tree):
