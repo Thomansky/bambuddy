@@ -132,6 +132,9 @@ async def test_queue_item_and_archive_keep_left_external_spool(tmp_path):
     mock_archive = MagicMock(id=1, print_name="test")
     with (
         patch("backend.app.api.routes.settings.get_setting", new_callable=AsyncMock, return_value=None),
+        # Fork: the queued job draws a running number; the mocked session has
+        # no series row, and None is what an install without the series gets.
+        patch("backend.app.services.virtual_printer.manager.allocate_number", AsyncMock(return_value=None)),
         patch(
             "backend.app.services.archive.ArchiveService.archive_print",
             new_callable=AsyncMock,
