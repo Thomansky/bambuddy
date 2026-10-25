@@ -734,6 +734,9 @@ export interface PrinterStatus {
   last_ams_update: number;
   // Number of printable objects in current print (for skip objects feature)
   printable_objects_count: number;
+  // The next pause the slicer put into the running print (#2984). minutes is
+  // null while the printer reports no time left yet.
+  next_pause?: { layer: number; minutes: number | null } | null;
   // Fan speeds (0-100 percentage, null if not available for this model)
   cooling_fan_speed: number | null;  // Part cooling fan
   big_fan1_speed: number | null;     // Auxiliary fan
@@ -1536,6 +1539,8 @@ export interface AppSettings {
   prometheus_token: string;
   // Bed cooled threshold
   bed_cooled_threshold: number;
+  // Minutes before a slicer pause to send the pause heads-up (#2984)
+  pause_warning_minutes: number;
   // Inventory low stock threshold
   low_stock_threshold: number;
   // Session policy (#1706) — admin-set ceiling, hours, [1, 720]
@@ -3223,6 +3228,7 @@ export interface NotificationProvider {
   on_location_ha_sensor_alert: boolean;
   // First layer complete
   on_first_layer_complete: boolean;
+  on_print_pause_upcoming: boolean;
   on_app_message: boolean;
   // Inventory stock alerts
   on_stock_reorder_alert: boolean;
@@ -3292,6 +3298,7 @@ export interface NotificationProviderCreate {
   on_location_ha_sensor_alert?: boolean;
   // First layer complete
   on_first_layer_complete?: boolean;
+  on_print_pause_upcoming?: boolean;
   on_app_message?: boolean;
   // Inventory stock alerts
   on_stock_reorder_alert?: boolean;
@@ -3354,6 +3361,7 @@ export interface NotificationProviderUpdate {
   on_location_ha_sensor_alert?: boolean;
   // First layer complete
   on_first_layer_complete?: boolean;
+  on_print_pause_upcoming?: boolean;
   on_app_message?: boolean;
   // Inventory stock alerts
   on_stock_reorder_alert?: boolean;
@@ -4117,6 +4125,40 @@ export interface SpoolFilamentPreset extends SpoolFilamentPresetInput {
   id: number;
   spool_id: number;
   created_at: string;
+}
+
+/**
+ * What a new spool of one product starts with (#1326): the slicer preset, the
+ * per-model preset overrides and the K profiles. `color_name` "" is the
+ * default for every colour of the product; one with a colour wins over it per
+ * preset and per hotend. Shared by both inventory modes.
+ */
+export interface ProfileDefaultKey {
+  brand: string;
+  material: string;
+  subtype: string;
+  color_name: string;
+}
+
+export interface ProfileDefaultInput extends ProfileDefaultKey {
+  slicer_filament: string | null;
+  slicer_filament_name: string | null;
+  presets: SpoolFilamentPresetInput[];
+  k_profiles: SpoolKProfileInput[];
+}
+
+export interface ProfileDefault extends ProfileDefaultInput {
+  id: number;
+  updated_at: string;
+}
+
+/** Both levels of a product's default merged, as a create applies them. */
+export interface ResolvedProfileDefault {
+  slicer_filament: string | null;
+  slicer_filament_name: string | null;
+  presets: SpoolFilamentPresetInput[];
+  k_profiles: SpoolKProfileInput[];
+  default_ids: number[];
 }
 
 /** One inventory-bound AMS slot, as returned by `/printers/{id}/inventory-remain`. */
@@ -7113,6 +7155,31 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(presets),
     }),
+  getProfileDefaults: () => request<ProfileDefault[]>('/inventory/profile-defaults'),
+  resolveProfileDefault: (key: ProfileDefaultKey) => {
+    const params = new URLSearchParams({
+      brand: key.brand,
+      material: key.material,
+      subtype: key.subtype,
+      color_name: key.color_name,
+    });
+    return request<ResolvedProfileDefault | null>(`/inventory/profile-defaults/resolve?${params}`);
+  },
+  saveProfileDefault: (data: ProfileDefaultInput) =>
+    request<ProfileDefault>('/inventory/profile-defaults', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  deleteProfileDefault: (defaultId: number) =>
+    request<{ status: string }>(`/inventory/profile-defaults/${defaultId}`, { method: 'DELETE' }),
+  /** Fills in what active spools of the default's product lack; the inventory mode picks the route. */
+  applyProfileDefault: (defaultId: number, spoolmanMode: boolean) =>
+    request<{ updated: number }>(
+      spoolmanMode
+        ? `/spoolman/inventory/profile-defaults/${defaultId}/apply`
+        : `/inventory/profile-defaults/${defaultId}/apply`,
+      { method: 'POST' },
+    ),
   getAssignments: (printerId?: number) =>
     request<SpoolAssignment[]>(`/inventory/assignments${printerId ? `?printer_id=${printerId}` : ''}`),
   assignSpool: (data: { spool_id: number; printer_id: number; ams_id: number; tray_id: number }) =>

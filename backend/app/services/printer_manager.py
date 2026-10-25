@@ -17,6 +17,7 @@ from backend.app.services.bambu_mqtt import (
     PrinterState,
     get_stage_name,
 )
+from backend.app.services.pause_eta import next_pause
 from backend.app.utils.ams_humidity import ams_humidity_percent
 from backend.app.utils.kprofile_lookup import build_slot_k_resolver
 
@@ -1767,6 +1768,8 @@ def printer_state_to_dict(
         "stg_cur_name": get_derived_status_name(state, model),
         # Printable objects count for skip objects feature
         "printable_objects_count": len(state.printable_objects),
+        # The next pause the slicer put into the running print (#2984)
+        "next_pause": next_pause(state),
         # Fan speeds (0-100 percentage, None if not available)
         "cooling_fan_speed": state.cooling_fan_speed,
         "big_fan1_speed": state.big_fan1_speed,

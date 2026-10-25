@@ -48,6 +48,7 @@ EVENT_NAMES = {
     "filament_low": "Filament Low",
     "maintenance_due": "Maintenance Due",
     "first_layer_complete": "First Layer Complete",
+    "print_pause_upcoming": "Pause Coming Up",
     "test": "Test Notification",
     # Queue notifications
     "queue_job_added": "Queue Job Added",

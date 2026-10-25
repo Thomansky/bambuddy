@@ -27,6 +27,7 @@ from backend.app.models.notification import (
     TelegramPendingVerdict,
 )
 from backend.app.models.notification_template import NotificationTemplate
+from backend.app.services.email_service import add_required_headers
 from backend.app.services.notify_client import NotifyClient, NotifyError, notify_credentials, notify_supports_photos
 from backend.app.services.print_confirmation import one_tap_url
 from backend.app.utils.notification_photos import save_notification_photo
@@ -1020,6 +1021,8 @@ class NotificationService:
                 msg["To"] = to_email
                 msg["Subject"] = f"[Bambuddy] {subject}"
                 msg.attach(MIMEText(body, "plain"))
+
+            add_required_headers(msg, from_email)
 
             # smtplib is synchronous and blocking: a wedged / greylisting /
             # firewall-dropped relay leaves recv() stuck. Two problems, two
@@ -2627,6 +2630,44 @@ class NotificationService:
             printer_id,
             printer_name,
             image_data=image_data,
+            variables=variables,
+        )
+
+    async def on_print_pause_upcoming(
+        self,
+        printer_id: int,
+        printer_name: str,
+        filename: str,
+        *,
+        minutes: int,
+        layer: int,
+        total_layers: int,
+        db: AsyncSession,
+    ):
+        """A pause the slicer put into the print is coming up (#2984)."""
+        providers = await self._get_providers_for_event(db, "on_print_pause_upcoming", printer_id)
+        if not providers:
+            return
+
+        variables = {
+            "printer": printer_name,
+            "filename": self._clean_filename(filename),
+            # At least a minute: a pause seconds away still reads as "1m".
+            "time_to_pause": self._format_duration(max(minutes, 1) * 60),
+            "eta": await self._format_eta(max(minutes * 60, 1), db),
+            "layer": str(layer),
+            "total_layers": str(total_layers),
+        }
+
+        title, message = await self._build_message_from_template(db, "print_pause_upcoming", variables)
+        await self._send_to_providers(
+            providers,
+            title,
+            message,
+            db,
+            "print_pause_upcoming",
+            printer_id,
+            printer_name,
             variables=variables,
         )
 

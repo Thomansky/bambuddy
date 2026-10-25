@@ -6,12 +6,14 @@ accurate partial usage reporting for multi-material prints.
 """
 
 import hashlib
+import io
 import json
 import logging
 import math
 import re
 import zipfile
 from collections import OrderedDict
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
@@ -199,15 +201,7 @@ def extract_layer_filament_usage_from_3mf(
     """
     try:
         with zipfile.ZipFile(file_path, "r") as zf:
-            names = zf.namelist()
-            gcode_path = select_plate_gcode_name(names, plate_id)
-            if gcode_path is None:
-                # No plate asked for, or a file whose single G-code member
-                # doesn't follow the plate_N naming convention (non-Bambu
-                # slicers) — the lone member is unambiguous either way.
-                gcode_files = [f for f in names if f.endswith(".gcode")]
-                if plate_id is None or len(gcode_files) == 1:
-                    gcode_path = default_plate_gcode_name(names)
+            gcode_path = _printed_plate_gcode_name(zf.namelist(), plate_id)
             if gcode_path is None:
                 return None
 
@@ -216,6 +210,93 @@ def extract_layer_filament_usage_from_3mf(
             return parse_gcode_layer_filament_usage(gcode_content)
     except Exception:
         return None
+
+
+def _printed_plate_gcode_name(names: list[str], plate_id: int | None) -> str | None:
+    """The G-code member of the plate that printed, or None.
+
+    Exactly ``plate_id`` when it is in the file. With no plate asked for, or a
+    file whose single G-code member doesn't follow the plate_N naming
+    convention (non-Bambu slicers), the lone or lowest member: unambiguous
+    either way. Never another plate of a multi-plate file.
+    """
+    gcode_path = select_plate_gcode_name(names, plate_id)
+    if gcode_path is None:
+        gcode_files = [f for f in names if f.endswith(".gcode")]
+        if plate_id is None or len(gcode_files) == 1:
+            gcode_path = default_plate_gcode_name(names)
+    return gcode_path
+
+
+@dataclass(frozen=True)
+class PausePoint:
+    """A pause the slicer put into the print (#2984).
+
+    ``layer`` is the layer the printer reports while it waits: Bambu Studio and
+    OrcaSlicer write the pause after the layer-change G-code (``M73 L<n>``),
+    at the start of that layer. ``remaining_minutes`` is the slicer's time left
+    at that point, from the last ``M73 P<pct> R<min>`` before it, or None when
+    the G-code carries no such line.
+    """
+
+    layer: int
+    remaining_minutes: int | None
+
+
+def parse_gcode_pause_points(gcode_content: str) -> list[PausePoint]:
+    """The pauses in a plate's G-code, in print order.
+
+    A pause is ``M400 U1``: the pause G-code of every Bambu printer profile,
+    written by both slicers after their ``; PAUSE_PRINTING`` tag, and by hand in
+    a custom layer G-code. Bambu's start and end G-code never use it. One per
+    layer: a second pause on a layer the printer already stopped at adds no
+    new point to warn about.
+    """
+    return _pause_points(gcode_content.splitlines())
+
+
+def _pause_points(lines: Iterable[str]) -> list[PausePoint]:
+    pauses: list[PausePoint] = []
+    layer = 0
+    remaining: int | None = None
+    for raw in lines:
+        line = raw.lstrip()
+        if not line.startswith(("M73", "M400", "m73", "m400")):
+            continue
+        parts = line.split(";", 1)[0].split()
+        cmd = parts[0].upper() if parts else ""
+        params = [p.upper() for p in parts[1:]]
+        if cmd == "M73":
+            for param in params:
+                try:
+                    if param.startswith("L"):
+                        layer = int(param[1:])
+                    elif param.startswith("R"):
+                        remaining = int(param[1:])
+                except ValueError:
+                    pass  # A malformed value leaves the last good one
+        elif cmd == "M400" and "U1" in params:
+            if not pauses or pauses[-1].layer != layer:
+                pauses.append(PausePoint(layer=layer, remaining_minutes=remaining))
+    return pauses
+
+
+def extract_pause_points_from_3mf(file_path: Path, plate_id: int | None = None) -> list[PausePoint]:
+    """The pauses of the plate that is printing, or none when unreadable.
+
+    Line by line: a plate's G-code can run to 100 MB, and only its M73 and
+    M400 lines are wanted.
+    """
+    try:
+        with zipfile.ZipFile(file_path, "r") as zf:
+            gcode_path = _printed_plate_gcode_name(zf.namelist(), plate_id)
+            if gcode_path is None:
+                return []
+            with zf.open(gcode_path) as member:
+                return _pause_points(io.TextIOWrapper(member, encoding="utf-8", errors="ignore"))
+    except Exception:
+        logger.debug("Could not read pauses from %s", file_path, exc_info=True)
+        return []
 
 
 def get_cumulative_usage_at_layer(
@@ -243,6 +324,42 @@ def get_cumulative_usage_at_layer(
 
     max_layer = max(relevant_layers)
     return layer_usage.get(max_layer, {})
+
+
+def slicer_grams_at_layer(
+    layer_usage: dict[int, dict[int, float]],
+    target_layer: int,
+    filament_usage: list[dict],
+) -> dict[int, float]:
+    """Grams per 1-based slot for a print stopped at ``target_layer`` (#3317).
+
+    The slicer's weight for each filament, times the share of that filament's
+    whole-print feed the G-code has done by ``target_layer``. A finished print
+    is charged the slicer's weight, and the G-code feeds more than the slicer
+    counts (the start sequence, the purge at a filament change) and ahead of
+    the layers it serves, so its grams on their own charged a print cancelled
+    near the end more than the same print finished.
+
+    Only slots the slicer weighed and the G-code fed by then; the caller
+    converts the others from millimetres.
+    """
+    if not layer_usage:
+        return {}
+    final = layer_usage[max(layer_usage)]
+    at_layer = get_cumulative_usage_at_layer(layer_usage, target_layer)
+    slicer_grams: dict[int, float] = {}
+    for usage in filament_usage:
+        slot_id, used_g = usage.get("slot_id"), usage.get("used_g") or 0
+        if isinstance(slot_id, int) and used_g > 0:
+            slicer_grams.setdefault(slot_id, used_g)
+    grams: dict[int, float] = {}
+    for filament_id, mm in at_layer.items():
+        slot_id = filament_id + 1
+        total_mm = final.get(filament_id, 0)
+        if slot_id in slicer_grams and total_mm > 0:
+            # The end sequence can retract a little after the last snapshot.
+            grams[slot_id] = slicer_grams[slot_id] * min(mm / total_mm, 1.0)
+    return grams
 
 
 def extract_filament_properties_from_3mf(file_path: Path) -> dict[int, dict]:
