@@ -5,8 +5,10 @@ one tag in the field, so the real anticollision and SELECT sequence runs.
 """
 
 import importlib
+import importlib.util
 import sys
 import types
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -110,6 +112,20 @@ def pn5180_mod(monkeypatch):
     return mod
 
 
+@pytest.fixture
+def read_tag_mod(monkeypatch):
+    """scripts/read_tag.py, the Read Tag diagnostic, imported without gpiod/spidev, its sleeps skipped."""
+    monkeypatch.setitem(sys.modules, "gpiod", MagicMock())
+    monkeypatch.setitem(sys.modules, "spidev", MagicMock())
+    spec = importlib.util.spec_from_file_location(
+        "spoolbuddy_read_tag", Path(__file__).resolve().parents[1] / "scripts" / "read_tag.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.setattr(mod, "time", types.SimpleNamespace(sleep=lambda _s: None, monotonic=lambda: 0.0))
+    return mod
+
+
 def _reader(mod, chip: FakeChip):
     """A PN5180 whose register and transceive commands go to ``chip``."""
     nfc = mod.PN5180.__new__(mod.PN5180)
@@ -204,3 +220,20 @@ class TestNfcReaderPoll:
         assert data["tag_uid"] == "04ECE673D32A81"
         assert data["sak"] == 0x00
         assert data["tag_type"] == "ntag"
+
+
+class TestReadTagDiagnostic:
+    """The Read Tag diagnostic has its own activate_type_a() and shows the UID the daemon reports."""
+
+    @pytest.mark.parametrize(
+        ("uid", "sak"), [(UID_4, 0x08), (UID_7, 0x00), (UID_10, 0x00)], ids=["4-byte", "7-byte", "10-byte"]
+    )
+    def test_the_full_uid_is_read(self, read_tag_mod, uid, sak):
+        chip = FakeChip(uid, sak=sak)
+
+        assert _reader(read_tag_mod, chip).activate_type_a() == (uid, sak)
+
+    def test_a_tag_gone_at_level_2_is_no_tag(self, read_tag_mod):
+        chip = FakeChip(UID_7, sak=0x00, gone_at_level=1)
+
+        assert _reader(read_tag_mod, chip).activate_type_a() is None
