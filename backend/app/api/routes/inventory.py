@@ -25,7 +25,9 @@ from backend.app.core.printer_scope import PrinterScope
 from backend.app.core.websocket import ws_manager
 from backend.app.models.ams_label import AmsLabel
 from backend.app.models.color_catalog import ColorCatalogEntry
+from backend.app.models.filament_profile_default import FilamentProfileDefault
 from backend.app.models.location import Location
+from backend.app.models.printer import Printer
 from backend.app.models.settings import Settings
 from backend.app.models.spool import Spool
 from backend.app.models.spool_assignment import SpoolAssignment
@@ -34,6 +36,12 @@ from backend.app.models.spool_filament_preset import SpoolFilamentPreset
 from backend.app.models.spool_k_profile import SpoolKProfile
 from backend.app.models.supplier import SpoolmanSpoolSupplier, SpoolSupplier, Supplier, supplier_name_key
 from backend.app.models.user import User
+from backend.app.schemas.filament_profile_default import (
+    FilamentProfileDefaultResponse,
+    FilamentProfileDefaultWrite,
+    ProfileDefaultApplyResult,
+    ResolvedProfileDefault,
+)
 from backend.app.schemas.location import LocationCreate, LocationResponse, LocationUpdate
 from backend.app.schemas.not_null import IgnoresNullForRequiredColumns
 from backend.app.schemas.spool import (
@@ -60,7 +68,7 @@ from backend.app.schemas.supplier import (
     SupplierStats,
     SupplierUpdate,
 )
-from backend.app.services import slot_unlink_grace, spool_swaps
+from backend.app.services import filament_profile_default as profile_defaults, slot_unlink_grace, spool_swaps
 from backend.app.services.ams_assignment_lock import get_ams_assignment_lock
 from backend.app.services.ams_slot_presence import spool_present
 from backend.app.services.location_service import (
@@ -1639,6 +1647,8 @@ async def create_spool(
     # A new spool of a product that already carries supplier assignments
     # inherits the source list (#2988).
     await apply_supplier_inheritance(db, spool)
+    # ...and the product's profile default, where the request brought none (#1326).
+    await profile_defaults.fill_internal_spool(db, spool)
     await db.commit()
     await db.refresh(spool)
     result = await db.execute(select(Spool).options(*spool_response_loads()).where(Spool.id == spool.id))
@@ -1669,6 +1679,14 @@ async def bulk_create_spools(
     await db.flush()
     # Every copy gets its own link rows, from one donor lookup (#2988).
     await apply_supplier_inheritance_to_batch(db, spools)
+    # Every copy is the same product, so one profile default for all (#1326).
+    if spools:
+        first = spools[0]
+        resolved = await profile_defaults.resolve_profile_default(
+            db, brand=first.brand, material=first.material, subtype=first.subtype, color_name=first.color_name
+        )
+        for spool in spools:
+            await profile_defaults.fill_internal_spool(db, spool, resolved=resolved)
     await db.commit()
     ids = [s.id for s in spools]
     result = await db.execute(select(Spool).options(*spool_response_loads()).where(Spool.id.in_(ids)))
@@ -2009,8 +2027,14 @@ async def replace_k_profiles(
     profiles: list[SpoolKProfileBase],
     db: AsyncSession = Depends(get_db, scope="function"),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_UPDATE),
+    printer_scope: PrinterScope = RequestPrinterScope,
 ):
-    """Replace all K-profiles for a spool (batch save)."""
+    """Replace all K-profiles for a spool (batch save).
+
+    A caller limited to some printers (#1727) replaces only theirs: the
+    profiles of printers it cannot see -- which its form never showed, a new
+    spool's from its product's profile default (#1326) among them -- stay.
+    """
     # Verify spool exists
     result = await db.execute(select(Spool).where(Spool.id == spool_id))
     if not result.scalar_one_or_none():
@@ -2019,11 +2043,14 @@ async def replace_k_profiles(
     # Delete existing
     existing = await db.execute(select(SpoolKProfile).where(SpoolKProfile.spool_id == spool_id))
     for old in existing.scalars().all():
-        await db.delete(old)
+        if printer_scope.allows(old.printer_id):
+            await db.delete(old)
 
     # Create new
     new_profiles = []
     for p in profiles:
+        if not printer_scope.allows(p.printer_id):
+            continue
         kp = SpoolKProfile(spool_id=spool_id, **p.model_dump())
         db.add(kp)
         new_profiles.append(kp)
@@ -2149,6 +2176,184 @@ async def replace_filament_presets(
     for row in new_presets:
         await db.refresh(row)
     return new_presets
+
+
+# ── Profile defaults (#1326) ─────────────────────────────────────────────────
+#
+# Shared by both inventory modes: a default is keyed on the product, not on a
+# spool. Applying one to existing spools is the only mode-specific part, so
+# the Spoolman twin of the apply route lives in spoolman_inventory.py.
+
+
+def _profile_default_response(row: FilamentProfileDefault, scope: PrinterScope) -> FilamentProfileDefaultResponse:
+    return FilamentProfileDefaultResponse(
+        id=row.id,
+        brand=row.brand,
+        material=row.material,
+        subtype=row.subtype,
+        color_name=row.color_name,
+        slicer_filament=row.slicer_filament,
+        slicer_filament_name=row.slicer_filament_name,
+        presets=[SpoolFilamentPresetBase.model_validate(p, from_attributes=True) for p in row.presets],
+        # A caller limited to some printers (#1727) sees only theirs.
+        k_profiles=[
+            SpoolKProfileBase.model_validate(k, from_attributes=True)
+            for k in row.k_profiles
+            if scope.allows(k.printer_id)
+        ],
+        updated_at=row.updated_at,
+    )
+
+
+@router.get("/profile-defaults", response_model=list[FilamentProfileDefaultResponse])
+async def list_profile_defaults(
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_READ),
+    printer_scope: PrinterScope = RequestPrinterScope,
+):
+    """Every profile default, ordered by product."""
+    result = await db.execute(
+        select(FilamentProfileDefault)
+        .options(selectinload(FilamentProfileDefault.presets), selectinload(FilamentProfileDefault.k_profiles))
+        .order_by(
+            func.lower(FilamentProfileDefault.brand),
+            func.lower(FilamentProfileDefault.material),
+            func.lower(FilamentProfileDefault.subtype),
+            func.lower(FilamentProfileDefault.color_name),
+        )
+    )
+    return [_profile_default_response(row, printer_scope) for row in result.scalars().all()]
+
+
+@router.get("/profile-defaults/resolve", response_model=ResolvedProfileDefault | None)
+async def resolve_profile_default(
+    material: str,
+    brand: str = "",
+    subtype: str = "",
+    color_name: str = "",
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_READ),
+    printer_scope: PrinterScope = RequestPrinterScope,
+):
+    """What a new spool of this product starts with; null when it has no default.
+
+    The spool form fills its Printers tab from this, so the user sees what the
+    create will apply before saving.
+    """
+    resolved = await profile_defaults.resolve_profile_default(
+        db, brand=brand, material=material, subtype=subtype, color_name=color_name
+    )
+    if resolved is None:
+        return None
+    return ResolvedProfileDefault(
+        slicer_filament=resolved.slicer_filament,
+        slicer_filament_name=resolved.slicer_filament_name,
+        presets=[SpoolFilamentPresetBase(**p) for p in resolved.presets],
+        k_profiles=[SpoolKProfileBase(**k) for k in resolved.k_profiles if printer_scope.allows(k["printer_id"])],
+        default_ids=resolved.default_ids,
+    )
+
+
+@router.put("/profile-defaults", response_model=FilamentProfileDefaultResponse)
+async def save_profile_default(
+    data: FilamentProfileDefaultWrite,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_UPDATE),
+    printer_scope: PrinterScope = RequestPrinterScope,
+):
+    """Create or replace the default for the product in the body.
+
+    A full replacement, like the spool's own K-profile and preset endpoints:
+    the body is everything the default holds. K profiles of printers the
+    caller cannot see are kept rather than cleared, and the body's rows for
+    them are ignored.
+    """
+    # Duplicates rejected by name, before anything is written.
+    seen_presets: set[tuple[str, str]] = set()
+    for p in data.presets:
+        key = (p.printer_model, p.nozzle_diameter)
+        if key in seen_presets:
+            raise HTTPException(
+                422, f"Duplicate override for model {p.printer_model!r} nozzle {p.nozzle_diameter or 'any'!r}"
+            )
+        seen_presets.add(key)
+    seen_hotends: set[tuple[int, int, str]] = set()
+    for k in data.k_profiles:
+        key = profile_defaults.hotend_key(k.printer_id, k.extruder, k.nozzle_diameter)
+        if key in seen_hotends:
+            raise HTTPException(422, f"Duplicate K profile for printer {k.printer_id} extruder {k.extruder}")
+        seen_hotends.add(key)
+    # Rows for printers the caller cannot see are ignored, as the spool's own
+    # K-profile save does: a form opened on a spool shows them all, and saving
+    # it as the default must not fail over rows the caller cannot change.
+    k_profiles = [k for k in data.k_profiles if printer_scope.allows(k.printer_id)]
+    printer_ids = {k.printer_id for k in k_profiles}
+    if printer_ids:
+        found = set((await db.execute(select(Printer.id).where(Printer.id.in_(printer_ids)))).scalars().all())
+        if printer_ids - found:
+            raise HTTPException(404, "Printer not found")
+
+    key = profile_defaults.product_key(
+        brand=data.brand, material=data.material, subtype=data.subtype, color_name=data.color_name
+    )
+    existing = await profile_defaults.find_default(db, key)
+    keep = (
+        {k.printer_id for k in existing.k_profiles if not printer_scope.allows(k.printer_id)}
+        if existing is not None
+        else set()
+    )
+    row = await profile_defaults.save_default(
+        db,
+        key,
+        slicer_filament=data.slicer_filament,
+        slicer_filament_name=data.slicer_filament_name,
+        presets=[p.model_dump() for p in data.presets],
+        k_profiles=[k.model_dump() for k in k_profiles],
+        keep_printer_ids=keep,
+    )
+    await db.commit()
+    row = await profile_defaults.load_default(db, row.id)
+    assert row is not None
+    return _profile_default_response(row, printer_scope)
+
+
+@router.delete("/profile-defaults/{default_id}")
+async def delete_profile_default(
+    default_id: int,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_UPDATE),
+    printer_scope: PrinterScope = RequestPrinterScope,
+):
+    """Delete a default. Spools that already got its profiles keep them."""
+    row = await profile_defaults.load_default(db, default_id)
+    if row is None:
+        raise HTTPException(404, "Profile default not found")
+    if any(not printer_scope.allows(k.printer_id) for k in row.k_profiles):
+        raise HTTPException(403, "This default holds K profiles for printers you cannot access")
+    await db.delete(row)
+    await db.commit()
+    return {"status": "deleted"}
+
+
+@router.post("/profile-defaults/{default_id}/apply", response_model=ProfileDefaultApplyResult)
+async def apply_profile_default(
+    default_id: int,
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_UPDATE),
+):
+    """Fill in what active spools of this default's product do not have yet.
+
+    Never overwrites: a spool keeps its own preset, its preset per model and
+    nozzle, and its K profile per hotend.
+    """
+    row = await profile_defaults.load_default(db, default_id)
+    if row is None:
+        raise HTTPException(404, "Profile default not found")
+    updated = await profile_defaults.apply_to_internal_spools(db, row)
+    await db.commit()
+    if updated:
+        await ws_manager.broadcast({"type": "inventory_changed"})
+    return ProfileDefaultApplyResult(updated=updated)
 
 
 # ── Spool Assignments ────────────────────────────────────────────────────────

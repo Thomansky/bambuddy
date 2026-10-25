@@ -255,6 +255,13 @@ async def create_spool_from_tray(db: AsyncSession, tray_data: dict) -> Spool:
 
     await apply_supplier_inheritance(db, spool)
 
+    # The product's profile default (#1326): its K profiles and per-model
+    # presets. The tag's own preset stays -- it names what is on the roll.
+    from backend.app.services.filament_profile_default import fill_internal_spool
+
+    await fill_internal_spool(db, spool)
+    await db.flush()
+
     logger.info(
         "Auto-created spool %d from AMS tray data: %s %s %s (tag=%s uuid=%s)",
         spool.id,

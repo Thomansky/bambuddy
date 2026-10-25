@@ -261,6 +261,7 @@ _INT_SETTING_KEYS = frozenset(
         "queue_keep_warm_max_minutes",
         "queue_max_concurrent_uploads",
         "ambient_drying_sustained_minutes",
+        "pause_warning_minutes",
     }
 )
 

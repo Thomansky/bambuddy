@@ -1724,6 +1724,8 @@ async def _track_from_3mf(
 
     # Per-layer gcode accuracy for partial prints
     layer_grams: dict[int, float] | None = None
+    # The same in the G-code's own grams, which the tray split weighs segments in.
+    layer_gcode_grams: dict[int, float] = {}
     if status != "completed":
         state = printer_manager.get_status(printer_id)
         current_layer = state.layer_num if state else 0
@@ -1738,19 +1740,22 @@ async def _track_from_3mf(
                     extract_layer_filament_usage_from_3mf,
                     get_cumulative_usage_at_layer,
                     mm_to_grams,
+                    slicer_grams_at_layer,
                 )
 
                 layer_usage = extract_layer_filament_usage_from_3mf(file_path, plate_id)
                 if layer_usage:
                     cumulative_mm = get_cumulative_usage_at_layer(layer_usage, current_layer)
                     filament_props = extract_filament_properties_from_3mf(file_path)
-                    layer_grams = {}
+                    # On the slicer's weights, as a finished print is (#3317).
+                    layer_grams = slicer_grams_at_layer(layer_usage, current_layer, filament_usage)
                     for filament_id, mm_used in cumulative_mm.items():
                         slot_id = filament_id + 1  # 0-based to 1-based
                         props = filament_props.get(slot_id, {})
                         density = props.get("density", 1.24)
                         diameter = props.get("diameter", 1.75)
-                        layer_grams[slot_id] = mm_to_grams(mm_used, diameter, density)
+                        layer_gcode_grams[slot_id] = mm_to_grams(mm_used, diameter, density)
+                        layer_grams.setdefault(slot_id, layer_gcode_grams[slot_id])
             except Exception:
                 pass  # Fall back to linear scaling
 
@@ -1832,9 +1837,14 @@ async def _track_from_3mf(
 
             from backend.app.utils.tray_split import compute_tray_split_grams
 
+            # The split prices segments in the G-code's grams and gives the last
+            # the rest, so it is run on the G-code's total and scaled to the
+            # slicer's after (#3317); a slicer total would leave the backup
+            # spool short, or with nothing.
+            split_total = layer_gcode_grams.get(slot_id) or total_weight
             segments = compute_tray_split_grams(
                 tray_changes=tray_changes,
-                total_weight=total_weight,
+                total_weight=split_total,
                 slot_id=slot_id,
                 layer_usage=split_layer_usage,
                 density=split_props.get("density", 1.24),
@@ -1842,6 +1852,7 @@ async def _track_from_3mf(
                 total_layers=(state.total_layers if state else 0) or 0,
                 last_layer_num=last_layer_num,
             )
+            segments = [(i, tray, grams * total_weight / split_total) for i, tray, grams in segments]
 
             for seg_idx, tray_global, segment_grams in segments:
                 if segment_grams <= 0:

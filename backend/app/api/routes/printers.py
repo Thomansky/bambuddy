@@ -38,6 +38,7 @@ from backend.app.schemas.printer import (
     ExtruderSlotResponse,
     FilaSwitchResponse,
     HmsActionBody,
+    NextPause,
     NozzleInfoResponse,
     NozzleRackSlot,
     PrinterCreate,
@@ -65,6 +66,7 @@ from backend.app.services.bambu_ftp import (
     list_files_result_async,
 )
 from backend.app.services.hms_actions import HMSAction
+from backend.app.services.pause_eta import next_pause
 from backend.app.services.print_storage import ftp_probe_paths, print_file_reachable_over_ftp
 from backend.app.services.printer_diagnostic import run_connection_diagnostic
 from backend.app.services.printer_file_cache import printer_file_cache
@@ -110,7 +112,7 @@ from backend.app.utils.filament_types import is_material_name, printer_filament_
 from backend.app.utils.fts_routing import slot_extruder
 from backend.app.utils.http import build_content_disposition, download_error_response, safe_download_filename
 from backend.app.utils.kprofile_lookup import build_slot_k_resolver
-from backend.app.utils.printer_models import MAX_CHAMBER_TEMP_C, uses_exhaust_fan_label
+from backend.app.utils.printer_models import MAX_CHAMBER_TEMP_C, aux_fan_sides, uses_exhaust_fan_label
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/printers", tags=["printers"])
@@ -857,6 +859,7 @@ async def _printer_status(db: AsyncSession, printer: Printer) -> PrinterStatus:
         mc_print_sub_stage=state.mc_print_sub_stage,
         last_ams_update=state.last_ams_update,
         printable_objects_count=len(state.printable_objects),
+        next_pause=NextPause(**upcoming) if (upcoming := next_pause(state)) else None,
         cooling_fan_speed=state.cooling_fan_speed,
         big_fan1_speed=state.big_fan1_speed,
         big_fan2_speed=state.big_fan2_speed,
@@ -3782,16 +3785,20 @@ async def set_chamber_temperature(
 @router.post("/{printer_id}/fan-speed")
 async def set_fan_speed(
     printer_id: int,
-    fan: str = Query(..., description="Fan to control: part, aux, aux2 (left aux), or chamber"),
+    fan: str = Query(
+        ...,
+        description="Fan to control: part, aux, aux2 (the second aux fan: left on the P2S, right on the X2D), or chamber",
+    ),
     speed: int = Query(..., ge=0, le=100, description="Fan speed percentage"),
     _=RequirePrinterPermissionIfAuthEnabled(Permission.PRINTERS_CONTROL),
     db: AsyncSession = Depends(get_db, scope="function"),
 ):
     """Set a fan speed by percentage.
 
-    Fan index 10 ("aux2") is the optional left auxiliary part cooling fan on
-    P2S/X2D — driven with "M106 P10" exactly like Bambu's official machine
-    profile gcode does. It only exists when the printer reports airduct part 10,
+    Fan index 10 ("aux2") is the second auxiliary part cooling fan: the left
+    one on the P2S (an accessory kit), the right one on the X2D, where index 2
+    ("aux") is the left (#3373). Driven with "M106 P10" exactly like Bambu's
+    official machine profile gcode does. It only exists when the printer reports airduct part 10,
     so the request is rejected rather than sending M106 P10 into the void on a
     machine that has no such fan.
 
@@ -3820,9 +3827,9 @@ async def set_fan_speed(
     if fan == "aux2" and getattr(client.state, "left_aux_fan_speed", None) is None:
         raise HTTPException(
             400,
-            "This printer does not report a left auxiliary fan "
-            "(no airduct part 10). The fan is an accessory kit on the P2S "
-            "and factory-fitted on the X2D.",
+            "This printer does not report a second auxiliary fan "
+            "(no airduct part 10). It is the left fan, an accessory kit, "
+            "on the P2S, and the right fan, factory-fitted, on the X2D.",
         )
 
     pwm_speed = round(speed * 255 / 100)
@@ -3833,10 +3840,13 @@ async def set_fan_speed(
     # The enclosure fan is called "Exhaust" on P2S/X2D and "Chamber" elsewhere;
     # match whatever the printer card badge shows so the toast agrees with the
     # control the user just clicked.
+    # The aux fans' sides depend on the model (#3373); the P2S's right aux fan
+    # keeps its plain name, as on the printer card.
+    aux_side, aux2_side = aux_fan_sides(printer.model)
     fan_names = {
         "part": "Part cooling fan",
-        "aux": "Auxiliary fan",
-        "aux2": "Left auxiliary fan",
+        "aux": "Left auxiliary fan" if aux_side == "left" else "Auxiliary fan",
+        "aux2": f"{aux2_side.capitalize()} auxiliary fan",
         "chamber": "Exhaust fan" if uses_exhaust_fan_label(printer.model) else "Chamber fan",
     }
     return {"success": True, "message": f"{fan_names[fan]} set to {speed}%"}

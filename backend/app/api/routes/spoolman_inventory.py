@@ -55,7 +55,7 @@ from backend.app.models.user import User
 from backend.app.schemas.spool import SpoolFilamentPresetBase, SpoolKProfileBase, naive_utc
 from backend.app.schemas.spoolman import SlotAmsId, SlotTrayId, SpoolmanFilamentPatch, SpoolmanSlotAssignmentEnriched
 from backend.app.schemas.supplier import SpoolSupplierLinkInput
-from backend.app.services import slot_unlink_grace, spool_swaps
+from backend.app.services import filament_profile_default as profile_defaults, slot_unlink_grace, spool_swaps
 from backend.app.services.location_service import (
     enrich_spool_dicts_with_location_id,
     maybe_sync_spoolman_locations,
@@ -571,6 +571,80 @@ async def _resolve_filament_id(data: SpoolmanInventoryCreate, client: SpoolmanCl
         )
 
 
+async def _resolve_create_default(
+    db: AsyncSession, data: SpoolmanInventoryCreate, spool: dict
+) -> profile_defaults.ResolvedProfiles | None:
+    """The profile default for a spool this request created (#1326).
+
+    From the request's product fields; a request that only names a catalog
+    filament (``spoolman_filament_id``) carries none, so then from the spool
+    Spoolman made -- its colour name only when it is a real one, the mapper
+    fills a missing one with the subtype.
+    """
+    if data.material:
+        return await profile_defaults.resolve_profile_default(
+            db, brand=data.brand, material=data.material, subtype=data.subtype, color_name=data.color_name
+        )
+    mapped = _map_spoolman_spool(spool)
+    return await profile_defaults.resolve_profile_default(
+        db,
+        brand=mapped["brand"],
+        material=mapped["material"],
+        subtype=mapped["subtype"],
+        color_name=data.color_name or (None if mapped["color_name_is_synthesized"] else mapped["color_name"]),
+    )
+
+
+async def _finish_created_spool(
+    db: AsyncSession,
+    client: SpoolmanClient,
+    spool: dict,
+    data: SpoolmanInventoryCreate,
+    default: profile_defaults.ResolvedProfiles | None,
+) -> dict:
+    """What a create does after Spoolman made the spool: the fields Spoolman
+    has no place for, and the product's profile default (#1326).
+
+    The slicer preset and the colour name go under the spool's extra dict
+    (mirror update_spool) -- Spoolman has no ``color_name`` on a filament
+    (#1357). A preset the request did not bring comes from the default, and
+    its preset overrides and K profiles land in the Bambuddy tables keyed by
+    the new spool's id. The spool exists either way, so a failed write is
+    logged and the create still succeeds.
+    """
+    slicer_filament = data.slicer_filament
+    slicer_filament_name = data.slicer_filament_name
+    if not slicer_filament and default is not None and default.slicer_filament:
+        slicer_filament = default.slicer_filament
+        slicer_filament_name = default.slicer_filament_name
+
+    new_extra: dict = {}
+    if slicer_filament is not None:
+        new_extra["bambu_slicer_filament"] = json.dumps(slicer_filament)
+    if slicer_filament_name is not None:
+        new_extra["bambu_slicer_filament_name"] = json.dumps(slicer_filament_name)
+    if data.color_name is not None:
+        new_extra["bambu_color_name"] = json.dumps(data.color_name)
+    if new_extra:
+        try:
+            async with _translate_spoolman_errors():
+                # Registered before the write, or Spoolman refuses the keys.
+                for name in new_extra:
+                    await client.ensure_extra_field(name)
+                spool = await client.merge_spool_extra(spool["id"], new_extra)
+        except HTTPException:
+            logger.warning("Failed to persist slicer_filament/color_name for spool %s", spool.get("id"))
+
+    if default is not None:
+        try:
+            if await profile_defaults.fill_spoolman_rows(db, int(spool["id"]), default):
+                await db.commit()
+        except Exception as exc:  # noqa: BLE001 — the spool is created; its profiles can be set by hand
+            await db.rollback()
+            logger.warning("Profile default for Spoolman spool %s not applied: %s", spool.get("id"), exc)
+    return spool
+
+
 @router.post("/spools")
 async def create_spool(
     data: SpoolmanInventoryCreate,
@@ -617,34 +691,7 @@ async def create_spool(
 
     spool, price_warnings = await _apply_price_if_set(client, spool, data.cost_per_kg)
 
-    # Persist slicer_filament AND color_name under the spool's extra dict
-    # (mirror update_spool). Spoolman has no `color_name` field on filament
-    # (#1357) so we own the round-trip ourselves.
-    if data.slicer_filament is not None or data.slicer_filament_name is not None or data.color_name is not None:
-        # Ensure extra fields are registered before write.
-        if data.slicer_filament is not None:
-            await client.ensure_extra_field("bambu_slicer_filament")
-        if data.slicer_filament_name is not None:
-            await client.ensure_extra_field("bambu_slicer_filament_name")
-        if data.color_name is not None:
-            await client.ensure_extra_field("bambu_color_name")
-        new_extra: dict = {}
-        if data.slicer_filament is not None:
-            new_extra["bambu_slicer_filament"] = json.dumps(data.slicer_filament)
-        if data.slicer_filament_name is not None:
-            new_extra["bambu_slicer_filament_name"] = json.dumps(data.slicer_filament_name)
-        if data.color_name is not None:
-            new_extra["bambu_color_name"] = json.dumps(data.color_name)
-        if new_extra:
-            try:
-                async with _translate_spoolman_errors():
-                    spool = await client.merge_spool_extra(spool["id"], new_extra)
-            except HTTPException:
-                # Best-effort — the spool already exists, log and continue.
-                logger.warning(
-                    "Failed to persist slicer_filament/color_name for spool %s",
-                    spool.get("id"),
-                )
+    spool = await _finish_created_spool(db, client, spool, data, await _resolve_create_default(db, data, spool))
 
     result = _map_spoolman_spool(spool)
     await ws_manager.broadcast({"type": "inventory_changed"})
@@ -688,6 +735,9 @@ async def bulk_create_spools(
     remaining = max(0.0, data.label_weight - data.weight_used)
     created: list[dict] = []
     failures: list[str] = []
+    # Every copy is the same product: one lookup for the batch, on the first.
+    default: profile_defaults.ResolvedProfiles | None = None
+    resolved_default = False
     for _ in range(payload.quantity):
         try:
             spool = await client.create_spool(
@@ -717,6 +767,12 @@ async def bulk_create_spools(
             continue
         if price_warnings:
             logger.warning("Bulk spool %s created without price: %s", spool.get("id"), price_warnings)
+        # Each copy gets the preset and colour name the single create gives,
+        # and the product's profile default (#1326).
+        if not resolved_default:
+            default = await _resolve_create_default(db, data, spool)
+            resolved_default = True
+        spool = await _finish_created_spool(db, client, spool, data, default)
         created.append(_map_spoolman_spool(spool))
 
     if not created:
@@ -2454,6 +2510,71 @@ async def patch_spoolman_filament(
     return normalized
 
 
+@router.post("/profile-defaults/{default_id}/apply")
+async def apply_profile_default_to_spoolman_spools(
+    default_id: int = Path(..., gt=0),
+    db: AsyncSession = Depends(get_db, scope="function"),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_UPDATE),
+) -> dict:
+    """Spoolman twin of ``POST /inventory/profile-defaults/{id}/apply`` (#1326).
+
+    Fills in what active Spoolman spools of the default's product do not have
+    yet: the spool's own preset (in its extra dict), and its preset overrides
+    and K profiles (Bambuddy tables keyed by the spool id). Never overwrites.
+    """
+    client = await _get_client(db)
+    row = await profile_defaults.load_default(db, default_id)
+    if row is None:
+        raise HTTPException(404, "Profile default not found")
+    async with _translate_spoolman_errors():
+        spools = await client.get_all_spools()
+
+    updated = 0
+    cache: dict[str, profile_defaults.ResolvedProfiles | None] = {}
+    slicer_field_ready = False
+    for raw in spools:
+        try:
+            mapped = _map_spoolman_spool(raw)
+        except ValueError:
+            continue
+        # The mapper fills a missing colour name with the subtype; that is no colour.
+        colour = None if mapped["color_name_is_synthesized"] else mapped["color_name"]
+        if mapped["archived_at"] or not profile_defaults.default_matches(
+            row, brand=mapped["brand"], material=mapped["material"], subtype=mapped["subtype"], color_name=colour
+        ):
+            continue
+        colour_key = (colour or "").strip().lower()
+        if colour_key not in cache:
+            cache[colour_key] = await profile_defaults.resolve_profile_default(
+                db, brand=row.brand, material=row.material, subtype=row.subtype, color_name=colour
+            )
+        resolved = cache[colour_key]
+        if resolved is None:
+            continue
+        changed = await profile_defaults.fill_spoolman_rows(db, mapped["id"], resolved)
+        if resolved.slicer_filament and not mapped["slicer_filament"]:
+            new_extra = {"bambu_slicer_filament": json.dumps(resolved.slicer_filament)}
+            if resolved.slicer_filament_name:
+                new_extra["bambu_slicer_filament_name"] = json.dumps(resolved.slicer_filament_name)
+            try:
+                async with _translate_spoolman_errors():
+                    if not slicer_field_ready:
+                        await client.ensure_extra_field("bambu_slicer_filament")
+                        await client.ensure_extra_field("bambu_slicer_filament_name")
+                        slicer_field_ready = True
+                    await client.merge_spool_extra(mapped["id"], new_extra)
+                forget_spoolman_spool_own_preset(mapped["id"])
+                changed = True
+            except HTTPException:
+                logger.warning("Profile default: preset not written to Spoolman spool %s", mapped["id"])
+        if changed:
+            updated += 1
+    await db.commit()
+    if updated:
+        await ws_manager.broadcast({"type": "inventory_changed"})
+    return {"updated": updated}
+
+
 @router.get("/spools/{spool_id}/k-profiles")
 async def get_spoolman_k_profiles(
     spool_id: int = Path(..., gt=0),
@@ -2473,16 +2594,26 @@ async def save_spoolman_k_profiles(
     profiles: list[SpoolKProfileBase] = Body(...),
     db: AsyncSession = Depends(get_db, scope="function"),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.INVENTORY_UPDATE),
+    printer_scope: PrinterScope = RequestPrinterScope,
 ) -> list[dict]:
-    """Replace all K-value calibration profiles for a Spoolman spool."""
+    """Replace all K-value calibration profiles for a Spoolman spool.
+
+    As the internal route: a caller limited to some printers (#1727) replaces
+    only theirs, and the other printers' profiles stay.
+    """
     client = await _get_client(db)
     async with _translate_spoolman_errors():
         await client.get_spool(spool_id)
 
     saved: list[SpoolmanKProfile] = []
     try:
-        await db.execute(delete(SpoolmanKProfile).where(SpoolmanKProfile.spoolman_spool_id == spool_id))
+        stmt = delete(SpoolmanKProfile).where(SpoolmanKProfile.spoolman_spool_id == spool_id)
+        if (in_scope := printer_scope.where_strict(SpoolmanKProfile.printer_id)) is not None:
+            stmt = stmt.where(in_scope)
+        await db.execute(stmt)
         for profile in profiles:
+            if not printer_scope.allows(profile.printer_id):
+                continue
             obj = SpoolmanKProfile(
                 spoolman_spool_id=spool_id,
                 printer_id=profile.printer_id,

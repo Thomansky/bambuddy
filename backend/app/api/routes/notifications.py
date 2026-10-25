@@ -155,6 +155,8 @@ def _provider_to_dict(provider: NotificationProvider) -> dict:
         "on_bed_cooled": provider.on_bed_cooled,
         # First layer complete
         "on_first_layer_complete": provider.on_first_layer_complete,
+        # A slicer pause coming up (#2984)
+        "on_print_pause_upcoming": bool(provider.on_print_pause_upcoming),
         # Messages from connected apps
         "on_app_message": bool(provider.on_app_message),
         # Inventory stock alerts. Absent here, the toggles above always read
@@ -309,6 +311,7 @@ async def create_notification_provider(
         on_bed_cooled=provider_data.on_bed_cooled,
         # First layer complete
         on_first_layer_complete=provider_data.on_first_layer_complete,
+        on_print_pause_upcoming=provider_data.on_print_pause_upcoming,
         on_app_message=provider_data.on_app_message,
         # Inventory stock alerts
         on_stock_reorder_alert=provider_data.on_stock_reorder_alert,

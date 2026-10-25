@@ -1149,6 +1149,11 @@ class PrinterState:
     printable_objects: dict = field(default_factory=dict)
     # Objects that have been skipped during the current print
     skipped_objects: list = field(default_factory=list)
+    # Pauses the slicer put into the running print, from its archived 3MF
+    # (#2984): threemf_tools.PausePoint, in print order. Empty when unknown.
+    pause_points: list = field(default_factory=list)
+    # Layers of those pauses a heads-up notification already went out for.
+    pause_warned_layers: set = field(default_factory=set)
     # Fan speeds (0-100 percentage, None if not available for this model)
     cooling_fan_speed: int | None = None  # Part cooling fan
     big_fan1_speed: int | None = None  # Auxiliary fan
@@ -4465,6 +4470,16 @@ class BambuMQTTClient:
             self._eop_probe_armed = False
             self._eop_probe_last = {}
 
+    @property
+    def layer_before_new_print(self) -> int:
+        """The layer the printer was on when a print start was detected, until
+        it reports another (#3317); 0 when none.
+
+        For a print that is resumed rather than new, which a restart while it
+        was paused makes look new, that is the layer it is still on (#2984).
+        """
+        return self._stale_layer_num
+
     def _is_stale_layer(self, value) -> bool:
         """Whether a frame's `layer_num` is the previous print's last layer (#3317)."""
         if not self._stale_layer_num:
@@ -5048,11 +5063,13 @@ class BambuMQTTClient:
                 # Parse individual airduct fan parts (new-protocol models: P2S/X2D/H2*).
                 # Raw part ids are bit-packed — decoded id = raw_id >> 4 (bits 4-11),
                 # mirroring Bambu Studio DevFan::ParseV3_0. Decoded ids follow the
-                # AIR_FUN enum: 1=part cooling, 2=right aux, 3=chamber/exhaust,
-                # 10=left aux (FAN_REMOTE_COOLING_1). The airduct `parts` list only
+                # AIR_FUN enum: 1=part cooling, 2=aux, 3=chamber/exhaust,
+                # 10=second aux (FAN_REMOTE_COOLING_1). Aux 2 is the right fan and
+                # 10 the left on the P2S, the other way round on the X2D (#3373;
+                # Bambu Studio's N7.json / N6.json). The airduct `parts` list only
                 # contains the fans that physically exist, so it doubles as a
                 # presence signal for the two P2S/X2D add-on kits:
-                #   - id 10 (left auxiliary part cooling fan) — reported ONLY here,
+                #   - id 10 (second auxiliary part cooling fan) — reported ONLY here,
                 #     never mirrored into a flat big_fanX_speed field.
                 #   - id 3 (chamber exhaust fan) — its speed is mirrored into
                 #     big_fan2_speed, but the part is only listed when the External
@@ -5082,7 +5099,7 @@ class BambuMQTTClient:
                             continue
                         # Ids seen across the support-package archive:
                         #   1 part cooling, 2 aux, 3 chamber/exhaust,
-                        #   6 (H2 series, unmapped), 10 left aux.
+                        #   6 (H2 series, unmapped), 10 second aux.
                         speeds[part_id] = max(0, min(100, part_state))
 
                     # Absence in this list is what tells us a kit is NOT fitted,
@@ -5105,7 +5122,7 @@ class BambuMQTTClient:
 
                     left_aux_speed = speeds.get(10)
                     if left_aux_speed is None and not is_full_inventory:
-                        # Partial frame that didn't mention the left aux fan —
+                        # Partial frame that didn't mention the second aux fan —
                         # keep whatever we already knew about it.
                         left_aux_speed = self.state.left_aux_fan_speed
                     if left_aux_speed != self.state.left_aux_fan_speed:
@@ -5113,7 +5130,7 @@ class BambuMQTTClient:
                             f"[{self.serial_number}] left_aux_fan_speed changed: "
                             f"{self.state.left_aux_fan_speed} -> {left_aux_speed}"
                         )
-                    # A FULL parts list without id 10 means the left aux fan is
+                    # A FULL parts list without id 10 means the second aux fan is
                     # not installed — report None so the UI can hide the widget.
                     self.state.left_aux_fan_speed = left_aux_speed
                     # id 3 present == chamber exhaust fan installed (base P2S
@@ -5800,6 +5817,9 @@ class BambuMQTTClient:
         if is_new_print or is_file_change:
             # Clear any old HMS errors when a new print starts
             self.state.hms_errors = []
+            # The last print's pauses; this one's come from its 3MF (#2984).
+            self.state.pause_points = []
+            self.state.pause_warned_layers = set()
             # Reset layer tracking for new print (needed for layer-based timelapse)
             # #3317: only above 1. Every print reports layer 1 first, which
             # clears a higher value; a previous print that ended on layer 1
@@ -7770,8 +7790,9 @@ class BambuMQTTClient:
         """Set fan speed.
 
         Args:
-            fan: Fan index (1=part cooling, 2=auxiliary, 3=chamber, 10=left auxiliary).
-                Index 10 is the optional left auxiliary part cooling fan on P2S/X2D
+            fan: Fan index (1=part cooling, 2=auxiliary, 3=chamber, 10=second auxiliary).
+                Index 10 is the second auxiliary part cooling fan: left on the P2S
+                (an accessory kit), right on the X2D, where 2 is the left (#3373)
                 (airduct part id 10); Bambu's official machine profiles drive it with
                 "M106 P10" in start/layer-change gcode.
             speed: Speed 0-255 (0=off, 255=full)
