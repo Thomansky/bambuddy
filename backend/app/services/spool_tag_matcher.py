@@ -533,6 +533,36 @@ async def get_spool_by_tag(db: AsyncSession, tag_uid: str, tray_uuid: str) -> Sp
     return None
 
 
+def cascade_level_1_uid(tag_uid: str | None) -> str | None:
+    """The form a reader that stops after cascade level 1 reports this UID in, or None.
+
+    Only a 7- or 10-byte UID goes on past level 1; such a reader reports it as
+    the cascade tag plus its first three bytes (#3258).
+    """
+    uid = _normalize_hex(tag_uid)
+    return CASCADE_TAG + uid[:6] if len(uid) in (14, 20) else None
+
+
+def cascade_level_1_uid_start(tag_uid: str | None) -> str | None:
+    """The first three bytes of the UID behind a read that stopped after cascade level 1, or None."""
+    uid = _normalize_hex(tag_uid)
+    return uid[len(CASCADE_TAG) :] if len(uid) == 8 and uid.startswith(CASCADE_TAG) else None
+
+
+def begins_with_cascade_level_1(stored_uid: str, uid_start: str) -> bool:
+    """Whether a stored tag link is a 7-byte UID that a cascade level 1 read of uid_start begins."""
+    return len(stored_uid) == 14 and stored_uid.startswith(uid_start)
+
+
+def warn_cascade_level_1_ambiguous(tag_uid: str, spool_ids: list) -> None:
+    """Log that more than one spool fits a tag at cascade level 1, so none is matched."""
+    logger.warning(
+        "Tag %s fits the tag links of spools %s at cascade level 1; not guessing between them",
+        tag_uid,
+        spool_ids,
+    )
+
+
 async def _spool_by_cascade_level_1(db: AsyncSession, tag_uid: str) -> Spool | None:
     """Match a tag UID and a link stored from the tag's cascade level 1 alone, either way round.
 
@@ -546,10 +576,11 @@ async def _spool_by_cascade_level_1(db: AsyncSession, tag_uid: str) -> Spool | N
     """
     loads = (selectinload(Spool.k_profiles), selectinload(Spool.assignments))
     full_uid = _normalize_hex(tag_uid)
+    level1_uid = cascade_level_1_uid(full_uid)
+    uid_start = cascade_level_1_uid_start(full_uid)
     matches: list[Spool] = []
 
-    if len(full_uid) in (14, 20):
-        level1_uid = CASCADE_TAG + full_uid[:6]
+    if level1_uid:
         result = await db.execute(
             select(Spool)
             .options(*loads)
@@ -568,8 +599,7 @@ async def _spool_by_cascade_level_1(db: AsyncSession, tag_uid: str) -> Spool | N
                 spool.tag_uid,
             )
             return spool
-    elif len(full_uid) == 8 and full_uid.startswith(CASCADE_TAG):
-        uid_start = full_uid[len(CASCADE_TAG) :]
+    elif uid_start:
         result = await db.execute(
             select(Spool)
             .options(*loads)
@@ -579,7 +609,7 @@ async def _spool_by_cascade_level_1(db: AsyncSession, tag_uid: str) -> Spool | N
         matches = [
             spool
             for spool in result.scalars().all()
-            if len(stored := _normalize_tag_uid(spool.tag_uid)) == 14 and stored.startswith(uid_start)
+            if begins_with_cascade_level_1(_normalize_tag_uid(spool.tag_uid), uid_start)
         ]
         if len(matches) == 1:
             logger.info(
@@ -591,11 +621,7 @@ async def _spool_by_cascade_level_1(db: AsyncSession, tag_uid: str) -> Spool | N
             return matches[0]
 
     if len(matches) > 1:
-        logger.warning(
-            "Tag %s fits the tag links of spools %s at cascade level 1; not guessing between them",
-            full_uid,
-            [spool.id for spool in matches],
-        )
+        warn_cascade_level_1_ambiguous(full_uid, [spool.id for spool in matches])
     return None
 
 
