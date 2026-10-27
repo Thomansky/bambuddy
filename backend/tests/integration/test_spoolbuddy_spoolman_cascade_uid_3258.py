@@ -89,8 +89,11 @@ def serving(client):
         yield ws
 
 
-async def _scan(async_client: AsyncClient, tag_uid: str) -> dict:
-    resp = await async_client.post(SCAN, json={"device_id": "sb-1", "tag_uid": tag_uid})
+async def _scan(async_client: AsyncClient, tag_uid: str, sak: int | None = None) -> dict:
+    body = {"device_id": "sb-1", "tag_uid": tag_uid}
+    if sak is not None:
+        body["sak"] = sak
+    resp = await async_client.post(SCAN, json=body)
     assert resp.status_code == 200
     return resp.json()
 
@@ -217,6 +220,23 @@ class TestLevel1Scan:
 
         assert result["spool_id"] == 7
         client.merge_spool_extra.assert_not_awaited()
+
+    async def test_an_old_daemon_reports_the_sak_of_level_1(self, async_client, spoolman_on):
+        client = _client([_spool(7, tags=[NTAG_UID])])
+
+        with serving(client):
+            result = await _scan(async_client, NTAG_LEVEL1, sak=0x04)
+
+        assert result["spool_id"] == 7
+
+    async def test_a_complete_uid_beginning_with_88_is_no_level1_read(self, async_client, spoolman_on):
+        """A SAK without bit 0x04 says the UID ended there: a 4-byte clone card, not a level-1 read."""
+        client = _client([_spool(7, tags=[NTAG_UID])])
+
+        with serving(client):
+            result = await _scan(async_client, NTAG_LEVEL1, sak=0x08)
+
+        assert result["matched"] is False
 
     async def test_only_a_seven_byte_uid_can_be_what_it_begins(self, async_client, spoolman_on):
         client = _client([_spool(7, tags=["04ECE673D32A8100"], extra_tag="04ECE673")])

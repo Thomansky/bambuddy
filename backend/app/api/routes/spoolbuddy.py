@@ -469,7 +469,7 @@ def _spoolman_tag_links(sm_spool: dict) -> set[str]:
     return _spoolman_native_tag_uids(sm_spool) | ({_spoolman_extra_tag_uid(sm_spool)} - {""})
 
 
-def _spoolman_spool_by_cascade_level_1(spools: list[dict], tag_uid: str) -> dict | None:
+def _spoolman_spool_by_cascade_level_1(spools: list[dict], tag_uid: str, sak: int | None = None) -> dict | None:
     """Match a tag UID and a Spoolman link stored from the tag's cascade level 1, either way round.
 
     The Spoolman counterpart of the built-in inventory's fallback in
@@ -480,7 +480,7 @@ def _spoolman_spool_by_cascade_level_1(spools: list[dict], tag_uid: str) -> dict
     begin more than one tag, so only a single fitting spool is matched.
     """
     level1_uid = cascade_level_1_uid(tag_uid)
-    uid_start = cascade_level_1_uid_start(tag_uid)
+    uid_start = cascade_level_1_uid_start(tag_uid, sak)
     if not level1_uid and not uid_start:
         return None
 
@@ -646,12 +646,12 @@ async def nfc_tag_scanned(
 
             # Last, a link stored from the tag's cascade level 1 (#3258), as
             # get_spool_by_tag falls back to in the built-in inventory.
-            level1_read = cascade_level_1_uid_start(req.tag_uid) is not None
+            level1_read = cascade_level_1_uid_start(req.tag_uid, req.sak) is not None
             level1_read_match = False
             if sm_spool is None and (level1_read or cascade_level_1_uid(req.tag_uid)):
                 if cached_spools is None:
                     cached_spools = await client.get_spools()
-                sm_spool = _spoolman_spool_by_cascade_level_1(cached_spools, req.tag_uid)
+                sm_spool = _spoolman_spool_by_cascade_level_1(cached_spools, req.tag_uid, req.sak)
                 level1_read_match = level1_read and sm_spool is not None
 
             if sm_spool is not None:
@@ -743,7 +743,7 @@ async def nfc_tag_scanned(
             return {"status": "ok", "matched": False, "spool_id": None}
     else:
         # Local mode — exclusive lookup, no Spoolman fallback.
-        spool = await get_spool_by_tag(db, req.tag_uid, tray_uuid or "")
+        spool = await get_spool_by_tag(db, req.tag_uid, tray_uuid or "", req.sak)
         if spool:
             await ws_manager.broadcast(
                 {

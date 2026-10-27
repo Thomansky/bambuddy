@@ -548,6 +548,24 @@ async def test_get_spool_by_tag_cascade_level_1_read_finds_full_uid(db_session):
 
 
 @pytest.mark.asyncio
+async def test_get_spool_by_tag_cascade_level_1_read_with_its_sak_finds_full_uid(db_session):
+    """An old daemon reports the SAK of level 1, which says the UID goes on."""
+    spool_id = await _add_spool(db_session, NTAG_UID)
+
+    found = await get_spool_by_tag(db_session, NTAG_LEVEL1, "", sak=0x04)
+
+    assert found.id == spool_id
+
+
+@pytest.mark.asyncio
+async def test_get_spool_by_tag_complete_uid_beginning_with_88_is_no_level_1_read(db_session):
+    """A 4-byte UID that begins with 88 (a non-ISO clone card) ended there: no fallback."""
+    await _add_spool(db_session, NTAG_UID)
+
+    assert await get_spool_by_tag(db_session, NTAG_LEVEL1, "", sak=0x08) is None
+
+
+@pytest.mark.asyncio
 async def test_get_spool_by_tag_cascade_level_1_read_two_full_uids_no_match(db_session):
     """Two stored 7-byte UIDs beginning with the same three bytes: no guess."""
     await _add_spool(db_session, NTAG_UID)

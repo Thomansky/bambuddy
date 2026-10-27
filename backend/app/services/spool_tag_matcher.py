@@ -28,6 +28,9 @@ ZERO_TRAY_UUID = "00000000000000000000000000000000"
 # ISO 14443-3 cascade tag. A reader that stops after cascade level 1 reports a
 # 7- or 10-byte UID as this byte plus the UID's first three bytes (#3258).
 CASCADE_TAG = "88"
+# SAK bit that says the UID goes on at the next cascade level. Such a reader
+# reports the SAK of level 1, so its 88 form always comes with this bit set.
+SAK_UID_INCOMPLETE = 0x04
 
 # Spool catalog row describing the reusable plastic spool Bambu Lab ships filament
 # on, and the weight to assume when that row is absent. DEFAULT_SPOOL_CATALOG holds
@@ -434,10 +437,11 @@ async def tag_belongs_to_archived_spool(db: AsyncSession, tag_uid: str, tray_uui
     return found is not None
 
 
-async def get_spool_by_tag(db: AsyncSession, tag_uid: str, tray_uuid: str) -> Spool | None:
+async def get_spool_by_tag(db: AsyncSession, tag_uid: str, tray_uuid: str, sak: int | None = None) -> Spool | None:
     """Look up an active spool by RFID tag UID or Bambu Lab tray UUID.
 
-    Prefers tray_uuid match over tag_uid (more reliable).
+    Prefers tray_uuid match over tag_uid (more reliable). sak is the SAK the
+    reader reported with the UID, when it reported one.
     """
     tray_uuid_norm = _normalize_tray_uuid(tray_uuid)
     tag_uid_norm = _normalize_tag_uid(tag_uid)
@@ -526,7 +530,7 @@ async def get_spool_by_tag(db: AsyncSession, tag_uid: str, tray_uuid: str) -> Sp
                         )
                         return candidate
 
-        spool = await _spool_by_cascade_level_1(db, tag_uid)
+        spool = await _spool_by_cascade_level_1(db, tag_uid, sak)
         if spool:
             return spool
 
@@ -543,8 +547,14 @@ def cascade_level_1_uid(tag_uid: str | None) -> str | None:
     return CASCADE_TAG + uid[:6] if len(uid) in (14, 20) else None
 
 
-def cascade_level_1_uid_start(tag_uid: str | None) -> str | None:
-    """The first three bytes of the UID behind a read that stopped after cascade level 1, or None."""
+def cascade_level_1_uid_start(tag_uid: str | None, sak: int | None = None) -> str | None:
+    """The first three bytes of the UID behind a read that stopped after cascade level 1, or None.
+
+    A SAK without the incomplete bit says the UID ended there: a 4-byte UID
+    that begins with 88 (a non-ISO clone card) is not such a read.
+    """
+    if sak is not None and not sak & SAK_UID_INCOMPLETE:
+        return None
     uid = _normalize_hex(tag_uid)
     return uid[len(CASCADE_TAG) :] if len(uid) == 8 and uid.startswith(CASCADE_TAG) else None
 
@@ -563,7 +573,7 @@ def warn_cascade_level_1_ambiguous(tag_uid: str, spool_ids: list) -> None:
     )
 
 
-async def _spool_by_cascade_level_1(db: AsyncSession, tag_uid: str) -> Spool | None:
+async def _spool_by_cascade_level_1(db: AsyncSession, tag_uid: str, sak: int | None = None) -> Spool | None:
     """Match a tag UID and a link stored from the tag's cascade level 1 alone, either way round.
 
     SpoolBuddy daemons before #3258 stopped after cascade level 1 and reported
@@ -577,7 +587,7 @@ async def _spool_by_cascade_level_1(db: AsyncSession, tag_uid: str) -> Spool | N
     loads = (selectinload(Spool.k_profiles), selectinload(Spool.assignments))
     full_uid = _normalize_hex(tag_uid)
     level1_uid = cascade_level_1_uid(full_uid)
-    uid_start = cascade_level_1_uid_start(full_uid)
+    uid_start = cascade_level_1_uid_start(full_uid, sak)
     matches: list[Spool] = []
 
     if level1_uid:
